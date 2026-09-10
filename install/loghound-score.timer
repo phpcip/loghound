@@ -1,0 +1,38 @@
+########################################################################
+# Loghound — scoring timer (every 60 seconds).
+#
+# 60s is the interval SPEC §5 specifies. It is a compromise: sessions are
+# only visible in the dashboard once they close, so a longer interval makes
+# the panel feel stale, and a shorter one spends more time on Solr facet
+# queries than on new data.
+#
+# Install: /etc/systemd/system/loghound-score.timer
+# Enable:  systemctl enable --now loghound-score.timer
+########################################################################
+
+[Unit]
+Description=Run Loghound session scoring every minute
+Documentation=file:/opt/loghound/docs/DETECTION.md
+
+[Timer]
+Unit=loghound-score.service
+
+# Wait for the box to settle after boot before the first run; there is
+# nothing to score in the first 90 seconds of uptime anyway.
+OnBootSec=90s
+
+# 60 seconds after the previous run FINISHED, not after it started. If a
+# run takes 90 seconds the next one does not pile up behind it.
+OnUnitActiveSec=60s
+
+# Default accuracy is 60s, which would let a 60s timer drift to two
+# minutes. 5s is precise enough without waking the CPU pointlessly.
+AccuracySec=5s
+
+# Deliberately NOT Persistent=true. This is a "catch up on live traffic"
+# job, not a scheduled report: firing a backlog of missed minute-runs after
+# a reboot achieves nothing that the next single run does not.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

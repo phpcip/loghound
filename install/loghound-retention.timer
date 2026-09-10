@@ -1,0 +1,32 @@
+########################################################################
+# Loghound — retention timer (daily).
+#
+# Install: /etc/systemd/system/loghound-retention.timer
+# Enable:  systemctl enable --now loghound-retention.timer
+########################################################################
+
+[Unit]
+Description=Run Loghound retention enforcement daily
+Documentation=file:/opt/loghound/docs/PRIVACY.md
+
+[Timer]
+Unit=loghound-retention.service
+
+# 03:20 local time. Away from the 03:00 crowd (logrotate, backups, package
+# updates) so a large delete-by-query is not competing with the nightly
+# rotation of the very logs Loghound is reading.
+OnCalendar=*-*-* 03:20:00
+
+# Spread the load across a fleet, and stop everyone's Solr from receiving a
+# delete-by-query at exactly the same second.
+RandomizedDelaySec=1800
+
+# Retention is a promise to visitors, not a convenience. If the box was off
+# at 03:20, the sweep runs at the next boot instead of being skipped: a day
+# of missed deletion is a day of data kept longer than the policy says.
+Persistent=true
+
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

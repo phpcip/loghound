@@ -1,0 +1,78 @@
+########################################################################
+# Loghound — retention enforcement.
+#
+# Deletes hits and sessions older than privacy.retention_days with a real
+# delete-by-query, and prunes the SQLite caches. The daily rollup documents
+# are kept when privacy.rollup_forever is true, because they contain no
+# per-visitor data.
+#
+# This is the job that makes the privacy policy true rather than aspirational.
+#
+# Install: /etc/systemd/system/loghound-retention.service
+########################################################################
+
+[Unit]
+Description=Loghound retention enforcement (delete data past the retention window)
+Documentation=file:/opt/loghound/docs/PRIVACY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+User=loghound
+Group=loghound
+SupplementaryGroups=adm
+
+WorkingDirectory=/opt/loghound
+ExecStart=/usr/bin/php /opt/loghound/bin/loghound-retention
+
+# A delete-by-query over a large index plus the segment merge that follows
+# can legitimately take a while. An hour is generous; past that something is
+# wrong and it should not still be running when tomorrow's timer fires.
+TimeoutStartSec=3600
+
+Restart=no
+
+# ---- Hardening (identical posture to loghound-tail) ------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/loghound/var
+ReadOnlyPaths=/var/log
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Deletion streams; it does not accumulate documents in memory.
+MemoryMax=256M
+TasksMax=16
+
+# Nice it down: this competes with live ingestion for the same Solr, and
+# nothing about a retention sweep is urgent.
+Nice=10
+IOSchedulingClass=idle
+
+UMask=0027
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=loghound-retention

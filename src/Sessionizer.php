@@ -1,0 +1,605 @@
+<?php
+/**
+ * Loghound — Sessionizer (SPEC §5 step 4).
+ *
+ * Groups hits into sessions as they arrive and maintains the running aggregate that
+ * bin/loghound-score later turns into a `sessions` document.
+ *
+ * ---------------------------------------------------------------------------------------
+ * THE KEY: client_key = ip_net + ua_hash
+ * ---------------------------------------------------------------------------------------
+ * SPEC §5 makes this a contract, and it is worth understanding what it buys and what it
+ * costs, because both matter to the verdicts downstream.
+ *
+ * It buys: a rotating-proxy fleet that changes its exit address WITHIN a netblock still
+ * lands in one session, and a household behind one NAT is not merged into one visitor as
+ * long as the devices differ (different UA → different key).
+ *
+ * It costs: two people behind the same /24 running the same browser version are one
+ * session. On a corporate NAT or a carrier-grade NAT that is common, and the honest
+ * consequence is that some sessions are two humans stitched together. This is why the
+ * fingerprint-cluster signal counts distinct IPs rather than distinct sessions — the
+ * session key deliberately merges, the cluster metric deliberately does not.
+ *
+ * ---------------------------------------------------------------------------------------
+ * THE RUNNING AGGREGATE — why the scorer never re-reads the hits core
+ * ---------------------------------------------------------------------------------------
+ * Everything the scoring rules need about a session is accumulated here, in SQLite, while
+ * the session is open: counts, status classes, gap statistics, the path set, the identity
+ * fields from the first hit. When the session closes, the scorer has the whole picture
+ * without issuing a single query against `hits`.
+ *
+ * That is not an optimisation, it is the only design that scales: the alternative is one
+ * Solr query per closed session, and a site closing 20k sessions an hour would spend its
+ * entire query budget re-reading data it had in memory sixty seconds earlier. The one
+ * query the scorer does make is the fingerprint facet (SPEC §5 step 3), which is a
+ * cross-session question and genuinely cannot be answered locally.
+ *
+ * ---------------------------------------------------------------------------------------
+ * DEPENDENCY ON src/State.php
+ * ---------------------------------------------------------------------------------------
+ * This class drives the `sessions_open` table through five State methods and nothing else:
+ *
+ *   findOpenSession(string $clientKey, int $idleSec, int $nowMs): ?array
+ *   openSession(string $clientKey, int $firstTsMs, ?string $host, array $data): string
+ *   updateSession(string $sessionId, int $lastTsMs, int $hitsDelta, ?array $data): void
+ *   listIdleSessions(int $idleSec, int $nowMs, int $limit): array
+ *   closeSession(string $sessionId): void
+ *
+ * Two things about that interface are worth knowing because they shape the code below.
+ *
+ * TIMESTAMPS ARE EPOCH MILLISECONDS throughout State. Hits arrive with second resolution
+ * from most log formats and microsecond resolution from a few, so everything here converts
+ * once, on entry, and stays in milliseconds until finalise() hands seconds back to the
+ * document builder.
+ *
+ * IDLENESS IS MEASURED AGAINST THE HIT'S OWN TIMESTAMP, not the wall clock: findOpenSession
+ * takes the "now" to compare against as an argument. That is what makes replaying a
+ * historical log produce exactly the sessions it would have produced live — a property
+ * worth protecting, because without it a backlog import silently merges a week of traffic
+ * into one session per visitor.
+ *
+ * The running aggregate is stored in the row's `data` JSON blob. Nothing outside this class
+ * interprets it.
+ *
+ * @package Loghound
+ * @license MIT
+ */
+
+declare(strict_types=1);
+
+namespace Loghound;
+
+use Loghound\Score\Signals;
+
+final class Sessionizer
+{
+    /**
+     * Hard cap on the distinct-path set held per open session.
+     *
+     * A crawler walking a large site would otherwise accumulate an unbounded set in SQLite
+     * and in memory. Above this, uniq_paths_i SATURATES at the cap — it stops being an
+     * exact count and becomes "at least this many". docs/SCHEMA.md says so, and no scoring
+     * rule uses uniq_paths_i as a threshold anywhere near this number, so the saturation
+     * cannot change a verdict.
+     */
+    private const MAX_TRACKED_PATHS = 10000;
+
+    /** Cap on the request-URI set used for repeat/conditional-request detection. */
+    private const MAX_TRACKED_URIS = 5000;
+
+    /**
+     * Cap on the inter-request gap list retained per session.
+     *
+     * The gap statistics (median, stddev) only need a representative sample; keeping every
+     * gap of a 200k-request crawl would put a megabyte of integers in one SQLite row. The
+     * first N gaps are kept because a scripted client's rhythm is established immediately,
+     * and because a truncated sample is honest in a way a reservoir sample is not (it is
+     * "the first N", not "a sample we hope is representative").
+     */
+    private const MAX_TRACKED_GAPS = 2000;
+
+    /** Number of paths copied onto the session document (SPEC §4.2: capped at 50). */
+    public const PATHS_ON_DOC = 50;
+
+    /** @var object The State instance; see the interface assumptions in the class docblock. */
+    private object $state;
+
+    /** Idle timeout in seconds before a session is considered closed. */
+    private int $idleSeconds;
+
+    /** privacy.ip_mode — needed for the daily-salted visitor hash. */
+    private string $ipMode;
+
+    /** privacy.ip_salt. */
+    private string $ipSalt;
+
+    /**
+     * @param object              $state The State instance (src/State.php).
+     * @param array<string,mixed> $cfg   Full config array, or at least the ingest/privacy
+     *                                   sections.
+     */
+    public function __construct(object $state, array $cfg = [])
+    {
+        $this->state = $state;
+
+        // SPEC §5: 30 minutes, configurable. Clamped to something sane: a 5-second timeout
+        // would turn every page load into its own session, and a 24-hour one would merge a
+        // week of a NAT's traffic into a single unusable document.
+        $this->idleSeconds = Security::clampInt(
+            $cfg['ingest']['session_idle_sec'] ?? 1800,
+            60,
+            86400,
+            1800
+        );
+
+        $this->ipMode = (string) ($cfg['privacy']['ip_mode'] ?? 'full');
+        $this->ipSalt = (string) ($cfg['privacy']['ip_salt'] ?? '');
+    }
+
+    /**
+     * Assign a hit to a session, updating the running aggregate.
+     *
+     * Returns the hit with session_id_s, session_seq_i, fp_hash_s and visitor_s filled in.
+     * The caller (bin/loghound-tail) then indexes the returned document.
+     *
+     * @param array<string,mixed> $hit A normalised hit from Parser.php.
+     * @return array<string,mixed>
+     */
+    public function assign(array $hit): array
+    {
+        $tsMs = self::hitMillis($hit);
+        if ($tsMs <= 0) {
+            // A hit with no usable timestamp cannot be sessionised or ordered. Refusing it
+            // here is better than substituting time(), which would place a replayed backlog
+            // in the present and corrupt every gap statistic in the batch.
+            throw new \InvalidArgumentException('Sessionizer: hit has no usable timestamp.');
+        }
+
+        // Parser.php already computes fp_hash_s from the header tuple and correctly leaves
+        // it ABSENT when the format logs no headers at all. Recomputing it here would be a
+        // second implementation of the same contract, and the two would drift. Only fall
+        // back when the hit did not come through the parser (a test harness, a replay tool).
+        if (!isset($hit['fp_hash_s'])) {
+            $hit['fp_hash_s'] = Signals::fingerprint($hit);
+        }
+        if (!isset($hit['visitor_s'])) {
+            $hit['visitor_s'] = Signals::visitorHash($hit, $this->ipMode, $this->ipSalt);
+        }
+
+        // kind_s is normally set by Parser.php. When it is not, derive it — the
+        // html/asset/beacon distinction is a detection decision (it drives asset_ratio_f
+        // and the page count), not a parsing detail, so an implementation lives in Signals
+        // and either caller may use it.
+        if (!isset($hit['kind_s'])) {
+            $classified = Signals::classifyRequest($hit);
+            $hit['kind_s'] = $classified['kind_s'];
+            if (isset($classified['asset_kind_s'])) {
+                $hit['asset_kind_s'] = $classified['asset_kind_s'];
+            }
+        }
+
+        $clientKey = self::clientKey($hit);
+
+        // State decides what "open" means: it looks for a row on this client_key whose
+        // last_ts is within the idle window of the instant we pass in. Passing the HIT's
+        // instant rather than the wall clock is what makes a historical replay produce the
+        // same sessions it would have produced live.
+        $row = $this->state->findOpenSession($clientKey, $this->idleSeconds, $tsMs);
+
+        if ($row === null) {
+            $agg = $this->newAggregate($hit);
+            $sessionId = $this->state->openSession(
+                $clientKey,
+                $tsMs,
+                isset($hit['host_s']) ? (string) $hit['host_s'] : null,
+                $agg
+            );
+            $row = [
+                'session_id' => $sessionId,
+                'client_key' => $clientKey,
+                'first_ts'   => $tsMs,
+                'last_ts'    => $tsMs,
+                'hits'       => 0,
+                'data'       => $agg,
+            ];
+        }
+
+        $agg = $this->accumulate((array) $row['data'], $hit, $tsMs, (int) $row['last_ts']);
+
+        // hitsDelta=1 keeps State's own counter in step with the aggregate's; last_ts is
+        // advanced with MAX() inside State, so an out-of-order line cannot rewind a session.
+        $this->state->updateSession((string) $row['session_id'], $tsMs, 1, $agg);
+
+        $hit['session_id_s']  = (string) $row['session_id'];
+        $hit['session_seq_i'] = (int) $agg['hits'];
+
+        return $hit;
+    }
+
+    /**
+     * Close every session that has been idle longer than the timeout.
+     *
+     * Each row is marked closed in State before it is returned, so a subsequent run cannot
+     * pick it up again and write its document twice. The row itself is kept (State purges
+     * it later) so a beacon arriving seconds after the close can still be matched.
+     *
+     * @param int $nowMs Epoch MILLISECONDS to measure idleness against.
+     * @param int $limit Batch size, so one run cannot pull an unbounded backlog into memory.
+     * @return array<int,array<string,mixed>> Session aggregates ready for scoring.
+     */
+    public function closeIdle(int $nowMs, int $limit = 500): array
+    {
+        $rows = $this->state->listIdleSessions($this->idleSeconds, $nowMs, $limit);
+
+        $out = [];
+        foreach ($rows as $row) {
+            $this->state->closeSession((string) $row['session_id']);
+            $out[] = $this->finalise($row);
+        }
+        return $out;
+    }
+
+    /**
+     * Close every open session regardless of idleness.
+     *
+     * Used on a clean shutdown, so a restart does not strand half a day of open sessions in
+     * SQLite, and by the test harness after replaying a fixture. Expressed as "idle for -1
+     * seconds as of the far future" rather than a separate State method, which keeps the
+     * State interface to the five calls documented at the top of this file.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function closeAll(): array
+    {
+        $out = [];
+        // listIdleSessions clamps its own limit to 5000, so drain in pages rather than
+        // asking for an unbounded batch and silently getting the first 5000.
+        while (true) {
+            $rows = $this->state->listIdleSessions(0, PHP_INT_MAX, 5000);
+            if ($rows === []) {
+                break;
+            }
+            foreach ($rows as $row) {
+                $this->state->closeSession((string) $row['session_id']);
+                $out[] = $this->finalise($row);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Extract the hit's instant in epoch milliseconds.
+     *
+     * Parser.php writes `ts` as the Solr string and exposes Parser::epochMs() to convert it,
+     * deliberately not smuggling a private numeric key onto the document (which would then
+     * have to be stripped before indexing). `_ts_ms` and `_ts_unix` are accepted as
+     * overrides so a replay tool or a test harness can supply the instant directly.
+     *
+     * @param array<string,mixed> $hit
+     */
+    public static function hitMillis(array $hit): int
+    {
+        if (isset($hit['_ts_ms'])) {
+            return (int) $hit['_ts_ms'];
+        }
+        if (isset($hit['_ts_unix'])) {
+            return ((int) $hit['_ts_unix']) * 1000;
+        }
+        if (isset($hit['ts']) && class_exists(Parser::class)) {
+            return Parser::epochMs((string) $hit['ts']);
+        }
+        return 0;
+    }
+
+    /**
+     * The sessionisation key: network prefix plus User-Agent hash.
+     *
+     * ip_net_s is expected to already be present (Parser/Enrich computes it with
+     * Security::ipNetwork). When it is missing — an un-enriched hit, or a malformed
+     * address — fall back to the raw address so the hit still lands in SOME session rather
+     * than being dropped. A session is a grouping, not an assertion, so a degraded key is
+     * better than no session at all.
+     *
+     * @param array<string,mixed> $hit
+     */
+    public static function clientKey(array $hit): string
+    {
+        $net = (string) ($hit['ip_net_s'] ?? ($hit['ip_s'] ?? '-'));
+        $ua  = (string) ($hit['ua_hash_s'] ?? sha1((string) ($hit['ua_s'] ?? '')));
+        return $net . '|' . $ua;
+    }
+
+    // =====================================================================================
+    // INTERNALS
+    // =====================================================================================
+
+    /**
+     * Create the empty running aggregate for a new session.
+     *
+     * The session id itself is minted by State::openSession() as
+     * sha1(client_key + first_ts + random), per SPEC §5. The random component is what stops
+     * the id from being guessable: without it, anyone who knows a visitor's netblock and
+     * User-Agent could compute their session id and forge beacon payloads for it, since the
+     * beacon HMAC is bound to the session id.
+     *
+     * @param array<string,mixed> $hit
+     * @return array<string,mixed>
+     */
+    private function newAggregate(array $hit): array
+    {
+        return [
+                'hits'       => 0,
+                'pages'      => 0,
+                'assets'     => 0,
+                // Counted separately from assets because SPEC §4.1 gives favicon its own
+                // kind_s, but it is unquestionably a sub-resource the renderer fetched, so
+                // the no_assets rule and asset_ratio_f both have to include it. A session
+                // that pulled the favicon did not "fetch nothing but the markup".
+                'favicons'   => 0,
+                'beacons'    => 0,
+                'bytes'      => 0,
+                'st2'        => 0,
+                'st3'        => 0,
+                'st4'        => 0,
+                'st5'        => 0,
+                'got_304'    => false,
+                'html_200'   => false,
+                'entry_path' => null,
+                'exit_path'  => null,
+                // path => 1. Bounded by MAX_TRACKED_PATHS; see the constant.
+                'paths'      => [],
+                'paths_saturated' => false,
+                // Full request target (path + query) => times seen, for repeat detection.
+                'uris'          => [],
+                // How many distinct SUB-RESOURCE URIs were fetched more than once. Only
+                // sub-resources: re-navigating to the same page is completely normal
+                // behaviour and says nothing about the client's HTTP cache.
+                'repeat_assets' => 0,
+                // Inter-request gaps in milliseconds.
+                'gaps'       => [],
+                // Identity/network/client fields lifted from the FIRST hit. The first hit
+                // is the right choice rather than the last: it is the one that carries the
+                // external referer and the entry conditions, and a session whose UA changes
+                // mid-way is already a different client_key.
+                'first'      => self::identityOf($hit),
+        ];
+    }
+
+    /**
+     * Fold one hit into the running aggregate.
+     *
+     * @param array<string,mixed> $agg    The aggregate so far (State's `data` blob).
+     * @param array<string,mixed> $hit
+     * @param int                 $tsMs   This hit's instant, epoch milliseconds.
+     * @param int                 $lastMs The session's previous last_ts, epoch milliseconds.
+     * @return array<string,mixed>
+     */
+    private function accumulate(array $agg, array $hit, int $tsMs, int $lastMs): array
+    {
+        // The inter-request gap. Computed before hits is incremented so the first hit of a
+        // session contributes no gap (there is nothing to measure from).
+        // max(0, ...) because a log file can contain out-of-order lines — two Apache worker
+        // processes flushing within the same second — and a negative gap would poison the
+        // standard deviation that periodic_timing reads.
+        if (($agg['hits'] ?? 0) > 0) {
+            $gapMs = max(0, $tsMs - $lastMs);
+            if (count($agg['gaps']) < self::MAX_TRACKED_GAPS) {
+                $agg['gaps'][] = $gapMs;
+            }
+        }
+
+        $agg['hits']++;
+
+        $kind   = (string) ($hit['kind_s'] ?? 'other');
+        $status = (int) ($hit['status_i'] ?? 0);
+        $path   = (string) ($hit['path_s'] ?? '');
+
+        // Page counting deliberately EXCLUDES beacon requests. An analytics beacon is a
+        // sub-resource fired by a page, and counting it as a second pageview would make
+        // every single-page visit look like a two-page one — which would silently disarm
+        // the single_page_10s rule on exactly the traffic it exists to catch.
+        if ($kind === 'html') {
+            $agg['pages']++;
+            if ($status === 200) {
+                $agg['html_200'] = true;
+            }
+            if ($agg['entry_path'] === null) {
+                $agg['entry_path'] = $path;
+            }
+            $agg['exit_path'] = $path;
+        } elseif ($kind === 'asset') {
+            $agg['assets']++;
+        } elseif ($kind === 'favicon') {
+            $agg['favicons']++;
+        } elseif ($kind === 'beacon') {
+            $agg['beacons']++;
+        }
+
+        $agg['bytes'] += max(0, (int) ($hit['bytes_l'] ?? 0));
+
+        if ($status >= 200 && $status < 300) {
+            $agg['st2']++;
+        } elseif ($status >= 300 && $status < 400) {
+            $agg['st3']++;
+            // 304 is the evidence that the client sent a conditional request — an
+            // If-None-Match or If-Modified-Since. Real browsers with a warm cache do this
+            // constantly; most scripted clients never do.
+            if ($status === 304) {
+                $agg['got_304'] = true;
+            }
+        } elseif ($status >= 400 && $status < 500) {
+            $agg['st4']++;
+        } elseif ($status >= 500) {
+            $agg['st5']++;
+        }
+
+        // Distinct paths. Saturates rather than growing without bound.
+        if ($path !== '') {
+            if (isset($agg['paths'][$path])) {
+                $agg['paths'][$path]++;
+            } elseif (count($agg['paths']) < self::MAX_TRACKED_PATHS) {
+                $agg['paths'][$path] = 1;
+            } else {
+                $agg['paths_saturated'] = true;
+            }
+        }
+
+        // Repeat-request detection, feeding the no_304_on_repeat rule. Two decisions here,
+        // both made against the real human fixture rather than from first principles:
+        //
+        //  * It keys on the FULL request target, path AND query, not path_s. A cache-busted
+        //    asset (/app.css?a=1832196438) is a different URL on every deploy, so the
+        //    browser has nothing to revalidate and legitimately never sends a conditional
+        //    request. Keying on path_s alone would see "/app.css fetched twice, no 304" and
+        //    fire on a completely normal human — and it does, twice, in
+        //    tests/fixtures/apache_combined_human.log.
+        //
+        //  * It counts SUB-RESOURCES only. Re-navigating to the same page, or polling a
+        //    status endpoint, is ordinary human behaviour and pages are frequently served
+        //    no-store, so an HTML repeat carries no information about the client's cache.
+        $uri = $path . (isset($hit['query_s']) && $hit['query_s'] !== '' ? '?' . $hit['query_s'] : '');
+        if ($uri !== '' && ($kind === 'asset' || $kind === 'favicon')) {
+            if (isset($agg['uris'][$uri])) {
+                // Count the URI once, however many times it repeats: three fetches of one
+                // file is one piece of evidence, not two.
+                if ($agg['uris'][$uri] === 1) {
+                    $agg['repeat_assets']++;
+                }
+                $agg['uris'][$uri]++;
+            } elseif (count($agg['uris']) < self::MAX_TRACKED_URIS) {
+                $agg['uris'][$uri] = 1;
+            }
+        }
+
+        return $agg;
+    }
+
+    /**
+     * Copy the identity, network and client fields that the session document carries.
+     *
+     * Only fields that are actually PRESENT are copied. An absent field stays absent all
+     * the way to Solr — SPEC §1 forbids fabricating a metric, and an enrichment that failed
+     * must be visibly missing rather than quietly defaulted.
+     *
+     * @param array<string,mixed> $hit
+     * @return array<string,mixed>
+     */
+    private static function identityOf(array $hit): array
+    {
+        $fields = [
+            'host_s', 'src_s',
+            'ip_s', 'ip_ver_i', 'ip_net_s',
+            'asn_i', 'as_org_s', 'as_type_s', 'netname_s', 'rdns_s', 'rdns_ok_b',
+            'country_s', 'region_s', 'city_s', 'geo_p', 'tz_s',
+            'proto_s',
+            'ua_s', 'ua_hash_s', 'browser_s', 'browser_ver_i', 'os_s', 'device_s',
+            'ua_bot_b', 'ua_bot_name_s', 'ua_bot_cat_s', 'ai_crawler_b',
+            'referer_s', 'referer_host_s', 'referer_type_s',
+            'accept_s', 'accept_lang_s', 'accept_enc_s',
+            'sec_ch_ua_s', 'sec_ch_platform_s', 'sec_ch_mobile_b',
+            'sec_fetch_site_s', 'sec_fetch_mode_s', 'sec_fetch_dest_s', 'sec_fetch_user_s',
+            'tls_proto_s', 'tls_cipher_s',
+            'fp_hash_s', 'visitor_s',
+
+            // Not a document field. `_logged` is the list of header fields the compiled log
+            // format can produce, and it is the ONLY way to tell "the browser did not send
+            // Sec-CH-UA" from "the operator does not log Sec-CH-UA". Two rules worth 70+
+            // points depend on that distinction, so it has to travel with the session.
+            // bin/loghound-score strips every underscore-prefixed key before indexing.
+            '_logged',
+        ];
+
+        $out = [];
+        foreach ($fields as $f) {
+            if (array_key_exists($f, $hit) && $hit[$f] !== null && $hit[$f] !== '') {
+                $out[$f] = $hit[$f];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Turn a closed open-session row into the aggregate the scorer consumes.
+     *
+     * This is where derived numbers are computed once, rather than in each of the rules
+     * that wants them.
+     *
+     * @param array<string,mixed> $row
+     * @return array<string,mixed>
+     */
+    private function finalise(array $row): array
+    {
+        // State hydrates `data` into an array; tolerate a raw JSON string too, so a row read
+        // by some other tool still finalises.
+        $agg = $row['data'] ?? [];
+        if (!is_array($agg)) {
+            $agg = (array) json_decode((string) $agg, true);
+        }
+
+        // State stores epoch MILLISECONDS. log_span_ms is therefore an exact difference;
+        // ts_start/ts_end are handed back in SECONDS because that is what the document
+        // builder formats into a Solr instant.
+        $firstMs = (int) $row['first_ts'];
+        $lastMs  = (int) $row['last_ts'];
+        $gaps    = array_map('intval', (array) ($agg['gaps'] ?? []));
+
+        $paths = array_keys((array) ($agg['paths'] ?? []));
+
+        $out = [
+            'session_id'   => (string) $row['session_id'],
+            'client_key'   => (string) $row['client_key'],
+            'ts_start'     => intdiv($firstMs, 1000),
+            'ts_end'       => intdiv($lastMs, 1000),
+            'ts_start_ms'  => $firstMs,
+            'ts_end_ms'    => $lastMs,
+            'log_span_ms'  => max(0, $lastMs - $firstMs),
+
+            'hits'         => (int) ($agg['hits'] ?? 0),
+            'pages'        => (int) ($agg['pages'] ?? 0),
+            'assets'       => (int) ($agg['assets'] ?? 0),
+            'favicons'     => (int) ($agg['favicons'] ?? 0),
+            'beacons'      => (int) ($agg['beacons'] ?? 0),
+            'bytes'        => (int) ($agg['bytes'] ?? 0),
+
+            'st2'          => (int) ($agg['st2'] ?? 0),
+            'st3'          => (int) ($agg['st3'] ?? 0),
+            'st4'          => (int) ($agg['st4'] ?? 0),
+            'st5'          => (int) ($agg['st5'] ?? 0),
+            'got_304'      => (bool) ($agg['got_304'] ?? false),
+            'html_200'     => (bool) ($agg['html_200'] ?? false),
+
+            'entry_path'   => $agg['entry_path'] ?? null,
+            'exit_path'    => $agg['exit_path'] ?? null,
+            // The true distinct count (saturating at MAX_TRACKED_PATHS)...
+            'uniq_paths'   => count($paths),
+            'paths_saturated' => (bool) ($agg['paths_saturated'] ?? false),
+            // ...and the capped sample that goes onto the document. SPEC §4.2 caps
+            // paths_ss at 50; uniq_paths_i carries the real number, so nothing is lost
+            // except the ability to enumerate, and the UI must label the list a sample.
+            'paths'        => array_slice($paths, 0, self::PATHS_ON_DOC),
+
+            'repeat_assets' => (int) ($agg['repeat_assets'] ?? 0),
+            'gaps'         => $gaps,
+            'first'        => (array) ($agg['first'] ?? []),
+        ];
+
+        // Sub-resources = assets + favicons. The favicon has its own kind_s in the schema
+        // but it is still something the renderer went and fetched, so it belongs on this
+        // side of the ratio.
+        $out['sub_resources'] = $out['assets'] + $out['favicons'];
+
+        // asset_ratio_f: sub-resources as a fraction of all hits. A browser rendering a page
+        // pulls CSS, JS, fonts and images; a client that fetches only HTML has a ratio of 0.
+        // Divided by total hits rather than by pages so a single-page visit with ten assets
+        // and a ten-page crawl with none are comparable numbers.
+        $out['asset_ratio'] = $out['hits'] > 0 ? round($out['sub_resources'] / $out['hits'], 4) : 0.0;
+
+        // Gap statistics. Computed here so every rule reads the same numbers, and so the
+        // session document carries them for the forensics view.
+        $out['gap_p50_ms']    = Signals::median($gaps);
+        $out['gap_stddev_ms'] = Signals::stddev($gaps);
+
+        return $out;
+    }
+}

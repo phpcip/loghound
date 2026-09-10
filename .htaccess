@@ -1,0 +1,45 @@
+# Loghound — application-root safety net.
+#
+# WHY THIS FILE EXISTS
+#
+# The supported deployment serves ONLY the public/ directory, with the vhost
+# using AllowOverride None. In that configuration this file is never read and
+# nothing here matters.
+#
+# It exists for the configuration we do NOT control. Hosting control panels and
+# server-management platforms routinely (re)generate vhosts from a generic
+# template, and a generic template has no way to know that this application
+# keeps its document root one level down. The common result is a vhost whose
+# DocumentRoot is the application root, with AllowOverride All. That would
+# expose the runtime state database, the git metadata, and anything else in the
+# tree to anyone who guesses a filename.
+#
+# Because those generated templates set AllowOverride All, this file activates
+# in precisely the situation that is dangerous, and stays inert otherwise. It is
+# defence in depth, not the primary control.
+#
+# The primary control remains: point the document root at public/.
+#
+# DELIBERATELY NOT DONE HERE: remapping .php to a plain-text type. That is the
+# usual "disable PHP" recipe and it is wrong for this tree. config/loghound.php
+# holds the API key and the beacon HMAC secret; served as text those leak, while
+# executed it prints nothing because of its own PHP_SAPI guard. Turning
+# execution into source disclosure would make this file harmful rather than
+# protective, so handler and type mappings are left completely alone.
+
+# ---------------------------------------------------------------------------
+# Deny everything. This is the whole point of the file.
+# ---------------------------------------------------------------------------
+<IfModule mod_authz_core.c>
+    # Apache 2.4+
+    Require all denied
+</IfModule>
+
+<IfModule !mod_authz_core.c>
+    # Apache 2.2 and earlier
+    Order allow,deny
+    Deny from all
+</IfModule>
+
+# No directory listings, whatever the generated vhost happens to say.
+Options -Indexes

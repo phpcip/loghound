@@ -1,0 +1,127 @@
+########################################################################
+# Loghound — DEDICATED PHP-FPM pool.
+#
+# NOTE: install/install.sh GENERATES an equivalent file for you, with your own
+# hostname, prefix, certificate paths and FPM socket already substituted, and
+# validates it with a configtest before enabling anything. This example exists
+# for people installing by hand — see the manual appendix in docs/INSTALL.md.
+#
+#
+# Install to:
+#   Debian/Ubuntu   /etc/php/<version>/fpm/pool.d/loghound.conf
+#   RHEL family     /etc/php-fpm.d/loghound.conf
+#
+# Then reload php-fpm YOURSELF when you are ready:
+#   systemctl reload php8.3-fpm      # Debian/Ubuntu, adjust the version
+#   systemctl reload php-fpm         # RHEL family
+#
+# The installer will place this file only if no file of that name exists, and
+# it never reloads php-fpm — on a box serving other sites, a reload is your
+# decision, not an installer's.
+#
+# =============================================================================
+# WHY A DEDICATED POOL, AND NOT www-data's
+# =============================================================================
+# config/loghound.php holds the Opensolr API key and the beacon HMAC secret.
+# It is mode 0640, owned by `loghound`. If the panel ran in the shared www-data
+# pool, then EVERY other site on this machine would be executing as a user that
+# can read that file — one vulnerable WordPress plugin anywhere on the box and
+# your API key is gone.
+#
+# The pool below runs as `loghound` and only as `loghound`. Nothing else on the
+# machine gains read access to the secrets, and Loghound gains no access to any
+# other site's files.
+########################################################################
+
+[loghound]
+
+; ---- Identity -------------------------------------------------------------
+; The same system user the daemons run as, so the panel and the ingest daemon
+; agree about who owns var/state.db.
+user  = loghound
+group = loghound
+
+; ---- Socket ---------------------------------------------------------------
+; A unix socket, not a TCP port: it cannot be reached from another host, and
+; the filesystem permissions below are the access control.
+listen = /run/php/loghound-fpm.sock
+
+; The web server needs to connect to the socket. Set listen.owner to the user
+; your web server runs as:
+;   Debian/Ubuntu Apache and nginx  -> www-data
+;   RHEL Apache                     -> apache
+;   RHEL nginx                      -> nginx
+listen.owner = www-data
+listen.group = www-data
+; 0660: the web server can connect, nothing else on the box can.
+listen.mode  = 0660
+
+; ---- Process manager ------------------------------------------------------
+; The panel is a low-traffic internal tool used by one or two people, and the
+; collector is a tiny endpoint that writes one SQLite row and returns 204.
+; `ondemand` means it costs nothing at all when nobody is looking at it.
+pm = ondemand
+pm.max_children = 8
+pm.process_idle_timeout = 30s
+pm.max_requests = 500
+
+; ---- Limits ---------------------------------------------------------------
+; The panel never streams a large result: Solr `rows` is clamped to 500 in
+; Security::MAX_ROWS, and the collector caps its payload at 8 KB.
+php_admin_value[memory_limit]      = 128M
+php_admin_value[post_max_size]     = 1M
+php_admin_value[upload_max_filesize] = 1M
+php_admin_value[max_execution_time] = 60
+
+; Loghound never accepts a file upload. Turning uploads off entirely removes a
+; whole class of attack from the public collector endpoint.
+php_admin_flag[file_uploads] = off
+
+; ---- Hardening ------------------------------------------------------------
+; The pool may only read and write inside the application tree and its own
+; temp directory. A path-traversal bug that reaches fopen() then cannot read
+; /etc/shadow, another site's config, or a customer database elsewhere.
+;
+; NOTE: open_basedir is a defence in depth, not a primary control. It is here
+; because it costs nothing and it turns several classes of bug into an error
+; log line instead of a breach.
+php_admin_value[open_basedir] = /opt/loghound:/tmp
+
+; Functions the panel has no use for and an attacker has every use for.
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,proc_nice,dl,pcntl_exec,pcntl_fork
+
+; Never reveal the interpreter version in a response header.
+php_admin_flag[expose_php] = off
+
+; Errors go to the log, never to the browser. A stack trace in an HTTP
+; response is a map of the filesystem handed to whoever asked for it.
+php_admin_flag[display_errors]      = off
+php_admin_flag[display_startup_errors] = off
+php_admin_flag[log_errors]          = on
+php_admin_value[error_log]          = /opt/loghound/var/php-error.log
+
+; ---- Sessions -------------------------------------------------------------
+; Only used when auth.mode is 'session'. Kept inside the application's own
+; var/ directory rather than the shared /var/lib/php/sessions, where any other
+; pool on the box could read the session files.
+php_admin_value[session.save_path]   = /opt/loghound/var/sessions
+php_admin_value[session.cookie_httponly] = 1
+php_admin_value[session.cookie_secure]   = 1
+php_admin_value[session.cookie_samesite] = Lax
+php_admin_value[session.use_strict_mode] = 1
+
+; ---- Logging --------------------------------------------------------------
+; Slow requests end up here. A panel page that takes more than 10 seconds is a
+; Solr query that needs a look, not a normal Tuesday.
+slowlog = /opt/loghound/var/fpm-slow.log
+request_slowlog_timeout = 10s
+
+; ---- Environment ----------------------------------------------------------
+; clear_env is on by default in modern PHP-FPM and should stay that way: the
+; pool must not inherit anything from the parent process environment.
+clear_env = yes
+
+; If you use session mode, create the directory once:
+;   mkdir -p /opt/loghound/var/sessions
+;   chown loghound:loghound /opt/loghound/var/sessions
+;   chmod 0700 /opt/loghound/var/sessions

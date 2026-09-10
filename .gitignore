@@ -1,0 +1,68 @@
+# ---------------------------------------------------------------------------
+# Secrets. Never commit these.
+# ---------------------------------------------------------------------------
+# The live configuration holds the Opensolr API key, the beacon HMAC secret,
+# the panel password hash and the IP-anonymisation salt. Only the example file
+# belongs in version control.
+config/loghound.php
+config/*.php
+!config/loghound.example.php
+
+# TLS material install.sh generates for a self-signed setup, and any certificate
+# or key an operator drops next to the config. A private key in a public repo is
+# the fastest way to lose a domain.
+config/*.key
+config/*.crt
+config/*.pem
+config/*.cer
+
+# ---------------------------------------------------------------------------
+# Runtime state. Machine-specific, often large, and full of visitor data.
+# ---------------------------------------------------------------------------
+# var/ holds the SQLite state database (tail offsets, open sessions, staged
+# beacon payloads, geo/ASN caches), PHP sessions, and sampled unparseable log
+# lines. All of it is per-install and some of it is personal data.
+var/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Logs of any kind, including the badline sample, which contains raw request
+# data captured from real traffic.
+*.log
+logs/
+
+# ---------------------------------------------------------------------------
+# Local development artefacts
+# ---------------------------------------------------------------------------
+.env
+.env.*
+tools/panel-preview-config.php
+/tmp/
+scratch/
+
+# ---------------------------------------------------------------------------
+# Editor and OS noise
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.orig
+*.rej
+
+# ---------------------------------------------------------------------------
+# Dependencies that are deliberately NOT used by this project
+# ---------------------------------------------------------------------------
+# Loghound has no Composer or npm dependencies on purpose — `git clone` plus
+# install.sh must work on a bare box. These entries exist so that a stray local
+# experiment cannot accidentally be committed and imply otherwise.
+vendor/
+node_modules/
+composer.lock
+package-lock.json

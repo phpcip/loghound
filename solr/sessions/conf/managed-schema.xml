@@ -1,0 +1,391 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Loghound — schema for the `sessions` core.
+
+  SPEC.md §4.2 is the contract.
+
+  Two document types live in this core, distinguished by doc_type_s:
+
+    doc_type_s = "session"      one document per closed session. This is what the
+                                dashboard queries for essentially everything.
+    doc_type_s = "rollup_daily" one document per day, written by bin/loghound-score.
+                                Tiny, and kept forever when privacy.rollup_forever is set,
+                                so year-over-year charts survive the retention job that
+                                deletes the sessions and hits behind them.
+
+  SPEC §4 says "two cores" and SPEC §10 refers to a `rollup_daily` source without saying
+  where it lives. Putting it here rather than in a third core is the reading that satisfies
+  both: a rollup document is a session-shaped aggregate, it is queried by the same views,
+  and a third core would triple the Opensolr provisioning for a few hundred documents a
+  year. Every dashboard query must therefore carry fq=doc_type_s:session (or :rollup_daily).
+
+  Disk discipline: the same four rules as the hits schema (see solr/hits/conf/managed-schema.xml
+  for the full reasoning). This core is far smaller — one document per session rather than
+  per hit, typically 5–50x fewer documents — so it can afford to store a little more, and it
+  is the core that has to answer facet queries fast.
+-->
+<schema name="loghound-sessions" version="1.6">
+
+    <uniqueKey>id</uniqueKey>
+
+    <!-- ==================== FIELD TYPES ==================== -->
+
+    <fieldType name="string" class="solr.StrField"
+               sortMissingLast="true" omitNorms="true" omitTermFreqAndPositions="true"/>
+
+    <fieldType name="strings" class="solr.StrField"
+               sortMissingLast="true" multiValued="true"
+               omitNorms="true" omitTermFreqAndPositions="true"/>
+
+    <fieldType name="boolean" class="solr.BoolField"
+               sortMissingLast="true" omitNorms="true" omitTermFreqAndPositions="true"/>
+
+    <fieldType name="pint"   class="solr.IntPointField"   omitNorms="true" positionIncrementGap="0"/>
+    <fieldType name="plong"  class="solr.LongPointField"  omitNorms="true" positionIncrementGap="0"/>
+    <fieldType name="pfloat" class="solr.FloatPointField" omitNorms="true" positionIncrementGap="0"/>
+    <fieldType name="pdate"  class="solr.DatePointField"  omitNorms="true" positionIncrementGap="0"/>
+
+    <fieldType name="location" class="solr.LatLonPointSpatialField" docValues="false"/>
+
+    <!-- Identical to the hits core's analyser; see that file for why it uses no external
+         word lists. -->
+    <fieldType name="text_general" class="solr.TextField" positionIncrementGap="100">
+        <analyzer type="index">
+            <tokenizer class="solr.StandardTokenizerFactory"/>
+            <filter class="solr.WordDelimiterGraphFilterFactory"
+                    generateWordParts="1" generateNumberParts="1"
+                    catenateWords="0" catenateNumbers="0" catenateAll="0"
+                    splitOnCaseChange="1" preserveOriginal="1"/>
+            <filter class="solr.FlattenGraphFilterFactory"/>
+            <filter class="solr.LowerCaseFilterFactory"/>
+            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
+        </analyzer>
+        <analyzer type="query">
+            <tokenizer class="solr.StandardTokenizerFactory"/>
+            <filter class="solr.WordDelimiterGraphFilterFactory"
+                    generateWordParts="1" generateNumberParts="1"
+                    catenateWords="0" catenateNumbers="0" catenateAll="0"
+                    splitOnCaseChange="1" preserveOriginal="1"/>
+            <filter class="solr.LowerCaseFilterFactory"/>
+            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
+        </analyzer>
+    </fieldType>
+
+    <fieldType name="ignored" class="solr.StrField" indexed="false" stored="false"
+               docValues="false" multiValued="true"/>
+
+
+    <!-- ==================== IDENTITY ==================== -->
+
+    <!--
+      id = session_id for a session document, "rollup_daily:YYYY-MM-DD" for a rollup.
+      Deterministic in both cases, which is what makes the scorer's upsert idempotent: a
+      re-run over the same closed sessions rewrites the same documents rather than
+      duplicating them.
+    -->
+    <field name="id" type="string" indexed="true" stored="true" docValues="false" required="true"/>
+
+    <!-- session | rollup_daily. Two values, so its docValues cost is ~1 byte per document,
+         and every dashboard query filters on it. -->
+    <field name="doc_type_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+
+    <!-- ==================== SESSION ROLLUP (SPEC §4.2) ==================== -->
+
+    <field name="ts_start" type="pdate" indexed="true" stored="true" docValues="true"/>
+    <field name="ts_end"   type="pdate" indexed="true" stored="true" docValues="true"/>
+
+    <field name="hits_i"       type="pint" indexed="true" stored="false" docValues="true"/>
+    <field name="pages_i"      type="pint" indexed="true" stored="false" docValues="true"/>
+    <field name="assets_i"     type="pint" indexed="true" stored="false" docValues="true"/>
+    <field name="uniq_paths_i" type="pint" indexed="true" stored="false" docValues="true"/>
+
+    <field name="bytes_l" type="plong" indexed="false" stored="false" docValues="true"/>
+
+    <!-- Status class counters. docValues-only: they are summed for the status heatmap and
+         never filtered individually. -->
+    <field name="status_2xx_i" type="pint" indexed="false" stored="false" docValues="true"/>
+    <field name="status_3xx_i" type="pint" indexed="false" stored="false" docValues="true"/>
+    <field name="status_4xx_i" type="pint" indexed="false" stored="false" docValues="true"/>
+    <field name="status_5xx_i" type="pint" indexed="false" stored="false" docValues="true"/>
+
+    <!-- Did this session ever receive a 304? Indexed because the no_304_on_repeat rule and
+         the forensics view both filter on it. A real browser with a warm cache sends
+         conditional requests; most scripted clients never do. -->
+    <field name="got_304_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <field name="entry_path_s" type="string" indexed="true" stored="true" docValues="true"/>
+    <field name="exit_path_s"  type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!--
+      Distinct paths visited, CAPPED AT 50 by the scorer.
+      The cap is not cosmetic: a crawler that walks 200k URLs in one session would otherwise
+      put 200k terms into a single document's docValues, and SORTED_SET docValues on a
+      multi-valued field is where that kind of document goes from "large" to "breaks the
+      merge". uniq_paths_i carries the true count, so nothing is fabricated — the list is
+      explicitly a sample and the UI must label it as one.
+    -->
+    <field name="paths_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+
+
+    <!-- ==================== IDENTITY / NETWORK / CLIENT, COPIED FROM THE FIRST HIT ====================
+         These are denormalised onto the session so the dashboard never has to join back to
+         `hits`. That duplication is the point: one query against a core with 20x fewer
+         documents answers "bots by ASN" without touching the hit stream at all. -->
+
+    <field name="host_s"  type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="src_s"   type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="ip_s"     type="string" indexed="true" stored="true"  docValues="true"/>
+    <field name="ip_ver_i" type="pint"   indexed="false" stored="false" docValues="true"/>
+    <field name="ip_net_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="asn_i"     type="pint"    indexed="true" stored="false" docValues="true"/>
+    <field name="as_org_s"  type="string"  indexed="true" stored="true"  docValues="true"/>
+    <field name="as_type_s" type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="netname_s" type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="rdns_s"    type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="rdns_ok_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <field name="country_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="region_s"  type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="city_s"    type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="geo_p"     type="location" indexed="true" stored="false" docValues="false"/>
+    <field name="tz_s"      type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="proto_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="ua_s"          type="string"  indexed="true" stored="true"  docValues="true"/>
+    <field name="ua_hash_s"     type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="browser_s"     type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="browser_ver_i" type="pint"    indexed="true" stored="false" docValues="true"/>
+    <field name="os_s"          type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="device_s"      type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="ua_bot_b"      type="boolean" indexed="true" stored="false" docValues="true"/>
+    <field name="ua_bot_name_s" type="string"  indexed="true" stored="true"  docValues="true"/>
+    <field name="ua_bot_cat_s"  type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="ai_crawler_b"  type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <field name="referer_s"      type="string" indexed="true" stored="true"  docValues="true"/>
+    <field name="referer_host_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="referer_type_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="accept_lang_s"  type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="visitor_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+
+    <!-- ==================== TIMING — THE DIFFERENTIATOR ====================
+         Four numbers that every other tool conflates into one. They are separate fields
+         precisely so the UI can show them side by side and let a user see how far apart
+         "the tab was open" and "someone was actually reading" really are.
+
+         wall/visible/engaged are ABSENT when beacon_b is false. Never zero-filled: a zero
+         is a measurement, an absent field is an admission that we do not know, and an
+         average over zero-filled unknowns is a lie. Solr's avg() over a facet naturally
+         skips missing values, which is exactly the behaviour we want. -->
+
+    <!-- Last request minus first request. What log-only tools call "time on site"; it is
+         really "time between the first and last byte the server saw", and it is structurally
+         blind to the final page of a session. Present for every session. -->
+    <field name="log_span_ms_l" type="plong" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Beacon: page-open wall clock, summed across pageviews. What Clicky/GA report.
+         Includes time the tab spent hidden behind other windows. -->
+    <field name="wall_ms_l" type="plong" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Beacon: visibilityState === 'visible' AND the window focused. -->
+    <field name="visible_ms_l" type="plong" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Beacon: visible AND within 30s of a real interaction. The honest number. -->
+    <field name="engaged_ms_l" type="plong" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Did ANY beacon arrive. Every timing aggregate in the UI must be scoped by this, and
+         the chart must say so. -->
+    <field name="beacon_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <!-- A beacon arrived that matched no open log session. Suspicious in itself (a forged
+         or replayed token, or a page served from a cache we never logged), so it is surfaced
+         rather than silently dropped. SPEC §6.4. -->
+    <field name="beacon_orphan_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+
+    <!-- ==================== BEHAVIOURAL ==================== -->
+
+    <!-- Median and standard deviation of inter-request gaps. periodic_timing reads them:
+         a human's gaps are wildly irregular, a scheduled client's are not. -->
+    <field name="gap_p50_ms_l"    type="plong"  indexed="true" stored="false" docValues="true"/>
+    <field name="gap_stddev_ms_l" type="plong"  indexed="true" stored="false" docValues="true"/>
+
+    <!-- assets / hits. A browser rendering a page fetches CSS, JS and images; a scraper
+         fetching only HTML has a ratio of 0. -->
+    <field name="asset_ratio_f" type="pfloat" indexed="true" stored="false" docValues="true"/>
+
+    <field name="interactions_i"   type="pint" indexed="true" stored="false" docValues="true"/>
+    <field name="max_scroll_pct_i" type="pint" indexed="true" stored="false" docValues="true"/>
+    <field name="pageviews_i"      type="pint" indexed="true" stored="false" docValues="true"/>
+
+
+    <!-- ==================== EXECUTION PLANE (beacon, SPEC §6) ==================== -->
+
+    <!-- Did JavaScript run at all. -->
+    <field name="js_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Headless signals positive. -->
+    <field name="headless_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Individual automation marker codes. Stored AND faceted: the forensics view lists
+         which specific markers fired, and "why did you call this a bot" must always be
+         answerable from the stored document alone. -->
+    <field name="automation_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+
+    <!-- Did the engine's feature set match the Chrome version the UA claims. -->
+    <field name="ua_claim_ok_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Browser Intl timezone vs the IP-derived tz_s. -->
+    <field name="tz_match_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <!-- WebGL UNMASKED_RENDERER string. Stored because "SwiftShader" in a report is worth
+         more than a boolean; it is the evidence, not the conclusion. -->
+    <field name="webgl_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!-- 0–100 confidence from the execution plane alone, before the log plane is folded in.
+         Kept separate so the two planes can be compared. -->
+    <field name="client_score_f" type="pfloat" indexed="true" stored="false" docValues="true"/>
+
+
+    <!-- ==================== CLUSTER ==================== -->
+
+    <field name="fp_hash_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!--
+      How many distinct IPs shared this fingerprint within ±12h of this session, computed by
+      the scorer with a JSON Facet unique(ip_s) against the hits core.
+      The single strongest signal against rotating-proxy fleets, and the number behind the
+      product's headline view.
+      ABSENT when the scorer could not compute it (Solr unreachable). Absent means unknown;
+      the rule that reads it must not treat absent as 1.
+    -->
+    <field name="fp_ips_24h_i" type="pint" indexed="true" stored="true" docValues="true"/>
+
+
+    <!-- ==================== VERDICT ==================== -->
+
+    <!-- 0–100. Stored because every list view shows it. -->
+    <field name="bot_score_f" type="pfloat" indexed="true" stored="true" docValues="true"/>
+
+    <!-- human | likely_human | unknown | likely_bot | bot -->
+    <field name="bot_verdict_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!--
+      The reason codes that produced the score. STORED, and a verdict without at least one
+      of these is a bug the scorer asserts against — an unexplainable verdict is worse than
+      no verdict, because someone will act on it.
+      Faceted: the bot-forensics view is essentially a facet on this field.
+    -->
+    <field name="bot_reasons_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+
+    <!-- Which ruleset produced this verdict. Bumped on every weight or rule change so a
+         historical score can be understood, and so a rescoring pass can find everything
+         judged by an older version. -->
+    <field name="rule_version_i" type="pint" indexed="true" stored="true" docValues="true"/>
+
+    <!--
+      headless | scripted | declared_crawler | ai_crawler | monitor | spoofed_ua |
+      proxy_fleet | none
+
+      declared_crawler and ai_crawler are NOT threats. Googlebot and GPTBot are bots, and
+      they are also the traffic that puts a site in a search index or an LLM answer.
+      Presenting them in the same bucket as an evasive scraper is what makes existing tools
+      useless, so the class is a first-class indexed field and every bot view must split on
+      it rather than leaving that to a UI checkbox.
+    -->
+    <field name="bot_class_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+
+    <!-- ==================== DAILY ROLLUP (doc_type_s = rollup_daily) ====================
+         Written once per UTC day by bin/loghound-score. Deliberately tiny — a few hundred
+         bytes — so privacy.rollup_forever can keep it indefinitely after the sessions and
+         hits behind it have been deleted by the retention job.
+
+         Only aggregate counts live here. Nothing in a rollup document identifies a visitor;
+         that is what makes keeping it forever compatible with a 90-day retention policy. -->
+
+    <!-- YYYY-MM-DD, UTC. Also encoded in the id, so a re-run overwrites. -->
+    <field name="day_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <field name="r_sessions_i"      type="pint"  indexed="false" stored="true" docValues="true"/>
+    <field name="r_hits_i"          type="pint"  indexed="false" stored="true" docValues="true"/>
+    <field name="r_pages_i"         type="pint"  indexed="false" stored="true" docValues="true"/>
+    <field name="r_bytes_l"         type="plong" indexed="false" stored="true" docValues="true"/>
+
+    <!-- Verdict distribution for the day. -->
+    <field name="r_human_i"        type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_likely_human_i" type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_unknown_i"      type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_likely_bot_i"   type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_bot_i"          type="pint" indexed="false" stored="true" docValues="true"/>
+
+    <!-- Class distribution. declared_crawler and ai_crawler are counted separately from
+         everything else for the reason given above. -->
+    <field name="r_declared_crawler_i" type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_ai_crawler_i"       type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_headless_i"         type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_scripted_i"         type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_proxy_fleet_i"      type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_spoofed_ua_i"       type="pint" indexed="false" stored="true" docValues="true"/>
+    <field name="r_monitor_i"          type="pint" indexed="false" stored="true" docValues="true"/>
+
+    <!-- Timing aggregates, HUMAN SESSIONS WITH BEACON DATA ONLY. r_beacon_sessions_i is the
+         population size; without it the averages below are uninterpretable, which is exactly
+         the mistake the rest of the industry makes. -->
+    <field name="r_beacon_sessions_i" type="pint"  indexed="false" stored="true" docValues="true"/>
+    <field name="r_engaged_ms_sum_l"  type="plong" indexed="false" stored="true" docValues="true"/>
+    <field name="r_visible_ms_sum_l"  type="plong" indexed="false" stored="true" docValues="true"/>
+    <field name="r_wall_ms_sum_l"     type="plong" indexed="false" stored="true" docValues="true"/>
+    <field name="r_log_span_ms_sum_l" type="plong" indexed="false" stored="true" docValues="true"/>
+
+
+    <!-- ==================== CATCHALL (ingest.catchall) ====================
+         Powers the session explorer's free-text box. Same tradeoff as the hits core, but
+         much cheaper here because there are far fewer documents — this is the copy of the
+         catchall you should keep if you have to choose one. -->
+
+    <field name="text_all" type="text_general" indexed="true" stored="false" multiValued="true"/>
+
+    <field name="path_txt"    type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="ua_txt"      type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="as_org_txt"  type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="netname_txt" type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="rdns_txt"    type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="city_txt"    type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="country_txt" type="text_general" indexed="true" stored="false" multiValued="true"/>
+
+    <copyField source="paths_ss"  dest="text_all"/>
+    <copyField source="ua_s"      dest="text_all"/>
+    <copyField source="referer_s" dest="text_all"/>
+    <copyField source="as_org_s"  dest="text_all"/>
+    <copyField source="netname_s" dest="text_all"/>
+    <copyField source="country_s" dest="text_all"/>
+    <copyField source="city_s"    dest="text_all"/>
+    <copyField source="rdns_s"    dest="text_all"/>
+
+    <copyField source="paths_ss"  dest="path_txt"/>
+    <copyField source="ua_s"      dest="ua_txt"/>
+    <copyField source="as_org_s"  dest="as_org_txt"/>
+    <copyField source="netname_s" dest="netname_txt"/>
+    <copyField source="rdns_s"    dest="rdns_txt"/>
+    <copyField source="city_s"    dest="city_txt"/>
+    <copyField source="country_s" dest="country_txt"/>
+
+
+    <!-- ==================== INTERNAL ====================
+         Required by the update log. The sessions core uses ATOMIC UPDATES (the scorer may
+         revise a verdict without rewriting the whole document), and an atomic update cannot
+         work without _version_ plus an updateLog. -->
+    <field name="_version_" type="plong" indexed="false" stored="false" docValues="true"/>
+
+    <!-- Same catch-all as the hits core: unknown fields are dropped rather than failing a
+         batch. See solr/hits/conf/managed-schema.xml for the full tradeoff. -->
+    <dynamicField name="*" type="ignored" multiValued="true"/>
+
+</schema>

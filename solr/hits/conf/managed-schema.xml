@@ -1,0 +1,499 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Loghound — schema for the `hits` core. One document per log line.
+
+  SPEC.md §4.1 is the contract. Field names here are exactly the names the rest of the
+  codebase writes and the dashboard queries. Do not rename them.
+
+  ============================================================================
+  DISK DISCIPLINE — read this before adding anything
+  ============================================================================
+  A busy site produces tens of millions of log lines a month. Every flag below was chosen
+  to keep bytes off disk, and each one is commented with what it costs.
+
+  The four rules this file follows:
+
+  1. stored="false" by default. Retrieval happens from docValues, which we are paying for
+     anyway because the dashboard facets and sorts on nearly every field. Storing a field
+     as well means writing the value TWICE (once in the .fdt stored-fields stream, once in
+     the .dvd docValues stream). Only fields a human actually reads in the session
+     drill-down are stored.
+
+  2. omitNorms="true" on every string field. Norms are a per-document, per-field byte used
+     for length normalisation in relevance scoring. We never score on string fields — they
+     are filtered and faceted, never ranked — so norms are a pure 1 byte × docs × fields
+     tax. At 45 string fields and 10M docs that is 450 MB of nothing.
+
+  3. omitTermFreqAndPositions="true" on every string field. A term frequency and a position
+     list per posting only exist to answer "how often" and "how near"; an exact-match filter
+     on ip_s needs neither. This roughly halves the postings size for these fields.
+     (StrField already defaults to this in Solr 9 — we write it out anyway so a reader can
+     see the decision instead of having to know the default.)
+     The text fields feeding the catchall are the deliberate exception: phrase search there
+     needs positions, and that is what makes the catchall expensive.
+
+  4. No stock sprawl. Solr's default configset ships a `_text_` catchall plus ~30 dynamic
+     fields (*_i, *_s, *_txt, *_dt, ignored_*, attr_*, random_*, and a copyField of
+     everything into _text_). On a schema like this one, that copyField silently doubles
+     the index and nothing in Loghound ever queries `_text_`. It is deleted here, along
+     with every dynamic field we do not use. See the dynamicField section at the bottom.
+-->
+<schema name="loghound-hits" version="1.6">
+
+    <uniqueKey>id</uniqueKey>
+
+    <!--
+      ========================================================================
+      FIELD TYPES
+      ========================================================================
+    -->
+
+    <!--
+      Exact-match string. docValues is turned on per field, not here, because a handful of
+      fields (id, raw_s, query_s) genuinely must not have it.
+      sortMissingLast: a missing value sorts to the end rather than to the top, so an
+      un-enriched document never leads a "top ASN" table.
+    -->
+    <fieldType name="string" class="solr.StrField"
+               sortMissingLast="true"
+               omitNorms="true"
+               omitTermFreqAndPositions="true"/>
+
+    <fieldType name="strings" class="solr.StrField"
+               sortMissingLast="true"
+               multiValued="true"
+               omitNorms="true"
+               omitTermFreqAndPositions="true"/>
+
+    <fieldType name="boolean" class="solr.BoolField"
+               sortMissingLast="true"
+               omitNorms="true"
+               omitTermFreqAndPositions="true"/>
+
+    <!--
+      Point-based numerics (Solr 9 has no Trie types left). Range queries run off the BKD
+      tree when indexed="true", or off docValues when indexed="false" — which is why several
+      counters below are docValues-only: a DV-only range scan is slower per query but costs
+      nothing to write, and those fields are only ever used in aggregates.
+    -->
+    <fieldType name="pint"   class="solr.IntPointField"   omitNorms="true" positionIncrementGap="0"/>
+    <fieldType name="plong"  class="solr.LongPointField"  omitNorms="true" positionIncrementGap="0"/>
+    <fieldType name="pfloat" class="solr.FloatPointField" omitNorms="true" positionIncrementGap="0"/>
+    <fieldType name="pdate"  class="solr.DatePointField"  omitNorms="true" positionIncrementGap="0"/>
+
+    <!--
+      Geo point. See the geo_p field for why it is indexed-only by default and what the
+      docValues upgrade costs.
+    -->
+    <fieldType name="location" class="solr.LatLonPointSpatialField" docValues="false"/>
+
+    <!--
+      Analysed text, used ONLY by the catchall and the *_txt fields the session explorer's
+      edismax searches.
+
+      Deliberately built from filters that need no external files: no stopwords.txt, no
+      synonyms.txt, no protwords.txt. That keeps the configset a two-file push
+      (managed-schema.xml + solrconfig.xml) with nothing to forget, which matters because
+      Opensolr's config editor uploads files one at a time.
+
+      ASCIIFolding is here so a search for "munchen" finds "München" in a city or AS-org
+      name. WordDelimiterGraph splits "opensolr-platform" and "Chrome/152.0" into their
+      parts, which is what makes path and UA search actually work.
+    -->
+    <fieldType name="text_general" class="solr.TextField" positionIncrementGap="100">
+        <analyzer type="index">
+            <tokenizer class="solr.StandardTokenizerFactory"/>
+            <filter class="solr.WordDelimiterGraphFilterFactory"
+                    generateWordParts="1" generateNumberParts="1"
+                    catenateWords="0" catenateNumbers="0" catenateAll="0"
+                    splitOnCaseChange="1" preserveOriginal="1"/>
+            <filter class="solr.FlattenGraphFilterFactory"/>
+            <filter class="solr.LowerCaseFilterFactory"/>
+            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
+        </analyzer>
+        <analyzer type="query">
+            <tokenizer class="solr.StandardTokenizerFactory"/>
+            <filter class="solr.WordDelimiterGraphFilterFactory"
+                    generateWordParts="1" generateNumberParts="1"
+                    catenateWords="0" catenateNumbers="0" catenateAll="0"
+                    splitOnCaseChange="1" preserveOriginal="1"/>
+            <filter class="solr.LowerCaseFilterFactory"/>
+            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
+        </analyzer>
+    </fieldType>
+
+    <!--
+      Write-only sink. Anything not named in this schema is routed here by the catch-all
+      dynamicField at the bottom and disappears. See that comment for the tradeoff.
+    -->
+    <fieldType name="ignored" class="solr.StrField" indexed="false" stored="false"
+               docValues="false" multiValued="true"/>
+
+
+    <!--
+      ========================================================================
+      IDENTITY / TIME  (SPEC §4.1)
+      ========================================================================
+    -->
+
+    <!--
+      sha1(log file identity + byte offset). Deterministic, so re-reading a rotated file or
+      replaying a backlog overwrites rather than duplicates — idempotent re-ingest is the
+      whole reason this is not a UUID.
+      No docValues: it is 40 bytes of pure entropy, one per document, and nothing sorts,
+      facets or groups on it. docValues here would add ~40 MB per million docs to buy
+      nothing.
+    -->
+    <field name="id" type="string" indexed="true" stored="true" docValues="false" required="true"/>
+
+    <!-- Request time in UTC. Indexed for range filters, docValues for the hourly
+         histograms, stored because the drill-down timeline prints it. -->
+    <field name="ts" type="pdate" indexed="true" stored="true" docValues="true"/>
+
+    <!-- Virtual host (%v). Low cardinality, so its docValues ordinals cost ~1 byte/doc. -->
+    <field name="host_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Which configured log file the line came from. Lets an operator prove a source is
+         alive, and lets a mis-detected format be deleted by query. -->
+    <field name="src_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+
+    <!--
+      ========================================================================
+      NETWORK
+      ========================================================================
+    -->
+
+    <!--
+      Subject to privacy.ip_mode: this holds whatever Security::applyIpPrivacy() returned,
+      which may be the full address, a truncated network, or a daily-salted hash. Stored
+      because the fingerprint-cluster view lists the member addresses, and that list is the
+      single most useful output of the product.
+      High cardinality — this is the most expensive docValues field in the schema, and it is
+      also the one `unique(ip_s)` runs against, so it has to be there.
+    -->
+    <field name="ip_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!-- 4 or 6. Not indexed: nobody filters on it directly, it is only ever a facet
+         alongside something else, which docValues alone can serve. -->
+    <field name="ip_ver_i" type="pint" indexed="false" stored="false" docValues="true"/>
+
+    <!-- /24 (v4) or /48 (v6). The cheap clustering key: a proxy fleet that leases a
+         contiguous block collapses to one value here. Also the sessionisation key. -->
+    <field name="ip_net_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="asn_i" type="pint" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Stored: the networks view and the cluster drill-down both print it, and looking it
+         up again from the ASN would mean a second query per row. -->
+    <field name="as_org_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!-- isp|hosting|vpn|edu|gov|mobile|unknown. Seven values, so ordinals are ~1 byte/doc.
+         Load-bearing for scoring: hosting_asn_browser_ua and fp_cluster_proxy_fleet both
+         read it. -->
+    <field name="as_type_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- RIR netname. Catches leased ranges that share an ASN with legitimate traffic — a
+         residential-proxy operator renting space inside a consumer ISP shows up here and
+         nowhere else. -->
+    <field name="netname_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="rdns_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Forward-confirmed reverse DNS passed: PTR resolves to a name whose A/AAAA comes
+         back to the same address. This is the ONLY honest way to verify a Googlebot claim,
+         and rdns_claim_failed (weight 95) depends on it. -->
+    <field name="rdns_ok_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <field name="country_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="region_s"  type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="city_s"    type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!--
+      lat,lon. SPEC §4.1 marks this indexed-only, and that is what ships: it answers
+      bounding-box and heatmap facet queries, which is what the map view needs, and costs
+      only the BKD points.
+      It cannot be RETRIEVED or sorted by distance in this configuration. If you want
+      either, set docValues="true" — that adds 16 bytes per document (~16 MB per million),
+      and you must reindex. The map in v1 is built from country_s/city_s aggregates and
+      does not need it.
+    -->
+    <field name="geo_p" type="location" indexed="true" stored="false" docValues="false"/>
+
+    <!-- IANA timezone derived from geo. Compared against the browser's own
+         Intl timezone by the tz_mismatch rule. -->
+    <field name="tz_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+
+    <!--
+      ========================================================================
+      REQUEST
+      ========================================================================
+    -->
+
+    <field name="method_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Path with the query string removed. Stored because the drill-down timeline shows
+         it verbatim and the top-pages table needs the exact value. -->
+    <field name="path_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!-- Number of path segments. Cheap proxy for "how deep did this client dig", which
+         separates a scraper walking a tree from a visitor reading one article. -->
+    <field name="path_depth_i" type="pint" indexed="false" stored="false" docValues="true"/>
+
+    <!--
+      STORED ONLY — no index, no docValues. Query strings are unbounded attacker-controlled
+      text with essentially unique values per request; indexing them would build a term
+      dictionary the size of the corpus and facet on it would be meaningless. It exists so
+      the drill-down can show the full request and so retroactive analysis has the data.
+    -->
+    <field name="query_s" type="string" indexed="false" stored="true" docValues="false"/>
+
+    <field name="proto_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="status_i" type="pint" indexed="true" stored="true" docValues="true"/>
+
+    <!-- Response bytes. docValues-only: it is summed and percentiled, never filtered on
+         its own, and a DV-only numeric costs no BKD tree. -->
+    <field name="bytes_l" type="plong" indexed="false" stored="false" docValues="true"/>
+
+    <!-- Microseconds from %D. ABSENT when the operator does not log %D — never zero, because
+         a zero here would silently drag every latency percentile toward the floor. -->
+    <field name="dur_us_l" type="plong" indexed="false" stored="false" docValues="true"/>
+
+    <!-- html|asset|api|beacon|robots|favicon|other. Drives asset_ratio_f and the page count,
+         both of which feed scoring, so it is indexed as well as faceted. -->
+    <field name="kind_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- js|css|img|font|media. Only set when kind_s=asset. -->
+    <field name="asset_kind_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+
+    <!--
+      ========================================================================
+      CLIENT
+      ========================================================================
+    -->
+
+    <!-- Raw User-Agent. Stored: every forensic view prints it, and it is the first thing a
+         human looks at. High cardinality but heavily repeated, so stored-field compression
+         handles it well (see solrconfig's BEST_COMPRESSION note). -->
+    <field name="ua_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!-- sha1 of the raw UA. Half of the sessionisation key (ip_net + ua_hash), and a
+         cheap grouping key that avoids dragging 200-byte strings through aggregations. -->
+    <field name="ua_hash_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="browser_s"     type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="browser_ver_i" type="pint"   indexed="true" stored="false" docValues="true"/>
+    <field name="os_s"          type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- desktop|mobile|tablet|bot|unknown -->
+    <field name="device_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- The UA SAYS it is a bot. This is a claim, not a fact — anyone can send it, and
+         anyone can omit it. It is never used alone to decide anything except the honest
+         crawler classification, which additionally requires forward-confirmed rDNS. -->
+    <field name="ua_bot_b"      type="boolean" indexed="true" stored="false" docValues="true"/>
+    <field name="ua_bot_name_s" type="string"  indexed="true" stored="false" docValues="true"/>
+
+    <!-- search|ai|seo|monitor|security|social|other -->
+    <field name="ua_bot_cat_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Its own field rather than just ua_bot_cat_s=ai because "how much of my traffic is
+         LLM crawlers" is a question people ask constantly and it deserves a one-term filter. -->
+    <field name="ai_crawler_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
+
+    <!--
+      ========================================================================
+      HEADERS
+      ========================================================================
+      Present only when the operator logs them. The parser must leave these ABSENT rather
+      than writing an empty string: an empty string is a real value that facets, sorts and
+      matches, and it would let "no Accept-Language header" be indistinguishable from
+      "Accept-Language: ''". Several scoring rules turn on exactly that distinction.
+    -->
+
+    <field name="referer_s"      type="string" indexed="true" stored="true"  docValues="true"/>
+    <field name="referer_host_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- direct|search|social|ai|internal|link|ad -->
+    <field name="referer_type_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="accept_s"      type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="accept_lang_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="accept_enc_s"  type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="sec_ch_ua_s"       type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="sec_ch_platform_s" type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="sec_ch_mobile_b"   type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <field name="sec_fetch_site_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="sec_fetch_mode_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="sec_fetch_dest_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="sec_fetch_user_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="xff_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="tls_proto_s"  type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="tls_cipher_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- JA4 TLS fingerprint. Nothing writes this in v1 — it needs a HAProxy in front that
+         exports the fingerprint into a header. The field is defined now so that turning it
+         on later is a config change and not a reindex. An always-absent field costs zero
+         bytes: Lucene stores nothing for a document that does not carry the field. -->
+    <field name="ja4_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+
+    <!--
+      ========================================================================
+      FINGERPRINTS & SESSION
+      ========================================================================
+    -->
+
+    <!--
+      THE cluster key. sha1 of the normalised header tuple (ua, accept, accept_lang,
+      accept_enc, sec_ch_ua, sec_ch_platform, sec_fetch_*, proto).
+
+      It deliberately EXCLUDES the IP address. That is the entire point: a fleet on rotating
+      residential proxies changes its address on every request and cannot change its header
+      tuple without breaking the browser it is pretending to be. Counting distinct ip_s per
+      fp_hash_s is what exposes it.
+
+      Caveat worth knowing (documented in docs/SCHEMA.md): with plain apache `combined` the
+      tuple degenerates to little more than the UA string, because none of the other
+      components are logged. The recommended LogFormat in SPEC §8 exists to make this field
+      discriminating.
+    -->
+    <field name="fp_hash_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- Assigned at ingest by Sessionizer. Stored so the drill-down can jump from a hit
+         back to its session without a second lookup. -->
+    <field name="session_id_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!-- 1-based position of this hit within its session. docValues-only: it is used to
+         order the timeline, never to filter. -->
+    <field name="session_seq_i" type="pint" indexed="false" stored="false" docValues="true"/>
+
+    <!-- Stable-ish visitor hash (ip_net + ua_hash + accept_lang), daily-salted in `hash`
+         privacy mode. "Stable-ish" is the honest word: it survives a session boundary but
+         not a network change, and the UI must never call it a person. -->
+    <field name="visitor_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+
+    <!--
+      ========================================================================
+      PROVISIONAL VERDICT
+      ========================================================================
+      Signal codes fired by this single hit. The FINAL verdict lives on the session document
+      — a hit on its own almost never carries enough context to judge, and pretending
+      otherwise is how tools end up flagging a favicon request as a bot.
+    -->
+    <field name="hit_flags_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+
+
+    <!--
+      ========================================================================
+      RAW
+      ========================================================================
+      STORED, NOT INDEXED, NO DOCVALUES.
+
+      Why keep it: scoring rules change. rule_version_i exists so you can tell which ruleset
+      produced a historical verdict, and raw_s exists so you can re-derive the whole document
+      under a new ruleset without having lost the original bytes. That is retroactive
+      rescoring, and it is the difference between "we improved the detector" and "we improved
+      the detector, starting from today".
+
+      What it costs: roughly the size of your log file, minus stored-field compression.
+      A plain `combined` line is ~300 bytes; the recommended LogFormat is ~800. These lines
+      are extremely repetitive so BEST_COMPRESSION typically gets 4–6x on them, landing at
+      ~60–200 bytes per document — call it a 20–35% increase in total index size, not the
+      "roughly doubles" that SPEC §4.1 warns about (that figure assumes no compression).
+      Turn it off with ingest.keep_raw=false; the field simply stops being written.
+    -->
+    <field name="raw_s" type="string" indexed="false" stored="true" docValues="false"/>
+
+
+    <!--
+      ========================================================================
+      CATCHALL  (ingest.catchall, default on)
+      ========================================================================
+      This block is the first thing to turn off at high volume. It is the only place in the
+      schema that pays for term frequencies and positions, and it indexes the same bytes
+      that are already indexed as strings elsewhere.
+
+      Two layers, and they are not redundant by accident:
+        * the *_txt fields are what edismax actually searches, via
+          qf = path_txt^3 ua_txt^2 as_org_txt^2 netname_txt^2 rdns_txt city_txt country_txt.
+          Separate fields are what make per-field boosting possible.
+        * text_all is the single-field fallback used as `df` for a bare query and for
+          highlighting. It duplicates the content of the *_txt fields.
+
+      If you need to cut: drop text_all first (delete the field and its copyFields). You keep
+      full search through the qf and lose only the bare-query fallback. See docs/SCHEMA.md.
+    -->
+
+    <field name="text_all" type="text_general" indexed="true" stored="false" multiValued="true"/>
+
+    <field name="path_txt"    type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="ua_txt"      type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="as_org_txt"  type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="netname_txt" type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="rdns_txt"    type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="city_txt"    type="text_general" indexed="true" stored="false" multiValued="true"/>
+    <field name="country_txt" type="text_general" indexed="true" stored="false" multiValued="true"/>
+
+    <copyField source="path_s"    dest="text_all"/>
+    <copyField source="ua_s"      dest="text_all"/>
+    <copyField source="referer_s" dest="text_all"/>
+    <copyField source="as_org_s"  dest="text_all"/>
+    <copyField source="netname_s" dest="text_all"/>
+    <copyField source="country_s" dest="text_all"/>
+    <copyField source="city_s"    dest="text_all"/>
+    <copyField source="rdns_s"    dest="text_all"/>
+
+    <copyField source="path_s"    dest="path_txt"/>
+    <copyField source="ua_s"      dest="ua_txt"/>
+    <copyField source="as_org_s"  dest="as_org_txt"/>
+    <copyField source="netname_s" dest="netname_txt"/>
+    <copyField source="rdns_s"    dest="rdns_txt"/>
+    <copyField source="city_s"    dest="city_txt"/>
+    <copyField source="country_s" dest="country_txt"/>
+
+
+    <!--
+      ========================================================================
+      INTERNAL
+      ========================================================================
+      Required by the update log for optimistic concurrency and atomic updates. Not indexed:
+      Solr reads it from docValues.
+    -->
+    <field name="_version_" type="plong" indexed="false" stored="false" docValues="true"/>
+
+
+    <!--
+      ========================================================================
+      DYNAMIC FIELDS — what was deleted, and the one that remains
+      ========================================================================
+      Solr's default configset ships roughly thirty dynamic fields (*_i *_is *_s *_ss *_l
+      *_t *_txt *_b *_f *_d *_dt *_p *_srpt, plus ignored_* attr_* random_*) and a
+      copyField "*" -> "_text_". On a schema with 60 explicitly named fields, that
+      combination means every value is indexed at least twice and `_text_` alone can be the
+      largest single component of the index — for a catchall nothing in Loghound queries.
+      Both the dynamic fields and `_text_` are deleted.
+
+      What remains is a single catch-all routing every unrecognised field into the `ignored`
+      type, which indexes and stores nothing.
+
+      The tradeoff, stated plainly: this makes a schema/code skew degrade quietly. If a
+      future version writes `foo_bar_s` and you have not pushed the new schema, that value
+      vanishes instead of failing the request — which is the right behaviour for a running
+      ingest daemon, because the alternative is a 400 that kills an entire 500-document
+      batch and stalls the tailer. The cost is that a typo in a field name is silent.
+      If you are DEVELOPING new fields, comment this line out and let Solr reject them
+      loudly until you are done.
+    -->
+    <dynamicField name="*" type="ignored" multiValued="true"/>
+
+</schema>

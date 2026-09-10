@@ -1,0 +1,74 @@
+########################################################################
+# Loghound — session closing and scoring.
+#
+# Closes sessions idle past the timeout, merges beacon data, computes the
+# fingerprint-cluster facet, runs the ruleset and upserts the `sessions`
+# documents. Triggered every 60 seconds by loghound-score.timer.
+#
+# Install: /etc/systemd/system/loghound-score.service
+########################################################################
+
+[Unit]
+Description=Loghound session scoring
+Documentation=file:/opt/loghound/docs/DETECTION.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+User=loghound
+Group=loghound
+SupplementaryGroups=adm
+
+WorkingDirectory=/opt/loghound
+ExecStart=/usr/bin/php /opt/loghound/bin/loghound-score
+
+# A scoring run that has not finished in five minutes is stuck (a hung Solr
+# request, a wedged whois lookup). Kill it: the timer will start a fresh one
+# in 60 seconds and no state is lost, because sessions are only marked
+# closed after they have been successfully upserted.
+TimeoutStartSec=300
+
+# Type=oneshot units are not restarted; a failed run is reported and the
+# next tick tries again.
+Restart=no
+
+# ---- Hardening (identical posture to loghound-tail) ------------------
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/loghound/var
+ReadOnlyPaths=/var/log
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Scoring holds a batch of sessions plus one facet response in memory. It
+# is bounded work, so a hard ceiling is safe and catches a runaway query.
+MemoryMax=512M
+TasksMax=16
+
+UMask=0027
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=loghound-score

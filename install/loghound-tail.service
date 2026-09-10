@@ -1,0 +1,126 @@
+########################################################################
+# Loghound — ingest daemon.
+#
+# Reads the configured access logs, parses, enriches, sessionises and
+# batches documents into Solr. Long-running, restarted on failure.
+#
+# Install:  /etc/systemd/system/loghound-tail.service
+# Reload:   systemctl reload loghound-tail   (SIGHUP: re-reads the config
+#                                             without losing a byte of
+#                                             tail position)
+########################################################################
+
+[Unit]
+Description=Loghound ingest daemon (tail, parse, enrich, index)
+Documentation=file:/opt/loghound/docs/INSTALL.md
+Documentation=https://github.com/cipriandimofte/loghound
+After=network-online.target
+Wants=network-online.target
+
+# A daemon that cannot start because of a bad config should give up rather
+# than restart forever and fill the journal. Ten attempts in five minutes,
+# then it stays down until someone looks at it.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+
+# ---- Identity --------------------------------------------------------
+# Never root. `adm` is what gives read access to /var/log/{apache2,nginx}
+# on Debian/Ubuntu and RHEL; it grants nothing else.
+User=loghound
+Group=loghound
+SupplementaryGroups=adm
+
+WorkingDirectory=/opt/loghound
+ExecStart=/usr/bin/php /opt/loghound/bin/loghound-tail
+ExecReload=/bin/kill -HUP $MAINPID
+
+# SIGTERM makes the daemon flush its pending batch and checkpoint every
+# cursor before exiting; give it room to finish rather than SIGKILLing a
+# half-written batch.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=always
+RestartSec=5
+
+# ---- Hardening -------------------------------------------------------
+# This process parses attacker-controlled bytes (request paths, User-Agent
+# and Referer strings chosen by whoever hit the origin server) all day. It
+# is confined accordingly.
+
+# No setuid binary can raise privileges out of this unit, ever.
+NoNewPrivileges=yes
+
+# The entire filesystem is read-only apart from what ReadWritePaths grants
+# back. /home, /root and /run/user are invisible.
+ProtectSystem=strict
+ProtectHome=yes
+
+# The one directory the daemon writes: SQLite state, the status file and
+# the capped bad-line sample.
+ReadWritePaths=/opt/loghound/var
+
+# The logs it reads. Redundant under ProtectSystem=strict, but explicit —
+# this is the security boundary of the whole application and it should be
+# readable as such in the unit file.
+ReadOnlyPaths=/var/log
+
+# A private /tmp, so nothing this process writes there is visible to, or
+# collides with, anything else on the box.
+PrivateTmp=yes
+PrivateDevices=yes
+
+# Kernel and cgroup surfaces it has no business touching.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# It needs IPv4/IPv6 for Solr, the geo/ASN lookups and whois, and AF_UNIX
+# for DNS resolution through nscd/systemd-resolved. Nothing else — no
+# packet sockets, no netlink.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Drop every capability. Reading a file as group adm needs none.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# NOTE: MemoryDenyWriteExecute is deliberately NOT set. It is a good
+# hardening flag in general, but it breaks the PHP JIT if opcache.jit is
+# ever enabled for the CLI SAPI, and a mysterious startup crash after an
+# unrelated PHP change is a worse outcome than the marginal gain here.
+
+# ---- Resources -------------------------------------------------------
+# Enrichment caches and the pending batch are the only significant memory
+# users; 512 MB is generous. Exceeding it is a bug, and being OOM-killed
+# with a clear cgroup message beats degrading the whole box.
+MemoryMax=512M
+TasksMax=32
+
+# Files it creates (state.db, badlines.log) are rw for the user, r for the
+# group, nothing for anyone else.
+UMask=0027
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=loghound-tail
+
+[Install]
+WantedBy=multi-user.target

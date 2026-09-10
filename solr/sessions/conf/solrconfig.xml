@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Loghound — solrconfig for the `sessions` core.
+
+  Target: Solr 9.6, classic single-core index (NOT SolrCloud).
+
+  Workload shape — this is the mirror image of the hits core, and the caches are sized
+  accordingly:
+    * READ HEAVY, WRITE LIGHT. One document per session instead of per hit, written once a
+      minute in a batch by bin/loghound-score. Every dashboard panel queries this core.
+    * FACET DOMINATED. Almost every query is a JSON Facet with a handful of fq clauses that
+      repeat across panels (a date range, doc_type_s:session, a verdict, a class). That is
+      the ideal filterCache workload, so unlike the hits core this one is worth warming.
+    * ATOMIC UPDATES. The scorer revises verdicts in place, which is why the updateLog and
+      Real Time Get handler are non-negotiable here.
+
+  The same hardening applies as on the hits core: no /stream, no /sql, no remote streaming,
+  no contrib jars. See the bottom of solr/hits/conf/solrconfig.xml for the full rationale
+  on each removed handler; it is not repeated here.
+-->
+<config>
+
+    <luceneMatchVersion>9.6.0</luceneMatchVersion>
+
+    <!-- No <lib/> directives: no Tika, no clustering, no DIH, no velocity. -->
+
+    <dataDir>${solr.data.dir:}</dataDir>
+
+    <directoryFactory name="DirectoryFactory"
+                      class="solr.NRTCachingDirectoryFactory">
+        <double name="maxMergeSizeMB">8</double>
+        <double name="maxCachedMB">48</double>
+    </directoryFactory>
+
+    <!--
+      BEST_COMPRESSION here too, but for a different reason than on the hits core: this core
+      stores a lot of small repetitive strings (verdict, class, reason codes, UA) across
+      relatively few documents, and DEFLATE's dictionary handles that extremely well. The
+      retrieval CPU cost is paid on a handful of dashboard rows at a time.
+    -->
+    <codecFactory class="solr.SchemaCodecFactory">
+        <str name="compressionMode">BEST_COMPRESSION</str>
+    </codecFactory>
+
+    <indexConfig>
+        <!-- Smaller than the hits core: writes arrive once a minute in modest batches, so a
+             large buffer would just sit half-empty holding heap that facet queries want. -->
+        <ramBufferSizeMB>32</ramBufferSizeMB>
+        <maxBufferedDocs>-1</maxBufferedDocs>
+        <useCompoundFile>false</useCompoundFile>
+
+        <mergePolicyFactory class="org.apache.solr.index.TieredMergePolicyFactory">
+            <int name="maxMergeAtOnce">10</int>
+            <int name="segmentsPerTier">6</int>
+            <!--
+              Fewer segments than the hits core (6 per tier, not 8). Facet performance is
+              dominated by per-segment docValues iteration, so on a read-heavy core it is
+              worth spending merge I/O to keep the segment count down.
+            -->
+            <double name="maxMergedSegmentMB">2048</double>
+            <!--
+              Atomic updates rewrite the whole document under the hood: every verdict
+              revision leaves a deletion behind. A tighter deleted-percentage keeps the
+              reclaim happening steadily instead of in one large stall.
+            -->
+            <double name="deletesPctAllowed">15.0</double>
+        </mergePolicyFactory>
+
+        <mergeScheduler class="org.apache.lucene.index.ConcurrentMergeScheduler">
+            <int name="maxThreadCount">1</int>
+            <int name="maxMergeCount">4</int>
+        </mergeScheduler>
+
+        <lockType>${solr.lock.type:native}</lockType>
+        <infoStream>false</infoStream>
+    </indexConfig>
+
+    <updateHandler class="solr.DirectUpdateHandler2">
+
+        <!--
+          MANDATORY on this core. Atomic updates ({"id":..., "field":{"set":...}}) are
+          implemented as read-modify-write against the transaction log, so without an
+          updateLog the scorer's verdict revisions would silently blank every field it did
+          not resend. That failure mode is quiet and catastrophic, which is why it is called
+          out here rather than left to be inferred.
+        -->
+        <updateLog>
+            <str name="dir">${solr.ulog.dir:}</str>
+            <int name="numVersionBuckets">65536</int>
+            <int name="numRecordsToKeep">1000</int>
+            <int name="maxNumLogsToKeep">10</int>
+        </updateLog>
+
+        <!-- SPEC §5: same commit cadence as the hits core, so the two cores never drift far
+             enough apart for a session to appear before its hits or vice versa. -->
+        <autoCommit>
+            <maxTime>${solr.autoCommit.maxTime:60000}</maxTime>
+            <openSearcher>false</openSearcher>
+        </autoCommit>
+
+        <autoSoftCommit>
+            <maxTime>${solr.autoSoftCommit.maxTime:5000}</maxTime>
+        </autoSoftCommit>
+
+    </updateHandler>
+
+    <query>
+        <maxBooleanClauses>1024</maxBooleanClauses>
+
+        <!--
+          CACHE SIZING — deliberately different from the hits core.
+
+          Here autowarmCount is NOT zero. The dashboard reuses the same handful of filters on
+          every panel refresh (doc_type_s:session, a day range, bot_verdict_s:human), and
+          this core takes writes once a minute rather than continuously, so a searcher lives
+          long enough to be worth warming. The 5-second autoSoftCommit only opens a new
+          searcher when something was actually written, so on an idle minute nothing warms.
+
+          filterCache: 1024 entries. Each is a bitset of 1 bit per document; at 5M sessions
+          that is ~600 KB per entry, ~600 MB worst case if every slot were a full-core
+          bitset — in practice Solr stores small result sets as sparse doc-id arrays, so the
+          real figure is far lower. Reduce this first if the node is heap-constrained.
+        -->
+        <filterCache class="solr.CaffeineCache" size="1024" initialSize="256" autowarmCount="128"/>
+
+        <!-- queryResultCache: the overview panels re-issue identical queries on every
+             refresh, so this one genuinely hits. -->
+        <queryResultCache class="solr.CaffeineCache" size="512" initialSize="128" autowarmCount="64"/>
+
+        <!-- documentCache: never autowarmed — internal doc ids change with every searcher,
+             so warming it would populate the cache with wrong answers. Solr forbids it; the
+             zero is written out so nobody "fixes" it. -->
+        <documentCache class="solr.CaffeineCache" size="512" initialSize="128" autowarmCount="0"/>
+
+        <enableLazyFieldLoading>true</enableLazyFieldLoading>
+
+        <!-- The session list shows 50 rows; caching a 60-doc window makes paging free. -->
+        <queryResultWindowSize>60</queryResultWindowSize>
+        <queryResultMaxDocsCached>200</queryResultMaxDocsCached>
+
+        <!-- false here, unlike the hits core: this core is queried by a human waiting on a
+             dashboard, and a brief block for a warm searcher beats a panel that returns
+             inconsistent numbers between refreshes. -->
+        <useColdSearcher>false</useColdSearcher>
+
+        <maxWarmingSearchers>2</maxWarmingSearchers>
+
+        <slowQueryThresholdMillis>2000</slowQueryThresholdMillis>
+    </query>
+
+    <requestDispatcher>
+        <!-- See the hits core config for what each of these flags prevents. Same locks,
+             same reasons: remote streaming is SSRF plus arbitrary file read, stream body is
+             an unauthenticated delete-everything primitive. -->
+        <requestParsers enableRemoteStreaming="false"
+                        enableStreamBody="false"
+                        multipartUploadLimitInKB="2048"
+                        formdataUploadLimitInKB="2048"
+                        addHttpRequestToContext="false"/>
+
+        <httpCaching never304="true"/>
+    </requestDispatcher>
+
+    <!--
+      Search handler. Note there is still no default defType: src/Solr.php sends
+      q={!edismax v=$uq}, and a {!...} switch is honoured only by the top-level lucene
+      parser. Setting defType here would make edismax swallow the local-param syntax as
+      literal text and return zero results.
+    -->
+    <requestHandler name="/select" class="solr.SearchHandler">
+        <lst name="defaults">
+            <str name="echoParams">none</str>
+            <int name="rows">20</int>
+            <str name="df">text_all</str>
+        </lst>
+        <lst name="invariants">
+            <str name="wt">json</str>
+            <str name="omitHeader">false</str>
+        </lst>
+    </requestHandler>
+
+    <requestHandler name="/update" class="solr.UpdateRequestHandler">
+        <lst name="defaults">
+            <str name="update.chain">loghound-update</str>
+        </lst>
+    </requestHandler>
+
+    <!-- Required for atomic updates: the scorer reads the current document out of the tlog
+         before a searcher has seen it. -->
+    <requestHandler name="/get" class="solr.RealTimeGetHandler">
+        <lst name="defaults">
+            <str name="omitHeader">true</str>
+            <str name="wt">json</str>
+        </lst>
+    </requestHandler>
+
+    <requestHandler name="/admin/ping" class="solr.PingRequestHandler">
+        <lst name="invariants">
+            <str name="q">*:*</str>
+            <str name="rows">0</str>
+        </lst>
+        <lst name="defaults">
+            <str name="echoParams">none</str>
+        </lst>
+    </requestHandler>
+
+    <updateRequestProcessorChain name="loghound-update" default="true">
+        <!-- Do not echo document bodies (which contain UA and referer text) into solr.log. -->
+        <processor class="solr.LogUpdateProcessorFactory">
+            <int name="maxNumToLog">0</int>
+        </processor>
+        <processor class="solr.RunUpdateProcessorFactory"/>
+    </updateRequestProcessorChain>
+
+    <!--
+      Deliberately absent, exactly as on the hits core: /stream, /sql, /export, /replication,
+      /update/extract, /debug/dump, /terms, /tvrh, /analysis/*, /spell, /suggest, /browse,
+      /elevate. See solr/hits/conf/solrconfig.xml for what each one would hand an attacker.
+    -->
+
+</config>

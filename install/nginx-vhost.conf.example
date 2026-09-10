@@ -1,0 +1,221 @@
+########################################################################
+# Loghound — nginx vhost EXAMPLE.
+#
+# NOTE: install/install.sh GENERATES an equivalent file for you, with your own
+# hostname, prefix, certificate paths and FPM socket already substituted, and
+# validates it with a configtest before enabling anything. This example exists
+# for people installing by hand — see the manual appendix in docs/INSTALL.md.
+#
+#
+# Copy, edit the three marked places, then enable it YOURSELF:
+#
+#   cp install/nginx-vhost.conf.example /etc/nginx/sites-available/loghound.conf
+#   $EDITOR /etc/nginx/sites-available/loghound.conf
+#   ln -s ../sites-available/loghound.conf /etc/nginx/sites-enabled/
+#   nginx -t && systemctl reload nginx
+#
+# The installer never writes this file and never reloads nginx. On a box that
+# is already serving real sites, that is not politeness, it is correctness.
+#
+# EDIT THESE:
+#   1. server_name
+#   2. the ssl_certificate paths (or delete the TLS block and use certbot)
+#   3. the fastcgi_pass socket path, if your distro puts it elsewhere
+########################################################################
+
+# ---------------------------------------------------------------------------
+# Plain HTTP: redirect only. The panel shows every visitor and every path on
+# your site; it is not served over cleartext.
+# ---------------------------------------------------------------------------
+server {
+    listen 80;
+    listen [::]:80;
+    server_name loghound.example.com;
+
+    # Leave ACME reachable so certificate renewal keeps working.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        autoindex off;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    server_name loghound.example.com;
+
+    root /opt/loghound/public;
+    index index.php;
+
+    # ---- TLS ----------------------------------------------------------
+    ssl_certificate     /etc/letsencrypt/live/loghound.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/loghound.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:LoghoundSSL:10m;
+
+    # ---- Its own logs -------------------------------------------------
+    # Loghound's own vhost logs to its own files. Do NOT point Loghound at
+    # these: it would ingest its own beacon traffic and inflate every number.
+    access_log /var/log/nginx/loghound_access.log combined;
+    error_log  /var/log/nginx/loghound_error.log warn;
+
+    # Never generate a directory listing, anywhere in this server block.
+    autoindex off;
+
+    # Do not advertise the version to every scanner on the internet.
+    server_tokens off;
+
+    # Beacon payloads are capped at 8 KB by the collector; nothing legitimate
+    # here is larger. A low ceiling turns a body-flood into a 413 at the edge
+    # instead of work for PHP.
+    client_max_body_size 64k;
+    client_body_buffer_size 16k;
+
+    # =====================================================================
+    # HARD DENIES — first, so nothing below can accidentally re-grant them.
+    # nginx matches `location ^~` and regex locations before the prefix `/`.
+    # =====================================================================
+
+    # Application directories. They are outside the docroot already; this is
+    # the second lock on the same door, and it survives someone moving the
+    # docroot up a level in a hurry.
+    location ~ ^/(config|src|var|bin|tests|solr|install|docs)(/|$) {
+        deny all;
+        return 404;
+    }
+
+    # Version control, caches and editor droppings.
+    location ~ /(\.git|\.hg|\.svn|\.bzr|__pycache__|node_modules)(/|$) {
+        deny all;
+        return 404;
+    }
+
+    # Every dotfile: .env, .htpasswd, .DS_Store, .gitignore.
+    location ~ /\. {
+        deny all;
+        return 404;
+    }
+
+    # Backup and swap suffixes editors and deploy scripts leave behind.
+    location ~ (~|\.swp|\.swo|\.orig|\.rej|\.save)$ {
+        deny all;
+        return 404;
+    }
+
+    # ---------------------------------------------------------------------
+    # DANGEROUS EXTENSIONS — denied everywhere in this server block.
+    #
+    # Serving any of these has been the root cause of a real breach in some
+    # real project: a .sql dump, a .env with credentials, a .db that IS the
+    # database, a .pem that IS the private key.
+    #
+    # NOTE on .json and .xml: they are in this list deliberately. Nothing
+    # Loghound ships needs to serve either. If you later add an ECharts geo
+    # map (which is .json), do NOT delete this rule — add one narrow
+    # exception for that single file path, and nothing else.
+    # ---------------------------------------------------------------------
+    location ~* \.(sh|csv|conf|lock|json|jar|gz|xml|properties|py|pyc|db|cache|hist|sql|bak|old|inc|sqlite|sqlite3|pem|key|crt|env|tar|zip|log|ini|yml|yaml)$ {
+        deny all;
+        return 404;
+    }
+
+    # =====================================================================
+    # THE BEACON — /b.js
+    #
+    # Cacheable and long-lived: it is versioned by query string
+    # (<script src="/b.js?v=2">), so a new version is a new URL and there is
+    # never a stale-beacon problem to debug.
+    # =====================================================================
+    location = /b.js {
+        add_header Cache-Control "public, max-age=604800, immutable" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        # The beacon is embedded on OTHER origins by design; that is the point.
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Timing-Allow-Origin "*" always;
+        default_type application/javascript;
+        try_files /b.js =404;
+    }
+
+    # =====================================================================
+    # THE COLLECTOR — /collect.php
+    #
+    # Public, unauthenticated write path. NEVER cached, anywhere, by anyone:
+    # a cached 204 would silently swallow every subsequent beacon from that
+    # client and the data loss would be invisible.
+    # =====================================================================
+    location = /collect.php {
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        add_header X-Content-Type-Options "nosniff" always;
+
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root/collect.php;
+        fastcgi_param DOCUMENT_ROOT   $document_root;
+        # A DEDICATED pool socket. Never point this at the shared www-data
+        # pool: every other site on this box would then be running as a user
+        # that can read /opt/loghound/config/loghound.php, which holds the
+        # Opensolr API key and the beacon HMAC secret.
+        fastcgi_pass unix:/run/php/loghound-fpm.sock;
+        fastcgi_read_timeout 15s;
+    }
+
+    # =====================================================================
+    # STATIC ASSETS — self-hosted ECharts, CSS, fonts. No PHP here, ever.
+    # =====================================================================
+    location ^~ /assets/ {
+        add_header Cache-Control "public, max-age=2592000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        try_files $uri =404;
+
+        # Even if a .php file somehow lands in assets/, it is served as bytes.
+        location ~ \.php$ {
+            deny all;
+            return 404;
+        }
+    }
+
+    # =====================================================================
+    # THE PANEL — everything else goes to the front controller.
+    # =====================================================================
+    location / {
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "same-origin" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+        try_files $uri /index.php$is_args$args;
+    }
+
+    # ONLY index.php is executable through this block. The pattern is anchored
+    # to the exact filename rather than the usual `\.php$`, so a file dropped
+    # anywhere in the tree can never be executed by requesting it.
+    location = /index.php {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_param DOCUMENT_ROOT   $document_root;
+        fastcgi_pass unix:/run/php/loghound-fpm.sock;
+        fastcgi_read_timeout 60s;
+        fastcgi_buffers 16 16k;
+        fastcgi_buffer_size 32k;
+
+        # PATH_INFO is not used by Loghound and is a classic source of
+        # path-traversal-into-the-interpreter bugs. Leave it empty.
+        fastcgi_param PATH_INFO "";
+    }
+
+    # Any other .php request is refused outright rather than being passed to
+    # PHP to decide. This is what stops an uploaded or planted file from ever
+    # becoming code.
+    location ~ \.php$ {
+        deny all;
+        return 404;
+    }
+}

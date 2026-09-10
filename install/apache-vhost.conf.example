@@ -1,0 +1,237 @@
+########################################################################
+# Loghound — Apache 2.4 vhost EXAMPLE.
+#
+# NOTE: install/install.sh GENERATES an equivalent file for you, with your own
+# hostname, prefix, certificate paths and FPM socket already substituted, and
+# validates it with a configtest before enabling anything. This example exists
+# for people installing by hand — see the manual appendix in docs/INSTALL.md.
+#
+#
+# Copy, edit the three marked places, then enable it YOURSELF:
+#
+#   cp install/apache-vhost.conf.example /etc/apache2/sites-available/loghound.conf
+#   $EDITOR /etc/apache2/sites-available/loghound.conf
+#   a2ensite loghound && apache2ctl configtest && systemctl reload apache2
+#
+# The installer never writes this file and never reloads Apache. On a box that
+# is already serving real sites, that is not politeness, it is correctness.
+#
+# EDIT THESE:
+#   1. ServerName
+#   2. the SSLCertificate* paths (or delete the :443 block and use certbot)
+#   3. the FPM socket path, if your distro puts it elsewhere
+#
+# Requires: mod_ssl, mod_rewrite, mod_headers, mod_proxy_fcgi, mod_expires.
+#   a2enmod ssl rewrite headers proxy_fcgi expires
+########################################################################
+
+# ---------------------------------------------------------------------------
+# Plain HTTP: redirect only. The panel shows every visitor and every path on
+# your site; it is not served over cleartext.
+# ---------------------------------------------------------------------------
+<VirtualHost *:80>
+    ServerName loghound.example.com
+
+    # Leave ACME reachable so certificate renewal keeps working.
+    Alias /.well-known/acme-challenge/ /var/www/html/.well-known/acme-challenge/
+    <Directory "/var/www/html/.well-known/acme-challenge">
+        Options -Indexes
+        Require all granted
+    </Directory>
+
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+    RewriteRule ^ https://%{SERVER_NAME}%{REQUEST_URI} [END,NE,R=permanent]
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName loghound.example.com
+
+    DocumentRoot /opt/loghound/public
+
+    # ---- TLS ----------------------------------------------------------
+    SSLEngine on
+    SSLCertificateFile      /etc/letsencrypt/live/loghound.example.com/fullchain.pem
+    SSLCertificateKeyFile   /etc/letsencrypt/live/loghound.example.com/privkey.pem
+    SSLProtocol             -all +TLSv1.2 +TLSv1.3
+    SSLHonorCipherOrder     off
+
+    # ---- Its own logs -------------------------------------------------
+    # Loghound's own vhost logs to its own files. Do NOT point Loghound at
+    # these: it would ingest its own beacon traffic and inflate every number.
+    ErrorLog  ${APACHE_LOG_DIR}/loghound_error.log
+    CustomLog ${APACHE_LOG_DIR}/loghound_access.log combined
+
+    # =====================================================================
+    # DEFAULT DENY
+    # Nothing under / is reachable unless a rule below explicitly grants it.
+    # =====================================================================
+    <Directory />
+        AllowOverride None
+        Options -Indexes -FollowSymLinks -ExecCGI -Includes
+        Require all denied
+    </Directory>
+
+    # =====================================================================
+    # The docroot: only index.php, collect.php and b.js
+    # =====================================================================
+    <Directory /opt/loghound/public>
+        AllowOverride None
+
+        # -Indexes: never generate a directory listing. There is no directory
+        # here whose contents are anyone's business.
+        # SymLinksIfOwnerMatch rather than FollowSymLinks: a symlink planted by
+        # a less-privileged user cannot be used to read outside the tree.
+        Options -Indexes +SymLinksIfOwnerMatch -ExecCGI -Includes
+
+        Require all denied
+
+        # The panel front controller and the public beacon collector.
+        <FilesMatch "^(index|collect)\.php$">
+            Require all granted
+        </FilesMatch>
+
+        # The beacon itself.
+        <FilesMatch "^b\.js$">
+            Require all granted
+        </FilesMatch>
+
+        # ---- PHP handler ----------------------------------------------
+        # A DEDICATED pool socket. Never point this at the shared www-data
+        # pool: every other site on this box would then be running as a user
+        # that can read /opt/loghound/config/loghound.php, which holds the
+        # Opensolr API key and the beacon HMAC secret.
+        <FilesMatch "^(index|collect)\.php$">
+            SetHandler "proxy:unix:/run/php/loghound-fpm.sock|fcgi://localhost"
+        </FilesMatch>
+
+        # ---- Front controller routing ---------------------------------
+        RewriteEngine On
+        # Anything that is not the collector, the beacon or a real asset file
+        # is a panel route and goes to index.php.
+        RewriteCond %{REQUEST_URI} !^/(collect\.php|b\.js)$
+        RewriteCond %{REQUEST_URI} !^/assets/
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteRule ^ /index.php [L]
+    </Directory>
+
+    # =====================================================================
+    # Static assets (self-hosted ECharts, CSS, fonts). No PHP here, ever.
+    # =====================================================================
+    <Directory /opt/loghound/public/assets>
+        AllowOverride None
+        Options -Indexes +SymLinksIfOwnerMatch -ExecCGI -Includes
+        Require all granted
+
+        # Belt and braces: even if a .php file somehow lands in assets/, it is
+        # served as bytes, not executed. (The SetHandler above is scoped to
+        # exactly two filenames, so this is the second lock, not the first.)
+        RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8 .phps
+        # php_flag exists only under mod_php; guarded so `apache2ctl configtest`
+        # does not fail on an FPM-only box.
+        <IfModule mod_php.c>
+            php_flag engine off
+        </IfModule>
+        <IfModule mod_php7.c>
+            php_flag engine off
+        </IfModule>
+    </Directory>
+
+    # =====================================================================
+    # HARD DENIES
+    # These are last so nothing above can accidentally re-grant them.
+    # =====================================================================
+
+    # Application directories that must never be reachable over HTTP. They are
+    # outside the docroot already; this is the second lock on the same door.
+    <DirectoryMatch "/opt/loghound/(config|src|var|bin|tests|solr|install|docs)(/|$)">
+        Require all denied
+    </DirectoryMatch>
+
+    # Same, expressed as URL paths, in case the docroot is ever moved up a level.
+    <LocationMatch "^/(config|src|var|bin|tests|solr|install|docs)(/|$)">
+        Require all denied
+    </LocationMatch>
+
+    # Version control and editor droppings.
+    <LocationMatch "/(\.git|\.hg|\.svn|\.bzr|__pycache__|node_modules)(/|$)">
+        Require all denied
+    </LocationMatch>
+
+    # Every dotfile: .env, .htpasswd, .DS_Store, .gitignore, editor swap files.
+    <FilesMatch "^\.">
+        Require all denied
+    </FilesMatch>
+
+    # Backup and swap suffixes that editors and deploy scripts leave behind.
+    <FilesMatch "(~|\.swp|\.swo|\.orig|\.rej|\.save)$">
+        Require all denied
+    </FilesMatch>
+
+    # ---------------------------------------------------------------------
+    # DANGEROUS EXTENSIONS — denied everywhere in this vhost.
+    #
+    # Serving any of these has been the root cause of a real breach in some
+    # real project: a .sql dump, a .env with credentials, a .db that IS the
+    # database, a .pem that IS the private key.
+    #
+    # NOTE on .json and .xml: they are in this list deliberately. Nothing
+    # Loghound ships needs to serve either. If you later add an ECharts geo
+    # map (which is .json), do NOT delete this rule — add one narrow
+    # exception for that single file path, and nothing else.
+    # ---------------------------------------------------------------------
+    <FilesMatch "\.(sh|csv|conf|lock|json|jar|gz|xml|properties|py|pyc|db|cache|hist|sql|bak|old|inc|sqlite|sqlite3|pem|key|crt|env|tar|zip|log|ini|yml|yaml)$">
+        Require all denied
+    </FilesMatch>
+
+    # =====================================================================
+    # CACHE HEADERS
+    # =====================================================================
+
+    # The beacon. Cacheable and long-lived: it is versioned by query string
+    # (<script src="/b.js?v=2">), so a new version is a new URL and there is
+    # never a stale-beacon problem to debug.
+    <Location "/b.js">
+        Header always set Cache-Control "public, max-age=604800, immutable"
+        Header unset Pragma
+        Header unset Expires
+        Header always set X-Content-Type-Options "nosniff"
+        # The beacon is embedded on OTHER origins by design; that is the point.
+        Header always set Access-Control-Allow-Origin "*"
+        Header always set Timing-Allow-Origin "*"
+    </Location>
+
+    # The collector. NEVER cached — anywhere, by anyone, for any length of
+    # time. A cached 204 would silently swallow every subsequent beacon from
+    # that client and the data loss would be invisible.
+    <Location "/collect.php">
+        Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+        Header always set Pragma "no-cache"
+        Header always set Expires "0"
+        Header always set X-Content-Type-Options "nosniff"
+    </Location>
+
+    # Static assets: hashed or versioned by the panel, so cache them hard.
+    <Location "/assets/">
+        Header always set Cache-Control "public, max-age=2592000"
+        Header always set X-Content-Type-Options "nosniff"
+    </Location>
+
+    # The panel itself is per-request data behind authentication. Never cache
+    # it, and never let a shared proxy hold a copy of someone's traffic report.
+    <Location "/">
+        Header always set X-Content-Type-Options "nosniff"
+        Header always set X-Frame-Options "DENY"
+        Header always set Referrer-Policy "same-origin"
+        Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    </Location>
+
+    # Do not advertise the PHP version to every scanner on the internet.
+    Header always unset X-Powered-By
+    ServerSignature Off
+
+    # Beacon payloads are capped at 8 KB by the collector; nothing legitimate
+    # here is larger. A low ceiling turns a body-flood into a 413 at the edge
+    # instead of work for PHP.
+    LimitRequestBody 65536
+</VirtualHost>

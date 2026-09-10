@@ -1,0 +1,366 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Loghound — solrconfig for the `hits` core.
+
+  Target: Solr 9.6, classic single-core index (NOT SolrCloud). This is what Opensolr
+  provisions; there is no ZooKeeper, no collection API, no shard routing.
+
+  Workload shape, because every number below follows from it:
+    * WRITE HEAVY, READ RARE. A busy site is thousands of inserts per minute and a handful
+      of queries per minute, most of which hit the `sessions` core instead. The dashboard
+      touches this core only for the session drill-down.
+    * Appends only. Documents arrive in time order, are never updated, and are deleted only
+      in bulk by the retention job.
+    * Ids are deterministic (sha1 of file+offset), so every write is idempotent and a
+      retried batch cannot duplicate.
+
+  SECURITY: this file deliberately does NOT define /stream, /sql, /export, /replication,
+  /update/extract, /debug/dump or the analysis handlers. See the "handlers deliberately
+  absent" section at the bottom for what each of those would hand an attacker.
+-->
+<config>
+
+    <!--
+      Index format compatibility. Bump only together with an actual Solr upgrade and a
+      reindex; lowering it silently disables newer codec behaviour.
+    -->
+    <luceneMatchVersion>9.6.0</luceneMatchVersion>
+
+    <!--
+      NO <lib/> DIRECTIVES.
+
+      The stock configset loads contrib jars (extraction/Tika, clustering, langid, velocity,
+      DIH). Every one of them is an unauthenticated code path reachable through a request
+      handler, and Tika in particular has a long history of RCEs triggered by a hostile
+      uploaded document. Loghound needs none of them. Not loading a jar is a stronger
+      control than not defining its handler.
+    -->
+
+    <dataDir>${solr.data.dir:}</dataDir>
+
+    <!--
+      NRTCachingDirectory keeps the newest, smallest segments in the heap so a 5-second soft
+      commit does not turn into a disk flush every five seconds. Bounded so it cannot grow
+      into the heap Solr needs for docValues.
+    -->
+    <directoryFactory name="DirectoryFactory"
+                      class="solr.NRTCachingDirectoryFactory">
+        <double name="maxMergeSizeMB">16</double>
+        <double name="maxCachedMB">96</double>
+    </directoryFactory>
+
+    <!--
+      BEST_COMPRESSION (DEFLATE) instead of the default BEST_SPEED (LZ4) for stored fields.
+
+      This is the single largest disk win available in this file, and it is nearly free for
+      this workload. Log lines are extremely repetitive — the same UA, the same referer, the
+      same path prefixes, thousands of times — so DEFLATE typically reaches 4–6x on raw_s
+      where LZ4 reaches 2–3x. The cost is CPU on stored-field RETRIEVAL, and we retrieve
+      stored fields only in the session drill-down, one screen at a time.
+
+      Do not switch this on an existing index expecting immediate benefit: it applies to
+      newly written segments, so the change takes effect as segments merge.
+    -->
+    <codecFactory class="solr.SchemaCodecFactory">
+        <str name="compressionMode">BEST_COMPRESSION</str>
+    </codecFactory>
+
+    <indexConfig>
+        <!--
+          64 MB of in-memory buffer before a flush. Larger buffers make larger first-level
+          segments, which means fewer merges over the life of the index. Below ~32 MB an
+          append-only workload spends a visible fraction of its CPU merging tiny segments.
+        -->
+        <ramBufferSizeMB>64</ramBufferSizeMB>
+        <maxBufferedDocs>-1</maxBufferedDocs>
+
+        <!--
+          Compound files pack a segment's files into one .cfs. That halves file-descriptor
+          pressure but costs on merge throughput. With a write-heavy core and a normal
+          ulimit, off is the right side of the trade.
+        -->
+        <useCompoundFile>false</useCompoundFile>
+
+        <mergePolicyFactory class="org.apache.solr.index.TieredMergePolicyFactory">
+            <!-- Fewer, larger segments: cheaper docValues loading and fewer open files at
+                 query time, which matters because docValues is how we retrieve. -->
+            <int name="maxMergeAtOnce">8</int>
+            <int name="segmentsPerTier">8</int>
+            <!-- Do not merge past 5 GB. A 20 GB merge on a shared Opensolr node stalls
+                 indexing for minutes and doubles peak disk while it runs. -->
+            <double name="maxMergedSegmentMB">5120</double>
+            <!--
+              Deleted documents are only reclaimed by a merge. The retention job deletes by
+              query, which marks whole day-ranges deleted at once; allowing a higher deleted
+              percentage before forcing a merge avoids rewriting the whole index the night a
+              retention window rolls over.
+            -->
+            <double name="deletesPctAllowed">25.0</double>
+        </mergePolicyFactory>
+
+        <!-- One merge thread, small pipeline: on a shared node, merge I/O competing with
+             ingest I/O is the usual cause of "indexing suddenly got slow". -->
+        <mergeScheduler class="org.apache.lucene.index.ConcurrentMergeScheduler">
+            <int name="maxThreadCount">1</int>
+            <int name="maxMergeCount">6</int>
+        </mergeScheduler>
+
+        <lockType>${solr.lock.type:native}</lockType>
+
+        <!-- Do not write the huge per-segment .si diagnostics/infoStream. -->
+        <infoStream>false</infoStream>
+    </indexConfig>
+
+    <updateHandler class="solr.DirectUpdateHandler2">
+
+        <!--
+          The transaction log. Required for atomic updates and Real Time Get, both of which
+          the sessions core uses; kept here as well so a crash mid-batch replays instead of
+          losing the tail.
+          numRecordsToKeep/maxNumLogsToKeep are bounded because an unbounded tlog on a
+          write-heavy core is a slow disk-fill bug.
+        -->
+        <updateLog>
+            <str name="dir">${solr.ulog.dir:}</str>
+            <int name="numVersionBuckets">65536</int>
+            <int name="numRecordsToKeep">500</int>
+            <int name="maxNumLogsToKeep">10</int>
+        </updateLog>
+
+        <!--
+          HARD COMMIT — SPEC §5: maxTime 60000, openSearcher=false.
+
+          openSearcher=false is the important half. This flushes segments to disk and
+          truncates the tlog (durability) WITHOUT opening a new searcher (no cache flush, no
+          warming stall). Visibility is entirely the soft commit's job. Getting this backwards
+          — openSearcher=true on a 60s hard commit — is the classic way to make a Solr node
+          spend all its time warming.
+
+          maxDocs is deliberately NOT set: with a 500-document batch size, a maxDocs trigger
+          would fire on an arbitrary mid-batch boundary and add nothing over the timer.
+        -->
+        <autoCommit>
+            <maxTime>${solr.autoCommit.maxTime:60000}</maxTime>
+            <openSearcher>false</openSearcher>
+        </autoCommit>
+
+        <!--
+          SOFT COMMIT — SPEC §5: maxTime 5000.
+
+          Five seconds is the visibility floor for the live dashboard. It is also the reason
+          every autowarmCount below is 0: a soft commit opens a new searcher, and warming a
+          new searcher every five seconds means the node warms permanently and never serves.
+        -->
+        <autoSoftCommit>
+            <maxTime>${solr.autoSoftCommit.maxTime:5000}</maxTime>
+        </autoSoftCommit>
+
+    </updateHandler>
+
+    <query>
+        <!--
+          Bounded, so a pathological wildcard cannot expand into an OOM. 1024 terms is far
+          more than any query Loghound builds; the panel never sends a wildcard at all.
+        -->
+        <maxBooleanClauses>1024</maxBooleanClauses>
+
+        <!--
+          CACHE SIZING — the reasoning, since these numbers look small next to the defaults.
+
+          autowarmCount is 0 EVERYWHERE on this core. With a 5-second soft commit, a searcher
+          lives for five seconds; warming it by replaying 128 old filters costs more CPU than
+          the queries it would ever serve. Autowarming and near-real-time indexing are
+          mutually exclusive, and near-real-time wins here.
+        -->
+
+        <!--
+          filterCache: fq results as bitsets, 1 bit per document in the core. On a 50M-doc
+          core each entry is ~6 MB, so 128 entries is a 768 MB worst case — which is why it
+          is not larger. The drill-down reuses only a handful of filters (a session id, a
+          time range), so a small cache with a high hit rate beats a large cold one.
+        -->
+        <filterCache class="solr.CaffeineCache" size="128" initialSize="32" autowarmCount="0"/>
+
+        <!-- queryResultCache: ordered doc-id lists. Almost useless here — drill-downs are
+             one-shot queries with a distinct fq — so it is kept small rather than removed,
+             purely so a user paging through one session's timeline gets page 2 free. -->
+        <queryResultCache class="solr.CaffeineCache" size="128" initialSize="32" autowarmCount="0"/>
+
+        <!-- documentCache: stored-field fetches. Sized to a couple of result pages. It must
+             never be autowarmed (the doc ids are meaningless in a new searcher). -->
+        <documentCache class="solr.CaffeineCache" size="256" initialSize="64" autowarmCount="0"/>
+
+        <!--
+          Lazy field loading matters a lot here because raw_s is by far the biggest stored
+          field and almost no query asks for it. With this on, fetching path_s from a
+          document does not decompress raw_s alongside it.
+        -->
+        <enableLazyFieldLoading>true</enableLazyFieldLoading>
+
+        <queryResultWindowSize>20</queryResultWindowSize>
+        <queryResultMaxDocsCached>100</queryResultMaxDocsCached>
+
+        <!--
+          Serve from a cold searcher rather than blocking the request until warming finishes.
+          On a core that opens a searcher every five seconds, the alternative is a dashboard
+          that intermittently hangs.
+        -->
+        <useColdSearcher>true</useColdSearcher>
+
+        <!-- No newSearcher/firstSearcher warming queries, for the same reason
+             autowarmCount is 0. Deliberately absent, not forgotten. -->
+
+        <!--
+          Solr 9 removed maxWarmingSearchers from <query> in favour of this; two is enough
+          to absorb a soft commit landing while the previous searcher is still opening.
+        -->
+        <maxWarmingSearchers>2</maxWarmingSearchers>
+
+        <slowQueryThresholdMillis>2000</slowQueryThresholdMillis>
+    </query>
+
+    <!--
+      REQUEST PARSING — hardening.
+    -->
+    <requestDispatcher>
+        <!--
+          enableRemoteStreaming=false: with it on, ANY request may pass stream.url=... or
+          stream.file=... and Solr will fetch that URL or read that path server-side. That is
+          a full server-side request forgery and arbitrary file read primitive, and it has
+          been used in the wild against exposed Solr nodes. It is off by default in Solr 9;
+          it is written out here so nobody re-enables it by copying a stock config over.
+
+          enableStreamBody=false: with it on, stream.body=<xml> lets a GET request submit an
+          update — including <delete><query>*:*</query></delete>.
+
+          src/Solr.php additionally refuses to send any stream.* parameter at all, so this is
+          the second of two independent locks on the same door.
+        -->
+        <requestParsers enableRemoteStreaming="false"
+                        enableStreamBody="false"
+                        multipartUploadLimitInKB="2048"
+                        formdataUploadLimitInKB="2048"
+                        addHttpRequestToContext="false"/>
+
+        <httpCaching never304="true"/>
+    </requestDispatcher>
+
+    <!--
+      ========================================================================
+      REQUEST HANDLERS — only what Loghound calls
+      ========================================================================
+    -->
+
+    <!--
+      Search. Defaults are conservative on purpose:
+        * rows=20 so a forgotten rows parameter cannot pull a million documents.
+        * df=text_all so a bare query has somewhere to go without the caller naming a field.
+        * No "defType" default. src/Solr.php sends q={!edismax v=$uq}, and a {!...} switch at
+          the start of q is honoured ONLY by the top-level lucene parser. Setting
+          defType=edismax here would make edismax parse the literal characters "{!edismax
+          v=$uq}" as search text and return nothing — a real bug that is very hard to see.
+        * echoParams=none so an error response does not reflect the request back.
+      invariants pin the response format: wt cannot be flipped to a serialiser we do not
+      parse, and no client can ask for a stack trace.
+    -->
+    <requestHandler name="/select" class="solr.SearchHandler">
+        <lst name="defaults">
+            <str name="echoParams">none</str>
+            <int name="rows">20</int>
+            <str name="df">text_all</str>
+        </lst>
+        <lst name="invariants">
+            <str name="wt">json</str>
+            <str name="omitHeader">false</str>
+        </lst>
+    </requestHandler>
+
+    <!-- Updates. JSON only; src/Solr.php posts a JSON array of documents. -->
+    <requestHandler name="/update" class="solr.UpdateRequestHandler">
+        <lst name="defaults">
+            <str name="update.chain">loghound-update</str>
+        </lst>
+    </requestHandler>
+
+    <!--
+      Real Time Get. Needed so an atomic update can read the current document out of the
+      tlog before a searcher has seen it. Cheap and internal-only.
+    -->
+    <requestHandler name="/get" class="solr.RealTimeGetHandler">
+        <lst name="defaults">
+            <str name="omitHeader">true</str>
+            <str name="wt">json</str>
+        </lst>
+    </requestHandler>
+
+    <!-- Health check used by Solr::ping(). -->
+    <requestHandler name="/admin/ping" class="solr.PingRequestHandler">
+        <lst name="invariants">
+            <str name="q">*:*</str>
+            <str name="rows">0</str>
+        </lst>
+        <lst name="defaults">
+            <str name="echoParams">none</str>
+        </lst>
+    </requestHandler>
+
+    <!--
+      Update chain.
+
+      Only two processors. Notably ABSENT: any schemaless / add-unknown-fields processor.
+      The stock configset's chain creates a new field for anything it has not seen, which
+      means one malformed document can permanently add a field to your schema. Loghound's
+      schema is a contract; unknown fields are dropped by the `ignored` dynamicField instead.
+    -->
+    <updateRequestProcessorChain name="loghound-update" default="true">
+        <!--
+          maxNumToLog=0: do not echo document bodies into solr.log. Those bodies contain
+          full request paths, User-Agents and referers — attacker-controlled text — and
+          writing them to a second log file that nobody rotates is how log data leaks.
+        -->
+        <processor class="solr.LogUpdateProcessorFactory">
+            <int name="maxNumToLog">0</int>
+        </processor>
+        <processor class="solr.RunUpdateProcessorFactory"/>
+    </updateRequestProcessorChain>
+
+    <!--
+      ========================================================================
+      HANDLERS DELIBERATELY ABSENT — and what each one would cost
+      ========================================================================
+      This is not an oversight list. Every entry below ships in Solr's default configset and
+      is removed here on purpose.
+
+      /stream and /sql (Streaming Expressions, Parallel SQL)
+          Accept an `expr` or `stmt` parameter that is a small programming language executed
+          server-side. It can read other collections, open HTTP connections to arbitrary
+          hosts (jdbc, http stream sources), and in several CVEs has been the entry point for
+          remote code execution. Loghound needs neither. This is the single most important
+          removal in this file.
+
+      /export
+          Unbounded docValues dump of the entire core in one response. A DoS and a bulk
+          exfiltration endpoint in one. All Loghound exports are bounded and paged.
+
+      /replication
+          Exposes the raw index files for download and accepts commands that can point a
+          follower at an attacker-controlled leader. Opensolr manages replication itself at
+          the platform layer; a core-level handler here would be a second, unmanaged path.
+
+      /update/extract (ExtractingRequestHandler / Tika)
+          Parses uploaded documents with Tika. We index log lines, not documents. Removed
+          along with the contrib jar it needs.
+
+      /debug/dump
+          Echoes the full request, including headers and any credentials in them.
+
+      /analysis/field, /analysis/document, /terms, /tvrh, /spell, /suggest, /browse, /elevate
+          Introspection and UI handlers with no caller in this project. /terms in particular
+          enumerates the term dictionary, which on this schema means dumping every IP address
+          and every URL in the index without a query.
+
+      /admin/luke is left at Solr's implicit default because the Opensolr control panel uses
+      it to report index size to the operator's own dashboard.
+    -->
+
+</config>

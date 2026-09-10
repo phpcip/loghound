@@ -1,0 +1,715 @@
+/*!
+ * Loghound beacon — public/b.js — MIT licensed.
+ *
+ * ============================================================================
+ * WHAT THIS FILE IS
+ * ============================================================================
+ * Two jobs, and only two:
+ *
+ *   1. Measure REAL time on site. Every other analytics product reports "the page
+ *      was open for N minutes". That number is wrong the moment a tab is left open
+ *      in a background window: a visitor who left after four seconds is reported as
+ *      seven minutes of "engagement". We report three separate clocks and never
+ *      conflate them:
+ *
+ *        wall_ms     the page existed for this long        (what Clicky/GA report)
+ *        visible_ms  the tab was visible AND focused       (honest attention window)
+ *        engaged_ms  visible AND a human touched something (the honest number)
+ *
+ *   2. Act as the execution plane of Loghound's three-plane bot detection: does JS
+ *      run at all, does the JS engine actually match the version the User-Agent
+ *      claims, and is a human plausibly driving the pointer.
+ *
+ * ============================================================================
+ * THE ONE PRINCIPLE THAT OVERRIDES EVERYTHING ELSE IN THIS FILE
+ * ============================================================================
+ * A false "this human is a bot" is far worse than a missed bot.
+ *
+ * Therefore EVERY environment probe here goes through T() or Q() below. If an API
+ * is absent, disabled by a privacy extension, blocked by a Content Security Policy,
+ * or simply throws, the result is UNKNOWN — never evidence of automation, and never
+ * an exception escaping into the host page. Real browsers are weird: Firefox hides
+ * the WebGL renderer, Brave lies about hardwareConcurrency, corporate proxies strip
+ * APIs, old Safari is missing half of this. None of that may produce a bot verdict.
+ *
+ * For the same reason most individual signals below are deliberately WEAK. The
+ * server correlates them with the transport and behaviour planes; a single code in
+ * `automation_ss` is a hint, never a verdict.
+ *
+ * ============================================================================
+ * WHY THIS IS ES5, NOT MODERN JS
+ * ============================================================================
+ * No arrow functions, no const/let, no template literals, no optional chaining.
+ * A SyntaxError on an old engine means the whole script never runs, which means no
+ * beacon arrives, which the server would read as "no JS at all" — the strongest
+ * bot signal we have. Being unparseable is therefore not a cosmetic failure here;
+ * it is a false accusation. ES5 costs a few hundred bytes and removes that class
+ * of bug entirely.
+ *
+ * ============================================================================
+ * PRIVACY
+ * ============================================================================
+ * No cookies. No localStorage. No canvas or audio fingerprinting. Nothing is read
+ * out of the page: no content, no form values, no keystrokes (we count keydown
+ * events, we never look at which key). The URL path is sent — never the query
+ * string, which on real sites carries session tokens and password-reset codes — so
+ * a session's pageviews can be told apart in the panel, and the server treats even
+ * that as untrusted. Full field-by-field list: docs/BEACON.md.
+ *
+ * ============================================================================
+ * GRACEFUL DEGRADATION
+ * ============================================================================
+ * If the collector is unreachable, slow, 404, 500, blocked by an ad blocker or
+ * behind a dead DNS name, the host page is completely unaffected: every network
+ * call is fire-and-forget, no response body is ever parsed, no promise rejection is
+ * left unhandled, and every entry point sits inside a try/catch.
+ *
+ * ============================================================================
+ * INSTALLATION
+ * ============================================================================
+ *   <script src="https://loghound.example.com/b.js" async></script>
+ *
+ * Optional attributes: data-endpoint (collector URL), data-hb (heartbeat ms),
+ * data-idle (engagement idle timeout ms).
+ */
+(function (w, d) {
+    'use strict';
+
+    /* ------------------------------------------------------------------ *
+     * 0. Preconditions and micro-helpers
+     * ------------------------------------------------------------------ */
+
+    var P = w.performance;
+
+    // No monotonic clock means we cannot measure duration honestly. Date.now() is
+    // NOT an acceptable substitute: it jumps on NTP steps, DST changes and manual
+    // clock edits, and one jump would silently corrupt every number we publish. We
+    // would rather report nothing than report a number we do not trust.
+    if (!d || !P || typeof P.now !== 'function' || w.__lh) { return; }
+    w.__lh = 1;
+
+    // Aliases. These are read constantly and a minifier cannot shorten a global.
+    var NV = w.navigator || {};
+    var SC = w.screen || {};
+
+    /**
+     * Probe wrapper: returns the probe's value, or undefined when the API is
+     * missing or throws. THE safety net described in the header.
+     */
+    function T(f) {
+        try { return f(); } catch (e) { return undefined; }
+    }
+
+    /** Push signal code `c` when probe f() is truthy. A throw pushes nothing. */
+    function Q(f, c) {
+        try { if (f()) { push(c); } } catch (e) { /* unknown is not a signal */ }
+    }
+
+    /** Monotonic milliseconds. Never wall-clock. */
+    function now() { return P.now(); }
+
+    /** Attach a passive, capturing listener without ever throwing. */
+    function on(t, n, h) {
+        T(function () { t.addEventListener(n, h, { capture: true, passive: true }); });
+    }
+
+    /* ------------------------------------------------------------------ *
+     * 1. Configuration (read off our own script tag)
+     * ------------------------------------------------------------------ */
+
+    var SELF = d.currentScript || T(function () {
+        var a = d.getElementsByTagName('script');
+        return a[a.length - 1];
+    });
+
+    function attr(n) { return T(function () { return SELF.getAttribute(n); }); }
+
+    // The collector lives next to b.js unless told otherwise, so the install
+    // snippet is one line with no second URL to keep in sync.
+    var EP = attr('data-endpoint') ||
+        T(function () { return SELF.src.replace(/\/b\.js(\?.*)?$/, '/collect.php'); });
+    if (!EP) { return; }
+
+    /** Read a numeric data- attribute, refusing values outside a sane range. */
+    function attrInt(n, def, min, max) {
+        var v = parseInt(attr(n), 10);
+        return (isFinite(v) && v >= min && v <= max) ? v : def;
+    }
+
+    var HB   = attrInt('data-hb', 15000, 2000, 300000);   // heartbeat interval
+    var IDLE = attrInt('data-idle', 30000, 1000, 600000); // engagement idle timeout
+
+    /* ------------------------------------------------------------------ *
+     * 2. The three clocks
+     * ------------------------------------------------------------------ *
+     *
+     * Everything is a performance.now() delta. The accumulators only ever move
+     * forward and only ever move inside accrue().
+     *
+     * accrue() closes the segment [last, now]. Within one segment the
+     * visibility/focus state is constant, because every event that could change it
+     * calls accrue() BEFORE it updates the state. That is what makes these numbers
+     * exact rather than "sampled once a second".
+     */
+
+    var t0, last, visMs, engMs, lastInt, visNow;
+    var pv, beat, sentEng, ended;
+    var itMask, itCount, mmPts, mmLast, scLast, scrollPct, scrolled;
+
+    /**
+     * Is the page really being looked at right now?
+     *
+     * visibilityState alone is not enough: a visible but unfocused window (the
+     * visitor is in another application, or another window is on top) is not
+     * attention. document.hasFocus() is absent on some very old engines — the call
+     * then throws, T() returns undefined, and we fall back to "visible" rather than
+     * reporting a false zero.
+     */
+    function computeVisible() {
+        // 'prerender' and 'hidden' both mean nobody is looking, so a page that
+        // starts prerendered or in a background tab accrues no visible time at all
+        // until it is actually shown. That is the entire point of the metric.
+        if (d.visibilityState && d.visibilityState !== 'visible') { return false; }
+        var f = T(function () { return d.hasFocus(); });
+        return f === undefined ? true : !!f;
+    }
+
+    /**
+     * Close the open segment and add its duration to the right accumulators.
+     *
+     * Engaged time is the OVERLAP of the segment with the window
+     * [lastInt, lastInt + IDLE]. Because accrue() also runs on every interaction,
+     * lastInt is always <= the segment start, so the overlap is simply
+     * min(segEnd, lastInt + IDLE) - segStart clamped into [0, dt]. Exact, with no
+     * polling timer, and it never credits the 15 seconds that follow a
+     * 30-second-old interaction.
+     */
+    function accrue() {
+        var t = now(), dt = t - last;
+        last = t;
+        // A non-positive delta (clock anomaly, or two events inside one
+        // millisecond) contributes nothing rather than something negative.
+        if (!(dt > 0) || !visNow) { return; }
+        visMs += dt;
+        if (lastInt >= 0) {
+            var ov = Math.min(t, lastInt + IDLE) - (t - dt);
+            if (ov > 0) { engMs += (ov > dt ? dt : ov); }
+        }
+    }
+
+    /**
+     * Reset every per-pageview accumulator. Called once at load, and again on a
+     * bfcache restore, which really is a new pageview (see the pageshow handler).
+     */
+    function reset() {
+        t0 = last = now();
+        visMs = engMs = 0;
+        lastInt = -1;
+        visNow = computeVisible();
+        // The pageview id only has to be locally unique so the server can collapse
+        // this pageview's heartbeats onto one row. It is not a security value and
+        // it is not an identifier of the visitor, so Math.random is the right tool.
+        pv = (Math.random() + '.' + Math.random()).replace(/\D/g, '').slice(0, 16);
+        beat = 0;
+        sentEng = -1;
+        ended = false;
+        itMask = itCount = 0;
+        mmPts = [];
+        mmLast = scLast = -1;
+        scrollPct = 0;
+        scrolled = false;
+    }
+    reset();
+
+    /* ------------------------------------------------------------------ *
+     * 3. Human-presence evidence
+     * ------------------------------------------------------------------ *
+     * Interaction type bits, reported to the server as a mask so it can see WHICH
+     * types occurred, not merely how many: 0 mousemove, 1 scroll, 2 keydown,
+     * 3 click, 4 pointerdown, 5 touchstart, 6 wheel.
+     */
+
+    /** Count one interaction of the given type and re-arm the engagement window. */
+    function mark(i) {
+        accrue();            // close the segment BEFORE lastInt moves
+        lastInt = now();
+        itMask |= (1 << i);
+        itCount++;
+    }
+
+    'keydown click pointerdown touchstart wheel'.split(' ').forEach(function (n, i) {
+        on(w, n, function () { mark(i + 2); });
+    });
+
+    // mousemove is throttled to one sample per second. An unthrottled mousemove
+    // handler is the classic way an analytics script shows up in a performance
+    // profile; this one does almost nothing, and does it rarely.
+    on(w, 'mousemove', function (e) {
+        var t = now();
+        if (mmLast >= 0 && t - mmLast < 1000) { return; }
+        mmLast = t;
+        mark(0);
+        // clientX/clientY only: viewport-relative, no page content, no identity.
+        if (mmPts.length < 16) { mmPts.push([e.clientX | 0, e.clientY | 0]); }
+    });
+
+    /** Full document height, for scroll depth and for the "tall page" test. */
+    function docH() {
+        var de = d.documentElement || {};
+        return Math.max(de.scrollHeight || 0, (d.body && d.body.scrollHeight) || 0);
+    }
+
+    /** Viewport height. */
+    function vpH() {
+        return w.innerHeight || (d.documentElement && d.documentElement.clientHeight) || 0;
+    }
+
+    // scroll is throttled to 4/sec and does one cheap layout read.
+    on(w, 'scroll', function () {
+        var t = now();
+        scrolled = true;
+        if (scLast >= 0 && t - scLast < 250) { return; }
+        scLast = t;
+        mark(1);
+        var pct = T(function () {
+            var h = docH(), vh = vpH();
+            if (h <= 0 || vh <= 0) { return 0; }
+            return ((w.pageYOffset || d.documentElement.scrollTop || 0) + vh) / h * 100;
+        });
+        if (pct > scrollPct) { scrollPct = pct > 100 ? 100 : pct; }
+    });
+
+    // Visibility and focus: accrue() first, THEN change the state, so the segment
+    // that just ended is attributed to the state it was actually in.
+    function stateChanged() {
+        accrue();
+        visNow = computeVisible();
+    }
+    on(d, 'visibilitychange', function () {
+        stateChanged();
+        // Hidden is the most reliable "the visitor is leaving" moment on mobile,
+        // where pagehide and unload frequently never fire at all.
+        if (!visNow) { flush(); }
+    });
+    on(w, 'blur', stateChanged);
+    on(w, 'focus', stateChanged);
+
+    /**
+     * Classify pointer movement from the sampled points. Three deliberately
+     * conservative outcomes:
+     *
+     *   human_mouse_natural  points vary in a way a straight line cannot explain
+     *   mouse_linear         >=90% of sampled triples are EXACTLY collinear, which
+     *                        is what a driver interpolating between two points
+     *                        produces and what a hand never produces
+     *   mouse_static         the pointer "moved" but never actually changed pixel
+     *
+     * Below 6 samples we say nothing at all: a visitor who nudged the mouse twice
+     * is not evidence of anything.
+     */
+    function mouseCodes(out) {
+        var n = mmPts.length, i, col = 0, tri = 0, moved = 0, a, b, c;
+        if (n < 6) { return; }
+        for (i = 2; i < n; i++) {
+            a = mmPts[i - 2];
+            b = mmPts[i - 1];
+            c = mmPts[i];
+            tri++;
+            // Cross product AB x AC. Exactly zero means the three are collinear.
+            if ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) === 0) { col++; }
+            if (b[0] !== a[0] || b[1] !== a[1]) { moved++; }
+        }
+        out.push(!moved ? 'mouse_static' : (col / tri >= 0.9 ? 'mouse_linear' : 'human_mouse_natural'));
+    }
+
+    /* ------------------------------------------------------------------ *
+     * 4. Execution-plane probes
+     * ------------------------------------------------------------------ *
+     * Everything here runs once, off the critical path, and appends short string
+     * codes to `sig`. The server scores the codes; this file assigns no weights.
+     */
+
+    var sig     = [];   // signal codes -> automation_ss
+    var uaClaim = -1;   // 1 engine matches the UA claim, 0 it does not, -1 unknown
+    var webgl   = '';   // UNMASKED_RENDERER, '' when unavailable
+    var tz      = '';   // IANA timezone from Intl, '' when unavailable
+
+    /** Record a signal code once. Hard cap so nothing can inflate the payload. */
+    function push(c) {
+        if (sig.length < 32 && sig.indexOf(c) < 0) { sig.push(c); }
+    }
+
+    var ua = NV.userAgent || '';
+    // Rough device class from the UA, used only to decide which probes are
+    // meaningful at all. The server has a real UA parser; this is a local shortcut.
+    var uaMobile = /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua);
+    var uaChrome = /Chrom(e|ium)\/\d/.test(ua);
+
+    /* ---- 4.1 Definitive automation markers ---------------------------------
+     * The flags a driver leaves behind when nobody bothered to hide them. Present
+     * means certainty; ABSENT MEANS NOTHING AT ALL, because hiding them is a
+     * one-line patch that every serious scraper applies.
+     *
+     * Rows are "code prefix prefix ...", matched as PREFIXES of the global
+     * object's own enumerable property names. Prefix matching rather than a scan
+     * for "anything suspicious" is deliberate: a site that happens to define a
+     * similar-looking variable must not be able to frame its own visitors.
+     * chromedriver's marker is a randomised name such as cdc_adoQpoasnfa76pfcZLmcfl_
+     * and it lands on document as well as on window, so both are scanned.
+     */
+    var DRV = ('cdc cdc_ $cdc_|playwright __playwright __pw_|puppeteer __puppeteer|'
+        + 'selenium __selenium __webdriver __driver_ __fxdriver|nightmare __nightmare|'
+        + 'phantom _phantom callPhantom __phantomas|domauto domAutomation')
+        .split('|').map(function (r) { return r.split(' '); });
+
+    function scan(o) {
+        var k, i, j, r;
+        for (k in o) {
+            for (i = 0; i < DRV.length; i++) {
+                r = DRV[i];
+                for (j = 1; j < r.length; j++) {
+                    if (k.indexOf(r[j]) === 0) { push('automation_' + r[0]); }
+                }
+            }
+        }
+    }
+
+    function markers() {
+        Q(function () { return NV.webdriver === true; }, 'automation_webdriver');
+        T(function () { scan(w); });
+        T(function () { scan(d); });
+    }
+
+    /* ---- 4.2 Headless-Chrome tells ------------------------------------------
+     * Individually weak to medium. The renderer string is the strong one: a
+     * software rasteriser under a UA claiming a consumer desktop browser means the
+     * "browser" has no GPU, which is what a container looks like.
+     */
+    function hl(c) { push('headless_' + c); }
+
+    function headless() {
+        // WebGL renderer. Firefox and several privacy extensions block the
+        // debug-renderer extension entirely, so absence is UNKNOWN, not a signal.
+        T(function () {
+            var c = d.createElement('canvas');
+            var gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+            if (!gl) { return; }
+            var ext = gl.getExtension('WEBGL_debug_renderer_info');
+            if (ext) {
+                webgl = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '').slice(0, 120);
+            }
+            // Release the context at once: holding a GPU surface open for the life
+            // of the page would be a real cost to a real visitor.
+            var lose = gl.getExtension('WEBGL_lose_context');
+            if (lose) { lose.loseContext(); }
+        });
+        if (webgl && /SwiftShader|llvmpipe|Mesa OffScreen|Microsoft Basic Render/i.test(webgl)) {
+            hl('renderer');
+        }
+
+        // No plugins at all under a desktop Chrome UA. Modern Chrome still exposes
+        // a fixed list of five PDF entries; headless historically exposed none.
+        Q(function () { return !uaMobile && uaChrome && NV.plugins.length === 0; }, 'headless_no_plugins');
+
+        // navigator.languages missing or empty. Real browsers always populate it.
+        Q(function () { return !NV.languages || !NV.languages.length; }, 'headless_no_languages');
+
+        // window.chrome absent under a Chrome UA is strong. window.chrome.runtime
+        // absent is WEAK: its presence on ordinary pages has changed several times
+        // across Chrome releases and it is trivially faked.
+        if (uaChrome) {
+            if (!w.chrome) {
+                hl('no_window_chrome');
+            } else {
+                Q(function () { return !w.chrome.runtime; }, 'headless_no_chrome_runtime');
+            }
+        }
+
+        // The classic contradiction: the Notification API says permission is
+        // already denied while the Permissions API says the user was never asked.
+        // No real profile is in both states at once. This one is async, so it
+        // lands in a later heartbeat rather than in the first payload.
+        T(function () {
+            if (w.Notification && w.Notification.permission === 'denied' && NV.permissions) {
+                NV.permissions.query({ name: 'notifications' }).then(function (r) {
+                    if (r && r.state === 'prompt') { hl('notif_contradiction'); }
+                })['catch'](function () {});
+            }
+        });
+
+        // hardwareConcurrency zero or absent under a UA claiming a real browser.
+        // Brave and Safari clamp this value, so only 0/absent is reported.
+        Q(function () { return uaChrome && !NV.hardwareConcurrency; }, 'headless_no_concurrency');
+    }
+
+    /* ---- 4.3 UA-claim verification -------------------------------------------
+     *
+     * The cheapest near-definitive check available. A scraper can set any
+     * User-Agent string it likes, but it cannot retrofit V8: the engine either has
+     * the features that shipped in the Chrome version the UA claims, or it does not.
+     *
+     * THE TABLE. Flat pairs of [chrome_major, dotted path to a function that first
+     * shipped natively in that Chrome release], resolved against `window`.
+     *
+     *   major <= claimed - GRACE : the feature MUST be present. Missing means the
+     *   engine is OLDER than claimed -> `ua_older_engine`. (An old engine wearing a
+     *   fresh UA: the classic scraper.)
+     *
+     *   major >= claimed + GRACE : the feature MUST be absent. Present means the
+     *   engine is NEWER than claimed -> `ua_newer_engine`. (A current engine wearing
+     *   an old UA, to dodge feature gates or to look like a long-lived install.)
+     *
+     * The specific mismatching probe is reported as `ua_probe_<major>`.
+     *
+     * HOW TO EXTEND AS CHROME ADVANCES: add one pair roughly every 10 Chrome
+     * releases, using a feature that (a) shipped in a known Chrome version — look it
+     * up on caniuse or in the V8 release notes, never guess — (b) is a FUNCTION
+     * reachable by a dotted path from window, and (c) is not commonly polyfilled.
+     * NEVER remove old rows: they are what catches ancient engines. Syntax-only
+     * features (optional chaining, class fields) cannot be used here at all, since
+     * detecting them requires eval, which our own CSP and most customers' CSPs
+     * forbid.
+     *
+     * FALSE-POSITIVE GUARD: has() rejects polyfills by requiring the function's
+     * source to be native code. A page loading core-js would otherwise make an old
+     * engine look new and get its visitors flagged. A non-native function reads as
+     * "feature absent", which is the safe direction.
+     *
+     * GRACE = 2 means a UA that is one or two majors out of step — a browser
+     * mid-upgrade, an enterprise pin, Chrome's own UA-reduction quirks — is never
+     * flagged.
+     */
+    var GRACE = 2;
+    var UA_PROBES = [
+        63,  'Promise.prototype.finally',
+        69,  'Array.prototype.flat',
+        73,  'Object.fromEntries',
+        85,  'String.prototype.replaceAll',
+        93,  'Object.hasOwn',
+        98,  'structuredClone',
+        110, 'Array.prototype.toSorted',
+        122, 'Set.prototype.union'
+    ];
+
+    /** True only when the dotted path resolves to genuine native code. */
+    function has(path) {
+        return T(function () {
+            var o = w, s = path.split('.'), i;
+            for (i = 0; i < s.length; i++) { o = o[s[i]]; }
+            return typeof o === 'function' &&
+                /\{\s*\[native code\]\s*\}/.test(Function.prototype.toString.call(o));
+        }) === true;
+    }
+
+    function uaClaimCheck() {
+        // Chrome-, Edge-, Firefox- and Opera-on-iOS are all WebKit wearing a
+        // Chrome-shaped UA. Their feature set has nothing to do with the Chrome
+        // version in the string, so they are excluded outright: skipping them costs
+        // us nothing, flagging them would be a pure false positive on millions of
+        // real iPhones.
+        if (/CriOS|EdgiOS|FxiOS|OPiOS|Firefox\//.test(ua)) { return; }
+        var m = /Chrom(?:e|ium)\/(\d+)/.exec(ua);
+        if (!m) { return; }  // Safari, Firefox, curl, anything else: not our claim to test
+        var claimed = +m[1];
+        if (!(claimed >= 40 && claimed <= 400)) { return; } // nonsense: unknown, not a provable lie
+
+        var bad = 0, i, min, have;
+        for (i = 0; i < UA_PROBES.length && !bad; i += 2) {
+            min = UA_PROBES[i];
+            have = has(UA_PROBES[i + 1]);
+            if (min <= claimed - GRACE && !have) { bad = -1; }
+            else if (min >= claimed + GRACE && have) { bad = 1; }
+            if (bad) { push('ua_probe_' + min); }
+        }
+        uaClaim = bad ? 0 : 1;
+        if (bad) { push(bad < 0 ? 'ua_older_engine' : 'ua_newer_engine'); }
+    }
+
+    /* ---- 4.4 Consistency cross-checks ----------------------------------------
+     *
+     * These compare two things the environment states about itself: a genuine
+     * browser agrees with itself, a patched one usually forgets one of the two.
+     *
+     * THE CLIENT REPORTS THE MEASUREMENTS; THE SERVER DOES THE COMPARING.
+     * Beacon::derive() in src/Beacon.php turns the raw numbers below into the
+     * codes `platform_mismatch`, `touch_missing_mobile`, `dpr_odd`,
+     * `screen_outer_impossible`, `headless_zero_outer` and
+     * `headless_screen_eq_avail`. Three reasons this split is right and not merely
+     * a way to save bytes:
+     *
+     *   1. The server holds the AUTHORITATIVE User-Agent, read off the connection
+     *      by the collector. Half of these checks compare something against the UA,
+     *      and the UA the client hands us is exactly the thing we do not trust.
+     *   2. A client cannot suppress a comparison it never performs.
+     *   3. The comparison thresholds can be tuned on the server without asking
+     *      every customer to re-deploy a script tag on their site.
+     *
+     * The timezone follows the same pattern and always has: the beacon reports the
+     * IANA zone, the server compares it against the IP's geolocation to set
+     * tz_match_b, because the beacon must never be told where the server thinks
+     * the visitor is.
+     */
+    function consistency() {
+        tz = T(function () { return Intl.DateTimeFormat().resolvedOptions().timeZone; }) || '';
+        if (!tz) { push('tz_unknown'); }
+    }
+
+    // Run the probes off the critical path: requestIdleCallback where available,
+    // otherwise a zero timeout. Either way the host page's first paint and its own
+    // scripts go first, and nothing above depends on this having finished.
+    (function () {
+        var run = function () { T(markers); T(headless); T(uaClaimCheck); T(consistency); };
+        if (typeof w.requestIdleCallback === 'function') {
+            w.requestIdleCallback(run, { timeout: 2000 });
+        } else {
+            setTimeout(run, 0);
+        }
+    }());
+
+    /* ------------------------------------------------------------------ *
+     * 5. Transport
+     * ------------------------------------------------------------------ */
+
+    var sid  = '';     // session id, issued by the server
+    var tok  = '';     // HMAC token, issued by the server
+    var dead = false;  // collector unreachable: go quiet, leave the page alone
+
+    /**
+     * Build the payload. Keys are short because this goes out several times per
+     * pageview under an 8 KB server-side cap. The mapping from these keys to Solr
+     * fields is documented in docs/BEACON.md and implemented in src/Beacon.php.
+     */
+    function payload(ev) {
+        accrue();
+        var codes = sig.slice(0);
+        // Human-presence evidence is computed at send time so it describes the
+        // whole pageview so far, not the state at load. `no_interaction` is NOT
+        // emitted here: whether zero interactions is damning depends on how the
+        // session ended, which only the server knows (see Beacon::derive()).
+        mouseCodes(codes);
+        // A page taller than the viewport that was never scrolled at all. On a
+        // short page this means nothing, which is why the height test is here, on
+        // the only side of the wire that can see the document.
+        if (!scrolled && docH() > vpH() * 1.5) { codes.push('no_scroll_tall_page'); }
+
+        return {
+            v: 1,
+            e: ev,                     // 'h' hello | 'b' heartbeat | 'x' final
+            s: sid,
+            k: tok,
+            p: pv,
+            n: ++beat,
+            w: Math.round(now() - t0), // wall_ms
+            vi: Math.round(visMs),
+            en: Math.round(engMs),
+            ic: itCount,
+            im: itMask,
+            sp: Math.round(scrollPct),
+            a: codes,
+            uo: uaClaim,
+            tz: tz,
+            gl: webgl,
+            // Path only, never the query string.
+            u: (w.location.pathname || '').slice(0, 512),
+            // --- raw environment measurements the SERVER cross-checks (4.4) ---
+            // navigator.platform, or the modern userAgentData.platform.
+            pl: ((NV.userAgentData && NV.userAgentData.platform) || NV.platform || '').slice(0, 32),
+            // Touch capability as a count; 'ontouchstart' covers older engines.
+            mt: (NV.maxTouchPoints | 0) || ('ontouchstart' in w ? 1 : 0),
+            dp: +w.devicePixelRatio || 0,
+            sw: SC.width | 0,
+            sh: SC.height | 0,
+            aw: SC.availWidth | 0,
+            ah: SC.availHeight | 0,
+            ow: w.outerWidth | 0,
+            oh: w.outerHeight | 0
+        };
+    }
+
+    /**
+     * POST a body. `cb` receives the Response when one is available.
+     *
+     * keepalive lets the request outlive the document, which is what makes the
+     * LAST pageview of a session measurable — the thing log-only analytics
+     * structurally cannot do. text/plain keeps this a CORS "simple request": no
+     * preflight, no OPTIONS round trip, byte-identical to what sendBeacon sends.
+     * credentials:'omit' is stated explicitly because "this never sends cookies" is
+     * a promise we make in the privacy documentation.
+     */
+    function post(body, cb) {
+        var ok = T(function () {
+            w.fetch(EP, {
+                method: 'POST',
+                body: body,
+                headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+                credentials: 'omit',
+                keepalive: true
+            }).then(cb || function () {})['catch'](function () { dead = true; });
+            return 1;
+        });
+        if (!ok) { dead = true; }
+    }
+
+    /**
+     * Send a payload, preferring sendBeacon: the browser queues it and delivers it
+     * even after the document is torn down.
+     */
+    function send(ev) {
+        if (dead || !sid || !tok) { return; }
+        // One try/catch covers payload building as well as the send: a throw
+        // anywhere in here must cost us a data point, never break the host page.
+        var body = T(function () { return JSON.stringify(payload(ev)); });
+        if (!body) { return; }
+        sentEng = engMs;
+        // An explicit text/plain Blob: some browsers send application/octet-stream
+        // for a bare string, and the collector accepts text/plain and JSON only.
+        if (T(function () {
+            return NV.sendBeacon(EP, new Blob([body], { type: 'text/plain;charset=UTF-8' }));
+        }) !== true) { post(body); }
+    }
+
+    /** Final flush for this pageview. Sent at most once per pageview. */
+    function flush() {
+        if (!ended) { ended = true; send('x'); }
+    }
+
+    /**
+     * The first call. Uses fetch rather than sendBeacon because it is the one call
+     * whose RESPONSE we need: the collector answers 204 with no body (it must never
+     * reveal whether a token was valid) and returns the session id and HMAC token
+     * in headers, which is the only channel a bodiless response leaves open.
+     *
+     * If it fails for any reason we go quiet permanently rather than retrying in a
+     * loop against a dead endpoint.
+     */
+    post(T(function () { return JSON.stringify(payload('h')); }) || '{}', function (r) {
+        var s = T(function () { return r.headers.get('X-LH-S'); });
+        var t = T(function () { return r.headers.get('X-LH-T'); });
+        if (!s || !t) { dead = true; return; }
+        sid = s;
+        tok = t;
+        // Heartbeat. Only sends when engaged time actually advanced since the last
+        // send, so a tab idling for an hour produces one beat, not 240. The
+        // heartbeat exists so a tab killed by the OS — or by a phone running out of
+        // memory — still leaves us data up to the last beat.
+        setInterval(function () {
+            T(function () {
+                accrue();
+                if (!ended && !dead && engMs > sentEng + 500) { send('b'); }
+            });
+        }, HB);
+    });
+
+    // pagehide is the correct end-of-page event. `unload` is NEVER used: it
+    // disables the back/forward cache in every modern browser — measurably slowing
+    // the site down for real visitors — and it does not fire reliably on mobile.
+    on(w, 'pagehide', flush);
+
+    // bfcache restore: the page is alive again after being frozen, so this is a NEW
+    // pageview with fresh clocks. Keeping the old ones would count time spent
+    // frozen in the bfcache as time on site, which is exactly the class of lie this
+    // beacon exists to stop telling.
+    on(w, 'pageshow', function (e) {
+        if (e && e.persisted) { reset(); }
+    });
+}(window, document));

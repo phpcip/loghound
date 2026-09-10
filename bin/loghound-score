@@ -1,0 +1,581 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Loghound — periodic scorer (SPEC §5, second half).
+ *
+ * Run every 60 seconds by loghound-score.timer. One pass does, in order:
+ *
+ *   1. Close sessions that have been idle past the timeout.
+ *   2. Merge staged beacon rows into those sessions.
+ *   3. Compute fp_ips_24h_i for every distinct fingerprint in the batch, in as few Solr
+ *      queries as possible.
+ *   4. Run the ruleset.
+ *   5. Upsert the session documents.
+ *   6. Recompute the daily rollup for every day the batch touched.
+ *
+ * Everything except steps 3 and 5–6 is local: the session aggregate was accumulated in
+ * SQLite while the session was open, so the scorer does not re-read the hits core to find
+ * out what happened. See src/Sessionizer.php for why that is the only design that scales.
+ *
+ * Exit codes: 0 success, 1 configuration error, 2 runtime failure.
+ *
+ * @package Loghound
+ * @license MIT
+ */
+
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli') {
+    // A daemon script reachable over HTTP would be an unauthenticated way to trigger Solr
+    // writes. Nothing should ever place bin/ inside a document root, but refuse anyway.
+    http_response_code(404);
+    exit;
+}
+
+require __DIR__ . '/../src/autoload.php';
+
+use Loghound\Config;
+use Loghound\Score\Rules;
+use Loghound\Score\Signals;
+use Loghound\Sessionizer;
+use Loghound\Solr;
+
+$root       = dirname(__DIR__);
+$configPath = getenv('LOGHOUND_CONFIG') ?: $root . '/config/loghound.php';
+$verbose    = in_array('-v', $argv, true) || in_array('--verbose', $argv, true);
+
+/**
+ * Write a line to stderr.
+ *
+ * stderr rather than stdout so systemd's journal keeps it separate from anything a future
+ * --json mode might print, and so a cron wrapper can redirect the two differently.
+ */
+$log = static function (string $msg) use ($verbose): void {
+    if ($verbose) {
+        fwrite(STDERR, '[' . gmdate('Y-m-d H:i:s') . '] ' . $msg . "\n");
+    }
+};
+
+// -----------------------------------------------------------------------------------------
+// Configuration
+// -----------------------------------------------------------------------------------------
+
+$cfg = Config::load($configPath);
+$errors = $cfg->validate();
+if ($errors !== []) {
+    fwrite(STDERR, "Loghound: configuration is not usable:\n  - " . implode("\n  - ", $errors) . "\n");
+    exit(1);
+}
+
+$all         = $cfg->all();
+$hitsCore    = (string) $cfg->get('solr.hits_core');
+$sessionCore = (string) $cfg->get('solr.sessions_core');
+
+try {
+    $solr = new Solr((array) $cfg->get('solr', []));
+    $rules = new Rules((array) $cfg->get('scoring', []));
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'Loghound: ' . $e->getMessage() . "\n");
+    exit(1);
+}
+
+// -----------------------------------------------------------------------------------------
+// State and beacon
+//
+// src/State.php and src/Beacon.php are written by other agents. Both are resolved
+// tolerantly here: a missing Beacon degrades this run to the log plane only (which is a
+// legitimate deployment — SPEC §8's detection ladder works without the beacon), while a
+// missing State is fatal, because without the open-session table there is nothing to score.
+// -----------------------------------------------------------------------------------------
+
+$statePath = $root . '/var/state.db';
+
+if (!class_exists('\\Loghound\\State')) {
+    fwrite(STDERR, "Loghound: src/State.php is not available; cannot read open sessions.\n");
+    exit(2);
+}
+
+try {
+    $state = new \Loghound\State($statePath);
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'Loghound: cannot open state database: ' . $e->getMessage() . "\n");
+    exit(2);
+}
+
+$beaconMerger = null;
+if ((bool) $cfg->get('beacon.enabled') && class_exists('\\Loghound\\Beacon')) {
+    try {
+        $beaconMerger = new \Loghound\Beacon($cfg);
+    } catch (\Throwable $e) {
+        // A beacon that cannot initialise must not stop the log plane from being scored.
+        // A log-only deployment is a supported configuration, not a degraded one.
+        $log('beacon merge unavailable: ' . $e->getMessage());
+    }
+}
+
+// -----------------------------------------------------------------------------------------
+// 1. Close idle sessions
+// -----------------------------------------------------------------------------------------
+
+$sessionizer = new Sessionizer($state, $all);
+$now = time();
+
+try {
+    // State measures idleness in epoch milliseconds.
+    $closed = $sessionizer->closeIdle($now * 1000);
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'Loghound: closing idle sessions failed: ' . $e->getMessage() . "\n");
+    exit(2);
+}
+
+if ($closed === []) {
+    $log('nothing to score');
+    exit(0);
+}
+$log('closed ' . count($closed) . ' session(s)');
+
+// -----------------------------------------------------------------------------------------
+// 2. Merge staged beacon rows
+// -----------------------------------------------------------------------------------------
+
+/*
+ * Beacon::mergeIntoSession() takes the SESSION DOCUMENT (Solr field names) and the staged
+ * rows, and returns the document with the execution-plane fields merged in. So the document
+ * is built first, here, and the verdict fields are added after scoring.
+ *
+ * It needs tz_s on the document to compute tz_match_b, which is why the identity fields have
+ * to be on there before the merge rather than after.
+ */
+$docs      = [];
+$mergedIds = [];
+
+foreach ($closed as $session) {
+    $sid = (string) $session['session_id'];
+
+    $doc = buildSessionDoc($session);
+
+    if ($beaconMerger !== null) {
+        try {
+            // Match on session id first, falling back to the client key for a beacon that
+            // arrived before the tailer had issued an id (SPEC §6.4).
+            $rows = $state->beaconsFor($sid, (string) ($session['client_key'] ?? ''));
+            $doc = $beaconMerger->mergeIntoSession($doc, $rows);
+            foreach ($rows as $row) {
+                if (isset($row['id'])) {
+                    $mergedIds[] = (int) $row['id'];
+                }
+            }
+        } catch (\Throwable $e) {
+            // A beacon-merge failure loses the execution plane for one session. It must not
+            // lose the session — the log plane still has something to say about it.
+            $log('beacon merge failed for ' . $sid . ': ' . $e->getMessage());
+        }
+    }
+
+    $docs[$sid] = $doc;
+}
+
+/*
+ * beacon_deployed: is the execution plane actually live on this site?
+ *
+ * This gates the no_js_on_html rule, which is worth 70 points and would otherwise fire on
+ * EVERY visitor of a site that never installed the beacon. The flag is computed from
+ * evidence rather than from configuration: the beacon must be enabled AND at least one
+ * session in this batch must have reported. Config says what the operator intended;
+ * evidence says what is true, and only the second one is safe to score on.
+ *
+ * The conservative failure mode is deliberate. On a quiet minute containing only bot
+ * sessions, no beacon reports, the flag is false, and the rule does not fire — we
+ * under-detect rather than mislabel a human. That is always the right direction here.
+ */
+$beaconDeployed = false;
+if ((bool) $cfg->get('beacon.enabled')) {
+    foreach ($docs as $doc) {
+        if (!empty($doc['beacon_b'])) {
+            $beaconDeployed = true;
+            break;
+        }
+    }
+}
+
+/*
+ * site_sends_304: does this site actually support conditional requests?
+ *
+ * Gates the no_304_on_repeat rule, for the same reason and by the same method as
+ * beacon_deployed above. A 304 requires the SERVER to send an ETag or Last-Modified;
+ * without one the browser cannot make a conditional request and a full 200 is its only
+ * option. On a site that serves its static files with no validators, the naive rule
+ * measures the server's configuration and blames the client — and it fires on four of the
+ * five real human sessions in tests/fixtures/apache_combined_human.log, which came from
+ * exactly such a site.
+ *
+ * So the flag is evidence-based: at least one session in this batch received a 304,
+ * proving conditional requests work here. When nothing in the batch did, the rule stays
+ * silent rather than accusing everyone.
+ */
+$siteSends304 = false;
+foreach ($closed as $session) {
+    if (!empty($session['got_304'])) {
+        $siteSends304 = true;
+        break;
+    }
+}
+
+// -----------------------------------------------------------------------------------------
+// 3. Fingerprint clustering — fp_ips_24h_i
+//
+// SPEC §5 step 3 asks for "one JSON Facet query per distinct fingerprint in the batch".
+// This does better: ONE query per time bucket, faceting on all the fingerprints in that
+// bucket at once. A run closing 5,000 sessions issues a handful of queries instead of
+// thousands, and the answer is identical — a terms facet on fp_hash_s with unique(ip_s)
+// under it returns the per-fingerprint counts in a single response.
+//
+// The window: SPEC says ±12h around the session. Sessions are bucketed by the hour they
+// ended and the whole bucket shares one window of [bucketStart-12h, bucketStart+13h]. That
+// is at most one hour wider than the exact per-session window. In normal operation every
+// session in a run lands in the same bucket, so the approximation is invisible; on a
+// backlog replay it can only ever include slightly MORE neighbouring traffic, never less,
+// and the effect on a >=5 threshold is negligible. Documented rather than hidden.
+// -----------------------------------------------------------------------------------------
+
+/** @var array<string,int|null> fp_hash => distinct IP count, or null when unknown. */
+$fpCounts = [];
+
+/** @var array<int,array<string,bool>> hour bucket => set of fingerprints */
+$buckets = [];
+foreach ($closed as $session) {
+    $fp = (string) (($session['first']['fp_hash_s'] ?? '') ?: '');
+    if ($fp === '') {
+        continue;
+    }
+    $bucket = (int) (floor(((int) $session['ts_end']) / 3600) * 3600);
+    $buckets[$bucket][$fp] = true;
+}
+
+foreach ($buckets as $bucketStart => $fpSet) {
+    $hashes = array_keys($fpSet);
+
+    // termsFilter caps at 512 values; chunk well below it so the generated filter stays
+    // comfortably inside maxBooleanClauses too.
+    foreach (array_chunk($hashes, 200) as $chunk) {
+        $from = gmdate('Y-m-d\TH:i:s\Z', $bucketStart - 12 * 3600);
+        $to   = gmdate('Y-m-d\TH:i:s\Z', $bucketStart + 13 * 3600);
+
+        try {
+            $res = $solr->jsonFacet(
+                $hitsCore,
+                [
+                    'q'  => '*:*',
+                    'fq' => [
+                        Solr::termsFilter('fp_hash_s', $chunk),
+                        Solr::rangeFilter('ts', $from, $to),
+                    ],
+                ],
+                [
+                    'by_fp' => [
+                        'type'     => 'terms',
+                        'field'    => 'fp_hash_s',
+                        'limit'    => count($chunk),
+                        'mincount' => 1,
+                        'facet'    => [
+                            // unique() is an approximation above ~100 values by default,
+                            // which is fine: the rule asks "is this at least 5", and the
+                            // approximation is exact well below that.
+                            'ips' => 'unique(ip_s)',
+                        ],
+                    ],
+                ]
+            );
+
+            foreach (($res['facets']['by_fp']['buckets'] ?? []) as $b) {
+                $fpCounts[(string) $b['val']] = (int) ($b['ips'] ?? 0);
+            }
+        } catch (\Throwable $e) {
+            // Solr unreachable. Every fingerprint in this chunk stays UNKNOWN (null), which
+            // makes fp_cluster_proxy_fleet decline to fire rather than assume a count of 1.
+            // Under-detecting during an outage is correct; inventing a number is not.
+            $log('fingerprint facet failed: ' . $e->getMessage());
+            foreach ($chunk as $fp) {
+                $fpCounts[$fp] = null;
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------------------
+// 4 & 5. Score and upsert
+// -----------------------------------------------------------------------------------------
+
+$ready = [];
+$days  = [];
+
+foreach ($closed as $session) {
+    $sid = (string) $session['session_id'];
+    $fp  = (string) ($session['first']['fp_hash_s'] ?? '');
+    $doc = $docs[$sid] ?? buildSessionDoc($session);
+
+    // array_key_exists, not ??: a fingerprint we looked up and could not resolve is
+    // present with a null value, and that null must survive as "unknown".
+    $fpIps = array_key_exists($fp, $fpCounts) ? $fpCounts[$fp] : null;
+    if ($fpIps !== null) {
+        $doc['fp_ips_24h_i'] = $fpIps;
+    }
+
+    // The document doubles as the beacon-signal source: Beacon::mergeIntoSession() writes
+    // the execution-plane fields onto it under their Solr names, which are exactly the
+    // names Signals::fromSession() reads.
+    $signals = Signals::fromSession($session, $doc, $fpIps);
+
+    try {
+        $verdict = $rules->score($signals, [
+            'beacon_deployed' => $beaconDeployed,
+            'site_sends_304'  => $siteSends304,
+        ]);
+    } catch (\Throwable $e) {
+        // A LogicException here means the ruleset produced an unexplainable verdict, which
+        // SPEC §1 calls a bug. Skip the session rather than writing a verdict nobody can
+        // defend, and make the failure loud.
+        fwrite(STDERR, 'Loghound: scoring failed for session ' . $sid . ': ' . $e->getMessage() . "\n");
+        continue;
+    }
+
+    $doc['bot_score_f']    = (float) $verdict['score'];
+    $doc['bot_verdict_s']  = (string) $verdict['verdict'];
+    $doc['bot_reasons_ss'] = array_values($verdict['reasons']);
+    $doc['bot_class_s']    = (string) $verdict['class'];
+    $doc['rule_version_i'] = (int) $verdict['rule_version'];
+
+    $ready[] = $doc;
+    $days[gmdate('Y-m-d', (int) $session['ts_start'])] = true;
+}
+
+$docs = $ready;
+
+if ($docs !== []) {
+    try {
+        // Chunked so one oversized POST cannot be rejected wholesale by a proxy in front
+        // of Solr, and so a partial failure loses one chunk rather than the whole run.
+        foreach (array_chunk($docs, 500) as $chunk) {
+            $solr->addDocs($sessionCore, $chunk, true);
+        }
+        $log('indexed ' . count($docs) . ' session document(s)');
+
+        // Only AFTER the documents are safely in Solr. Marking them merged first would mean
+        // an indexing failure silently discarded the beacon data for those sessions, and
+        // there is no second copy of it anywhere.
+        if ($mergedIds !== [] && method_exists($state, 'markBeaconsMerged')) {
+            $state->markBeaconsMerged($mergedIds);
+        }
+    } catch (\Throwable $e) {
+        fwrite(STDERR, 'Loghound: indexing sessions failed: ' . $e->getMessage() . "\n");
+        exit(2);
+    }
+}
+
+// -----------------------------------------------------------------------------------------
+// 6. Daily rollup
+//
+// Recomputed from the sessions core rather than incremented.
+//
+// An atomic `inc` would be one cheap call, and it would be WRONG: send() retries a request
+// whose response was lost, and a retried increment double-counts. Recomputing the whole day
+// with one facet query is idempotent, exact, and self-healing — a run that crashed halfway
+// is repaired by the next one instead of leaving a permanently inflated counter.
+//
+// The previous day is recomputed too when the run happens early in a UTC day, because the
+// final minutes of a day are still inside the 5-second soft-commit window when that day's
+// last run executes.
+// -----------------------------------------------------------------------------------------
+
+if ((int) gmdate('H', $now) < 2) {
+    $days[gmdate('Y-m-d', $now - 86400)] = true;
+}
+
+foreach (array_keys($days) as $day) {
+    try {
+        $rollup = computeRollup($solr, $sessionCore, $day);
+        $solr->addDocs($sessionCore, [$rollup], true);
+        $log('rollup rebuilt for ' . $day);
+    } catch (\Throwable $e) {
+        // A failed rollup is a reporting gap, not a data loss: the sessions behind it are
+        // already indexed and the next run rebuilds the same day from scratch.
+        $log('rollup for ' . $day . ' failed: ' . $e->getMessage());
+    }
+}
+
+exit(0);
+
+
+// =========================================================================================
+// HELPERS
+// =========================================================================================
+
+/**
+ * Turn a closed session into the BASE Solr document.
+ *
+ * Base means: everything the log plane knows, and nothing else. The execution-plane fields
+ * are added afterwards by Beacon::mergeIntoSession(), and the verdict fields after that by
+ * the scoring loop. Keeping the three stages separate is what lets the beacon merge see a
+ * document that already carries tz_s (which it needs to compute tz_match_b).
+ *
+ * The one rule that matters here: a field is written ONLY when it is known. SPEC §1 forbids
+ * fabricating a metric, and the beacon timing fields in particular must be ABSENT rather
+ * than zero when no beacon arrived — a zero would be averaged in as a measurement and would
+ * drag every engagement number toward the floor.
+ *
+ * @param array<string,mixed> $session Aggregate from Sessionizer::closeIdle().
+ * @return array<string,mixed>
+ */
+function buildSessionDoc(array $session): array
+{
+    $doc = [
+        'id'         => (string) $session['session_id'],
+        'doc_type_s' => 'session',
+
+        'ts_start' => gmdate('Y-m-d\TH:i:s\Z', (int) $session['ts_start']),
+        'ts_end'   => gmdate('Y-m-d\TH:i:s\Z', (int) $session['ts_end']),
+
+        'hits_i'       => (int) $session['hits'],
+        'pages_i'      => (int) $session['pages'],
+        'assets_i'     => (int) $session['assets'],
+        'uniq_paths_i' => (int) $session['uniq_paths'],
+        'bytes_l'      => (int) $session['bytes'],
+
+        'status_2xx_i' => (int) $session['st2'],
+        'status_3xx_i' => (int) $session['st3'],
+        'status_4xx_i' => (int) $session['st4'],
+        'status_5xx_i' => (int) $session['st5'],
+        'got_304_b'    => (bool) $session['got_304'],
+
+        // Present for every session: these really are derived from the log alone.
+        'log_span_ms_l'   => (int) $session['log_span_ms'],
+        'gap_p50_ms_l'    => (int) $session['gap_p50_ms'],
+        'gap_stddev_ms_l' => (int) $session['gap_stddev_ms'],
+        'asset_ratio_f'   => (float) $session['asset_ratio'],
+
+        // beacon_b starts false and stays false unless a beacon actually arrived. A false
+        // here means "we looked and nothing came", which is exactly what the no_js_on_html
+        // cross-check needs — and it is why the three timing fields stay absent alongside it.
+        'beacon_b' => false,
+    ];
+
+    if (($session['entry_path'] ?? null) !== null) {
+        $doc['entry_path_s'] = (string) $session['entry_path'];
+    }
+    if (($session['exit_path'] ?? null) !== null) {
+        $doc['exit_path_s'] = (string) $session['exit_path'];
+    }
+    if (!empty($session['paths'])) {
+        // Already capped at 50 by Sessionizer; uniq_paths_i carries the true count.
+        $doc['paths_ss'] = array_values($session['paths']);
+    }
+
+    // Identity, network and client fields lifted from the first hit. Only those that
+    // actually exist; an enrichment that failed leaves its field off the document.
+    foreach ((array) ($session['first'] ?? []) as $field => $value) {
+        if (str_starts_with((string) $field, '_')) {
+            // Internal parser metadata (_logged and friends) never goes to Solr.
+            continue;
+        }
+        $doc[$field] = $value;
+    }
+
+    return $doc;
+}
+
+/**
+ * Rebuild the daily rollup document for one UTC day.
+ *
+ * Every number here is an aggregate. Nothing in a rollup identifies a visitor, which is
+ * what makes privacy.rollup_forever compatible with a 90-day retention policy: the
+ * sessions behind it can be deleted while the shape of the traffic survives.
+ *
+ * r_beacon_sessions_i is written alongside the timing sums on purpose. A sum of engaged
+ * milliseconds without the population it covers is uninterpretable, and presenting one
+ * without the other is the exact mistake SPEC §10 forbids ("an unlabelled number is a lie").
+ *
+ * @return array<string,mixed>
+ */
+function computeRollup(Solr $solr, string $core, string $day): array
+{
+    $from = $day . 'T00:00:00Z';
+    $to   = $day . 'T23:59:59.999Z';
+
+    $res = $solr->jsonFacet(
+        $core,
+        [
+            'q'  => '*:*',
+            'fq' => [
+                Solr::termFilter('doc_type_s', 'session'),
+                Solr::rangeFilter('ts_start', $from, $to),
+            ],
+        ],
+        [
+            'verdicts' => ['type' => 'terms', 'field' => 'bot_verdict_s', 'limit' => 10],
+            'classes'  => ['type' => 'terms', 'field' => 'bot_class_s',   'limit' => 20],
+            'hits'     => 'sum(hits_i)',
+            'pages'    => 'sum(pages_i)',
+            'bytes'    => 'sum(bytes_l)',
+            'span'     => 'sum(log_span_ms_l)',
+            // Timing sums are scoped to the population that actually has timings.
+            'withbeacon' => [
+                'type'  => 'query',
+                'q'     => 'beacon_b:true',
+                'facet' => [
+                    'wall'    => 'sum(wall_ms_l)',
+                    'visible' => 'sum(visible_ms_l)',
+                    'engaged' => 'sum(engaged_ms_l)',
+                ],
+            ],
+        ]
+    );
+
+    $facets = $res['facets'] ?? [];
+
+    /** @var array<string,int> $verdicts */
+    $verdicts = [];
+    foreach (($facets['verdicts']['buckets'] ?? []) as $b) {
+        $verdicts[(string) $b['val']] = (int) $b['count'];
+    }
+    /** @var array<string,int> $classes */
+    $classes = [];
+    foreach (($facets['classes']['buckets'] ?? []) as $b) {
+        $classes[(string) $b['val']] = (int) $b['count'];
+    }
+
+    return [
+        // Deterministic id: a rebuild overwrites rather than duplicating.
+        'id'         => 'rollup_daily:' . $day,
+        'doc_type_s' => 'rollup_daily',
+        'day_s'      => $day,
+        // ts_start is set so a rollup can be range-filtered with the same field as a
+        // session, which keeps the dashboard's date handling to one code path.
+        'ts_start'   => $from,
+        'ts_end'     => $to,
+
+        'r_sessions_i' => (int) ($facets['count'] ?? 0),
+        'r_hits_i'     => (int) ($facets['hits'] ?? 0),
+        'r_pages_i'    => (int) ($facets['pages'] ?? 0),
+        'r_bytes_l'    => (int) ($facets['bytes'] ?? 0),
+
+        'r_human_i'        => $verdicts['human'] ?? 0,
+        'r_likely_human_i' => $verdicts['likely_human'] ?? 0,
+        'r_unknown_i'      => $verdicts['unknown'] ?? 0,
+        'r_likely_bot_i'   => $verdicts['likely_bot'] ?? 0,
+        'r_bot_i'          => $verdicts['bot'] ?? 0,
+
+        'r_declared_crawler_i' => $classes['declared_crawler'] ?? 0,
+        'r_ai_crawler_i'       => $classes['ai_crawler'] ?? 0,
+        'r_headless_i'         => $classes['headless'] ?? 0,
+        'r_scripted_i'         => $classes['scripted'] ?? 0,
+        'r_proxy_fleet_i'      => $classes['proxy_fleet'] ?? 0,
+        'r_spoofed_ua_i'       => $classes['spoofed_ua'] ?? 0,
+        'r_monitor_i'          => $classes['monitor'] ?? 0,
+
+        'r_beacon_sessions_i' => (int) ($facets['withbeacon']['count'] ?? 0),
+        'r_wall_ms_sum_l'     => (int) ($facets['withbeacon']['wall'] ?? 0),
+        'r_visible_ms_sum_l'  => (int) ($facets['withbeacon']['visible'] ?? 0),
+        'r_engaged_ms_sum_l'  => (int) ($facets['withbeacon']['engaged'] ?? 0),
+        'r_log_span_ms_sum_l' => (int) ($facets['span'] ?? 0),
+    ];
+}
