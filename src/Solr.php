@@ -60,50 +60,56 @@ final class Solr
      * refused outright rather than having the parameter quietly dropped, because a caller
      * that tried to set `shards` has a bug or an injection and both deserve to be loud.
      *
+     * Each group in the list below is refused for a specific attack.
+     *
+     * Remote content loading — SSRF and arbitrary file read. stream.url makes Solr fetch a
+     * URL of the caller's choosing (hello, cloud metadata endpoint), stream.file makes it
+     * read a local path, and stream.body lets a GET carry an update command, including a
+     * delete-by-query for *:*.
+     *
+     * Distributed search — SSRF with the response relayed back. `shards` names the hosts a
+     * distributed query fans out to, so an attacker-chosen shard is an outbound HTTP
+     * request to an arbitrary host whose body is handed back to them. `distrib` and
+     * `_route_` are the switches that turn it on.
+     *
+     * Handler selection — `qt` re-dispatches the request to a different handler by path.
+     * Even though this configset defines no /stream or /sql, `qt` would reach anything Solr
+     * registers implicitly, so it is refused rather than reasoned about.
+     *
+     * Response writers — `wt` is pinned to json by an invariant in solrconfig; refusing it
+     * here as well means a stock configset cannot be talked into wt=xslt, which runs a
+     * stylesheet of the caller's choosing (XXE and stored XSS), or into a serialiser this
+     * client cannot parse.
+     *
+     * Streaming expressions and SQL — remote code execution. The handlers are not defined
+     * in our configset; these are refused anyway so that pointing Loghound at somebody
+     * else's Solr, which may define them, is still safe.
+     *
+     * Replication and core admin — `command` on /replication can fetch the whole index or
+     * repoint a follower at an attacker-controlled leader.
+     *
+     * Parser selection — `deftype` is not dangerous on its own, but it silently breaks this
+     * client's core idiom. A `{!edismax v=$uq}` switch at the start of `q` is honoured ONLY
+     * by the top-level lucene parser; with defType=edismax set, edismax parses the literal
+     * characters "{!edismax v=$uq}" as search terms and returns nothing. That bug is
+     * invisible in a diff and expensive to find, so the parameter is refused.
+     *
      * @var string[]
      */
     private const DENIED_PARAMS = [
-        // --- Remote content loading: SSRF + arbitrary file read ----------------------
-        // stream.url makes Solr fetch a URL of the caller's choosing (hello, cloud
-        // metadata endpoint); stream.file makes it read a local path; stream.body lets a
-        // GET carry an update command, including a delete-by-query for *:*.
         'stream.body', 'stream.url', 'stream.file', 'stream.contenttype',
 
-        // --- Distributed search: SSRF with the response relayed back -----------------
-        // `shards` names the hosts a distributed query fans out to. An attacker-chosen
-        // shard is an outbound HTTP request to an arbitrary host whose body is returned
-        // to them. `distrib` and `_route_` are the switches that turn it on.
         'shards', 'shards.tolerant', 'shards.info', 'shards.preference', 'shard.url',
         'distrib', '_route_', '_statever_',
 
-        // --- Handler selection -------------------------------------------------------
-        // `qt` re-dispatches the request to a different handler by path. Even though this
-        // configset defines no /stream or /sql, `qt` would reach anything Solr registers
-        // implicitly, so it is refused rather than reasoned about.
         'qt', 'handler',
 
-        // --- Response writers --------------------------------------------------------
-        // `wt` is pinned to json by an invariant in solrconfig; refusing it here as well
-        // means a stock configset cannot be talked into wt=xslt (which runs a stylesheet:
-        // XXE and stored XSS) or a serialiser this client cannot parse.
         'wt', 'tr', 'xsl',
 
-        // --- Streaming expressions and SQL: remote code execution --------------------
-        // The handlers are not defined in our configset. These are refused anyway so that
-        // pointing Loghound at somebody else's Solr, which may define them, is still safe.
         'expr', 'stmt', 'sql',
 
-        // --- Replication / core admin commands ---------------------------------------
-        // `command` on /replication can fetch the whole index or repoint a follower at an
-        // attacker-controlled leader.
         'command', 'action', 'core', 'datadir', 'instancedir', 'config', 'schema',
 
-        // --- Parser selection --------------------------------------------------------
-        // Not dangerous on its own, but banned because it silently breaks this client's
-        // core idiom. A `{!edismax v=$uq}` switch at the start of `q` is honoured ONLY by
-        // the top-level lucene parser. With defType=edismax set, edismax parses the
-        // literal characters "{!edismax v=$uq}" as search terms and returns nothing. That
-        // bug is invisible in a diff and expensive to find, so the parameter is refused.
         'deftype',
     ];
 
@@ -155,6 +161,9 @@ final class Solr
     private string $lastError = '';
 
     /**
+     * The transport is a plain callable so that a test can hand over a closure returning
+     * canned JSON: no mocking framework, no network, no Composer.
+     *
      * @param array<string,mixed> $solrCfg The 'solr' section of the config.
      * @param callable|null       $transport fn(array $req): array{status:int,body:string,error:string}
      *                                       Injected by tests; defaults to curl.
@@ -166,25 +175,45 @@ final class Solr
         $this->httpPass = (string) ($solrCfg['http_pass'] ?? '');
         $this->timeout  = max(1, (int) ($solrCfg['timeout'] ?? 20));
 
-        // A transport is a plain callable so a test can hand over a closure that returns
-        // canned JSON. No mocking framework, no network, no Composer.
         $this->transport = $transport ?? [self::class, 'curlTransport'];
     }
 
-    // =====================================================================================
-    // PUBLIC API
-    // =====================================================================================
-
     /**
-     * Liveness check against the core's ping handler.
+     * Liveness check: a zero-row select, deliberately NOT /admin/ping.
      *
      * Used by setup to confirm the connection details and by the daemons at startup so a
      * misconfiguration is one clear message instead of a stream of failed batches.
+     *
+     * Loghound's solrconfig strips every handler the application does not use, and
+     * /admin/ping is one of them, so a real and perfectly healthy core answers a ping
+     * request with 404 — the old check reported the backend as down while every actual
+     * query worked. A `q=*:*&rows=0` select is also the better health check on its own
+     * merits: it proves the core is loaded, the searcher is open and our credentials are
+     * accepted, which is exactly what the caller wants to know. /admin/ping proves only
+     * that a handler exists.
+     *
+     * The core name is validated FIRST, and a bad one is allowed to throw. A health check
+     * must not become a hole in the input validation: if the catch below swallowed
+     * everything, a caller could pass a core name containing a query string or a path
+     * segment and learn from the returned boolean whether their injection reached a real
+     * handler. Only transport-level failures — an unreachable node, an auth failure, a
+     * malformed response, the thing ping is actually asking about — are turned into false.
+     * The wording of the core-name error matches the one in send() so that callers and
+     * tests see one consistent message for one condition regardless of entry point.
      */
     public function ping(string $core): bool
     {
-        $res = $this->send($core, '/admin/ping', ['echoParams' => 'none'], null, 'GET');
-        return isset($res['status']) && (string) $res['status'] === '0';
+        if (!Security::isSafeCoreName($core)) {
+            throw new \InvalidArgumentException('Solr: unsafe core name: ' . $core);
+        }
+
+        try {
+            $res = $this->send($core, '/select', ['q' => '*:*', 'rows' => 0], null, 'GET');
+        } catch (\RuntimeException $e) {
+            return false;
+        }
+        return isset($res['responseHeader']['status'])
+            && (int) $res['responseHeader']['status'] === 0;
     }
 
     /**
@@ -198,6 +227,15 @@ final class Solr
      * idempotent and safe to retry — which is what makes the retry loop in send() correct
      * for a write.
      *
+     * The soft commit is asked for within a second; Solr coalesces those, so a burst of
+     * batches produces one commit rather than one per batch.
+     *
+     * The payload is encoded with JSON_INVALID_UTF8_SUBSTITUTE because log lines are bytes,
+     * not text. A request path can contain any byte an attacker likes, including invalid
+     * UTF-8 sequences, and json_encode() returns false on those — which would silently drop
+     * a whole batch. Substituting U+FFFD keeps the document indexable and keeps the
+     * pipeline honest about the fact that the byte was not valid text.
+     *
      * @param array<int,array<string,mixed>> $docs
      * @return array<string,mixed> Decoded Solr response.
      */
@@ -209,17 +247,10 @@ final class Solr
 
         $params = [];
         if ($softCommit) {
-            // Ask for a soft commit within a second. Solr coalesces these, so a burst of
-            // batches produces one commit rather than one per batch.
             $params['softCommit'] = 'true';
             $params['commitWithin'] = '1000';
         }
 
-        // JSON_INVALID_UTF8_SUBSTITUTE: log lines are bytes, not text. A request path can
-        // contain any byte an attacker likes, including invalid UTF-8 sequences, and
-        // json_encode returns false on those — which would silently drop a whole batch.
-        // Substituting U+FFFD keeps the document indexable and keeps the pipeline honest
-        // about the fact that the byte was not valid text.
         $body = json_encode(
             array_values($docs),
             JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
@@ -241,6 +272,12 @@ final class Solr
      * For free text use queryText() instead — it is the only method that accepts human
      * input, and it binds it rather than splicing it.
      *
+     * The request goes out as a form-encoded POST rather than a GET, for two practical
+     * reasons: a long fq list or a big filter selection blows past the ~8 KB URL limit some
+     * proxies enforce, and the failure mode there is a truncated query rather than an
+     * error; and Solr's request log records the URL, so with GET every search term a user
+     * typed would be written to a second log file on a third-party managed host.
+     *
      * @param array<string,mixed> $params
      * @return array<string,mixed>
      */
@@ -248,11 +285,6 @@ final class Solr
     {
         $params = $this->sanitiseQueryParams($params);
 
-        // POST rather than GET, form-encoded. Two reasons, both practical:
-        //  * a long fq list or a big filter selection blows past the ~8 KB URL limit some
-        //    proxies enforce, and the failure mode is a truncated query, not an error;
-        //  * Solr's request log records the URL. With GET, every search term a user typed
-        //    would be written to a second log file on a third-party managed host.
         return $this->send($core, '/select', [], self::encodeParams($params), 'POST', 'application/x-www-form-urlencoded');
     }
 
@@ -263,6 +295,17 @@ final class Solr
      * travels as its own parameter (`uq`) and is referenced from a query string we wrote
      * (`{!edismax v=$uq}`). Nothing the user types can terminate the local-param block,
      * add a parameter, or change the parser.
+     *
+     * Note the absence of defType, which is deliberate and is why defType sits in
+     * DENIED_PARAMS: the {!edismax ...} switch is honoured only by the top-level lucene
+     * parser, and setting defType=edismax would make edismax read the braces as literal
+     * search text and return nothing.
+     *
+     * An empty search box means "everything", not "match nothing".
+     *
+     * mm is pinned to 100%, so every term must match. On a forensic tool a search for
+     * "SwiftShader 45.38" that silently ORs the terms and returns half the index is worse
+     * than no results at all, because the operator will believe the extra rows.
      *
      * @param string              $userText  Raw input from the search box.
      * @param array<string,mixed> $params    Extra params (fq, rows, sort, facets...).
@@ -280,24 +323,16 @@ final class Solr
     ): array {
         $text = $this->normaliseUserText($userText);
 
-        // An empty box means "everything", not "match nothing".
         if ($text === '') {
             $params['q'] = '*:*';
             unset($params['uq'], $params['qf']);
             return $this->query($core, $params);
         }
 
-        // NOTE the absence of defType. The {!edismax ...} switch is honoured only by the
-        // top-level lucene parser; setting defType=edismax would make edismax read the
-        // braces as literal search text and return nothing. defType is in DENIED_PARAMS
-        // for exactly this reason.
         $params['q']  = '{!edismax v=$uq}';
         $params['uq'] = $text;
         $params['qf'] = $this->buildQf($qf);
 
-        // mm=100%: every term must match. On a forensic tool, a search for
-        // "SwiftShader 45.38" that silently ORs the terms and returns half the index is
-        // worse than no results, because the operator will believe the extra rows.
         $params['mm'] = '100%';
 
         return $this->query($core, $params);
@@ -317,6 +352,9 @@ final class Solr
      *       ['by_fp' => ['type' => 'terms', 'field' => 'fp_hash_s', 'limit' => 500,
      *                    'facet' => ['ips' => 'unique(ip_s)']]]);
      *
+     * rows is forced to 0: a facet request never needs documents back, and asking for them
+     * turns a cheap aggregate into a full stored-field fetch.
+     *
      * @param array<string,mixed> $queryParams Standard params (q, fq, ...). rows is forced to 0.
      * @param array<string,mixed> $facet       JSON Facet structure.
      * @return array<string,mixed>
@@ -325,8 +363,6 @@ final class Solr
     {
         $params = $this->sanitiseQueryParams($queryParams);
 
-        // A facet request never needs documents back, and asking for them turns a cheap
-        // aggregate into a full stored-field fetch.
         $params['rows'] = 0;
 
         $params['json.facet'] = json_encode(
@@ -386,6 +422,12 @@ final class Solr
      * read-modify-write against the transaction log. Without them, EVERY FIELD NOT NAMED
      * HERE IS BLANKED, silently. Both cores' solrconfig.xml enable them; that is why.
      *
+     * Only the four modifiers Solr defines are accepted. Anything else would be
+     * interpreted as a literal field named "set" or "whatever" and quietly do the wrong
+     * thing. `remove-regex` is refused along with the rest: it evaluates a regex
+     * server-side against every value of a field, which is a ReDoS primitive burning
+     * someone else's CPU, and nothing in Loghound needs it.
+     *
      * @param array<string,array<string,mixed>> $ops e.g. ['set' => ['bot_score_f' => 91.0],
      *                                                     'add' => ['bot_reasons_ss' => ['no_js_on_html']],
      *                                                     'inc' => ['hits_i' => 1]]
@@ -399,14 +441,10 @@ final class Solr
 
         $doc = ['id' => $id];
         foreach ($ops as $op => $fields) {
-            // Only the four modifiers Solr defines. Anything else would be interpreted as
-            // a literal field named "set"/"whatever" and quietly do the wrong thing.
             if (!in_array($op, ['set', 'add', 'inc', 'remove', 'removeregex', 'add-distinct'], true)) {
                 throw new \InvalidArgumentException('Solr: unknown atomic update operation: ' . $op);
             }
             if ($op === 'removeregex') {
-                // A regex evaluated server-side against every value of a field: a ReDoS
-                // primitive with someone else's CPU. Nothing in Loghound needs it.
                 throw new \InvalidArgumentException('Solr: removeregex is not permitted.');
             }
             foreach ((array) $fields as $field => $value) {
@@ -428,10 +466,6 @@ final class Solr
     {
         return $this->lastError;
     }
-
-    // =====================================================================================
-    // QUERY BUILDERS — the safe way to get a value into a filter
-    // =====================================================================================
 
     /**
      * Quote a value for use as an exact term.
@@ -468,6 +502,10 @@ final class Solr
      * where the stack trace is useful, rather than a "too many boolean clauses" from Solr
      * after the request has been built.
      *
+     * An empty value list produces a filter that matches NOTHING. Returning an empty string
+     * instead would mean "match everything", which is the classic way an authorisation
+     * filter turns into a data leak.
+     *
      * @param string[] $values
      */
     public static function termsFilter(string $field, array $values): string
@@ -477,9 +515,6 @@ final class Solr
         }
         $values = array_values(array_unique(array_map('strval', $values)));
         if ($values === []) {
-            // An empty IN-list means "match nothing". Returning an empty string instead
-            // would mean "match everything", which is the classic way an authorisation
-            // filter turns into a data leak.
             return '(-*:*)';
         }
         if (count($values) > 512) {
@@ -508,6 +543,10 @@ final class Solr
 
     /**
      * Validate one bound of a range filter.
+     *
+     * Three forms are accepted and nothing else: a number, including negatives and
+     * decimals; an ISO-8601 UTC instant in the form Solr writes; and Solr date math, such
+     * as NOW, NOW-12HOURS, NOW/DAY, NOW-90DAYS/DAY, or an instant with math applied to it.
      */
     private static function assertRangeBound(?string $bound): string
     {
@@ -515,27 +554,44 @@ final class Solr
         if ($bound === '' || $bound === '*') {
             return '*';
         }
-        // Numbers (including negatives and decimals).
         if (preg_match('/^-?\d+(\.\d+)?$/', $bound)) {
             return $bound;
         }
-        // ISO-8601 UTC instants as Solr writes them.
         if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/', $bound)) {
             return $bound;
         }
-        // Date math: NOW, NOW-12HOURS, NOW/DAY, NOW-90DAYS/DAY, or an instant with math.
         if (preg_match('#^(NOW|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z)([-+/]\d*[A-Z]+)*$#', $bound)) {
             return $bound;
         }
         throw new \InvalidArgumentException('Solr: invalid range bound: ' . $bound);
     }
 
-    // =====================================================================================
-    // VALIDATION
-    // =====================================================================================
-
     /**
      * Validate and normalise a parameter map before it is allowed near Solr.
+     *
+     * A parameter NAME is part of the request line, so anything outside a strict character
+     * class could inject a second parameter or a header break and is refused.
+     *
+     * rows and start are clamped rather than trusted, even when they come from our own
+     * code: deep paging is both a denial of service, since Solr materialises start+rows
+     * documents per shard, and a pointless user experience.
+     *
+     * fq is flattened by hand into repeat-key parameters, because http_build_query() turns
+     * a PHP list into fq[0]=..&fq[1]=.., which Solr does not understand; see send().
+     *
+     * sort is checked field by field against the allowlist, with `score` permitted because
+     * it is a pseudo-field rather than a schema field.
+     *
+     * fl must be an explicit list. `*` is refused so that a bug cannot start returning
+     * raw_s — and therefore the full attacker-controlled log line — into a JSON response by
+     * default, and function-query pseudo-fields are refused because fl accepts them and
+     * they are arbitrary server-side expressions.
+     *
+     * json.facet is never accepted here. jsonFacet() validates a PHP array field by field
+     * and aggregate by aggregate, then attaches the serialised result AFTER this method has
+     * run. A pre-built JSON blob cannot be validated, so it is refused outright — that is
+     * the difference between "we check facets" and "we check facets unless someone passes a
+     * string".
      *
      * @param array<string,mixed> $params
      * @return array<string,mixed>
@@ -547,8 +603,6 @@ final class Solr
         foreach ($params as $key => $value) {
             $key = (string) $key;
 
-            // A parameter name is part of the request line. Anything outside this class
-            // could inject a second parameter or a header break.
             if (!preg_match('/^[A-Za-z0-9_.\[\]-]{1,64}$/', $key)) {
                 throw new \InvalidArgumentException('Solr: illegal parameter name: ' . $key);
             }
@@ -571,20 +625,13 @@ final class Solr
             $out[$key] = $value;
         }
 
-        // --- rows / start ---------------------------------------------------------------
-        // Deep paging is both a DoS (Solr materialises start+rows documents per shard) and
-        // a pointless UX. Clamped, never trusted, even from our own code.
         $out['rows']  = Security::clampInt($out['rows'] ?? 20, 0, Security::MAX_ROWS, 20);
         $out['start'] = Security::clampInt($out['start'] ?? 0, 0, Security::MAX_START, 0);
 
-        // --- q ---------------------------------------------------------------------------
         if (isset($out['q'])) {
             self::assertSafeQuery((string) $out['q']);
         }
 
-        // --- fq --------------------------------------------------------------------------
-        // http_build_query turns a PHP list into fq[0]=..&fq[1]=.., which Solr does not
-        // understand. Repeat-key parameters have to be flattened by hand; see send().
         if (isset($out['fq'])) {
             $fqs = is_array($out['fq']) ? $out['fq'] : [$out['fq']];
             foreach ($fqs as $fq) {
@@ -593,23 +640,14 @@ final class Solr
             $out['fq'] = array_values($fqs);
         }
 
-        // --- sort ------------------------------------------------------------------------
-        // "field asc, field2 desc". Every field is checked against the allowlist. `score`
-        // is permitted because it is a pseudo-field, not a schema field.
         if (isset($out['sort'])) {
             $out['sort'] = self::assertSafeSort((string) $out['sort']);
         }
 
-        // --- fl --------------------------------------------------------------------------
-        // An explicit list only. `*` is refused so a bug cannot start returning raw_s (and
-        // therefore the full attacker-controlled log line) into a JSON response by default,
-        // and function-query pseudo-fields are refused because fl accepts them and they are
-        // arbitrary server-side expressions.
         if (isset($out['fl'])) {
             $out['fl'] = self::assertSafeFieldList((string) $out['fl']);
         }
 
-        // --- facet field names ------------------------------------------------------------
         foreach (['facet.field', 'facet.pivot', 'stats.field', 'group.field', 'df'] as $fieldParam) {
             if (!isset($out[$fieldParam])) {
                 continue;
@@ -627,12 +665,6 @@ final class Solr
             }
         }
 
-        // --- json.facet --------------------------------------------------------------------
-        // Never accepted here. jsonFacet() validates a PHP array field by field and
-        // aggregate by aggregate, then attaches the serialised result AFTER this method has
-        // run. A pre-built JSON blob cannot be validated, so it is refused outright — that
-        // is the difference between "we check facets" and "we check facets unless someone
-        // passes a string".
         if (array_key_exists('json.facet', $out) || array_key_exists('json', $out)) {
             throw new \InvalidArgumentException(
                 'Solr: pass a JSON Facet as an array to jsonFacet(); raw json/json.facet is refused.'
@@ -713,7 +745,6 @@ final class Solr
             throw new \InvalidArgumentException('Solr: nested-query magic field in filter.');
         }
 
-        // Strip the one local-param form we generate, then insist nothing else remains.
         $stripped = preg_replace('/^\{!(tag|ex)=[A-Za-z0-9_,]{1,128}\}/', '', $fq) ?? $fq;
         if (str_contains($stripped, '{!')) {
             throw new \InvalidArgumentException('Solr: local parameters are not permitted in a filter.');
@@ -722,6 +753,9 @@ final class Solr
 
     /**
      * Validate a sort specification and return it normalised.
+     *
+     * Exactly "<field> <asc|desc>" is accepted. A sort clause in Solr also accepts function
+     * queries, which is why nothing looser is allowed through.
      */
     public static function assertSafeSort(string $sort): string
     {
@@ -731,8 +765,6 @@ final class Solr
             if ($clause === '') {
                 continue;
             }
-            // Exactly "<field> <asc|desc>". A sort clause also accepts function queries in
-            // Solr, which is why nothing looser is allowed here.
             if (!preg_match('/^([A-Za-z0-9_]{1,64})\s+(asc|desc)$/i', $clause, $m)) {
                 throw new \InvalidArgumentException('Solr: unsafe sort clause: ' . $clause);
             }
@@ -749,6 +781,10 @@ final class Solr
 
     /**
      * Validate an `fl` field list and return it normalised.
+     *
+     * This is where `fl=*` and `fl=id,sum(a,b)` both land and are refused: the first would
+     * start returning raw_s to the browser, the second is server-side evaluation of an
+     * expression the caller chose.
      */
     public static function assertSafeFieldList(string $fl): string
     {
@@ -763,8 +799,6 @@ final class Solr
                 continue;
             }
             if (!Security::isSafeFieldName($field)) {
-                // This is where `fl=*` and `fl=id,sum(a,b)` both land. `*` would start
-                // returning raw_s to the browser; a function is server-side evaluation.
                 throw new \InvalidArgumentException('Solr: unsafe field in fl: ' . $field);
             }
             $fields[] = $field;
@@ -798,6 +832,17 @@ final class Solr
     /**
      * Recursively validate a JSON Facet structure.
      *
+     * Both spellings are accepted: the shorthand form, 'ips' => 'unique(ip_s)', and the
+     * full array form. `func` is not a permitted type, because its own `func` slot is an
+     * arbitrary function query.
+     *
+     * `limit` is bounded, since an unbounded terms facet on ip_s would try to return every
+     * distinct address in the index in a single response. A facet `sort` names a bucket
+     * ("count desc", "ips desc") rather than a schema field, so it gets the same shape
+     * check but resolved against bucket names. Range facet bounds go through the same
+     * validator as rangeFilter(). Of the domain options only excludeTags is allowed, which
+     * is how a facet ignores its own filter.
+     *
      * @param array<string,mixed> $facet
      * @param int                 $depth Guard against a hand-built structure nesting deep
      *                                   enough to blow the stack (or Solr's).
@@ -815,7 +860,6 @@ final class Solr
                 throw new \InvalidArgumentException('Solr: unsafe facet bucket name: ' . $name);
             }
 
-            // Shorthand form: 'ips' => 'unique(ip_s)'
             if (is_string($spec)) {
                 $out[$name] = self::assertSafeAggregate($spec);
                 continue;
@@ -826,7 +870,6 @@ final class Solr
 
             $type = (string) ($spec['type'] ?? 'terms');
             if (!in_array($type, self::FACET_TYPES, true)) {
-                // `func` is refused: its `func` slot is an arbitrary function query.
                 throw new \InvalidArgumentException('Solr: unsupported facet type: ' . $type);
             }
             $clean = ['type' => $type];
@@ -845,8 +888,6 @@ final class Solr
                 $clean['q'] = $q;
             }
 
-            // limit: bounded. An unbounded terms facet on ip_s would try to return every
-            // distinct address in the index in one response.
             if (isset($spec['limit'])) {
                 $clean['limit'] = Security::clampInt($spec['limit'], -1, 10000, 10);
             }
@@ -857,15 +898,12 @@ final class Solr
                 $clean['offset'] = Security::clampInt($spec['offset'], 0, 100000, 0);
             }
             if (isset($spec['sort'])) {
-                // A facet sort names a bucket ("count desc", "ips desc"), not a schema
-                // field, so it gets the same shape check but against bucket names.
                 if (!preg_match('/^[A-Za-z0-9_]{1,64}\s+(asc|desc)$/i', (string) $spec['sort'])) {
                     throw new \InvalidArgumentException('Solr: unsafe facet sort: ' . $spec['sort']);
                 }
                 $clean['sort'] = (string) $spec['sort'];
             }
 
-            // Range facet bounds go through the same validator as rangeFilter().
             foreach (['start', 'end'] as $bound) {
                 if (isset($spec[$bound])) {
                     $clean[$bound] = self::assertRangeBound((string) $spec[$bound]);
@@ -878,7 +916,6 @@ final class Solr
                 $clean['gap'] = (string) $spec['gap'];
             }
 
-            // Domain: only excludeTags, which is how a facet ignores its own filter.
             if (isset($spec['domain']) && is_array($spec['domain'])) {
                 $tags = $spec['domain']['excludeTags'] ?? null;
                 if ($tags !== null) {
@@ -952,10 +989,6 @@ final class Solr
         return $text;
     }
 
-    // =====================================================================================
-    // TRANSPORT
-    // =====================================================================================
-
     /**
      * Send one request, with retries.
      *
@@ -963,6 +996,21 @@ final class Solr
      * session ids are deterministic, rollup ids encode the day — so retrying a request
      * whose response was lost cannot duplicate data. That is what makes a blind retry
      * correct here; it would not be for an API with auto-generated ids.
+     *
+     * The core name is validated because it becomes a path segment: without that check a
+     * core name of "../../admin/cores" would reach the core admin API. wt=json is forced on
+     * every request rather than taken from the caller — it is in DENIED_PARAMS — so the
+     * response is always something json_decode() understands.
+     *
+     * A transport failure, a rate limit or a server error is retried; a 4xx is NOT. A 400
+     * means the request itself is wrong, and sending it again three times only makes the
+     * log noisier. Backoff is exponential with jitter, and the jitter matters when several
+     * Loghound daemons share a Solr node: without it they all retry in lockstep and
+     * re-create the overload they are backing off from.
+     *
+     * A failure surfaces Solr's own message, which is genuinely useful ("unknown field x"),
+     * but never the request body: that body contains log lines, which are hostile text, and
+     * this message ends up in a log file and possibly on a screen.
      *
      * @param array<string,mixed> $queryParams Parameters that go in the URL.
      * @param string|null         $body        Request body, already encoded.
@@ -977,16 +1025,12 @@ final class Solr
         string $contentType = 'application/json'
     ): array {
         if (!Security::isSafeCoreName($core)) {
-            // The core name becomes a path segment. Without this check a core name of
-            // "../../admin/cores" would reach the core admin API.
             throw new \InvalidArgumentException('Solr: unsafe core name: ' . $core);
         }
         if ($this->baseUrl === '') {
             throw new \RuntimeException('Solr: no base_url configured. Run loghound-setup.');
         }
 
-        // wt=json is forced on every request, not taken from the caller (it is in
-        // DENIED_PARAMS), so the response is always something json_decode understands.
         $queryParams['wt'] = 'json';
 
         $url = $this->baseUrl . '/' . $core . $path;
@@ -1018,17 +1062,11 @@ final class Solr
             $lastBody   = (string) ($res['body'] ?? '');
             $this->lastError = (string) ($res['error'] ?? '');
 
-            // Retry a transport failure, a rate limit, or a server error. Do NOT retry a
-            // 4xx: a 400 means the request itself is wrong and sending it again three
-            // times only makes the log noisier.
             $retryable = ($lastStatus === 0 || $lastStatus === 429 || $lastStatus >= 500);
             if (!$retryable) {
                 break;
             }
             if ($attempt < $this->maxAttempts) {
-                // Exponential backoff with jitter. The jitter matters when several
-                // Loghound daemons share a Solr node: without it, they all retry in
-                // lockstep and re-create the overload they are backing off from.
                 $sleepUs = (int) (150000 * (4 ** ($attempt - 1)));
                 usleep($sleepUs + random_int(0, 50000));
             }
@@ -1044,9 +1082,6 @@ final class Solr
         }
 
         if ($lastStatus >= 400) {
-            // Surface Solr's own message, which is genuinely useful ("unknown field x"),
-            // but never the request body: it contains log lines, which are hostile text,
-            // and this message ends up in a log file and possibly on a screen.
             $msg = $decoded['error']['msg'] ?? ('HTTP ' . $lastStatus);
             throw new \RuntimeException('Solr: ' . $msg);
         }
@@ -1059,6 +1094,17 @@ final class Solr
      *
      * Static and parameter-driven so a test can substitute a closure with the same shape.
      * Nothing here logs, echoes, or throws with the password in the message.
+     *
+     * Redirects are never followed. A Solr node that answers 302 is not a Solr node, and
+     * following it would send the basic-auth credentials to wherever it points. Certificate
+     * verification stays on for the same reason: those credentials travel in every request,
+     * and a downgraded connection hands them over. gzip is accepted because facet responses
+     * compress well.
+     *
+     * There is deliberately no curl_close(). It has been a no-op since PHP 8.0, where the
+     * handle became an object freed when it goes out of scope, and PHP 8.5 emits a
+     * deprecation for it — on a daemon making thousands of requests a minute, that is
+     * thousands of lines of noise in the journal.
      *
      * @param array<string,mixed> $req
      * @return array{status:int,body:string,error:string}
@@ -1074,14 +1120,10 @@ final class Solr
             CURLOPT_HTTPHEADER     => $req['headers'],
             CURLOPT_TIMEOUT        => $req['timeout'],
             CURLOPT_CONNECTTIMEOUT => $req['connect_timeout'],
-            // Never follow a redirect. A Solr node that answers 302 is not a Solr node, and
-            // following it would send the basic-auth credentials to wherever it points.
             CURLOPT_FOLLOWLOCATION => false,
-            // Certificate verification stays on. Solr basic-auth credentials travel in
-            // every request; a downgraded connection hands them over.
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_ENCODING       => '',   // accept gzip; facet responses compress well
+            CURLOPT_ENCODING       => '',
         ]);
 
         if ($req['body'] !== null) {
@@ -1096,10 +1138,6 @@ final class Solr
         $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $error  = curl_error($ch);
 
-        // No curl_close(): it has been a no-op since PHP 8.0 (the handle is an object and
-        // is freed when it goes out of scope) and PHP 8.5 emits a deprecation for it. On a
-        // daemon that makes thousands of requests a minute, that deprecation is thousands of
-        // lines of noise in the journal.
         unset($ch);
 
         return [

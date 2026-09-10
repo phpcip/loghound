@@ -44,17 +44,27 @@ final class Signals
      * automation framework. None of them has a legitimate reason to be present on a real
      * user's browser, which is why the rule they feed is worth 100 points on its own.
      *
+     * What each code means, in the order they are listed:
+     *   webdriver        navigator.webdriver === true
+     *   cdc_props        $cdc_asdjflasutopfhvcZLmcfl_, chromedriver's injected object
+     *   nightmare        window.__nightmare
+     *   phantom          _phantom / callPhantom / __phantomas
+     *   playwright       window.__playwright*
+     *   puppeteer        window.__puppeteer*
+     *   selenium         window.__selenium* / document.$cdc_
+     *   dom_automation   window.domAutomation / domAutomationController
+     *
      * @var string[]
      */
     public const DEFINITIVE_MARKERS = [
-        'webdriver',            // navigator.webdriver === true
-        'cdc_props',            // $cdc_asdjflasutopfhvcZLmcfl_ — chromedriver's injected object
-        'nightmare',            // window.__nightmare
-        'phantom',              // _phantom / callPhantom / __phantomas
-        'playwright',           // window.__playwright*
-        'puppeteer',            // window.__puppeteer*
-        'selenium',             // window.__selenium* / document.$cdc_
-        'dom_automation',       // window.domAutomation / domAutomationController
+        'webdriver',
+        'cdc_props',
+        'nightmare',
+        'phantom',
+        'playwright',
+        'puppeteer',
+        'selenium',
+        'dom_automation',
     ];
 
     /**
@@ -130,10 +140,6 @@ final class Signals
         'apiv', 'action_name', 'urlref', 'pv_id', 'send_image', 'e_c', 'e_a', 'n', 'p', 'u',
     ];
 
-    // =====================================================================================
-    // HIT-LEVEL SIGNALS
-    // =====================================================================================
-
     /**
      * Compute fp_hash_s — the cross-IP cluster key (SPEC §4.1).
      *
@@ -163,6 +169,9 @@ final class Signals
      * come through the parser (a replay tool, a test harness). The component list below is
      * kept identical to the parser's for that reason.
      *
+     * Normalisation collapses runs of whitespace, because some clients send ", " where
+     * others send ",".
+     *
      * @param array<string,mixed> $hit
      */
     public static function fingerprint(array $hit): string
@@ -175,7 +184,6 @@ final class Signals
             'proto_s',
         ] as $field) {
             $value = isset($hit[$field]) ? (string) $hit[$field] : '';
-            // Collapse runs of whitespace: some clients send ", " and some send ",".
             $value = strtolower(trim((string) preg_replace('/\s+/', ' ', $value)));
             $parts[] = $value;
         }
@@ -230,6 +238,15 @@ final class Signals
      * as one; the failure mode is a beacon counted as a page, which is the conservative
      * direction (it makes a session look MORE human, never less).
      *
+     * The tests run in a deliberate order. Loghound's own collector comes first, when the
+     * operator has told us where it lives, then the generic analytics-beacon heuristic.
+     * API-ish paths are checked AFTER the beacon test, because a beacon endpoint often lives
+     * under /api/ too and "beacon" is the more specific answer. A path with no extension at
+     * all is a page — the common case for modern URLs, and the reason extension-based
+     * classification alone is not enough. A known extension we do not classify, a PDF, an
+     * installer, an archive, is neither a page (it is not a navigation that a beacon would
+     * follow) nor a sub-resource (it was not pulled in by the renderer).
+     *
      * @param array<string,mixed> $hit
      * @return array{kind_s:string,asset_kind_s?:string}
      */
@@ -239,7 +256,6 @@ final class Signals
         $query = (string) ($hit['query_s'] ?? '');
         $lower = strtolower($path);
 
-        // Loghound's own collector, when the operator has told us where it lives.
         $ownBeacon = (string) ($hit['_beacon_path'] ?? '');
         if ($ownBeacon !== '' && $lower === strtolower($ownBeacon)) {
             return ['kind_s' => 'beacon'];
@@ -261,8 +277,6 @@ final class Signals
             return ['kind_s' => 'asset', 'asset_kind_s' => self::ASSET_EXTENSIONS[$ext]];
         }
 
-        // Generic analytics-beacon detection. Three or more classic beacon parameters plus
-        // a small response.
         if ($query !== '') {
             parse_str($query, $parsed);
             $matches = 0;
@@ -277,8 +291,6 @@ final class Signals
             }
         }
 
-        // API-ish paths. Checked after the beacon test because a beacon endpoint often
-        // lives under /api/ too, and "beacon" is the more specific answer.
         if (str_contains($lower, '/api/')
             || str_starts_with($lower, '/api')
             || $ext === 'json'
@@ -288,8 +300,6 @@ final class Signals
             return ['kind_s' => 'api'];
         }
 
-        // No extension at all: a page. This is the common case for modern URLs and is why
-        // extension-based classification alone is not enough.
         if ($ext === '') {
             return ['kind_s' => 'html'];
         }
@@ -298,15 +308,8 @@ final class Signals
             return ['kind_s' => 'html'];
         }
 
-        // A known extension we do not classify — a PDF, an installer, an archive. Not a
-        // page (it is not a navigation that a beacon would follow) and not a sub-resource
-        // (it was not pulled in by the renderer).
         return ['kind_s' => 'other'];
     }
-
-    // =====================================================================================
-    // SESSION-LEVEL SIGNALS
-    // =====================================================================================
 
     /**
      * Build the complete signal map that Rules.php scores.
@@ -316,10 +319,39 @@ final class Signals
      * without running the scorer, and that a rule change never silently changes what a
      * signal MEANS.
      *
+     * The map is built in groups, and several of them carry a decision.
+     *
+     * Declared bot. A client "claims a real browser" when the UA parses as a consumer
+     * browser and does not also declare itself a bot. Several rules hinge on this: the point
+     * of no_js_on_html and hosting_asn_browser_ua is the CONTRADICTION between claiming to be
+     * Chrome and not behaving like it, and neither is a contradiction for a crawler that
+     * never claimed to be a browser in the first place.
+     *
+     * rDNS. NULL when the lookup was not performed or did not resolve, never coerced to
+     * anything else. A crawler's claim can only FAIL verification when we were able to verify
+     * it at all.
+     *
+     * Header self-consistency. Both signals return null unless the log format actually
+     * captures the header, so an operator on plain `combined` never trips them; see
+     * headerLogged().
+     *
+     * Session shape. Sub-resources are assets plus favicon — everything the renderer went and
+     * fetched — and that, not `assets`, is what the no_assets rule asks about. The repeat
+     * counter is distinct sub-resource URIs fetched more than once in this session.
+     *
+     * Fingerprint cluster. NULL when the scorer could not reach Solr. A rule reading null
+     * must not treat it as 1: "we could not check" is not "this fingerprint is unique".
+     *
+     * Execution plane. The beacon keys are all optional, and absence means the beacon did not
+     * report it. Two values are derived rather than read: which definitive markers actually
+     * fired, and whether the WebGL renderer names a software rasteriser. Forgery is accepted
+     * in two shapes — Beacon.php reports it as a code inside automation_ss, which is where
+     * its timing-sanity check in SPEC §6.3 puts it, and a dedicated field is honoured too, so
+     * neither spelling is silently ignored.
+     *
      * @param array<string,mixed> $session Aggregate from Sessionizer::closeIdle().
      * @param array<string,mixed> $beacon  Merged beacon data (Beacon::mergeIntoSession()).
-     *                                     Empty array when no beacon arrived. Assumed keys
-     *                                     are listed inline below.
+     *                                     Empty array when no beacon arrived.
      * @param int|null            $fpIps   fp_ips_24h_i, or null when it could not be computed.
      * @return array<string,mixed>
      */
@@ -329,7 +361,6 @@ final class Signals
 
         $s = [];
 
-        // ---- identity ------------------------------------------------------------------
         $s['session_id']  = (string) ($session['session_id'] ?? '');
         $s['fp_hash']     = (string) ($first['fp_hash_s'] ?? '');
         $s['as_type']     = isset($first['as_type_s']) ? (string) $first['as_type_s'] : null;
@@ -340,51 +371,35 @@ final class Signals
         $s['os']          = isset($first['os_s']) ? (string) $first['os_s'] : null;
         $s['device']      = isset($first['device_s']) ? (string) $first['device_s'] : null;
 
-        // ---- declared bot --------------------------------------------------------------
         $s['ua_bot']      = isset($first['ua_bot_b']) ? (bool) $first['ua_bot_b'] : false;
         $s['ua_bot_name'] = isset($first['ua_bot_name_s']) ? (string) $first['ua_bot_name_s'] : null;
         $s['ua_bot_cat']  = isset($first['ua_bot_cat_s']) ? (string) $first['ua_bot_cat_s'] : null;
         $s['ai_crawler']  = isset($first['ai_crawler_b']) ? (bool) $first['ai_crawler_b'] : false;
 
-        // A client "claims a real browser" when the UA parses as a consumer browser and
-        // does not also declare itself a bot. Several rules hinge on this: the point of
-        // no_js_on_html and hosting_asn_browser_ua is the CONTRADICTION between claiming to
-        // be Chrome and not behaving like it, and neither is a contradiction for a crawler
-        // that never claimed to be a browser in the first place.
         $s['claims_browser'] = !$s['ua_bot']
             && $s['browser'] !== null
             && in_array(strtolower((string) $s['browser']), [
                 'chrome', 'firefox', 'safari', 'edge', 'opera', 'samsung internet', 'brave',
             ], true);
 
-        // ---- rDNS ----------------------------------------------------------------------
-        // NULL when the lookup was not performed or did not resolve. Never coerced.
         $s['rdns']    = isset($first['rdns_s']) ? (string) $first['rdns_s'] : null;
         $s['rdns_ok'] = array_key_exists('rdns_ok_b', $first) ? (bool) $first['rdns_ok_b'] : null;
 
-        // Is this a crawler whose claim we are ABLE to verify? Only then can it fail.
         $s['crawler_verifiable'] = $s['ua_bot'] && self::isVerifiableCrawler($s['ua_bot_name']);
 
-        // ---- header self-consistency ---------------------------------------------------
-        // Both of these return null unless the log format actually captures the header, so
-        // an operator on plain `combined` never trips them. See headerLogged().
         $s['secch_mismatch']    = self::secChMismatch($first, $s);
         $s['platform_mismatch'] = self::platformMismatch($first);
 
-        // ---- session shape -------------------------------------------------------------
         $s['hits']         = (int) ($session['hits'] ?? 0);
         $s['pages']        = (int) ($session['pages'] ?? 0);
         $s['assets']       = (int) ($session['assets'] ?? 0);
         $s['favicons']     = (int) ($session['favicons'] ?? 0);
-        // Assets plus favicon: everything the renderer went and fetched. This, not
-        // `assets`, is what the no_assets rule asks about.
         $s['sub_resources'] = (int) ($session['sub_resources'] ?? ($s['assets'] + $s['favicons']));
         $s['uniq_paths']   = (int) ($session['uniq_paths'] ?? 0);
         $s['log_span_ms']  = (int) ($session['log_span_ms'] ?? 0);
         $s['asset_ratio']  = (float) ($session['asset_ratio'] ?? 0.0);
         $s['html_200']     = (bool) ($session['html_200'] ?? false);
         $s['got_304']      = (bool) ($session['got_304'] ?? false);
-        // Distinct sub-resource URIs fetched more than once in this session.
         $s['repeat_assets'] = (int) ($session['repeat_assets'] ?? 0);
 
         $gaps = array_map('intval', (array) ($session['gaps'] ?? []));
@@ -393,14 +408,8 @@ final class Signals
         $s['gap_stddev_ms'] = (int) ($session['gap_stddev_ms'] ?? self::stddev($gaps));
         $s['periodic']      = self::isPeriodic($gaps);
 
-        // ---- fingerprint cluster --------------------------------------------------------
-        // NULL when the scorer could not reach Solr. A rule reading null must not treat it
-        // as 1: "we could not check" is not "this fingerprint is unique".
         $s['fp_ips_24h'] = $fpIps;
 
-        // ---- execution plane (beacon) ---------------------------------------------------
-        // Assumed shape of Beacon::mergeIntoSession() output; every key is optional and
-        // absence means the beacon did not report it.
         $s['beacon']         = (bool) ($beacon['beacon_b'] ?? false);
         $s['beacon_orphan']  = (bool) ($beacon['beacon_orphan_b'] ?? false);
         $s['js']             = array_key_exists('js_b', $beacon) ? (bool) $beacon['js_b'] : null;
@@ -421,16 +430,11 @@ final class Signals
         $s['visible_ms']     = array_key_exists('visible_ms_l', $beacon) ? (int) $beacon['visible_ms_l'] : null;
         $s['engaged_ms']     = array_key_exists('engaged_ms_l', $beacon) ? (int) $beacon['engaged_ms_l'] : null;
 
-        // Derived: which definitive markers actually fired.
         $s['definitive_markers'] = array_values(array_intersect($s['automation'], self::DEFINITIVE_MARKERS));
 
-        // Forgery. Beacon.php reports it as a code inside automation_ss (that is where its
-        // timing-sanity check in SPEC §6.3 puts it); a dedicated field is accepted too, so
-        // either shape works and neither is silently ignored.
         $s['beacon_forged'] = (bool) ($beacon['beacon_forged_b'] ?? false)
             || in_array('beacon_forged', $s['automation'], true);
 
-        // Derived: does the WebGL renderer name a software rasteriser.
         $s['headless_renderer'] = self::isHeadlessRenderer($s['webgl']);
 
         return $s;
@@ -484,7 +488,16 @@ final class Signals
      *     Sec-CH-UA at all; expecting it would flag every one of them.
      *   * The UA claims Chrome older than 89, which predates the header.
      *   * Sec-CH-UA is sent only on secure contexts, so a plain-HTTP request legitimately
-     *     has none.
+     *     has none. When the format captures the TLS protocol and it says the request was
+     *     NOT over TLS, the browser was right not to send the header and its absence must
+     *     not be read as evasion.
+     *
+     * Only Chromium-family browsers send the header, and only from version 89 onwards. When
+     * it is logged, expected and not sent, that is the mismatch. When it IS present, the
+     * versions it advertises are compared with the UA's claim: the header looks like
+     * "Chromium";v="152", "Not(A:Brand";v="24", "Google Chrome";v="152", and the
+     * "Not(A:Brand" entry carries a deliberately meaningless version, so a match on ANY
+     * advertised version is enough to call it consistent.
      *
      * @param array<string,mixed> $first The first hit's identity fields.
      * @param array<string,mixed> $s     Partially built signal map (browser, version).
@@ -498,16 +511,12 @@ final class Signals
         $browser = strtolower((string) ($s['browser'] ?? ''));
         $ver     = (int) ($s['browser_ver'] ?? 0);
 
-        // Only Chromium-family browsers send it, and only from version 89.
         if (!in_array($browser, ['chrome', 'edge', 'opera', 'brave', 'samsung internet'], true)) {
             return null;
         }
         if ($ver > 0 && $ver < 89) {
             return null;
         }
-        // Client hints are a secure-context feature. When the format captures the TLS
-        // protocol and it says the request was NOT over TLS, the browser was correct not to
-        // send Sec-CH-UA and we must not read its absence as evasion.
         if (array_key_exists('tls_proto_s', $first)
             && stripos((string) $first['tls_proto_s'], 'tls') === false
             && stripos((string) $first['tls_proto_s'], 'ssl') === false
@@ -517,16 +526,11 @@ final class Signals
 
         $secCh = trim((string) ($first['sec_ch_ua_s'] ?? ''));
         if ($secCh === '' || $secCh === '-') {
-            // Logged, expected, and not sent. That is the mismatch.
             return true;
         }
 
-        // Present. Does the version it advertises agree with the UA's claim?
-        // Sec-CH-UA looks like: "Chromium";v="152", "Not(A:Brand";v="24", "Google Chrome";v="152"
         if ($ver > 0 && preg_match_all('/v="(\d+)/', $secCh, $m)) {
             $versions = array_map('intval', $m[1]);
-            // The "Not(A:Brand" entry carries a deliberately meaningless version, so a
-            // match on ANY advertised version is enough to call it consistent.
             if (!in_array($ver, $versions, true)) {
                 return true;
             }
@@ -541,6 +545,14 @@ final class Signals
      * Same null discipline as secChMismatch(): unknown unless the header is actually
      * captured by the log format and the UA gave us an OS to compare against.
      *
+     * Chromium sends the low-entropy platform hint by default, so its absence on a format
+     * that captures it is itself suspicious — but that is a weaker statement than a
+     * contradiction, and Sec-CH-UA's own absence already covers the case. Returning null here
+     * keeps the two rules from double-counting the same evidence.
+     *
+     * The header has a fixed vocabulary, which is mapped onto the OS names Enrich/Ua.php
+     * produces. "Unknown", or a platform we do not model, is not a contradiction.
+     *
      * @param array<string,mixed> $first
      */
     public static function platformMismatch(array $first): ?bool
@@ -550,10 +562,6 @@ final class Signals
         }
         $platform = trim((string) ($first['sec_ch_platform_s'] ?? ''), " \t\"'");
         if ($platform === '' || $platform === '-') {
-            // Chromium sends the low-entropy platform hint by default, so its absence on a
-            // format that captures it is itself suspicious — but it is a weaker statement
-            // than a contradiction, and Sec-CH-UA's own absence already covers that case.
-            // Returning null keeps the two rules from double-counting the same evidence.
             return null;
         }
 
@@ -562,7 +570,6 @@ final class Signals
             return null;
         }
 
-        // Map the header's fixed vocabulary onto the OS names Enrich/Ua.php produces.
         $expected = [
             'windows'  => ['windows'],
             'macos'    => ['mac os', 'macos', 'mac os x', 'os x'],
@@ -575,7 +582,6 @@ final class Signals
 
         $key = strtolower($platform);
         if (!isset($expected[$key])) {
-            // "Unknown" or a platform we do not model. Not a contradiction.
             return null;
         }
 
@@ -597,23 +603,20 @@ final class Signals
      * entirely, this returns false — the conservative answer, which disarms the rules
      * rather than arming them against everyone.
      *
+     * There is one fallback: a field that is present with a value proves the format captures
+     * it, which makes the rules work for a hit that carries the header even when the parser
+     * did not publish a `_logged` list.
+     *
      * @param array<string,mixed> $first
      */
     public static function headerLogged(array $first, string $field): bool
     {
         $logged = $first['_logged'] ?? null;
         if (!is_array($logged)) {
-            // Fallback: if the field is present with a value, the format obviously captures
-            // it. This makes the rules work for a hit that carries the header even when the
-            // parser did not publish a `_logged` list.
             return array_key_exists($field, $first) && (string) $first[$field] !== '';
         }
         return in_array($field, $logged, true);
     }
-
-    // =====================================================================================
-    // STATISTICS
-    // =====================================================================================
 
     /**
      * Median of a list of integers. 0 for an empty list.

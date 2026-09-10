@@ -17,11 +17,7 @@
 
 'use strict';
 
-import { clockOnly, dur, durUs, num } from './core.js';
-
-/* -------------------------------------------------------------------------
- * Tokens
- * ---------------------------------------------------------------------- */
+import { clockOnly, dur, durUs, esc, num } from './core.js';
 
 /**
  * Read the current theme's colours out of the stylesheet.
@@ -34,25 +30,26 @@ export function tokens() {
     const style = getComputedStyle(document.documentElement);
     const get = (name, fallback) => (style.getPropertyValue(name) || fallback).trim();
     return {
-        text:   get('--text', '#1b1d21'),
-        muted:  get('--text-muted', '#5d6470'),
-        faint:  get('--text-faint', '#868d99'),
-        card:   get('--bg-card', '#ffffff'),
-        sunken: get('--bg-sunken', '#efefec'),
-        border: get('--border', '#dedcd6'),
-        grid:   get('--c-grid', '#e4e2dc'),
-        axis:   get('--c-axis', '#767c86'),
-        accent: get('--accent', '#b8511c'),
+        text:   get('--ink', '#111111'),
+        muted:  get('--muted', '#4a4540'),
+        faint:  get('--faint', '#6b6560'),
+        card:   get('--page', '#ffffff'),
+        sunken: get('--chip', '#f4f1ec'),
+        border: get('--hairline', '#d9d4cc'),
+        grid:   get('--c-grid', '#e8e4dd'),
+        axis:   get('--c-axis', '#6b6560'),
+        accent: get('--accent', '#c05520'),
         pop: {
-            human:    get('--c-human', '#b8511c'),
-            unknown:  get('--c-unknown', '#8b93a1'),
-            declared: get('--c-declared', '#3f7196'),
-            ai:       get('--c-ai', '#6f5f9e'),
-            evasive:  get('--c-evasive', '#a83b32')
+            human:    get('--c-human', '#d9d4cc'),
+            unknown:  get('--c-unknown', '#b9b3a9'),
+            declared: get('--c-declared', '#8a8279'),
+            ai:       get('--c-ai', '#4a4540'),
+            evasive:  get('--c-evasive', '#c05520')
         },
-        good: get('--good', '#2f7d54'),
-        warn: get('--warn', '#9a6b12'),
-        bad:  get('--bad', '#b23a30'),
+        ok:   get('--ok', '#111111'),
+        mid:  get('--mid', '#8a8279'),
+        warn: get('--warn', '#6b6560'),
+        bad:  get('--bad', '#c05520'),
         mono: get('--font-mono', 'monospace')
     };
 }
@@ -65,12 +62,8 @@ export function tokens() {
  * colour is a chart that should have been a table.
  */
 export function ramp(t) {
-    return [t.pop.human, t.pop.declared, t.pop.ai, t.pop.unknown, t.pop.evasive, t.good, t.warn];
+    return [t.pop.evasive, t.pop.ai, t.pop.declared, t.pop.unknown, t.pop.human, t.accent, t.mid];
 }
-
-/* -------------------------------------------------------------------------
- * Chart registry
- * ---------------------------------------------------------------------- */
 
 /** id → {instance, factory}. Kept so a theme flip can rebuild every live chart. */
 const charts = new Map();
@@ -98,8 +91,6 @@ export function draw(id, factory) {
         entry.factory = factory;
     }
     const t = tokens();
-    // `true` = do not merge with the previous option. Merging is how a chart ends up
-    // showing a series that the new data no longer contains.
     entry.instance.setOption(withDefaults(factory(t), t), true);
     return entry.instance;
 }
@@ -150,10 +141,6 @@ function withDefaults(option, t) {
     });
 }
 
-/* -------------------------------------------------------------------------
- * Axis helpers
- * ---------------------------------------------------------------------- */
-
 /** A time category axis whose labels are formatted in the display timezone. */
 export function timeAxis(t, times) {
     return {
@@ -186,10 +173,6 @@ export function valueAxis(t, formatter) {
     };
 }
 
-/* -------------------------------------------------------------------------
- * Chart builders
- * ---------------------------------------------------------------------- */
-
 /**
  * The Overview traffic chart: five mutually exclusive populations, stacked.
  *
@@ -220,7 +203,7 @@ export function stackedTraffic(id, data, order) {
                 ];
                 for (const p of params.slice().reverse()) {
                     lines.push(
-                        p.marker + ' ' + p.seriesName +
+                        p.marker + ' ' + esc(p.seriesName) +
                         '<span style="float:right;padding-left:18px;font-weight:600">' + num(p.value) + '</span>'
                     );
                 }
@@ -238,7 +221,6 @@ export function stackedTraffic(id, data, order) {
             smooth: false,
             symbol: 'none',
             lineStyle: { width: 1, color: t.pop[key] },
-            // Flat fill, no gradient. Opacity separates the bands without a shadow.
             areaStyle: { color: t.pop[key], opacity: 0.62 },
             emphasis: { focus: 'series' },
             data: data.series[key] || []
@@ -255,8 +237,6 @@ export function stackedTraffic(id, data, order) {
  */
 export function barsH(id, rows, opts) {
     const options = opts || {};
-    // `format` lets a caller render durations or bytes instead of bare counts, on the
-    // axis, the end-of-bar label and the tooltip at once — so they can never disagree.
     const fmt = options.format || num;
     draw(id, (t) => ({
         grid: { left: 4, right: 74, top: 6, bottom: 4, containLabel: true },
@@ -266,14 +246,13 @@ export function barsH(id, rows, opts) {
             formatter: (params) => {
                 const p = params[0];
                 const row = rows[rows.length - 1 - p.dataIndex];
-                return '<strong>' + p.name + '</strong><br>' + fmt(p.value) +
+                return '<strong>' + esc(p.name) + '</strong><br>' + fmt(p.value) +
                     (row && row.extra ? '<br><span style="color:' + t.muted + '">' + row.extra + '</span>' : '');
             }
         },
         xAxis: Object.assign(valueAxis(t, fmt), { splitLine: { lineStyle: { color: t.grid, type: 'dashed' } } }),
         yAxis: {
             type: 'category',
-            // ECharts draws a category y-axis bottom-up; reversing puts the largest first.
             data: rows.map((r) => r.label).reverse(),
             axisLine: { show: false },
             axisTick: { show: false },
@@ -349,7 +328,7 @@ export function donut(id, rows, centreLabel, centreValue) {
         },
         tooltip: {
             trigger: 'item',
-            formatter: (p) => '<strong>' + p.name + '</strong><br>' + num(p.value) + ' (' + p.percent + '%)'
+            formatter: (p) => '<strong>' + esc(p.name) + '</strong><br>' + num(p.value) + ' (' + p.percent + '%)'
         },
         grid: null,
         series: [{
@@ -383,7 +362,7 @@ export function histogram(id, rows, colorFor) {
             axisPointer: { type: 'shadow', shadowStyle: { color: t.sunken } },
             formatter: (params) => {
                 const p = params[0];
-                return 'Score ' + p.name + '<br><strong>' + num(p.value) + '</strong> sessions';
+                return 'Score ' + esc(p.name) + '<br><strong>' + num(p.value) + '</strong> sessions';
             }
         },
         xAxis: {
@@ -414,8 +393,8 @@ export function treemap(id, nodes, colorForType, legend) {
         tooltip: {
             formatter: (p) => {
                 const d = p.data;
-                return '<strong>' + d.name + '</strong><br>' +
-                    (d.org ? d.org + '<br>' : '') +
+                return '<strong>' + esc(d.name) + '</strong><br>' +
+                    (d.org ? esc(d.org) + '<br>' : '') +
                     '<span style="color:' + t.muted + '">' + (d.astype || 'unknown') + '</span><br>' +
                     num(d.value) + ' sessions · ' + num(d.uniqIps) + ' IPs<br>' +
                     '<span style="color:' + t.muted + '">' + num(d.human) + ' human · ' +
@@ -475,7 +454,7 @@ export function lines(id, times, series, formatter) {
             formatter: (params) => {
                 const lines = ['<div style="color:' + t.muted + '">' + clockOnly(params[0].axisValue) + '</div>'];
                 for (const p of params) {
-                    lines.push(p.marker + ' ' + p.seriesName +
+                    lines.push(p.marker + ' ' + esc(p.seriesName) +
                         '<span style="float:right;padding-left:18px;font-weight:600">' +
                         (p.value === null || p.value === undefined ? '—' : (formatter ? formatter(p.value) : num(p.value))) +
                         '</span>');
@@ -530,7 +509,7 @@ export function geoScatter(id, points) {
         grid: { left: 6, right: 6, top: 10, bottom: 6, containLabel: false },
         tooltip: {
             trigger: 'item',
-            formatter: (p) => '<strong>' + p.data.name + '</strong><br>' +
+            formatter: (p) => '<strong>' + esc(p.data.name) + '</strong><br>' +
                 num(p.data.sessions) + ' sessions · ' + num(p.data.ips) + ' IPs<br>' +
                 '<span style="color:' + t.muted + '">' + num(p.data.human) + ' human · ' +
                 num(p.data.evasive) + ' evasive</span>'
@@ -561,10 +540,6 @@ export function geoScatter(id, points) {
     }));
 }
 
-/* -------------------------------------------------------------------------
- * Sparklines (plain canvas, not ECharts)
- * ---------------------------------------------------------------------- */
-
 /**
  * Draw a sparkline into a canvas.
  *
@@ -592,17 +567,11 @@ export function sparkline(canvas, values, color) {
     const barWidth = w / values.length;
     ctx.fillStyle = color;
     for (let i = 0; i < values.length; i += 1) {
-        // A one-pixel floor on non-zero buckets: "a little activity" and "no activity"
-        // must not look identical.
         const raw = (values[i] / max) * (h - 2);
         const barHeight = values[i] > 0 ? Math.max(1, raw) : 0;
         ctx.fillRect(i * barWidth, h - barHeight, Math.max(1, barWidth - 1), barHeight);
     }
 }
-
-/* -------------------------------------------------------------------------
- * Lifecycle
- * ---------------------------------------------------------------------- */
 
 /**
  * Keep charts sized and themed.
@@ -641,5 +610,4 @@ export function initCharts() {
     }
 }
 
-/* Re-exported for views that format axis labels. */
 export { dur, durUs, num };

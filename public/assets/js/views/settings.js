@@ -1,22 +1,147 @@
 /*
  * Loghound — Settings view.
  *
- * The Settings page is rendered entirely server-side (it is a set of forms, and it must
- * work with JavaScript disabled), so this module only adds the two conveniences that
- * genuinely need scripting: the snippet tabs and the copy buttons.
+ * The forms are server-rendered and post normally, so the page works with JavaScript
+ * disabled. What this module adds is the parts that cannot be synchronous:
  *
- * The copy buttons are wired centrally in core.js — every [data-copy] on the page — so
- * this file only handles the tab strip.
+ *  - The long operations. Testing a Solr connection, validating Opensolr credentials and
+ *    previewing retention all run as stepped jobs — start, poll, render progress, report
+ *    per-step results — because doing any of them inside one request risks a gateway
+ *    timeout on a slow or unreachable backend.
+ *  - The beacon status, which used to be a blocking Solr query during page render.
+ *  - The snippet tabs and the copy buttons.
  */
 
 'use strict';
 
+import { api, byId, el, post, reattachJob, runJob, when } from '../core.js';
+
+/** Human titles for the job kinds this view can start. */
+const JOB_TITLES = {
+    solr_connection: 'Solr connection check',
+    opensolr_check: 'Opensolr credential check',
+    retention_preview: 'Retention preview'
+};
+
+/**
+ * Wire the buttons that start long operations.
+ *
+ * A button is disabled while its job runs, and the server returns the already-running job
+ * for a kind rather than starting a second, so a double-click cannot run the work twice.
+ */
+function initJobButtons() {
+    for (const button of document.querySelectorAll('[data-job]')) {
+        const kind = button.dataset.job;
+        const mount = button.dataset.mount;
+
+        button.addEventListener('click', async () => {
+            setJobButtonsBusy(kind, true);
+            await runJob(kind, mount, {
+                title: JOB_TITLES[kind] || 'Operation',
+                onDone: () => setJobButtonsBusy(kind, false)
+            });
+            setJobButtonsBusy(kind, false);
+        });
+    }
+}
+
+/**
+ * Disable or restore every button that starts a given job kind.
+ */
+function setJobButtonsBusy(kind, busy) {
+    for (const button of document.querySelectorAll('[data-job="' + kind + '"]')) {
+        button.disabled = busy;
+        button.setAttribute('aria-busy', busy ? 'true' : 'false');
+    }
+}
+
+/**
+ * Reattach to any operation that was still running when the page was last open.
+ *
+ * Refreshing mid-operation must not orphan it or start a second one; the server holds the
+ * state, so the page picks the same job back up at the step it had reached.
+ */
+function reattachRunningJobs() {
+    for (const button of document.querySelectorAll('[data-job]')) {
+        const kind = button.dataset.job;
+        reattachJob(kind, button.dataset.mount, { title: JOB_TITLES[kind] || 'Operation' })
+            .then((found) => {
+                if (found) {
+                    setJobButtonsBusy(kind, true);
+                }
+            })
+            .catch(() => {});
+    }
+}
+
+/**
+ * Fetch and render whether the beacon is actually receiving data.
+ *
+ * An operator who has pasted a snippet into a template has no way to know whether it
+ * worked, and "no engaged time in the dashboard" is indistinguishable from "no traffic".
+ * This answers that question after the page has rendered, so it never holds it up.
+ */
+async function loadBeaconStatus() {
+    const box = byId('beacon-status');
+    const label = byId('beacon-status-label');
+    const detail = byId('beacon-status-detail');
+    if (!box || !label || !detail) {
+        return;
+    }
+
+    let data;
+    try {
+        data = await api('settings', 'beacon');
+    } catch (err) {
+        box.className = 'beacon-status beacon-none';
+        label.textContent = 'Beacon: status unknown';
+        detail.textContent = 'Could not ask the sessions core: ' + (err && err.message ? err.message : err);
+        return;
+    }
+
+    const status = data.beacon || {};
+    const live = status.hour > 0;
+    const everSeen = status.ever > 0;
+
+    box.className = 'beacon-status ' + (live ? 'beacon-live' : (everSeen ? 'beacon-stale' : 'beacon-none'));
+    label.textContent = 'Beacon: ' + (live ? 'Receiving data' : (everSeen ? 'Not seen in the last hour' : 'Never seen'));
+
+    detail.replaceChildren(...(everSeen
+        ? beaconDetail(status)
+        : [document.createTextNode(
+            'No session in the last 30 days has carried beacon data. If you have just added the snippet, load a ' +
+            'page on your site and refresh this view.'
+        )]));
+}
+
+/**
+ * Build the beacon detail line: recent counts, last arrival and coverage.
+ */
+function beaconDetail(status) {
+    const parts = [
+        document.createTextNode(
+            status.hour.toLocaleString('en-US') + ' sessions in the last hour · ' +
+            status.day.toLocaleString('en-US') + ' in the last 24 hours'
+        )
+    ];
+    if (status.last) {
+        parts.push(document.createTextNode(' · last at '));
+        parts.push(el('span', { class: 'mono', text: when(status.last) }));
+    }
+    if (status.coverage !== null && status.coverage !== undefined) {
+        parts.push(document.createTextNode(' · '));
+        parts.push(el('span', { class: 'mono', text: status.coverage + '%' }));
+        parts.push(document.createTextNode(' of sessions that were served a page'));
+    }
+    return parts;
+}
+
 /**
  * Wire the install-snippet tabs.
  *
- * Roving selection over role="tab" buttons with arrow-key support, because a tab strip
- * that only responds to a mouse is a tab strip half the operators cannot use. No inline
- * handlers: the CSP forbids them and the listeners are attached here.
+ * Roving selection with arrow-key support, because a tab strip that only responds to a
+ * mouse is a tab strip half the operators cannot use. No inline handlers: the CSP forbids
+ * them and the listeners are attached here.
  */
 function initTabs() {
     const strip = document.querySelector('.snippets .tabs');
@@ -39,30 +164,49 @@ function initTabs() {
 
     for (const tab of tabs) {
         tab.addEventListener('click', () => select(tab.dataset.tab));
-        tab.addEventListener('keydown', (e) => {
-            const i = tabs.indexOf(tab);
+        tab.addEventListener('keydown', (event) => {
+            const index = tabs.indexOf(tab);
             let next = null;
-            if (e.key === 'ArrowRight') {
-                next = tabs[(i + 1) % tabs.length];
-            } else if (e.key === 'ArrowLeft') {
-                next = tabs[(i - 1 + tabs.length) % tabs.length];
+            if (event.key === 'ArrowRight') {
+                next = tabs[(index + 1) % tabs.length];
+            } else if (event.key === 'ArrowLeft') {
+                next = tabs[(index - 1 + tabs.length) % tabs.length];
             }
             if (next) {
-                e.preventDefault();
+                event.preventDefault();
                 select(next.dataset.tab);
                 next.focus();
             }
         });
     }
 
-    // Establish the initial roving tabindex from whichever tab the server marked active.
-    const active = tabs.find((t) => t.classList.contains('on')) || tabs[0];
+    const active = tabs.find((tab) => tab.classList.contains('on')) || tabs[0];
     if (active) {
         select(active.dataset.tab);
     }
 }
 
-/** Entry point. */
-export default async function init() {
+/**
+ * Stop a settings form being submitted twice by an impatient double-click.
+ */
+function initSubmitGuards() {
+    for (const form of document.querySelectorAll('form[method="post"]')) {
+        form.addEventListener('submit', () => {
+            for (const button of form.querySelectorAll('button[type="submit"]')) {
+                button.disabled = true;
+                button.setAttribute('aria-busy', 'true');
+            }
+        });
+    }
+}
+
+/**
+ * Entry point.
+ */
+export default function init() {
     initTabs();
+    initSubmitGuards();
+    initJobButtons();
+    reattachRunningJobs();
+    loadBeaconStatus();
 }

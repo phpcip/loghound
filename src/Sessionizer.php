@@ -115,6 +115,10 @@ final class Sessionizer
     private string $ipSalt;
 
     /**
+     * The idle timeout is SPEC §5's 30 minutes, configurable, and clamped to something sane
+     * at both ends: a 5-second timeout would turn every page load into its own session, and
+     * a 24-hour one would merge a week of a NAT's traffic into a single unusable document.
+     *
      * @param object              $state The State instance (src/State.php).
      * @param array<string,mixed> $cfg   Full config array, or at least the ingest/privacy
      *                                   sections.
@@ -123,9 +127,6 @@ final class Sessionizer
     {
         $this->state = $state;
 
-        // SPEC §5: 30 minutes, configurable. Clamped to something sane: a 5-second timeout
-        // would turn every page load into its own session, and a 24-hour one would merge a
-        // week of a NAT's traffic into a single unusable document.
         $this->idleSeconds = Security::clampInt(
             $cfg['ingest']['session_idle_sec'] ?? 1800,
             60,
@@ -143,6 +144,26 @@ final class Sessionizer
      * Returns the hit with session_id_s, session_seq_i, fp_hash_s and visitor_s filled in.
      * The caller (bin/loghound-tail) then indexes the returned document.
      *
+     * A hit with no usable timestamp cannot be sessionised or ordered, and is refused.
+     * Substituting time() instead would place a replayed backlog in the present and corrupt
+     * every gap statistic in the batch.
+     *
+     * fp_hash_s is taken from the hit, not recomputed. Parser.php already derives it from the
+     * header tuple and correctly leaves it ABSENT when the format logs no headers at all;
+     * recomputing here would be a second implementation of the same contract and the two
+     * would drift. The fallback exists only for a hit that did not come through the parser,
+     * such as one from a test harness or a replay tool. kind_s is handled the same way: it is
+     * normally set by Parser.php, and when it is not it is derived through Signals, because
+     * the html/asset/beacon distinction is a detection decision that drives asset_ratio_f and
+     * the page count rather than a parsing detail.
+     *
+     * State decides what "open" means: it looks for a row on this client_key whose last_ts is
+     * within the idle window of the instant we pass in. Passing the HIT's instant rather than
+     * the wall clock is what makes a historical replay produce the same sessions it would
+     * have produced live. The update passes hitsDelta=1 to keep State's own counter in step
+     * with the aggregate's, and last_ts is advanced with MAX() inside State, so an
+     * out-of-order line cannot rewind a session.
+     *
      * @param array<string,mixed> $hit A normalised hit from Parser.php.
      * @return array<string,mixed>
      */
@@ -150,16 +171,9 @@ final class Sessionizer
     {
         $tsMs = self::hitMillis($hit);
         if ($tsMs <= 0) {
-            // A hit with no usable timestamp cannot be sessionised or ordered. Refusing it
-            // here is better than substituting time(), which would place a replayed backlog
-            // in the present and corrupt every gap statistic in the batch.
             throw new \InvalidArgumentException('Sessionizer: hit has no usable timestamp.');
         }
 
-        // Parser.php already computes fp_hash_s from the header tuple and correctly leaves
-        // it ABSENT when the format logs no headers at all. Recomputing it here would be a
-        // second implementation of the same contract, and the two would drift. Only fall
-        // back when the hit did not come through the parser (a test harness, a replay tool).
         if (!isset($hit['fp_hash_s'])) {
             $hit['fp_hash_s'] = Signals::fingerprint($hit);
         }
@@ -167,10 +181,6 @@ final class Sessionizer
             $hit['visitor_s'] = Signals::visitorHash($hit, $this->ipMode, $this->ipSalt);
         }
 
-        // kind_s is normally set by Parser.php. When it is not, derive it — the
-        // html/asset/beacon distinction is a detection decision (it drives asset_ratio_f
-        // and the page count), not a parsing detail, so an implementation lives in Signals
-        // and either caller may use it.
         if (!isset($hit['kind_s'])) {
             $classified = Signals::classifyRequest($hit);
             $hit['kind_s'] = $classified['kind_s'];
@@ -181,10 +191,6 @@ final class Sessionizer
 
         $clientKey = self::clientKey($hit);
 
-        // State decides what "open" means: it looks for a row on this client_key whose
-        // last_ts is within the idle window of the instant we pass in. Passing the HIT's
-        // instant rather than the wall clock is what makes a historical replay produce the
-        // same sessions it would have produced live.
         $row = $this->state->findOpenSession($clientKey, $this->idleSeconds, $tsMs);
 
         if ($row === null) {
@@ -207,8 +213,6 @@ final class Sessionizer
 
         $agg = $this->accumulate((array) $row['data'], $hit, $tsMs, (int) $row['last_ts']);
 
-        // hitsDelta=1 keeps State's own counter in step with the aggregate's; last_ts is
-        // advanced with MAX() inside State, so an out-of-order line cannot rewind a session.
         $this->state->updateSession((string) $row['session_id'], $tsMs, 1, $agg);
 
         $hit['session_id_s']  = (string) $row['session_id'];
@@ -248,13 +252,14 @@ final class Sessionizer
      * seconds as of the far future" rather than a separate State method, which keeps the
      * State interface to the five calls documented at the top of this file.
      *
+     * Draining is paged, because listIdleSessions clamps its own limit to 5000 and asking
+     * for an unbounded batch would silently get the first 5000 and leave the rest open.
+     *
      * @return array<int,array<string,mixed>>
      */
     public function closeAll(): array
     {
         $out = [];
-        // listIdleSessions clamps its own limit to 5000, so drain in pages rather than
-        // asking for an unbounded batch and silently getting the first 5000.
         while (true) {
             $rows = $this->state->listIdleSessions(0, PHP_INT_MAX, 5000);
             if ($rows === []) {
@@ -310,10 +315,6 @@ final class Sessionizer
         return $net . '|' . $ua;
     }
 
-    // =====================================================================================
-    // INTERNALS
-    // =====================================================================================
-
     /**
      * Create the empty running aggregate for a new session.
      *
@@ -322,6 +323,25 @@ final class Sessionizer
      * the id from being guessable: without it, anyone who knows a visitor's netblock and
      * User-Agent could compute their session id and forge beacon payloads for it, since the
      * beacon HMAC is bound to the session id.
+     *
+     * The aggregate's shape, and why each part of it exists:
+     *
+     * Favicons are counted separately from assets because SPEC §4.1 gives favicon its own
+     * kind_s, but a favicon is unquestionably a sub-resource the renderer fetched, so the
+     * no_assets rule and asset_ratio_f both have to include it — a session that pulled the
+     * favicon did not "fetch nothing but the markup".
+     *
+     * Distinct paths are tracked as a path => 1 map, bounded by MAX_TRACKED_PATHS. Alongside
+     * it, the full request target (path plus query) is counted as target => times seen, for
+     * repeat detection, and a running count is kept of how many distinct SUB-RESOURCE URIs
+     * were fetched more than once. Sub-resources only: re-navigating to the same page is
+     * completely normal behaviour and says nothing about the client's HTTP cache.
+     *
+     * Inter-request gaps are accumulated in milliseconds.
+     *
+     * The identity, network and client fields are lifted from the FIRST hit. The first is the
+     * right choice rather than the last: it carries the external referer and the entry
+     * conditions, and a session whose UA changes mid-way is already a different client_key.
      *
      * @param array<string,mixed> $hit
      * @return array<string,mixed>
@@ -332,10 +352,6 @@ final class Sessionizer
                 'hits'       => 0,
                 'pages'      => 0,
                 'assets'     => 0,
-                // Counted separately from assets because SPEC §4.1 gives favicon its own
-                // kind_s, but it is unquestionably a sub-resource the renderer fetched, so
-                // the no_assets rule and asset_ratio_f both have to include it. A session
-                // that pulled the favicon did not "fetch nothing but the markup".
                 'favicons'   => 0,
                 'beacons'    => 0,
                 'bytes'      => 0,
@@ -347,27 +363,47 @@ final class Sessionizer
                 'html_200'   => false,
                 'entry_path' => null,
                 'exit_path'  => null,
-                // path => 1. Bounded by MAX_TRACKED_PATHS; see the constant.
                 'paths'      => [],
                 'paths_saturated' => false,
-                // Full request target (path + query) => times seen, for repeat detection.
                 'uris'          => [],
-                // How many distinct SUB-RESOURCE URIs were fetched more than once. Only
-                // sub-resources: re-navigating to the same page is completely normal
-                // behaviour and says nothing about the client's HTTP cache.
                 'repeat_assets' => 0,
-                // Inter-request gaps in milliseconds.
                 'gaps'       => [],
-                // Identity/network/client fields lifted from the FIRST hit. The first hit
-                // is the right choice rather than the last: it is the one that carries the
-                // external referer and the entry conditions, and a session whose UA changes
-                // mid-way is already a different client_key.
                 'first'      => self::identityOf($hit),
         ];
     }
 
     /**
      * Fold one hit into the running aggregate.
+     *
+     * The inter-request gap is computed BEFORE the hit counter is incremented, so the first
+     * hit of a session contributes no gap — there is nothing to measure it from. It is
+     * floored at zero, because a log file can contain out-of-order lines, two Apache worker
+     * processes flushing within the same second, and a negative gap would poison the standard
+     * deviation that the periodic_timing rule reads.
+     *
+     * Page counting deliberately EXCLUDES beacon requests. An analytics beacon is a
+     * sub-resource fired by a page, and counting it as a second pageview would make every
+     * single-page visit look like a two-page one, silently disarming the single_page_10s rule
+     * on exactly the traffic it exists to catch.
+     *
+     * A 304 is counted because it is the evidence that the client sent a conditional request,
+     * an If-None-Match or an If-Modified-Since. Real browsers with a warm cache do this
+     * constantly; most scripted clients never do.
+     *
+     * The distinct-path counter saturates rather than growing without bound.
+     *
+     * Repeat-request detection, which feeds the no_304_on_repeat rule, involves two decisions
+     * that were made against the real human fixture rather than from first principles. It
+     * keys on the FULL request target, path AND query, not on path_s: a cache-busted asset
+     * (/app.css?a=1832196438) is a different URL on every deploy, so the browser has nothing
+     * to revalidate and legitimately never sends a conditional request — keying on path_s
+     * alone would see "/app.css fetched twice, no 304" and fire on a completely normal human,
+     * and it does exactly that, twice, in tests/fixtures/apache_combined_human.log. And it
+     * counts SUB-RESOURCES only, because re-navigating to the same page or polling a status
+     * endpoint is ordinary human behaviour, and pages are frequently served no-store, so an
+     * HTML repeat carries no information about the client's cache. A repeated URI is counted
+     * once however many times it repeats: three fetches of one file is one piece of evidence,
+     * not two.
      *
      * @param array<string,mixed> $agg    The aggregate so far (State's `data` blob).
      * @param array<string,mixed> $hit
@@ -377,11 +413,6 @@ final class Sessionizer
      */
     private function accumulate(array $agg, array $hit, int $tsMs, int $lastMs): array
     {
-        // The inter-request gap. Computed before hits is incremented so the first hit of a
-        // session contributes no gap (there is nothing to measure from).
-        // max(0, ...) because a log file can contain out-of-order lines — two Apache worker
-        // processes flushing within the same second — and a negative gap would poison the
-        // standard deviation that periodic_timing reads.
         if (($agg['hits'] ?? 0) > 0) {
             $gapMs = max(0, $tsMs - $lastMs);
             if (count($agg['gaps']) < self::MAX_TRACKED_GAPS) {
@@ -395,10 +426,6 @@ final class Sessionizer
         $status = (int) ($hit['status_i'] ?? 0);
         $path   = (string) ($hit['path_s'] ?? '');
 
-        // Page counting deliberately EXCLUDES beacon requests. An analytics beacon is a
-        // sub-resource fired by a page, and counting it as a second pageview would make
-        // every single-page visit look like a two-page one — which would silently disarm
-        // the single_page_10s rule on exactly the traffic it exists to catch.
         if ($kind === 'html') {
             $agg['pages']++;
             if ($status === 200) {
@@ -422,9 +449,6 @@ final class Sessionizer
             $agg['st2']++;
         } elseif ($status >= 300 && $status < 400) {
             $agg['st3']++;
-            // 304 is the evidence that the client sent a conditional request — an
-            // If-None-Match or If-Modified-Since. Real browsers with a warm cache do this
-            // constantly; most scripted clients never do.
             if ($status === 304) {
                 $agg['got_304'] = true;
             }
@@ -434,7 +458,6 @@ final class Sessionizer
             $agg['st5']++;
         }
 
-        // Distinct paths. Saturates rather than growing without bound.
         if ($path !== '') {
             if (isset($agg['paths'][$path])) {
                 $agg['paths'][$path]++;
@@ -445,24 +468,9 @@ final class Sessionizer
             }
         }
 
-        // Repeat-request detection, feeding the no_304_on_repeat rule. Two decisions here,
-        // both made against the real human fixture rather than from first principles:
-        //
-        //  * It keys on the FULL request target, path AND query, not path_s. A cache-busted
-        //    asset (/app.css?a=1832196438) is a different URL on every deploy, so the
-        //    browser has nothing to revalidate and legitimately never sends a conditional
-        //    request. Keying on path_s alone would see "/app.css fetched twice, no 304" and
-        //    fire on a completely normal human — and it does, twice, in
-        //    tests/fixtures/apache_combined_human.log.
-        //
-        //  * It counts SUB-RESOURCES only. Re-navigating to the same page, or polling a
-        //    status endpoint, is ordinary human behaviour and pages are frequently served
-        //    no-store, so an HTML repeat carries no information about the client's cache.
         $uri = $path . (isset($hit['query_s']) && $hit['query_s'] !== '' ? '?' . $hit['query_s'] : '');
         if ($uri !== '' && ($kind === 'asset' || $kind === 'favicon')) {
             if (isset($agg['uris'][$uri])) {
-                // Count the URI once, however many times it repeats: three fetches of one
-                // file is one piece of evidence, not two.
                 if ($agg['uris'][$uri] === 1) {
                     $agg['repeat_assets']++;
                 }
@@ -481,6 +489,12 @@ final class Sessionizer
      * Only fields that are actually PRESENT are copied. An absent field stays absent all
      * the way to Solr — SPEC §1 forbids fabricating a metric, and an enrichment that failed
      * must be visibly missing rather than quietly defaulted.
+     *
+     * `_logged` is carried across too, and it is not a document field. It is the list of
+     * header fields the compiled log format can produce, and the ONLY way to tell "the
+     * browser did not send Sec-CH-UA" from "the operator does not log Sec-CH-UA". Two rules
+     * worth 70+ points depend on that distinction, so it has to travel with the session;
+     * bin/loghound-score strips every underscore-prefixed key before indexing.
      *
      * @param array<string,mixed> $hit
      * @return array<string,mixed>
@@ -502,11 +516,6 @@ final class Sessionizer
             'tls_proto_s', 'tls_cipher_s',
             'fp_hash_s', 'visitor_s',
 
-            // Not a document field. `_logged` is the list of header fields the compiled log
-            // format can produce, and it is the ONLY way to tell "the browser did not send
-            // Sec-CH-UA" from "the operator does not log Sec-CH-UA". Two rules worth 70+
-            // points depend on that distinction, so it has to travel with the session.
-            // bin/loghound-score strips every underscore-prefixed key before indexing.
             '_logged',
         ];
 
@@ -525,21 +534,38 @@ final class Sessionizer
      * This is where derived numbers are computed once, rather than in each of the rules
      * that wants them.
      *
+     * State hydrates `data` into an array, and a raw JSON string is tolerated as well, so a
+     * row read by some other tool still finalises.
+     *
+     * State stores epoch MILLISECONDS, so log_span_ms is an exact difference, while
+     * ts_start and ts_end are handed back in SECONDS because that is what the document
+     * builder formats into a Solr instant.
+     *
+     * Two path numbers come out of this: the true distinct count, saturating at
+     * MAX_TRACKED_PATHS, and the capped sample that goes onto the document. SPEC §4.2 caps
+     * paths_ss at 50, and uniq_paths_i carries the real number, so nothing is lost except
+     * the ability to enumerate — and the UI must label the list a sample.
+     *
+     * Sub-resources are assets plus favicons. The favicon has its own kind_s in the schema
+     * but it is still something the renderer went and fetched, so it belongs on this side of
+     * the ratio. asset_ratio_f is then sub-resources as a fraction of ALL hits: a browser
+     * rendering a page pulls CSS, JS, fonts and images, while a client that fetches only HTML
+     * has a ratio of 0. Dividing by total hits rather than by pages is what makes a
+     * single-page visit with ten assets and a ten-page crawl with none comparable numbers.
+     *
+     * The gap statistics are computed here so that every rule reads the same numbers and the
+     * session document carries them for the forensics view.
+     *
      * @param array<string,mixed> $row
      * @return array<string,mixed>
      */
     private function finalise(array $row): array
     {
-        // State hydrates `data` into an array; tolerate a raw JSON string too, so a row read
-        // by some other tool still finalises.
         $agg = $row['data'] ?? [];
         if (!is_array($agg)) {
             $agg = (array) json_decode((string) $agg, true);
         }
 
-        // State stores epoch MILLISECONDS. log_span_ms is therefore an exact difference;
-        // ts_start/ts_end are handed back in SECONDS because that is what the document
-        // builder formats into a Solr instant.
         $firstMs = (int) $row['first_ts'];
         $lastMs  = (int) $row['last_ts'];
         $gaps    = array_map('intval', (array) ($agg['gaps'] ?? []));
@@ -571,12 +597,8 @@ final class Sessionizer
 
             'entry_path'   => $agg['entry_path'] ?? null,
             'exit_path'    => $agg['exit_path'] ?? null,
-            // The true distinct count (saturating at MAX_TRACKED_PATHS)...
             'uniq_paths'   => count($paths),
             'paths_saturated' => (bool) ($agg['paths_saturated'] ?? false),
-            // ...and the capped sample that goes onto the document. SPEC §4.2 caps
-            // paths_ss at 50; uniq_paths_i carries the real number, so nothing is lost
-            // except the ability to enumerate, and the UI must label the list a sample.
             'paths'        => array_slice($paths, 0, self::PATHS_ON_DOC),
 
             'repeat_assets' => (int) ($agg['repeat_assets'] ?? 0),
@@ -584,19 +606,10 @@ final class Sessionizer
             'first'        => (array) ($agg['first'] ?? []),
         ];
 
-        // Sub-resources = assets + favicons. The favicon has its own kind_s in the schema
-        // but it is still something the renderer went and fetched, so it belongs on this
-        // side of the ratio.
         $out['sub_resources'] = $out['assets'] + $out['favicons'];
 
-        // asset_ratio_f: sub-resources as a fraction of all hits. A browser rendering a page
-        // pulls CSS, JS, fonts and images; a client that fetches only HTML has a ratio of 0.
-        // Divided by total hits rather than by pages so a single-page visit with ten assets
-        // and a ten-page crawl with none are comparable numbers.
         $out['asset_ratio'] = $out['hits'] > 0 ? round($out['sub_resources'] / $out['hits'], 4) : 0.0;
 
-        // Gap statistics. Computed here so every rule reads the same numbers, and so the
-        // session document carries them for the forensics view.
         $out['gap_p50_ms']    = Signals::median($gaps);
         $out['gap_stddev_ms'] = Signals::stddev($gaps);
 

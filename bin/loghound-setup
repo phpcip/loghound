@@ -22,6 +22,12 @@
  *
  * THE API KEY IS NEVER PRINTED, NEVER ECHOED WHILE TYPED, AND NEVER LOGGED.
  *
+ * THIS IS ONE OF TWO FRONT ENDS. The other is the browser installer (src/Setup/Installer),
+ * and the two must not drift: every decision about what setup MEANS — which files are
+ * candidates, how a format is graded, how indexes are provisioned, what a valid password
+ * is, what the next steps are — lives in src/Setup/ and is called from both. What is left
+ * here is prompting and printing.
+ *
  * Usage
  *   loghound-setup                    the full wizard
  *   loghound-setup --detect-only      run detection, print the result, change nothing
@@ -46,8 +52,8 @@
  *   LOGHOUND_SOLR_HTTP_AUTH        yes|no
  *   LOGHOUND_SOLR_HTTP_USER        own-Solr basic auth user
  *   LOGHOUND_SOLR_HTTP_PASS        own-Solr basic auth password
- *   LOGHOUND_HITS_CORE             default loghound_hits
- *   LOGHOUND_SESSIONS_CORE         default loghound_sessions
+ *   LOGHOUND_HITS_CORE             own-Solr core name for hits
+ *   LOGHOUND_SESSIONS_CORE         own-Solr core name for sessions
  *   LOGHOUND_IP_MODE               full|truncate|hash
  *   LOGHOUND_RETENTION_DAYS        integer, 0 = never delete
  *   LOGHOUND_RESET_PANEL_AUTH      yes|no — replace existing panel credentials
@@ -56,6 +62,24 @@
  *   LOGHOUND_BASE_URL              public URL of the panel, for the beacon snippet
  *   LOGHOUND_ROTATE_BEACON_SECRET  yes|no
  *   LOGHOUND_FORCE_WRITE           yes|no — write even a config that fails validation
+ *
+ * In managed mode the two index names are GENERATED rather than asked for, because an
+ * Opensolr index name is unique across the whole platform and permanent once created;
+ * LOGHOUND_HITS_CORE / LOGHOUND_SESSIONS_CORE therefore apply to your own Solr only.
+ *
+ * Non-interactive mode answers every prompt from a LOGHOUND_* environment variable or from
+ * the offered default. install.sh --non-interactive uses it so the whole install can run
+ * from Ansible or a CI job with no terminal attached, and it is switched on automatically
+ * when stdin is not a terminal — a wizard that blocks forever on a closed stdin is the worst
+ * possible failure mode inside an automated deploy. `--interactive` forces prompting even
+ * when stdin does not look like a terminal.
+ *
+ * `--detect-only` shows exactly what the wizard would ask about and then stops. It is useful
+ * for checking a box before committing to a setup run, and for debugging a format that will
+ * not match without having to answer six prompts first.
+ *
+ * Confirmation of the detected sources is mandatory, per SPEC §8: "Never silently ingest
+ * with a guessed format."
  *
  * @package Loghound
  * @license MIT
@@ -66,9 +90,10 @@ declare(strict_types=1);
 namespace Loghound\Bin;
 
 use Loghound\Config;
-use Loghound\LogDetect;
-use Loghound\LogFormat;
-use Loghound\Security;
+use Loghound\Setup\Detector;
+use Loghound\Setup\Job;
+use Loghound\Setup\Steps;
+use Loghound\Setup\Storage;
 
 if (PHP_SAPI !== 'cli') {
     http_response_code(404);
@@ -78,19 +103,10 @@ if (PHP_SAPI !== 'cli') {
 $ROOT = dirname(__DIR__);
 require_once $ROOT . '/src/autoload.php';
 
-// =============================================================================
-// Arguments
-// =============================================================================
-
 $configPath = $ROOT . '/config/loghound.php';
 $detectOnly = false;
 $useColor   = function_exists('posix_isatty') && @posix_isatty(STDOUT) && getenv('NO_COLOR') === false;
 
-// Non-interactive: every prompt is answered from a LOGHOUND_* environment variable, or
-// from its offered default. install.sh --non-interactive uses this so the whole install
-// can run from Ansible or a CI job with no terminal attached. Also switched on
-// automatically when stdin is not a terminal, because a wizard that blocks forever on a
-// closed stdin is the worst possible failure mode inside an automated deploy.
 $nonInteractive = getenv('LOGHOUND_NONINTERACTIVE') === '1'
     || !(function_exists('posix_isatty') && @posix_isatty(STDIN));
 
@@ -104,7 +120,6 @@ foreach (array_slice($argv, 1) as $a) {
     } elseif ($a === '--non-interactive') {
         $nonInteractive = true;
     } elseif ($a === '--interactive') {
-        // Force prompting even when stdin does not look like a terminal.
         $nonInteractive = false;
     } elseif ($a === '--help' || $a === '-h') {
         fwrite(STDOUT, "loghound-setup [--detect-only] [--non-interactive] [--config=PATH] [--no-color]\n");
@@ -117,10 +132,6 @@ foreach (array_slice($argv, 1) as $a) {
 
 $UI = new Ui($useColor, $nonInteractive);
 
-// =============================================================================
-// Load whatever is already configured
-// =============================================================================
-
 $cfg = Config::load($configPath);
 $isFirstRun = !is_file($configPath);
 
@@ -131,21 +142,17 @@ if (!$isFirstRun) {
     $UI->nl();
 }
 
-// =============================================================================
-// STEP 1 — log source detection
-// =============================================================================
-
 $UI->step(1, 'Finding your access logs');
 
-$detected = detectSources($cfg, $UI);
+$report = Detector::runSync($cfg, static function (string $line) use ($UI): void {
+    $UI->info('    ' . $line);
+});
+$detected = (array) ($report['sources'] ?? []);
 
 if ($detectOnly) {
-    // Show exactly what the wizard would ask about, then stop. Useful for checking a
-    // box before committing to a setup run, and for debugging a format that will not
-    // match without having to answer six prompts first.
     foreach ($detected as $d) {
         $UI->nl();
-        presentSource($d, $UI);
+        presentSource((array) $d, $UI);
     }
     $UI->nl();
     $UI->info('--detect-only: ' . count($detected) . ' source(s) found, nothing was written.');
@@ -157,50 +164,50 @@ if ($detected === []) {
     $UI->info('You can point Loghound at a file by hand.');
     $manual = $UI->ask('Path to an access log (blank to skip)', '', 'LOGHOUND_LOG_PATH');
     if ($manual !== '') {
-        $detected = [[
-            'path'        => $manual,
-            'format'      => 'apache_combined',
-            'format_kind' => 'library',
-            'vhost'       => null,
-            'confidence'  => null,
-            'origin'      => 'manual',
-            'samples'     => [],
-            'fields'      => [],
-        ]];
+        $added = Detector::manualSource($cfg, $manual, 'apache_combined', '');
+        if ($added['ok']) {
+            $detected = [$added['source']];
+        } else {
+            $UI->err($added['error']);
+        }
     }
 }
 
-// Confirmation is mandatory. SPEC §8: "Never silently ingest with a guessed format."
-$sources = [];
+$chosen = [];
+$widen  = [];
 foreach ($detected as $d) {
+    $d = (array) $d;
     $UI->nl();
     presentSource($d, $UI);
+
     if (!$UI->confirm('Ingest this file with this format?', true, 'LOGHOUND_CONFIRM_SOURCES')) {
-        $UI->info('Skipped ' . $d['path']);
+        $UI->info('Skipped ' . (string) $d['path']);
         continue;
     }
-    $sources[] = array_filter([
-        'path'   => $d['path'],
-        'format' => $d['format'],
-        'host'   => $d['vhost'],
-    ], static fn($v) => $v !== null && $v !== '');
+
+    if (!empty($d['outside_roots'])) {
+        $dir = dirname((string) $d['path']);
+        $UI->warn($dir . ' is outside allowed_log_roots.');
+        if (!$UI->confirm('Allow Loghound to read log files under ' . $dir . '?', true, 'LOGHOUND_ALLOW_LOG_ROOTS')) {
+            $UI->info('Skipped ' . (string) $d['path']);
+            continue;
+        }
+        $widen[] = $dir;
+    }
+
+    $chosen[] = $d;
 }
 
-if ($sources === []) {
+if ($chosen === []) {
     $UI->warn('No log sources confirmed. Loghound will have nothing to ingest.');
     if (!$UI->confirm('Carry on anyway?', false, 'LOGHOUND_CONFIRM_SOURCES')) {
         exit(1);
     }
 }
-$cfg->set('sources', $sources);
 
-// Make sure every confirmed path is actually inside an allowed root, otherwise the
-// daemon will refuse it at startup and the operator will have no idea why.
-widenAllowedRoots($cfg, $sources, $UI);
-
-// =============================================================================
-// STEP 2 — Solr backend
-// =============================================================================
+foreach (Steps::applySources($cfg, $chosen, $widen) as $problem) {
+    $UI->err($problem);
+}
 
 $UI->nl();
 $UI->step(2, 'Where should the index live?');
@@ -211,70 +218,51 @@ $UI->info('  2) My own Solr 9     — you already run one');
 $choice = $UI->ask('Choose 1 or 2', $currentMode === 'custom' ? '2' : '1', 'LOGHOUND_SOLR_CHOICE');
 
 if ($choice === '2') {
-    configureOwnSolr($cfg, $UI);
+    configureOwnSolr($cfg, $UI, $ROOT);
 } else {
     configureOpensolr($cfg, $UI, $ROOT);
 }
 
-// =============================================================================
-// STEP 3 — secrets
-// =============================================================================
-
 $UI->nl();
 $UI->step(3, 'Secrets');
 
-// The beacon HMAC secret. Without it a visitor could claim any session id and any dwell
-// time; with it, forged timings become evidence rather than data (SPEC §6.3).
-$beaconSecret = (string) $cfg->get('beacon.secret', '');
-if (strlen($beaconSecret) < 32) {
-    $cfg->set('beacon.secret', bin2hex(random_bytes(32)));
-    $UI->ok('Generated a new beacon HMAC secret (64 hex chars).');
-} else {
-    $UI->ok('Beacon HMAC secret already set — keeping it.');
+foreach (Steps::ensureSecrets($cfg) as $made) {
+    $UI->ok('Generated a new ' . $made . '.');
+}
+
+if (strlen((string) $cfg->get('beacon.secret', '')) >= 32) {
+    $UI->ok('Beacon HMAC secret is set.');
     if ($UI->confirm('Rotate it? (every issued beacon token becomes invalid)', false, 'LOGHOUND_ROTATE_BEACON_SECRET')) {
         $cfg->set('beacon.secret', bin2hex(random_bytes(32)));
         $UI->ok('Beacon secret rotated.');
     }
 }
 
-// The IP salt, used only in `hash` privacy mode, but generated unconditionally so
-// switching modes later never requires regenerating anything.
-if (strlen((string) $cfg->get('privacy.ip_salt', '')) < 16) {
-    $cfg->set('privacy.ip_salt', bin2hex(random_bytes(16)));
-    $UI->ok('Generated a new IP hashing salt.');
-}
-
-// =============================================================================
-// STEP 4 — privacy
-// =============================================================================
-
 $UI->nl();
 $UI->step(4, 'Privacy');
 
 $UI->info('How should visitor IP addresses be stored?');
-$UI->info('  full      — keep the address (you already have it in your own access log)');
-$UI->info('  truncate  — /24 for IPv4, /48 for IPv6; network analysis still works');
-$UI->info('  hash      — keyed hash, rotated daily; same-day sessions still work,');
-$UI->info('              cross-day correlation of an individual becomes impossible');
-$ipMode = $UI->choice('IP storage mode', ['full', 'truncate', 'hash'], (string) $cfg->get('privacy.ip_mode', 'full'), 'LOGHOUND_IP_MODE');
-$cfg->set('privacy.ip_mode', $ipMode);
-
-if ($ipMode !== 'full') {
-    $UI->info('Note: bot detection loses some precision in ' . $ipMode . ' mode — the');
-    $UI->info('fingerprint-cluster rule counts DISTINCT IPs per fingerprint, and');
-    $UI->info('truncation merges a proxy fleet\'s exits that share a /24.');
+foreach (Steps::ipModes() as $key => $mode) {
+    $UI->raw('  ' . str_pad((string) $key, 10) . $mode['text']);
+    $UI->raw('  ' . str_repeat(' ', 10) . $mode['cost']);
 }
 
-$retention = (int) $UI->ask(
+$ipMode = $UI->choice(
+    'IP storage mode',
+    array_keys(Steps::ipModes()),
+    (string) $cfg->get('privacy.ip_mode', 'full'),
+    'LOGHOUND_IP_MODE'
+);
+
+$retention = $UI->ask(
     'Delete hits older than how many days? (0 = never delete)',
     (string) (int) $cfg->get('privacy.retention_days', 90),
     'LOGHOUND_RETENTION_DAYS'
 );
-$cfg->set('privacy.retention_days', max(0, $retention));
 
-// =============================================================================
-// STEP 5 — panel authentication
-// =============================================================================
+foreach (Steps::applyPrivacy($cfg, $ipMode, $retention) as $problem) {
+    $UI->err($problem);
+}
 
 $UI->nl();
 $UI->step(5, 'Panel access');
@@ -293,34 +281,7 @@ if ($haveHash && $authMode !== 'none') {
 }
 
 if ($changeAuth) {
-    $user = '';
-    while ($user === '') {
-        $user = trim($UI->ask('Panel username', (string) $cfg->get('auth.user', 'admin'), 'LOGHOUND_PANEL_USER'));
-    }
-
-    $pass = '';
-    while (true) {
-        $pass = $UI->askSecret('Panel password (not echoed)', 'LOGHOUND_PANEL_PASSWORD');
-        if (strlen($pass) < 10) {
-            $UI->warn('Use at least 10 characters. This page is reachable from the internet.');
-            continue;
-        }
-        if (!$UI->isNonInteractive() && getenv('LOGHOUND_PANEL_PASSWORD') === false
-            && $UI->askSecret('Repeat the password') !== $pass) {
-            $UI->warn('The two entries did not match.');
-            continue;
-        }
-        break;
-    }
-
-    $cfg->set('auth.user', $user);
-    // PASSWORD_DEFAULT so the hash algorithm follows PHP forward without a migration.
-    $cfg->set('auth.password_hash', password_hash($pass, PASSWORD_DEFAULT));
-    $cfg->set('auth.mode', 'basic');
-    // Do not leave the plaintext in a variable any longer than necessary.
-    $pass = str_repeat("\0", 64);
-    unset($pass);
-    $UI->ok('Panel credentials stored as a password hash.');
+    setPanelAccount($cfg, $UI);
 }
 
 $baseUrl = trim($UI->ask(
@@ -328,16 +289,9 @@ $baseUrl = trim($UI->ask(
     (string) $cfg->get('base_url', ''),
     'LOGHOUND_BASE_URL'
 ));
-if ($baseUrl !== '') {
-    if (Security::safeUrl($baseUrl) === '#') {
-        $UI->warn('That does not look like an http(s) URL; storing it anyway but the beacon snippet may be wrong.');
-    }
-    $cfg->set('base_url', rtrim($baseUrl, '/'));
+foreach (Steps::applyBaseUrl($cfg, $baseUrl) as $problem) {
+    $UI->warn($problem);
 }
-
-// =============================================================================
-// STEP 6 — write
-// =============================================================================
 
 $UI->nl();
 $UI->step(6, 'Writing the configuration');
@@ -370,386 +324,192 @@ try {
 $UI->ok('Wrote ' . $configPath . ' (mode 0640).');
 $UI->nl();
 
-// =============================================================================
-// What to do next
-// =============================================================================
-
 $UI->banner('Next steps');
-$UI->info('1. Start ingestion:');
-$UI->info('     sudo systemctl enable --now loghound-tail.service');
-$UI->info('     sudo systemctl enable --now loghound-score.timer loghound-retention.timer');
-$UI->info('2. Check it is keeping up:');
-$UI->info('     loghound-tail --status --human');
-$UI->info('3. Add the beacon to your site to measure real time-on-site and to run the');
-$UI->info('   execution-plane checks. One line, before </body>:');
+
+$n = 0;
+foreach (Steps::nextSteps($cfg, $ROOT) as $group) {
+    $n++;
+    $UI->info($n . '. ' . $group['title'] . ':');
+    foreach ($group['lines'] as $line) {
+        $UI->raw('     ' . $line);
+    }
+}
+
 $UI->nl();
-$snippetBase = (string) $cfg->get('base_url', 'https://loghound.example.com');
-$UI->raw('     <script src="' . $snippetBase . '/b.js?v=1" defer></script>');
-$UI->nl();
-$UI->info('Without the beacon Loghound still works, but plane 3 is blind: headless');
-$UI->info('automation is inferred rather than proven, and time-on-site is the weak');
-$UI->info('log-derived number every other log analyser reports. See docs/DETECTION.md.');
+$UI->info(wordwrap(Steps::beaconRationale(), 76));
+$UI->info('See docs/DETECTION.md.');
 $UI->nl();
 
 exit(0);
-
-// =============================================================================
-// Steps
-// =============================================================================
-
-/**
- * Run the SPEC §8 detection ladder and return a confirmed-ready source list.
- *
- * Step 1 (read the webserver config) is deterministic and is preferred whenever it
- * produces anything: it yields the exact format string, the exact file list AND the
- * vhost each file belongs to. Step 2 (score the tail of each candidate file against the
- * format library) is the fallback for when the configs are unreadable, which is the
- * normal case when Loghound is not running as root.
- *
- * @return array<int,array<string,mixed>>
- */
-function detectSources(Config $cfg, Ui $UI): array
-{
-    $roots = (array) $cfg->get('allowed_log_roots', ['/var/log']);
-    $discoverCfg = (array) $cfg->get('discover', []);
-    $out = [];
-
-    // ---- Ladder step 1: read their webserver configuration ------------------
-    $fromConfig = [];
-    try {
-        $fromConfig = LogDetect::discoverAll($discoverCfg);
-    } catch (\Throwable $e) {
-        $UI->warn('Could not read the webserver configuration: ' . $e->getMessage());
-    }
-
-    if ($fromConfig !== []) {
-        $UI->ok('Read the webserver configuration: ' . count($fromConfig) . ' access log(s) defined.');
-    } else {
-        $UI->info('No access log could be read out of the webserver configuration.');
-        $UI->info('(That is normal when the config files are not readable by this user.)');
-    }
-
-    foreach ($fromConfig as $path => $meta) {
-        if (!is_file($path)) {
-            // Defined in the config but never written to yet — a vhost with no traffic.
-            continue;
-        }
-        $fmtString = (string) ($meta['format'] ?? '');
-        $fmt = null;
-        if ($fmtString !== '') {
-            try {
-                $fmt = ($meta['server'] ?? 'apache') === 'nginx'
-                    ? LogFormat::fromNginx($fmtString, 'from-config')
-                    : LogFormat::fromApache($fmtString, 'from-config');
-            } catch (\Throwable $e) {
-                $fmt = null;
-            }
-        }
-
-        // Even a format read straight out of the config gets verified against real bytes.
-        // A stale CustomLog pointing at a file written by an older format is common, and
-        // the whole point of showing a confidence number is that it can be low.
-        $sample = LogDetect::tailLines($path, 200, $roots);
-        [$conf, $parsedSamples] = gradeFormat($fmt, $sample);
-
-        $out[$path] = [
-            'path'        => $path,
-            'format'      => $fmtString !== '' ? $fmtString : 'apache_combined',
-            'format_kind' => 'config',
-            'format_obj'  => $fmt,
-            'vhost'       => $meta['vhost'] ?? null,
-            'confidence'  => $conf,
-            'origin'      => 'webserver config (' . basename((string) ($meta['config'] ?? '?')) . ')',
-            'samples'     => $parsedSamples,
-            'fields'      => $fmt !== null ? $fmt->fieldMap() : [],
-        ];
-    }
-
-    // ---- Ladder step 2: score candidate files against the library -----------
-    $candidates = [];
-    foreach ((array) ($discoverCfg['fallback_globs'] ?? []) as $glob) {
-        foreach (glob($glob) ?: [] as $file) {
-            $candidates[$file] = true;
-        }
-    }
-    foreach (array_keys($candidates) as $path) {
-        if (isset($out[$path])) {
-            continue; // already answered deterministically
-        }
-        $real = Security::safePath($path, $roots);
-        if ($real === null || !is_readable($real)) {
-            continue;
-        }
-
-        $sample = LogDetect::tailLines($real, 200, $roots);
-        if ($sample === []) {
-            continue;
-        }
-        $ranked = LogDetect::detectFromSample($sample, 3);
-        if ($ranked === []) {
-            // Ladder step 3: nothing in the library matched — propose a pattern from the
-            // sample so the operator has something to accept or edit rather than a dead end.
-            $proposal = LogDetect::proposeRegex($sample);
-            if ($proposal !== null) {
-                $out[$real] = [
-                    'path'        => $real,
-                    'format'      => $proposal,
-                    'format_kind' => 'proposed-regex',
-                    'format_obj'  => LogDetect::formatFromRegex($proposal, 'proposed'),
-                    'vhost'       => null,
-                    'confidence'  => null,
-                    'origin'      => 'generated from the sample (no known format matched)',
-                    'samples'     => [],
-                    'fields'      => [],
-                ];
-            }
-            continue;
-        }
-
-        $best = $ranked[0];
-        $out[$real] = [
-            'path'        => $real,
-            'format'      => $best['name'],
-            'format_kind' => 'library',
-            'format_obj'  => $best['format'],
-            'vhost'       => null,
-            'confidence'  => $best['confidence'],
-            'origin'      => 'matched the format library (' . $best['parsed'] . '/' . $best['total'] . ' lines)',
-            'samples'     => $best['samples'],
-            'fields'      => $best['fields'],
-            'runners_up'  => array_slice($ranked, 1),
-        ];
-    }
-
-    return array_values($out);
-}
-
-/**
- * Grade a compiled format against sample lines.
- *
- * @param string[] $sample
- * @return array{0:?float,1:array<int,array<string,string>>}
- */
-function gradeFormat(?LogFormat $fmt, array $sample): array
-{
-    if ($fmt === null || $sample === []) {
-        return [null, []];
-    }
-    $parsed = 0;
-    $records = [];
-    foreach ($sample as $line) {
-        $rec = $fmt->parse((string) $line);
-        if ($rec === null) {
-            continue;
-        }
-        $parsed++;
-        if (count($records) < 5) {
-            $records[] = $rec;
-        }
-    }
-    return [round($parsed / count($sample) * 100, 1), $records];
-}
 
 /**
  * Print one detected source: where it came from, the field mapping, real parsed lines,
  * and how confident we are. This is the screen SPEC §8 requires before anything is
  * ingested.
  *
- * @param array<string,mixed> $d
+ * Values come out of a log file and are therefore attacker-controlled; Detector has
+ * already stripped control characters so they cannot reach the terminal as escapes.
+ *
+ * The confidence figure is shown even when it is bad. A 41% confidence is the most useful
+ * thing on this screen, and hiding it would make the confirmation meaningless.
+ *
+ * @param array<string,mixed> $d One entry of the detection report.
  */
 function presentSource(array $d, Ui $UI): void
 {
     $UI->rule();
-    $UI->raw('  ' . $UI->bold((string) $d['path']));
-    $UI->raw('  source:  ' . (string) $d['origin']);
+    $UI->raw('  ' . $UI->bold((string) ($d['path'] ?? '')));
+    $UI->raw('  source:  ' . (string) ($d['source'] ?? 'unknown'));
+    $UI->raw('  format:  ' . (string) ($d['format_name'] ?? ''));
 
-    $fmtLabel = $d['format_kind'] === 'library'
-        ? (string) $d['format']
-        : mb_strimwidth((string) $d['format'], 0, 100, '...');
-    $UI->raw('  format:  ' . $fmtLabel);
-
+    if ((string) ($d['format_string'] ?? '') !== '') {
+        $UI->raw('  string:  ' . mb_strimwidth((string) $d['format_string'], 0, 100, '...'));
+    }
     if (!empty($d['vhost'])) {
         $UI->raw('  vhost:   ' . (string) $d['vhost']);
     }
-
-    // Confidence. Deliberately shown even when it is bad — a 41% confidence is the most
-    // useful thing on this screen, and hiding it would make the confirmation meaningless.
-    if ($d['confidence'] === null) {
-        $UI->raw('  match:   ' . $UI->yellow('unverified — could not sample this file'));
-    } else {
-        $c = (float) $d['confidence'];
-        $txt = sprintf('%.1f%% of the last sampled lines parse cleanly', $c);
-        $UI->raw('  match:   ' . ($c >= 95 ? $UI->green($txt) : ($c >= 70 ? $UI->yellow($txt) : $UI->red($txt))));
+    if (!empty($d['outside_roots'])) {
+        $UI->raw('  ' . $UI->yellow('outside allowed_log_roots — you will be asked to permit it'));
     }
 
-    // Field mapping.
-    if (!empty($d['fields'])) {
-        $UI->raw('  fields:  ' . implode(', ', (array) $d['fields']));
+    $c = (float) ($d['confidence'] ?? 0);
+    $txt = sprintf(
+        '%.1f%% of %d sampled lines parse cleanly',
+        $c,
+        (int) ($d['lines_tested'] ?? 0)
+    );
+    $UI->raw('  match:   ' . ($c >= 95 ? $UI->green($txt) : ($c >= 70 ? $UI->yellow($txt) : $UI->red($txt))));
+
+    foreach ((array) ($d['mapping'] ?? []) as $m) {
+        $UI->raw(sprintf(
+            '           %-22s -> %-32s %s',
+            (string) $m['token'],
+            (string) $m['field'],
+            mb_strimwidth((string) $m['example'], 0, 40, '...')
+        ));
     }
 
-    // Up to five real lines, rendered as parsed records. Values are truncated but never
-    // reformatted — the operator has to be able to recognise their own traffic.
-    $samples = (array) $d['samples'];
+    foreach ((array) ($d['missing'] ?? []) as $m) {
+        $UI->raw('  ' . $UI->yellow('not logged:') . ' ' . (string) $m['token'] . ' — ' . (string) $m['why']);
+    }
+
+    $samples = (array) ($d['samples'] ?? []);
     if ($samples !== []) {
         $UI->raw('');
         $UI->raw('  Sample lines as Loghound reads them:');
-        foreach (array_slice($samples, 0, 5) as $i => $rec) {
+        foreach (array_slice($samples, 0, 5) as $i => $sample) {
             $UI->raw('    [' . ($i + 1) . ']');
-            foreach ((array) $rec as $k => $v) {
-                $v = (string) $v;
-                if ($v === '' || $v === '-') {
-                    continue;
-                }
-                // Log fields are attacker-controlled. Strip control characters before
-                // they reach the operator's terminal.
-                $v = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '?', $v) ?? '';
-                $UI->raw(sprintf('      %-26s %s', $k, mb_strimwidth($v, 0, 90, '...')));
+            foreach ((array) ($sample['parsed'] ?? []) as $k => $v) {
+                $UI->raw(sprintf('      %-26s %s', (string) $k, mb_strimwidth((string) $v, 0, 90, '...')));
             }
         }
     } else {
         $UI->raw('  ' . $UI->yellow('No sample lines could be parsed — check this one carefully.'));
     }
 
-    if (!empty($d['runners_up'])) {
-        $alts = [];
-        foreach ((array) $d['runners_up'] as $r) {
-            $alts[] = $r['name'] . ' (' . $r['confidence'] . '%)';
-        }
-        $UI->raw('  also considered: ' . implode(', ', $alts));
+    foreach ((array) ($d['alternatives'] ?? []) as $alt) {
+        $UI->raw('  also considered: ' . (string) $alt['name'] . ' (' . (string) $alt['confidence'] . '%)');
     }
+
     $UI->rule();
 }
 
 /**
- * Make sure every confirmed source resolves inside `allowed_log_roots`.
+ * Run one setup job to completion, printing each step as it lands.
  *
- * That list is a security control (it stops the log-path setting from becoming an
- * arbitrary-file-read primitive), so it is widened only with the operator's explicit
- * consent and only to the directory actually needed — never to '/'.
+ * The browser installer runs these same steps a budget at a time and polls for progress;
+ * here there is no gateway to time out, so the whole thing runs in one go. Either way the
+ * work, the order and the error messages are identical.
  *
- * @param array<int,array<string,mixed>> $sources
+ * @param array<string,mixed> $params
  */
-function widenAllowedRoots(Config $cfg, array $sources, Ui $UI): void
+function runJob(Config $cfg, Ui $UI, string $root, string $kind, array $params): bool
 {
-    $roots = (array) $cfg->get('allowed_log_roots', ['/var/log']);
-    $needed = [];
-
-    foreach ($sources as $s) {
-        $dir = dirname((string) $s['path']);
-        if (Security::safePath($dir, $roots) !== null) {
-            continue;
-        }
-        $real = realpath($dir);
-        if ($real !== false) {
-            $needed[$real] = true;
-        }
+    try {
+        $job = Job::create($root . '/var/setup', $kind, $params);
+    } catch (\Throwable $e) {
+        $UI->err('Could not start: ' . $e->getMessage());
+        return false;
     }
 
-    foreach (array_keys($needed) as $dir) {
-        $UI->warn($dir . ' is outside allowed_log_roots.');
-        if ($UI->confirm('Allow Loghound to read log files under ' . $dir . '?', true, 'LOGHOUND_ALLOW_LOG_ROOTS')) {
-            $roots[] = $dir;
+    $ok = $job->runAll($cfg, $root, static function (string $key, string $label, string $state, string $detail) use ($UI): void {
+        if ($state === 'done') {
+            $UI->ok('  ' . $label . ($detail !== '' ? ' — ' . $detail : ''));
+        } elseif ($state === 'error') {
+            $UI->err('  ' . $label . ': ' . $detail);
+        } else {
+            $UI->info('  ' . $label . ($detail !== '' ? ' — ' . $detail : ''));
         }
-    }
+    });
 
-    $cfg->set('allowed_log_roots', array_values(array_unique($roots)));
+    if (!$ok && $job->error() !== '') {
+        $UI->err('  ' . $job->error());
+    }
+    return $ok;
 }
 
 /**
- * Make sure this installation has an install id, and derive both core names from it.
+ * Collect connection details for a Solr the operator already runs, then test them.
  *
- * Opensolr index names live in a GLOBAL namespace shared by every account on the
- * platform, so a hardcoded 'loghound_hits' would collide for the second person who ever
- * installs this. Config::coreName() builds `loghound_<install id>_<role>` instead.
- *
- * The id is generated ONCE and never rotated: it is part of the identity of the two
- * indexes, so changing it would orphan the data rather than rename it. That is why this
- * function only ever fills in a missing value, and why the names are offered as defaults
- * rather than silently forced — an operator re-running the wizard against indexes that
- * already exist must keep the names those indexes actually have.
- *
- * @return array{0:string,1:string} [hits core, sessions core]
+ * On your own Solr the namespace is yours, so the generated per-installation names are
+ * only a default: a plain `loghound_hits` is fine here and easier to recognise in the
+ * Solr admin UI.
  */
-function ensureCoreNames(Config $cfg, Ui $UI): array
+function configureOwnSolr(Config $cfg, Ui $UI, string $root): void
 {
     $installId = (string) $cfg->get('solr.install_id', '');
     if ($installId === '') {
         $installId = Config::newInstallId();
         $cfg->set('solr.install_id', $installId);
-        $UI->ok('Generated install id ' . $installId . ' (used to make the index names unique).');
     }
 
-    $hits = (string) $cfg->get('solr.hits_core', '');
-    $sess = (string) $cfg->get('solr.sessions_core', '');
+    $defHits = (string) $cfg->get('solr.hits_core', '') !== ''
+        ? (string) $cfg->get('solr.hits_core')
+        : Config::coreName($installId, 'hits');
+    $defSessions = (string) $cfg->get('solr.sessions_core', '') !== ''
+        ? (string) $cfg->get('solr.sessions_core')
+        : Config::coreName($installId, 'sessions');
 
-    if ($hits === '') {
-        $hits = Config::coreName($installId, 'hits');
-    }
-    if ($sess === '') {
-        $sess = Config::coreName($installId, 'sessions');
-    }
+    while (true) {
+        $base = rtrim(trim($UI->ask(
+            'Solr base URL (e.g. http://127.0.0.1:8983/solr)',
+            (string) $cfg->get('solr.base_url', 'http://127.0.0.1:8983/solr'),
+            'LOGHOUND_SOLR_BASE_URL'
+        )), '/');
 
-    return [$hits, $sess];
-}
-
-/**
- * Validate and store a pair of core names, keeping the previous value on rejection.
- */
-function storeCoreNames(Config $cfg, Ui $UI, string $hits, string $sess): void
-{
-    foreach ([['solr.hits_core', $hits], ['solr.sessions_core', $sess]] as [$key, $val]) {
-        if (!Security::isSafeCoreName($val)) {
-            $UI->err('Index names must match [A-Za-z0-9_]{1,64}. Keeping the previous value.');
-            continue;
+        $user = '';
+        $pass = '';
+        if ($UI->confirm(
+            'Does it need HTTP basic auth?',
+            (string) $cfg->get('solr.http_user', '') !== '',
+            'LOGHOUND_SOLR_HTTP_AUTH'
+        )) {
+            $user = $UI->ask('Solr username', (string) $cfg->get('solr.http_user', ''), 'LOGHOUND_SOLR_HTTP_USER');
+            $pass = $UI->askSecret('Solr password (not echoed, blank keeps the current one)', 'LOGHOUND_SOLR_HTTP_PASS');
         }
-        if (strlen($val) > 50) {
-            // Opensolr caps index names at 50 characters; surface it here rather than
-            // as an opaque API rejection halfway through provisioning.
-            $UI->err('Index names must be 50 characters or fewer (Opensolr limit).');
-            continue;
+
+        $hits = $UI->ask('Core name for hits', $defHits, 'LOGHOUND_HITS_CORE');
+        $sessions = $UI->ask('Core name for sessions', $defSessions, 'LOGHOUND_SESSIONS_CORE');
+
+        $errors = Storage::saveCustom($cfg, $base, $user, $pass, $hits, $sessions);
+        if ($errors === []) {
+            break;
         }
-        $cfg->set($key, $val);
-    }
-}
-
-/**
- * Collect connection details for a Solr the operator already runs.
- */
-function configureOwnSolr(Config $cfg, Ui $UI): void
-{
-    $cfg->set('solr.mode', 'custom');
-
-    $base = '';
-    while ($base === '') {
-        $base = rtrim(trim($UI->ask('Solr base URL (e.g. http://127.0.0.1:8983/solr)',
-            (string) $cfg->get('solr.base_url', 'http://127.0.0.1:8983/solr'), 'LOGHOUND_SOLR_BASE_URL')), '/');
-        if ($base !== '' && Security::safeUrl($base) === '#') {
-            $UI->warn('That must be an http:// or https:// URL.');
-            $base = '';
+        foreach ($errors as $problem) {
+            $UI->err($problem);
+        }
+        if ($UI->isNonInteractive()) {
+            return;
         }
     }
-    $cfg->set('solr.base_url', $base);
-
-    if ($UI->confirm('Does it need HTTP basic auth?', (string) $cfg->get('solr.http_user', '') !== '', 'LOGHOUND_SOLR_HTTP_AUTH')) {
-        $cfg->set('solr.http_user', $UI->ask('Solr username', (string) $cfg->get('solr.http_user', ''), 'LOGHOUND_SOLR_HTTP_USER'));
-        $pw = $UI->askSecret('Solr password (not echoed, blank keeps the current one)', 'LOGHOUND_SOLR_HTTP_PASS');
-        if ($pw !== '') {
-            $cfg->set('solr.http_pass', $pw);
-        }
-    }
-
-    // On your own Solr the namespace is yours, so the generated per-installation names
-    // are only a default — a plain 'loghound_hits' is perfectly fine here and easier to
-    // recognise in the Solr admin UI.
-    [$defHits, $defSess] = ensureCoreNames($cfg, $UI);
-    $hits = $UI->ask('Core name for hits', $defHits, 'LOGHOUND_HITS_CORE');
-    $sess = $UI->ask('Core name for sessions', $defSess, 'LOGHOUND_SESSIONS_CORE');
-    storeCoreNames($cfg, $UI, $hits, $sess);
 
     $UI->nl();
     $UI->info('Push the configsets from solr/hits/conf and solr/sessions/conf into those');
     $UI->info('cores before starting ingestion. docs/INSTALL.md has the exact commands');
     $UI->info('for both a Config Set API upload and a manual copy.');
+    $UI->nl();
+
+    runJob($cfg, $UI, $root, Job::KIND_SOLRTEST, []);
 }
 
 /**
@@ -758,185 +518,104 @@ function configureOwnSolr(Config $cfg, Ui $UI): void
  * The API key is read without echo, stored in the 0640 config and NEVER printed back,
  * not even partially masked — a masked key in a terminal scrollback is still a key in a
  * terminal scrollback.
+ *
+ * The index names are generated rather than asked for. An Opensolr index name is unique
+ * across the WHOLE PLATFORM and permanent once created, so a name an operator picks is a
+ * name that will collide with somebody; Config::coreName() builds one from a random
+ * per-installation id and a collision is retried with a fresh id.
  */
 function configureOpensolr(Config $cfg, Ui $UI, string $root): void
 {
-    $cfg->set('solr.mode', 'opensolr');
+    while (true) {
+        $email = trim($UI->ask(
+            'Opensolr account email',
+            (string) $cfg->get('opensolr.email', ''),
+            'LOGHOUND_OPENSOLR_EMAIL'
+        ));
 
-    $email = '';
-    while ($email === '') {
-        $email = trim($UI->ask('Opensolr account email', (string) $cfg->get('opensolr.email', ''), 'LOGHOUND_OPENSOLR_EMAIL'));
-        if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
-            $UI->warn('That is not a valid email address.');
-            $email = '';
+        $haveKey = (string) $cfg->get('opensolr.api_key', '') !== '';
+        $key = $UI->askSecret(
+            $haveKey
+                ? 'Opensolr API key (not echoed, blank keeps the stored key)'
+                : 'Opensolr API key (not echoed)',
+            'LOGHOUND_OPENSOLR_API_KEY'
+        );
+
+        $errors = Storage::saveCredentials($cfg, $email, $key);
+        $key = str_repeat("\0", 64);
+        unset($key);
+
+        if ($errors === []) {
+            break;
+        }
+        foreach ($errors as $problem) {
+            $UI->err($problem);
+        }
+        if ($UI->isNonInteractive()) {
+            return;
         }
     }
-    $cfg->set('opensolr.email', $email);
 
-    $haveKey = strlen((string) $cfg->get('opensolr.api_key', '')) > 0;
-    $prompt = $haveKey
-        ? 'Opensolr API key (not echoed, blank keeps the stored key)'
-        : 'Opensolr API key (not echoed)';
-    $key = $UI->askSecret($prompt, 'LOGHOUND_OPENSOLR_API_KEY');
-    if ($key !== '') {
-        $cfg->set('opensolr.api_key', $key);
-    } elseif (!$haveKey) {
-        $UI->err('An API key is required in managed mode.');
-        return;
-    }
-    // Drop the local copy immediately; from here on it is only read out of the config.
-    $key = str_repeat("\0", 64);
-    unset($key);
-
-    // An Opensolr index name is unique across the WHOLE PLATFORM and permanent once
-    // created, so the default carries this installation's random id. Changing it to
-    // something friendly is allowed, but it will collide with anyone else who picked the
-    // same friendly name — the wizard reports that as "index not created" and carries on.
-    [$defHits, $defSess] = ensureCoreNames($cfg, $UI);
-    $UI->info('Index names are unique across the whole Opensolr platform, so these');
-    $UI->info('defaults carry a random per-installation id. Press Enter to accept them.');
-    $hits = $UI->ask('Index name for hits', $defHits, 'LOGHOUND_HITS_CORE');
-    $sess = $UI->ask('Index name for sessions', $defSess, 'LOGHOUND_SESSIONS_CORE');
-    storeCoreNames($cfg, $UI, $hits, $sess);
-
-    // ---- Talk to the API ------------------------------------------------
-    $client = makeOpensolrClient($cfg);
-    if ($client === null) {
-        $UI->warn('src/Opensolr.php is not available in this checkout, so the indexes');
-        $UI->warn('cannot be created from here. The configuration is still written.');
-        $UI->info('Create them in the Opensolr control panel, then re-run this wizard.');
-        return;
-    }
-
-    // Regions.
     $region = (string) $cfg->get('opensolr.region', '');
     try {
-        $regions = callIfExists($client, ['regions', 'listRegions', 'getRegions'], []);
-        if (is_array($regions) && $regions !== []) {
-            $names = normaliseRegions($regions);
-            $UI->info('Available regions: ' . implode(', ', $names));
-            $region = $UI->choice('Region', $names, $region !== '' ? $region : ($names[0] ?? ''), 'LOGHOUND_OPENSOLR_REGION');
-        } else {
-            $region = $UI->ask('Region', $region, 'LOGHOUND_OPENSOLR_REGION');
-        }
+        $regions = Storage::listRegions($cfg);
+        $UI->ok('Opensolr accepted the credentials.');
+        $region = $UI->choice(
+            'Region',
+            $regions,
+            in_array($region, $regions, true) ? $region : (string) ($regions[0] ?? ''),
+            'LOGHOUND_OPENSOLR_REGION'
+        );
     } catch (\Throwable $e) {
-        $UI->warn('Could not fetch the region list: ' . $e->getMessage());
+        $UI->err($e->getMessage());
         $region = $UI->ask('Region', $region, 'LOGHOUND_OPENSOLR_REGION');
-    }
-    $cfg->set('opensolr.region', $region);
-
-    // Create + push + verify, for each of the two indexes.
-    foreach ([
-        ['name' => (string) $cfg->get('solr.hits_core'),     'conf' => $root . '/solr/hits/conf'],
-        ['name' => (string) $cfg->get('solr.sessions_core'), 'conf' => $root . '/solr/sessions/conf'],
-    ] as $index) {
-        $UI->nl();
-        $UI->raw('  ' . $UI->bold($index['name']));
-
-        try {
-            callIfExists($client, ['createIndex', 'create'], [$index['name'], $region]);
-            $UI->ok('  Index created.');
-        } catch (\Throwable $e) {
-            // An index that already exists is the normal case on a re-run, and is not an
-            // error: this wizard is meant to be idempotent.
-            $UI->info('  Index not created (' . $e->getMessage() . ') — continuing.');
-        }
-
-        if (!is_dir($index['conf'])) {
-            $UI->warn('  Configset directory missing: ' . $index['conf']);
-            continue;
-        }
-
-        try {
-            callIfExists($client, ['pushConfigset', 'pushConfigSet', 'uploadConfigset'], [$index['name'], $index['conf']]);
-            $UI->ok('  Configset pushed.');
-        } catch (\Throwable $e) {
-            $UI->warn('  Configset push failed: ' . $e->getMessage());
-        }
-
-        try {
-            $health = callIfExists($client, ['verify', 'health', 'ping'], [$index['name']]);
-            $UI->ok('  Healthy.' . (is_string($health) && $health !== '' ? ' ' . $health : ''));
-        } catch (\Throwable $e) {
-            $UI->warn('  Health check failed: ' . $e->getMessage());
-        }
     }
 
     $UI->nl();
-    $UI->info('Backups, downloads and restores for these indexes are available in your');
-    $UI->info('Opensolr control panel. You never need to touch a configset by hand.');
-}
+    $UI->info('Creating your indexes. The names are generated because an Opensolr index');
+    $UI->info('name has to be unique across the whole platform.');
 
-/**
- * Construct the Opensolr API client, tolerating either constructor shape.
- *
- * Written by another agent in parallel; returns null when it is not in this checkout so
- * the wizard can still write a usable config.
- */
-function makeOpensolrClient(Config $cfg): ?object
-{
-    if (!class_exists('\\Loghound\\Opensolr')) {
-        return null;
-    }
-    try {
-        /** @psalm-suppress MixedMethodCall */
-        return new \Loghound\Opensolr((array) $cfg->get('opensolr', []));
-    } catch (\Throwable $e) {
-        try {
-            /** @psalm-suppress MixedMethodCall */
-            return new \Loghound\Opensolr(
-                (string) $cfg->get('opensolr.api_base'),
-                (string) $cfg->get('opensolr.email'),
-                (string) $cfg->get('opensolr.api_key')
-            );
-        } catch (\Throwable $e2) {
-            return null;
-        }
+    if (runJob($cfg, $UI, $root, Job::KIND_OPENSOLR, ['region' => $region])) {
+        $UI->nl();
+        $UI->info('Backups, downloads and restores for these indexes are available in your');
+        $UI->info('Opensolr control panel. You never need to touch a configset by hand.');
     }
 }
 
 /**
- * Call the first method on $obj that exists, from a list of accepted names.
+ * Ask for the panel username and password, until they are acceptable.
  *
- * @param string[] $names
- * @param array<int,mixed> $args
- * @return mixed
+ * The plaintext never leaves this function: Steps::applyAdmin hashes it immediately, and
+ * the local copy is overwritten before returning.
  */
-function callIfExists(object $obj, array $names, array $args)
+function setPanelAccount(Config $cfg, Ui $UI): void
 {
-    foreach ($names as $n) {
-        if (method_exists($obj, $n)) {
-            /** @psalm-suppress MixedMethodCall */
-            return $obj->{$n}(...$args);
+    while (true) {
+        $user = trim($UI->ask('Panel username', (string) $cfg->get('auth.user', 'admin'), 'LOGHOUND_PANEL_USER'));
+        $pass = $UI->askSecret('Panel password (not echoed)', 'LOGHOUND_PANEL_PASSWORD');
+
+        $confirm = '';
+        if (!$UI->isNonInteractive() && getenv('LOGHOUND_PANEL_PASSWORD') === false) {
+            $confirm = $UI->askSecret('Repeat the password');
+        }
+
+        $errors = Steps::applyAdmin($cfg, $user, $pass, $confirm);
+        $pass = str_repeat("\0", 64);
+        $confirm = str_repeat("\0", 64);
+        unset($pass, $confirm);
+
+        if ($errors === []) {
+            $UI->ok('Panel credentials stored as a password hash.');
+            return;
+        }
+        foreach ($errors as $problem) {
+            $UI->warn($problem);
+        }
+        if ($UI->isNonInteractive()) {
+            return;
         }
     }
-    throw new \RuntimeException('none of ' . implode('/', $names) . '() exist on ' . get_class($obj));
 }
-
-/**
- * Flatten whatever shape the regions endpoint returns into a list of names.
- *
- * @param array<mixed> $regions
- * @return string[]
- */
-function normaliseRegions(array $regions): array
-{
-    $out = [];
-    foreach ($regions as $k => $v) {
-        if (is_string($v)) {
-            $out[] = $v;
-        } elseif (is_array($v)) {
-            $out[] = (string) ($v['name'] ?? $v['region'] ?? $v['id'] ?? $k);
-        } elseif (is_string($k)) {
-            $out[] = $k;
-        }
-    }
-    return array_values(array_unique(array_filter($out, static fn($s) => $s !== '')));
-}
-
-// =============================================================================
-// Terminal helper
-// =============================================================================
 
 /**
  * Minimal prompting and colouring for the wizard.
@@ -1071,6 +750,9 @@ final class Ui
     /**
      * Prompt for a line of input, offering a default.
      *
+     * With no stdin at all — a piped install, a closed terminal — the default is taken
+     * rather than spinning forever.
+     *
      * @param string $env Environment variable that answers this prompt when set. Always
      *                    consulted, interactive or not, so an operator can pre-seed one
      *                    answer and still be asked the rest.
@@ -1091,8 +773,6 @@ final class Ui
         fwrite(STDOUT, $question . $suffix . ': ');
         $line = fgets(STDIN);
         if ($line === false) {
-            // No stdin (piped install, closed terminal): take the default rather than
-            // spinning forever.
             fwrite(STDOUT, "\n");
             return $default;
         }
@@ -1105,12 +785,16 @@ final class Ui
      *
      * Turns off terminal echo with stty for the duration. If stty is unavailable (no
      * TTY at all) the prompt says so explicitly rather than quietly echoing a secret.
+     *
+     * An environment override never appears on screen either, which is the whole point of
+     * this method: LOGHOUND_OPENSOLR_API_KEY must not be echoed back by the wizard any more
+     * than a typed key would be.
+     *
+     * No user input reaches the stty command line — it is a fixed string either way — so
+     * there is nothing there to escape.
      */
     public function askSecret(string $question, string $env = ''): string
     {
-        // An environment override never appears on screen, which is the whole point of
-        // this method — LOGHOUND_OPENSOLR_API_KEY must not be echoed back by the wizard
-        // any more than a typed key would be.
         $override = $this->env($env);
         if ($override !== null) {
             fwrite(STDOUT, $question . ': (taken from $' . $env . ", not shown)\n");
@@ -1130,8 +814,6 @@ final class Ui
         }
 
         fwrite(STDOUT, $question . ': ');
-        // No user input reaches this command line, so there is nothing to escape; it is
-        // a fixed string either way.
         @shell_exec('stty -echo 2>/dev/null');
         $line = fgets(STDIN);
         @shell_exec('stty echo 2>/dev/null');
@@ -1180,12 +862,13 @@ final class Ui
     /**
      * Prompt until the answer is one of $options.
      *
+     * In non-interactive mode an unusable default would loop forever, so it falls back to the
+     * first option rather than hanging a CI job.
+     *
      * @param string[] $options
      */
     public function choice(string $question, array $options, string $default, string $env = ''): string
     {
-        // In non-interactive mode an unusable default would loop forever, so fall back
-        // to the first option rather than hanging a CI job.
         if ($this->nonInteractive && $this->env($env) === null && !in_array($default, $options, true)) {
             $default = (string) ($options[0] ?? '');
         }

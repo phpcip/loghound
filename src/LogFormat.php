@@ -51,29 +51,35 @@ final class LogFormat
      * with `%v:%p`, and a greedy `\S+` for the vhost would backtrack across the colon into
      * whatever colon appears last on the line. Excluding ':' from the vhost class removes
      * the ambiguity entirely instead of relying on the engine to backtrack "correctly".
+     *
+     * A few of the entries are worth spelling out. `%a` is the client IP ignoring
+     * X-Forwarded-For. `%b` is typed `num` because Apache writes '-' for zero, and the num
+     * type allows it. `%D` is microseconds; `%T` is seconds, and an integer unless %{ms}T or
+     * %{us}T was used. `%U` is the path only and never contains a '?', whereas `%q` is either
+     * empty or '?...' with the leading '?' included by Apache.
      */
     private const APACHE_DIRECTIVES = [
         'h' => ['remote_addr',  'token'],
-        'a' => ['remote_addr',  'token'],   // client IP ignoring X-Forwarded-For
+        'a' => ['remote_addr',  'token'],
         'A' => ['local_addr',   'token'],
         'l' => ['ident',        'token'],
         'u' => ['remote_user',  'token'],
         't' => ['time',         'time_bracket'],
         'r' => ['request',      'text'],
         's' => ['status',       'status'],
-        'b' => ['bytes',        'num'],     // '-' when zero, hence the num type allows '-'
+        'b' => ['bytes',        'num'],
         'O' => ['bytes_out',    'num'],
         'I' => ['bytes_in',     'num'],
         'S' => ['bytes_total',  'num'],
-        'D' => ['dur_us',       'num'],     // microseconds
-        'T' => ['dur_s',        'float'],   // seconds (integer unless %{ms}T / %{us}T used)
+        'D' => ['dur_us',       'num'],
+        'T' => ['dur_s',        'float'],
         'v' => ['vhost',        'host'],
         'V' => ['vhost',        'host'],
         'p' => ['port',         'port'],
         'H' => ['proto',        'text'],
         'm' => ['method',       'token'],
-        'U' => ['uri',          'path'],    // path only, never contains '?'
-        'q' => ['query',        'query'],   // '' or '?...' — leading '?' included by Apache
+        'U' => ['uri',          'path'],
+        'q' => ['query',        'query'],
         'f' => ['filename',     'text'],
         'k' => ['keepalive',    'num'],
         'X' => ['conn_status',  'token'],
@@ -201,16 +207,20 @@ final class LogFormat
         $this->urldecode  = $urldecode;
     }
 
-    // -----------------------------------------------------------------------------
-    // Named constructors
-    // -----------------------------------------------------------------------------
-
     /**
      * Compile an Apache `LogFormat` string.
      *
      * Accepts the string either as it appears in the config (wrapped in double quotes with
      * `\"` around each quoted field) or already unwrapped, because callers get it from both
      * places: LogDetect reads it out of httpd.conf, the setup UI may get it pasted by hand.
+     *
+     * Literal text between directives is matched verbatim, with '~' as the pattern delimiter.
+     * An unknown directive consumes a bare token so the rest of the line still lines up, but
+     * captures nothing: an unnamed field is worse than no field.
+     *
+     * The compiled pattern is anchored at BOTH ends, and that is what makes format
+     * discrimination work. Without the trailing anchor, `common` would happily match a
+     * `combined` line and the detector would pick the lossier format.
      *
      * @param string $fmt  e.g. `"%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""`
      * @param string $name Cosmetic label used in the setup UI ("combined", "loghound", ...).
@@ -227,15 +237,12 @@ final class LogFormat
 
         foreach ($tokens as $k => $tok) {
             if ($tok[0] === 'lit') {
-                // Literal text between directives is matched verbatim; '~' is our delimiter.
                 $regex .= preg_quote($tok[1], '~');
                 continue;
             }
 
             $spec = self::resolveApacheDirective($tok[1], $tok[2]);
             if ($spec === null) {
-                // Unknown directive: consume a bare token so the rest of the line still
-                // lines up, but do not capture it — an unnamed field is worse than none.
                 $regex .= '(?:\S*)';
                 continue;
             }
@@ -252,9 +259,6 @@ final class LogFormat
             $fields[] = self::uniqueField($fields, $field);
         }
 
-        // Anchored at both ends. This is what makes format *discrimination* work: without
-        // the trailing anchor, `common` would happily match a `combined` line and the
-        // detector would pick the wrong (lossier) format.
         $pattern = '~^' . $regex . '\s*$~';
 
         return new self(self::KIND_REGEX, $name, $raw, $pattern, $fields, [], $timeFormat, true);
@@ -277,7 +281,6 @@ final class LogFormat
         $raw = $fmt;
         $fmt = self::stripOuterQuotes($fmt);
 
-        // JSON template? Then it is a JSON log, not a delimited one.
         if (preg_match('/^\s*\{/', $fmt) && preg_match('/\}\s*$/', $fmt)) {
             $map = self::nginxJsonTemplateMap($fmt);
             if ($map !== []) {
@@ -315,6 +318,8 @@ final class LogFormat
      *
      * @param array<string,string> $map  dotted JSON key path => canonical field name.
      *                                   Array values (Caddy's header lists) take element 0.
+     *                                   Values are already decoded by json_decode(), so no
+     *                                   further unescaping is applied to them.
      * @param array<string,mixed>  $opts 'time_format' => DateTime format for the time field,
      *                                   'source' => original format text for display.
      */
@@ -328,7 +333,7 @@ final class LogFormat
             [],
             $map,
             isset($opts['time_format']) ? (string) $opts['time_format'] : null,
-            false // JSON values are already decoded by json_decode(); no extra unescaping.
+            false
         );
     }
 
@@ -352,7 +357,6 @@ final class LogFormat
         array $opts = []
     ): self {
         if ($fields === []) {
-            // Derive the ordered field list from the named groups in declaration order.
             if (preg_match_all('/\(\?P?<([A-Za-z_][A-Za-z0-9_.]*)>/', $pattern, $m)) {
                 $fields = $m[1];
             }
@@ -370,10 +374,6 @@ final class LogFormat
         );
     }
 
-    // -----------------------------------------------------------------------------
-    // Parsing
-    // -----------------------------------------------------------------------------
-
     /**
      * Parse one raw log line into the canonical raw-field array.
      *
@@ -381,11 +381,20 @@ final class LogFormat
      * record, never an exception, never a warning — the caller (the tail daemon) counts the
      * null and samples the line to var/badlines.log so nothing is silently lost.
      *
+     * A trailing newline is an artifact of reading, not part of the record, and is removed
+     * first. The match itself is @-suppressed: a pathological line can trip the backtrack
+     * limit, which emits a warning and returns false, and that is a normal expected outcome
+     * here rather than an error worth reporting.
+     *
+     * Named groups, which fromRegex() produces, are addressable by name; generated patterns
+     * are read by index. Values are percent-decoded only for the formats that declare it,
+     * CloudFront being the one that does, so a real path containing a literal '%20' in an
+     * ordinary Apache log stays untouched.
+     *
      * @return array<string,string>|null
      */
     public function parse(string $line): ?array
     {
-        // Trailing newline is an artifact of reading, not part of the record.
         $line = rtrim($line, "\r\n");
         if ($line === '') {
             return null;
@@ -396,8 +405,6 @@ final class LogFormat
         }
 
         $m = [];
-        // @-suppressed: a pathological line can trip the backtrack limit, which emits a
-        // warning and returns false. That is a normal, expected outcome here, not an error.
         $ok = @preg_match($this->pattern, $line, $m);
         if ($ok !== 1) {
             return null;
@@ -405,7 +412,6 @@ final class LogFormat
 
         $out = [];
         foreach ($this->fields as $i => $field) {
-            // Named groups (fromRegex) are addressable by name; generated patterns by index.
             $value = $m[$field] ?? ($m[$i + 1] ?? '');
             if (!is_string($value)) {
                 continue;
@@ -413,8 +419,6 @@ final class LogFormat
             if ($this->unescape && $value !== '') {
                 $value = self::unescape($value);
             }
-            // Percent-decoded only for the formats that declare it (CloudFront), so a real
-            // path containing a literal '%20' in an ordinary Apache log stays untouched.
             if ($value !== '' && in_array($field, $this->urldecode, true)) {
                 $value = rawurldecode($value);
             }
@@ -427,7 +431,10 @@ final class LogFormat
      * Parse a JSON log line by walking the key map.
      *
      * A line that is not a JSON object at all yields null (counted as a parse error), which
-     * is also how a JSON format loses the detection contest against a regex format.
+     * is also how a JSON format loses the detection contest against a regex format. A JSON
+     * object carrying none of the expected keys is likewise not this format.
+     *
+     * An absent key stays absent and is never zero-filled, per SPEC §1 Correctness.
      *
      * @return array<string,string>|null
      */
@@ -442,11 +449,10 @@ final class LogFormat
         foreach ($this->jsonMap as $path => $field) {
             $value = self::digJson($doc, $path);
             if ($value === null) {
-                continue; // Absent stays absent — never zero-filled. SPEC §1 Correctness.
+                continue;
             }
             $out[$field] = $value;
         }
-        // A JSON object with none of the expected keys is not this format.
         return $out === [] ? null : $out;
     }
 
@@ -478,10 +484,6 @@ final class LogFormat
         }
         return (string) $node;
     }
-
-    // -----------------------------------------------------------------------------
-    // Accessors
-    // -----------------------------------------------------------------------------
 
     /** Ordered list of canonical field names, one per capture group. */
     public function fieldMap(): array
@@ -525,16 +527,16 @@ final class LogFormat
         return in_array($field, $this->fieldMap(), true);
     }
 
-    // -----------------------------------------------------------------------------
-    // Apache internals
-    // -----------------------------------------------------------------------------
-
     /**
      * Split an Apache format string into literal runs and directive tokens.
      *
      * Apache's directive grammar is: `%` [`!`][status,list] [`<`|`>`] [`{arg}`] letter.
      * The status-code condition (`%400,501{Referer}i`) only changes whether Apache writes
      * the value or a `-`; either way it occupies one field, so we parse past it and ignore it.
+     *
+     * `%%` is a literal percent sign. A malformed directive leaves the '%' as literal text,
+     * and trailing garbage is kept literal too, so a format string we do not fully understand
+     * still produces a usable pattern instead of an exception.
      *
      * @return array<int,array{0:string,1:string,2?:?string}> ['lit', text] | ['dir', letter, arg]
      */
@@ -550,7 +552,6 @@ final class LogFormat
                 $lit .= $c;
                 continue;
             }
-            // `%%` is a literal percent sign.
             if ($i + 1 < $len && $fmt[$i + 1] === '%') {
                 $lit .= '%';
                 $i++;
@@ -559,20 +560,20 @@ final class LogFormat
 
             $j = $i + 1;
             if ($j < $len && $fmt[$j] === '!') {
-                $j++;                                   // negated status condition
+                $j++;
             }
             while ($j < $len && (ctype_digit($fmt[$j]) || $fmt[$j] === ',')) {
-                $j++;                                   // status-code condition list
+                $j++;
             }
             if ($j < $len && ($fmt[$j] === '<' || $fmt[$j] === '>')) {
-                $j++;                                   // original/final request modifier
+                $j++;
             }
 
             $arg = null;
             if ($j < $len && $fmt[$j] === '{') {
                 $close = strpos($fmt, '}', $j);
                 if ($close === false) {
-                    $lit .= $c;                         // malformed: treat '%' as literal
+                    $lit .= $c;
                     continue;
                 }
                 $arg = substr($fmt, $j + 1, $close - $j - 1);
@@ -580,7 +581,7 @@ final class LogFormat
             }
 
             if ($j >= $len) {
-                $lit .= substr($fmt, $i);               // trailing garbage: keep it literal
+                $lit .= substr($fmt, $i);
                 break;
             }
 
@@ -604,11 +605,16 @@ final class LogFormat
      * Returns null for directives we do not model, which the caller turns into a
      * non-capturing token so the rest of the line still aligns.
      *
+     * The `%{...}` variants are resolved first, because the brace argument changes the
+     * meaning of the letter that follows it. Among them are the mod_ssl and mod_log_config
+     * extensions, %{SSL_PROTOCOL}x and %{SSL_CIPHER}x, and %{ms}T / %{us}T / %{s}T, which
+     * select the unit of the request duration. An unknown brace directive is skipped without
+     * capturing.
+     *
      * @return array{0:string,1:string,2:?string,3:?string}|null
      */
     private static function resolveApacheDirective(string $letter, ?string $arg): ?array
     {
-        // `%{...}` variants first — the brace argument changes the meaning of the letter.
         if ($arg !== null) {
             $lower = strtolower($arg);
             switch ($letter) {
@@ -621,14 +627,12 @@ final class LogFormat
                 case 'n':
                     return ['note.' . $lower, 'text', null, null];
                 case 'x':
-                    // mod_ssl / mod_log_config extensions: %{SSL_PROTOCOL}x, %{SSL_CIPHER}x
                     return ['var.' . $lower, 'text', null, null];
                 case 'C':
                     return ['cookie.' . $lower, 'text', null, null];
                 case 'p':
                     return ['port', 'port', null, null];
                 case 'T':
-                    // %{ms}T / %{us}T / %{s}T select the unit of the request duration.
                     if ($lower === 'ms') {
                         return ['dur_ms', 'float', null, null];
                     }
@@ -639,7 +643,6 @@ final class LogFormat
                 case 't':
                     return self::apacheTimeDirective($arg);
             }
-            // Unknown brace directive: skip it without capturing.
             return null;
         }
 
@@ -659,11 +662,14 @@ final class LogFormat
      *  - anything else is a strftime template, which we translate into both a matching regex
      *    and a DateTime::createFromFormat() format so Parser does not have to guess.
      *
+     * The `begin:`/`end:` prefixes only pick which instant is printed, not how it is
+     * rendered, so they are stripped. The epoch variants need no format hint at all, because
+     * Parser sniffs the magnitude to decide the unit.
+     *
      * @return array{0:string,1:string,2:?string,3:?string}
      */
     private static function apacheTimeDirective(string $arg): array
     {
-        // begin:/end: only pick the instant, not the rendering.
         if (preg_match('/^(begin|end):(.*)$/s', $arg, $m)) {
             $arg = $m[2];
         }
@@ -673,7 +679,6 @@ final class LogFormat
             return ['time', 'time_bracket', null, null];
         }
         if (in_array($lower, ['sec', 'msec', 'usec', 'msec_frac', 'usec_frac'], true)) {
-            // Epoch variants. Parser sniffs the magnitude, so no format hint is needed.
             return ['time', 'num', '\d+', null];
         }
 
@@ -686,13 +691,19 @@ final class LogFormat
      *
      * Only the specifiers that actually appear in webserver log configs are supported; an
      * unrecognised one becomes a permissive `\S+` in the regex and is dropped from the date
-     * format, which degrades to "Parser sniffs it" rather than to a crash.
+     * format, which degrades to "Parser sniffs it" rather than to a crash. Once a specifier
+     * has been dropped, no parse format can be reconstructed from the rest, so none is
+     * returned.
+     *
+     * The table maps each specifier to a regex fragment and a
+     * DateTime::createFromFormat() fragment. Only letters mean anything to
+     * createFromFormat(), so only letters are backslash-escaped in the output; escaping '-'
+     * and ':' as well would work but would make the stored format unreadable in the setup UI.
      *
      * @return array{0:string,1:?string}
      */
     private static function strftimeToRegex(string $fmt): array
     {
-        // specifier => [regex fragment, DateTime::createFromFormat fragment]
         static $map = [
             'Y' => ['\d{4}',            'Y'],
             'y' => ['\d{2}',            'y'],
@@ -728,9 +739,6 @@ final class LogFormat
         for ($i = 0; $i < $len; $i++) {
             if ($fmt[$i] !== '%' || $i + 1 >= $len) {
                 $regex .= preg_quote($fmt[$i], '~');
-                // Only letters mean something to DateTime::createFromFormat, so only letters
-                // need the backslash. Escaping '-' and ':' too would work but would make the
-                // stored format unreadable in the setup UI.
                 $date  .= ctype_alpha($fmt[$i]) ? '\\' . $fmt[$i] : $fmt[$i];
                 continue;
             }
@@ -742,7 +750,7 @@ final class LogFormat
             }
             if (!isset($map[$spec])) {
                 $regex .= '\S+';
-                $usable = false;      // cannot reconstruct a parse format any more
+                $usable = false;
                 continue;
             }
             $regex .= $map[$spec][0];
@@ -756,15 +764,11 @@ final class LogFormat
         return [$regex, $usable ? $date : null];
     }
 
-    // -----------------------------------------------------------------------------
-    // nginx internals
-    // -----------------------------------------------------------------------------
-
     /**
      * Split an nginx log_format body into literal runs and `$variable` tokens.
      *
      * Supports both `$name` and `${name}`. nginx variable names are `[A-Za-z0-9_]`, so the
-     * greedy scan is unambiguous.
+     * greedy scan is unambiguous. A bare '$' with no name after it is a literal dollar sign.
      *
      * @return array<int,array{0:string,1:string}> ['lit', text] | ['var', name]
      */
@@ -797,7 +801,7 @@ final class LogFormat
                     $j++;
                 }
                 if ($name === '') {
-                    $lit .= $c;    // a bare '$' is a literal dollar sign
+                    $lit .= $c;
                     continue;
                 }
                 $i = $j - 1;
@@ -821,6 +825,9 @@ final class LogFormat
      *
      * The `$http_*` family is handled generically because the suffix IS the header name with
      * dashes turned into underscores — that is nginx's own rule, so we simply invert it.
+     *
+     * An unknown variable is kept under a namespaced field name rather than dropped, because
+     * dropping it would silently remove a whole column from the record.
      *
      * @return array{0:string,1:string}
      */
@@ -846,7 +853,6 @@ final class LogFormat
         if (str_starts_with($var, 'arg_')) {
             return ['arg.' . substr($var, 4), 'text'];
         }
-        // Unknown variable: keep it, namespaced, rather than dropping the column.
         return ['var.' . $var, 'optional'];
     }
 
@@ -873,10 +879,6 @@ final class LogFormat
         return $map;
     }
 
-    // -----------------------------------------------------------------------------
-    // Shared helpers
-    // -----------------------------------------------------------------------------
-
     /**
      * Pattern for a field of the given type.
      *
@@ -887,6 +889,13 @@ final class LogFormat
      *
      * Every alternative below is linear and non-nested: none of these can backtrack
      * catastrophically no matter what a hostile line contains.
+     *
+     * The individual types encode format quirks. Apache's %t emits its own square brackets,
+     * as in [10/Sep/2026:09:57:08 +0000]. nginx's $time_local contains a space, so it needs a
+     * structural pattern rather than \S+. nginx joins per-upstream values with ", ", and with
+     * ":" across upstream groups. The host type excludes ':' so that `%v:%p` splits
+     * deterministically instead of by backtracking. Apache's %q is either empty or '?...',
+     * while nginx's $args carries no leading '?' and is empty when there is no query.
      */
     private static function patternFor(string $type, bool $quoted): string
     {
@@ -896,10 +905,8 @@ final class LogFormat
 
         switch ($type) {
             case 'time_bracket':
-                // Apache's %t emits its own square brackets, e.g. [10/Sep/2026:09:57:08 +0000]
                 return '\[[^\]]*\]';
             case 'time_local':
-                // nginx $time_local contains a space, so it needs a structural pattern, not \S+.
                 return '\d{1,2}\/[A-Za-z]{3}\/\d{4}:\d{2}:\d{2}:\d{2}\s[+-]\d{4}';
             case 'time_iso':
                 return '\S+';
@@ -910,20 +917,16 @@ final class LogFormat
             case 'float':
                 return '(?:-|\d+(?:\.\d+)?)';
             case 'floatlist':
-                // nginx joins per-upstream values with ", " (and ":" across upstream groups).
                 return '(?:-|\d+(?:\.\d+)?(?:\s*[,:]\s*(?:-|\d+(?:\.\d+)?))*)';
             case 'port':
                 return '(?:\d+|-)';
             case 'host':
-                // Excludes ':' so `%v:%p` splits deterministically instead of by backtracking.
                 return '[^\s:]+';
             case 'path':
                 return '[^\s?]*';
             case 'query':
-                // Apache's %q is '' or '?...'.
                 return '(?:\?\S*)?';
             case 'query_raw':
-                // nginx's $args has no leading '?' and is empty when there is no query.
                 return '\S*';
             case 'optional':
                 return '\S*';
@@ -1006,10 +1009,13 @@ final class LogFormat
      *
      * This must happen AFTER the regex match (the pattern relies on the escapes being
      * intact to find the field boundary) and BEFORE anything looks at the value.
+     *
+     * There is a fast path for the overwhelming majority of values, which contain no
+     * backslash at all. preg_replace_callback() returns null only on a PCRE failure, in which
+     * case the original value is kept.
      */
     public static function unescape(string $s): string
     {
-        // Fast path: the overwhelming majority of values contain no backslash at all.
         if (!str_contains($s, '\\')) {
             return $s;
         }
@@ -1034,7 +1040,6 @@ final class LogFormat
             },
             $s
         );
-        // preg_replace_callback returns null only on a PCRE failure; keep the original then.
         return $out ?? $s;
     }
 }

@@ -49,13 +49,31 @@ final class Ua
      *
      * ORDER IS SIGNIFICANT — first match wins.
      *
+     * The table is grouped: AI/LLM crawlers first, which is the SPEC §4.1 ai_crawler_b list,
+     * then search engines, SEO and marketing crawlers, uptime and performance monitors,
+     * scanners and security research, social and link unfurlers, generic HTTP clients and
+     * libraries, and finally the last-resort generic markers.
+     *
+     * Individual entries that need explaining: OAI-SearchBot is OpenAI's search index and
+     * ChatGPT-User its user-triggered fetch; FacebookBot collects Meta's LLM corpus;
+     * Applebot-Extended must be listed BEFORE applebot or the plain needle would swallow it;
+     * Google-Extended is Gemini training. Palo Alto's scanner identifies itself as "Expanse, a
+     * Palo Alto Networks company", and the trailing comma in the needle is what keeps it from
+     * matching the ordinary English word. HeadlessChrome is honest headless.
+     *
+     * The generic HTTP clients are not "bots" in the crawler sense, but they self-declare as
+     * non-browsers, and that is exactly what `ua_declared_bot` needs to know.
+     *
+     * The last-resort markers sit at the very bottom deliberately: 'bot' as a substring
+     * matches far too much — Cubot phones, "Abbot" — so anything specific must have had its
+     * chance first.
+     *
      * @var array<int,array{0:string,1:string,2:string,3:bool}>
      */
     private const BOTS = [
-        // ---- AI / LLM crawlers (SPEC §4.1 ai_crawler_b list first) ------------
         ['gptbot',                'GPTBot',              'ai',       true],
-        ['oai-searchbot',         'OAI-SearchBot',       'ai',       true],  // OpenAI search index
-        ['chatgpt-user',          'ChatGPT-User',        'ai',       true],  // user-triggered fetch
+        ['oai-searchbot',         'OAI-SearchBot',       'ai',       true],
+        ['chatgpt-user',          'ChatGPT-User',        'ai',       true],
         ['claudebot',             'ClaudeBot',           'ai',       true],
         ['claude-web',            'Claude-Web',          'ai',       true],
         ['claude-searchbot',      'Claude-SearchBot',    'ai',       true],
@@ -66,9 +84,9 @@ final class Ua
         ['amazonbot',             'Amazonbot',           'ai',       true],
         ['meta-externalagent',    'meta-externalagent',  'ai',       true],
         ['meta-externalfetcher',  'meta-externalfetcher', 'ai',      true],
-        ['facebookbot',           'FacebookBot',         'ai',       true],  // Meta LLM corpus
-        ['applebot-extended',     'Applebot-Extended',   'ai',       true],  // BEFORE applebot
-        ['google-extended',       'Google-Extended',     'ai',       true],  // Gemini training
+        ['facebookbot',           'FacebookBot',         'ai',       true],
+        ['applebot-extended',     'Applebot-Extended',   'ai',       true],
+        ['google-extended',       'Google-Extended',     'ai',       true],
         ['ccbot',                 'CCBot',               'ai',       true],
         ['diffbot',               'Diffbot',             'ai',       true],
         ['omgilibot',             'Omgilibot',           'ai',       true],
@@ -85,7 +103,6 @@ final class Ua
         ['petalbot',              'PetalBot',            'ai',       true],
         ['mistralai-user',        'MistralAI-User',      'ai',       true],
 
-        // ---- Search engines ---------------------------------------------------
         ['googlebot-image',       'Googlebot-Image',     'search',   false],
         ['googlebot-video',       'Googlebot-Video',     'search',   false],
         ['googlebot-news',        'Googlebot-News',      'search',   false],
@@ -112,7 +129,6 @@ final class Ua
         ['ia_archiver',           'ia_archiver',         'search',   false],
         ['archive.org_bot',       'archive.org_bot',     'search',   false],
 
-        // ---- SEO / marketing crawlers ----------------------------------------
         ['ahrefsbot',             'AhrefsBot',           'seo',      false],
         ['ahrefssiteaudit',       'AhrefsSiteAudit',     'seo',      false],
         ['semrushbot',            'SemrushBot',          'seo',      false],
@@ -130,7 +146,6 @@ final class Ua
         ['linkdexbot',            'linkdexbot',          'seo',      false],
         ['zoominfobot',           'ZoominfoBot',         'seo',      false],
 
-        // ---- Uptime / performance monitors -----------------------------------
         ['uptimerobot',           'UptimeRobot',         'monitor',  false],
         ['pingdom',               'Pingdom',             'monitor',  false],
         ['statuscake',            'StatusCake',          'monitor',  false],
@@ -147,10 +162,7 @@ final class Ua
         ['lighthouse',            'Lighthouse',          'monitor',  false],
         ['chrome-lighthouse',     'Chrome-Lighthouse',   'monitor',  false],
 
-        // ---- Scanners and security research ----------------------------------
         ['censysinspect',         'CensysInspect',       'security', false],
-        // Palo Alto's scanner identifies itself as "Expanse, a Palo Alto Networks company";
-        // the trailing comma keeps the needle from matching the ordinary English word.
         ['expanse,',              'Expanse',             'security', false],
         ['internetmeasurement',   'InternetMeasurement', 'security', false],
         ['shodan',                'Shodan',              'security', false],
@@ -166,7 +178,6 @@ final class Ua
         ['paloaltonetworks',      'Palo Alto Networks',  'security', false],
         ['l9explore',             'l9explore',           'security', false],
 
-        // ---- Social / link unfurlers -----------------------------------------
         ['facebookexternalhit',   'facebookexternalhit', 'social',   false],
         ['twitterbot',            'Twitterbot',          'social',   false],
         ['linkedinbot',           'LinkedInBot',         'social',   false],
@@ -182,9 +193,6 @@ final class Ua
         ['vkshare',               'VKShare',             'social',   false],
         ['bsky',                  'Bluesky',             'social',   false],
 
-        // ---- Generic HTTP clients and libraries ------------------------------
-        // Not "bots" in the crawler sense, but they self-declare as non-browsers, and that
-        // is exactly what `ua_declared_bot` needs to know.
         ['curl/',                 'curl',                'other',    false],
         ['wget/',                 'Wget',                'other',    false],
         ['python-requests',       'python-requests',     'other',    false],
@@ -208,13 +216,10 @@ final class Ua
         ['dart/',                 'Dart',                'other',    false],
         ['powershell',            'PowerShell',          'other',    false],
         ['winhttp',               'WinHTTP',             'other',    false],
-        ['headlesschrome',        'HeadlessChrome',      'other',    false],  // honest headless
+        ['headlesschrome',        'HeadlessChrome',      'other',    false],
         ['phantomjs',             'PhantomJS',           'other',    false],
         ['electron/',             'Electron',            'other',    false],
 
-        // ---- Last-resort generic markers -------------------------------------
-        // Deliberately at the very bottom: 'bot' as a substring matches far too much
-        // (Cubot phones, "Abbot"), so anything specific must have had its chance first.
         ['crawler',               'unspecified crawler', 'other',    false],
         ['spider',                'unspecified spider',  'other',    false],
         ['bot/',                  'unspecified bot',     'other',    false],
@@ -262,6 +267,10 @@ final class Ua
      *
      * The cache is what makes UA parsing free on the ingest hot path: a busy site has maybe
      * a few thousand distinct UAs per day against millions of hits.
+     *
+     * It is a simple bounded cache: on overflow everything is dropped and it starts again,
+     * rather than implementing an LRU. Refilling costs microseconds and the code stays
+     * auditable.
      */
     public static function parse(string $ua): self
     {
@@ -269,8 +278,6 @@ final class Ua
             return self::$cache[$ua];
         }
         $obj = new self($ua);
-        // Simple bounded cache: on overflow, drop everything and start again rather than
-        // implementing an LRU. Refilling costs microseconds and the code stays auditable.
         if (count(self::$cache) >= self::CACHE_MAX) {
             self::$cache = [];
         }
@@ -324,13 +331,18 @@ final class Ua
 
     /**
      * Run the whole classification once, at construction time.
+     *
+     * An empty User-Agent is a fact, not an unknown: it is a client that chose to send none.
+     *
+     * The browser family and version are worked out even for a declared bot, because many of
+     * them advertise the Chrome build they embed, and knowing which one is useful when a
+     * "Googlebot" turns out to be a spoof.
      */
     private function analyse(): void
     {
         $ua = $this->raw;
 
         if (trim($ua) === '') {
-            // An empty UA is a fact, not an unknown: it is a client that chose to send none.
             $this->fields['device_s']     = 'unknown';
             $this->fields['ua_bot_b']     = false;
             $this->fields['ai_crawler_b'] = false;
@@ -339,7 +351,6 @@ final class Ua
 
         $lower = strtolower($ua);
 
-        // ---- Declared bot? ---------------------------------------------------
         foreach (self::BOTS as [$needle, $name, $cat, $ai]) {
             if (str_contains($lower, $needle)) {
                 $this->isBot = true;
@@ -356,9 +367,6 @@ final class Ua
             $this->fields['ai_crawler_b'] = false;
         }
 
-        // ---- Browser family and major version --------------------------------
-        // Run even for declared bots: many of them advertise the Chrome build they embed,
-        // and knowing which one is useful when a "Googlebot" turns out to be a spoof.
         $browser = self::matchBrowser($ua);
         if ($browser !== null) {
             $this->fields['browser_s'] = $browser[0];
@@ -367,18 +375,15 @@ final class Ua
             }
         }
 
-        // ---- Operating system -------------------------------------------------
         $os = self::matchOs($ua);
         if ($os !== null) {
             $this->fields['os_s'] = $os;
         }
 
-        // ---- Device class -----------------------------------------------------
         if (!$this->isBot) {
             $this->fields['device_s'] = self::matchDevice($ua);
         }
 
-        // ---- Does it claim to be a browser? -----------------------------------
         $this->claimsBrowser = !$this->isBot && (bool) preg_match(
             '~AppleWebKit/|Gecko/|Trident/|Presto/|Gecko\)~i',
             $ua
@@ -393,11 +398,15 @@ final class Ua
      * would be reported as Chrome. Safari must come last because every WebKit browser on iOS
      * carries `Safari/`.
      *
+     * The table maps a case-insensitive needle to a family and a version-capturing regex.
+     * Safari is the exception to the pattern: it reports its marketing version in `Version/`
+     * rather than in `Safari/`, and a bare `Safari/` with no `Version/` at all is usually an
+     * embedded WebKit view rather than the browser.
+     *
      * @return array{0:string,1:?int}|null [family, major version]
      */
     private static function matchBrowser(string $ua): ?array
     {
-        // needle (case-insensitive) => [family, version-capturing regex]
         static $table = [
             ['~Edg(?:e|A|iOS)?/([0-9]+)~i',        'Edge'],
             ['~OPR/([0-9]+)~i',                    'Opera'],
@@ -415,7 +424,6 @@ final class Ua
             ['~FxiOS/([0-9]+)~i',                  'Firefox'],
             ['~Firefox/([0-9]+)~i',                'Firefox'],
             ['~SeaMonkey/([0-9]+)~i',              'SeaMonkey'],
-            // Safari reports its marketing version in Version/, not in Safari/.
             ['~Version/([0-9]+)[.0-9]*\s+(?:Mobile/\S+\s+)?Safari/~i', 'Safari'],
             ['~MSIE ([0-9]+)~i',                   'Internet Explorer'],
             ['~Trident/.*rv:([0-9]+)~i',           'Internet Explorer'],
@@ -426,7 +434,6 @@ final class Ua
                 return [$family, isset($m[1]) ? (int) $m[1] : null];
             }
         }
-        // A bare `Safari/` with no `Version/` is usually an embedded WebKit view.
         if (preg_match('~Safari/~i', $ua) && preg_match('~AppleWebKit/~i', $ua)) {
             return ['Safari', null];
         }
@@ -438,7 +445,9 @@ final class Ua
      *
      * Coarse on purpose. "Windows 10/11" rather than a build number, "Linux" rather than a
      * distribution: those are the buckets a traffic report is actually read in, and the
-     * finer detail in a UA is mostly fiction anyway (Chrome freezes its OS version).
+     * finer detail in a UA is mostly fiction anyway (Chrome freezes its OS version). macOS is
+     * the clearest case: Safari and Chrome both freeze it at 10_15_7, so no version number is
+     * reported for it.
      */
     private static function matchOs(string $ua): ?string
     {
@@ -467,7 +476,6 @@ final class Ua
             return 'ChromeOS';
         }
         if (preg_match('~Mac OS X ([0-9_]+)~i', $ua, $m)) {
-            // Safari and Chrome both freeze this at 10_15_7, so the number is not reported.
             return 'macOS';
         }
         if (preg_match('~Macintosh|Mac OS~i', $ua)) {

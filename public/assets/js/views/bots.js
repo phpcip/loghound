@@ -1,27 +1,30 @@
 /*
  * Loghound — Bot forensics view.
  *
- * The declared/evasive split is rendered first and everything below it repeats the
- * distinction, because a page that shows "8,412 bot sessions" without saying that 7,900
- * of them were Googlebot doing its job is worse than no page at all.
+ * Six independent cards. The declared/evasive split is rendered first and everything
+ * below it repeats the distinction, because a page that shows "8,412 bot sessions"
+ * without saying that 7,900 of them were Googlebot doing its job is worse than no page.
  *
- * The reason bars are stacked into those two halves for exactly that reason: a signal
- * that fires overwhelmingly on declared crawlers (ua_declared_bot) looks completely
- * different from one that fires on evasive traffic (fp_cluster_proxy_fleet), and the
- * stack shows it without needing a second chart.
+ * The reason bars are stacked into those two halves for the same reason: a signal that
+ * fires overwhelmingly on declared crawlers looks completely different from one that
+ * fires on evasive traffic, and the stack shows it without a second chart.
  */
 
 'use strict';
 
-import { api, byId, dec, el, hideEmpty, load, noDataYet, num, tbody, when } from '../core.js';
+import {
+    api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, tbody, when
+} from '../core.js';
 import { barsHStacked, donut, histogram, tokens } from '../charts.js';
 
-/** Verdict → the chart colour it keeps everywhere in the panel. */
+/**
+ * The chart colour a verdict keeps everywhere in the panel.
+ */
 function verdictColour(t, verdict) {
     switch (verdict) {
         case 'human':
         case 'likely_human':
-            return t.pop.human;
+            return t.pop.declared;
         case 'unknown':
             return t.pop.unknown;
         case 'bot':
@@ -32,163 +35,178 @@ function verdictColour(t, verdict) {
     }
 }
 
-/** The two-column summary at the top. */
-function renderSplit(data) {
-    const set = (field, value) => {
-        const node = document.querySelector('[data-field="' + field + '"]');
-        if (node) {
-            node.textContent = value;
-        }
-    };
-    set('declared_sessions', num(data.split.declared.sessions));
-    set('ai_sessions', num(data.split.ai.sessions));
-    set('declared_hits', num((data.split.declared.hits || 0) + (data.split.ai.hits || 0)));
-    set('evasive_sessions', num(data.split.evasive.sessions));
-    set('evasive_ips', num(data.split.evasive.uniq_ips));
-    set('evasive_hits', num(data.split.evasive.hits));
+/**
+ * Set a [data-field] value inside a card's content area.
+ */
+function setField(cardId, field, value) {
+    const node = document.querySelector('#' + cardId + '-content [data-field="' + field + '"]');
+    if (node) {
+        node.textContent = value;
+    }
 }
 
-/** The reason bars, split declared vs evasive. */
+/**
+ * Fill the two-column summary at the top.
+ */
+function renderSplit(data) {
+    setField('bf-split', 'declared_sessions', num(data.declared.sessions));
+    setField('bf-split', 'ai_sessions', num(data.ai.sessions));
+    setField('bf-split', 'declared_hits', num((data.declared.hits || 0) + (data.ai.hits || 0)));
+    setField('bf-split', 'evasive_sessions', num(data.evasive.sessions));
+    setField('bf-split', 'evasive_ips', num(data.evasive.uniq_ips));
+    setField('bf-split', 'evasive_hits', num(data.evasive.hits));
+    setPop('bf-split', num(data.total) + ' scored sessions in range, of which ' + num(data.human.sessions) +
+        ' were human. The two halves below are never added together.');
+}
+
+/**
+ * Draw the reason bars and the table explaining every code.
+ */
 function renderReasons(data) {
     if (!data.reasons.length) {
         noDataYet('bf-reasons-empty', 'scored bot sessions');
         return;
     }
     hideEmpty('bf-reasons-empty');
+    setPop('bf-reasons', num(data.botlike) + ' sessions with verdict bot or likely_bot. A session fires several ' +
+        'rules, so the bars sum to more than the session count.');
+
     const t = tokens();
-
-    barsHStacked('bf-reasons', data.reasons.map((r) => ({
-        label: r.label,
+    barsHStacked('bf-reasons-chart', data.reasons.map((row) => ({
+        label: row.label,
         parts: [
-            { name: 'Evasive', value: r.evasive, color: t.pop.evasive },
-            { name: 'Declared crawlers', value: r.declared, color: t.pop.declared }
+            { name: 'Evasive', value: row.evasive, color: t.pop.evasive },
+            { name: 'Declared crawlers', value: row.declared, color: t.pop.declared }
         ]
-    })), { labelWidth: 220 });
+    })), { labelWidth: 230 });
 
-    // The table under the chart carries the explanation for every code. A verdict with no
-    // reason is a bug (SPEC §1); a reason with no explanation is only slightly better.
-    tbody(byId('bf-reason-table'), data.reasons.map((r) => ({
+    tbody(byId('bf-reason-table'), data.reasons.map((row) => ({
         cells: [
             {
                 node: el('div', {}, [
-                    el('code', { class: 'mono', text: r.code }),
+                    el('code', { class: 'mono', text: row.code }),
                     el('br'),
-                    el('span', { class: 'muted', text: r.label })
+                    el('span', { class: 'muted', text: row.label })
                 ])
             },
-            { text: r.why, class: 'muted wrap' },
-            { text: num(r.evasive), num: true },
-            { text: num(r.declared), num: true },
-            { text: r.avg_score === null ? '—' : dec(r.avg_score, 0), num: true }
+            { text: row.why, class: 'muted wrap' },
+            { text: num(row.evasive), num: true },
+            { text: num(row.declared), num: true },
+            { text: row.avg_score === null ? '—' : dec(row.avg_score, 0), num: true }
         ]
     })));
 }
 
-/** Verdict donut. */
+/**
+ * Draw the verdict donut.
+ */
 function renderVerdicts(data) {
     if (!data.verdicts.length) {
         noDataYet('bf-verdicts-empty', 'scored sessions');
         return;
     }
     hideEmpty('bf-verdicts-empty');
+    cardChart('bf-verdicts', 300);
     const t = tokens();
-    donut('bf-verdicts', data.verdicts.map((v) => ({
-        label: v.verdict,
-        value: v.count,
-        color: verdictColour(t, v.verdict)
+    donut('bf-verdicts', data.verdicts.map((row) => ({
+        label: row.verdict,
+        value: row.count,
+        color: verdictColour(t, row.verdict)
     })), 'sessions', num(data.total));
 }
 
-/** Bot-score histogram, coloured by the band each bucket falls in. */
+/**
+ * Draw the score histogram, coloured by the verdict band each bucket falls in.
+ */
 function renderHistogram(data) {
-    const any = data.histogram.some((b) => b.count > 0);
-    if (!any) {
+    if (!data.histogram.some((bucket) => bucket.count > 0)) {
         noDataYet('bf-histogram-empty', 'scored sessions');
         return;
     }
     hideEmpty('bf-histogram-empty');
+    cardChart('bf-histogram', 300);
     const t = tokens();
-    histogram('bf-histogram', data.histogram.map((b) => ({
-        label: String(Math.round(b.from)),
-        value: b.count,
-        from: b.from
+    histogram('bf-histogram', data.histogram.map((bucket) => ({
+        label: String(Math.round(bucket.from)),
+        value: bucket.count,
+        from: bucket.from
     })), (row) => {
-        // The colours match the verdict thresholds from SPEC §7, so the shape of the
-        // distribution can be read against the bands without a legend.
         if (row.from >= 80) { return t.pop.evasive; }
-        if (row.from >= 60) { return t.warn; }
+        if (row.from >= 60) { return t.pop.declared; }
         if (row.from >= 40) { return t.pop.unknown; }
         return t.pop.human;
     });
 }
 
-/** Bot class table. */
+/**
+ * Fill the bot class table.
+ */
 function renderClasses(data) {
-    const table = byId('bf-classes');
     if (!data.classes.length) {
-        tbody(table, []);
+        tbody(byId('bf-classes-table'), []);
         noDataYet('bf-classes-empty', 'bot classes');
         return;
     }
     hideEmpty('bf-classes-empty');
 
-    tbody(table, data.classes.map((c) => ({
+    tbody(byId('bf-classes-table'), data.classes.map((row) => ({
         cells: [
-            { node: el('code', { class: 'mono', text: c.class }) },
+            { node: el('code', { class: 'mono', text: row.class }) },
             {
                 node: el('span', {
-                    class: 'chip ' + (c.declared ? 'chip-good' : 'chip-bad'),
-                    text: c.declared ? 'declared' : 'evasive'
+                    class: 'chip ' + (row.declared ? 'chip-good' : 'chip-bad'),
+                    text: row.declared ? 'declared' : 'evasive'
                 })
             },
-            { text: num(c.count), num: true },
-            { text: num(c.uniq_ips), num: true },
-            { text: num(c.hits), num: true },
-            { text: c.avg_score === null ? '—' : dec(c.avg_score, 0), num: true }
+            { text: num(row.count), num: true },
+            { text: num(row.uniq_ips), num: true },
+            { text: num(row.hits), num: true },
+            { text: row.avg_score === null ? '—' : dec(row.avg_score, 0), num: true }
         ]
     })));
 }
 
-/** Declared crawler roll-call. */
+/**
+ * Fill the declared crawler roll-call.
+ */
 function renderCrawlers(data) {
-    const table = byId('bf-crawlers');
     if (!data.crawlers.length) {
-        tbody(table, []);
-        showEmptyCrawlers();
+        tbody(byId('bf-crawlers-table'), []);
+        showNoCrawlers();
         return;
     }
     hideEmpty('bf-crawlers-empty');
 
-    tbody(table, data.crawlers.map((c) => ({
+    tbody(byId('bf-crawlers-table'), data.crawlers.map((row) => ({
         cells: [
             {
                 node: el('span', {}, [
-                    el('strong', { text: c.name }),
-                    c.ai ? el('span', { class: 'chip chip-accent', text: 'AI', style: 'margin-left:6px' }) : null
+                    el('strong', { text: row.name }),
+                    row.ai ? el('span', { class: 'chip chip-accent', text: 'AI', style: 'margin-left:8px' }) : null
                 ])
             },
-            { node: el('code', { class: 'mono', text: c.category || 'other' }) },
-            { text: num(c.sessions), num: true },
-            { text: num(c.hits), num: true },
-            { text: num(c.uniq_ips), num: true },
+            { node: el('code', { class: 'mono', text: row.category || 'other' }) },
+            { text: num(row.sessions), num: true },
+            { text: num(row.hits), num: true },
+            { text: num(row.uniq_ips), num: true },
             {
-                // "Verified" is forward-confirmed reverse DNS. An unverified Googlebot is
-                // not a crawler having a bad day; it is something wearing its name.
                 node: el('span', {
-                    class: 'chip ' + (c.verified >= c.sessions ? 'chip-good' : (c.verified > 0 ? 'chip-warn' : 'chip-bad')),
-                    text: num(c.verified) + '/' + num(c.sessions),
-                    title: c.verified >= c.sessions
+                    class: 'chip ' + (row.verified >= row.sessions ? 'chip-good' : 'chip-bad'),
+                    text: num(row.verified) + '/' + num(row.sessions),
+                    title: row.verified >= row.sessions
                         ? 'Every session passed forward-confirmed reverse DNS.'
-                        : 'Some or all sessions failed forward-confirmed reverse DNS — that is an impersonator, not a crawler.'
+                        : 'Some or all sessions failed forward-confirmed reverse DNS — that is an impersonator.'
                 })
             },
-            { text: when(c.last), mono: true, nowrap: true }
+            { text: when(row.last), mono: true, nowrap: true }
         ]
     })));
 }
 
-/** Empty state specific to the crawler table, which has its own next step. */
-function showEmptyCrawlers() {
+/**
+ * The crawler table's own empty state, which has a different next step from the others.
+ */
+function showNoCrawlers() {
     const node = byId('bf-crawlers-empty');
     if (!node) {
         return;
@@ -202,17 +220,32 @@ function showEmptyCrawlers() {
                 'unusual over anything longer than an hour — widen the time range before concluding anything.'
         })
     );
+    const content = byId('bf-crawlers-content');
+    if (content) {
+        content.hidden = true;
+    }
 }
 
-/** Entry point. */
-export default async function init() {
-    await load('bf-reasons-empty', 'bot forensics', async () => {
-        const data = await api('bots', 'summary');
-        renderSplit(data);
-        renderReasons(data);
-        renderVerdicts(data);
-        renderHistogram(data);
-        renderClasses(data);
-        renderCrawlers(data);
+/**
+ * Entry point. Six cards, six requests, all independent.
+ */
+export default function init() {
+    loadCard('bf-split', 'Separating declared crawlers from evasive automation', async () => {
+        renderSplit(await api('bots', 'split'));
+    });
+    loadCard('bf-reasons', 'Faceting signal codes', async () => {
+        renderReasons(await api('bots', 'reasons'));
+    });
+    loadCard('bf-verdicts', 'Faceting verdicts', async () => {
+        renderVerdicts(await api('bots', 'verdicts'));
+    });
+    loadCard('bf-histogram', 'Bucketing bot scores', async () => {
+        renderHistogram(await api('bots', 'histogram'));
+    });
+    loadCard('bf-classes', 'Faceting bot classes', async () => {
+        renderClasses(await api('bots', 'classes'));
+    });
+    loadCard('bf-crawlers', 'Faceting crawler names', async () => {
+        renderCrawlers(await api('bots', 'crawlers'));
     });
 }

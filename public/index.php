@@ -7,16 +7,57 @@
  *
  *   1. Send the security headers, before any output can commit them.
  *   2. Load configuration from OUTSIDE the document root.
- *   3. Authenticate. Fails closed: with no auth configured the panel refuses to serve at
+ *   3. Hand over to the installer when this installation is not ready to serve. An
+ *      unconfigured or half-configured Loghound never answers with a configuration error;
+ *      it answers with the screen that fixes the problem.
+ *   4. Authenticate. Fails closed: with no auth configured the panel refuses to serve at
  *      all, because an analytics dashboard left open on the internet is a data breach and
  *      defaults decide outcomes.
- *   4. Enforce CSRF on anything that is not a GET or HEAD.
- *   5. Route to exactly one of the seven views, by an allowlist. There is no dynamic
+ *   5. Enforce CSRF on anything that is not a GET or HEAD.
+ *   6. Route to exactly one of the seven views, by an allowlist. There is no dynamic
  *      class resolution from the URL — a route is a key in a map, and an unknown key is a
  *      404, not an attempt to load a class named after user input.
  *
  * There is deliberately no "run this Solr query" endpoint here or anywhere else. Every
  * query the panel issues is constructed server-side by a Panel controller.
+ *
+ * ---------------------------------------------------------------------------------
+ * THE DECISIONS BEHIND EACH STEP
+ * ---------------------------------------------------------------------------------
+ * HEADERS. The panel renders live operational data behind authentication, so caching any
+ * of it — in a browser, in a proxy, in a back/forward cache — is wrong in every case.
+ *
+ * CONFIGURATION. The session cookie is hardened before any session is started, because
+ * Security::csrfToken() and session auth both start one lazily. The cookie is marked Secure
+ * only when the request actually arrived over TLS; marking it unconditionally would make a
+ * plain-HTTP install silently lose its session on every request.
+ *
+ * SETUP. Once the configuration exists, has credentials and passes validation,
+ * Installer::isNeeded() is false and every installer route is dead.
+ *
+ * CSRF. The check returns immediately for GET and HEAD, and exits 403 for anything else
+ * that arrives without a valid token.
+ *
+ * ROUTING. An unknown view is a typo or a probe, so the operator is sent to the default
+ * rather than shown an error page that would tell a prober which slugs exist.
+ *
+ * State changes arrive as POSTs, only the Settings view accepts them, and it answers with a
+ * redirect target so the browser follows POST/Redirect/GET: a refresh never re-submits, and
+ * the page works with JavaScript disabled.
+ *
+ * The JSON data endpoints are `?v=<view>&api=<action>`. The action name is passed to the
+ * view, which matches it against its own allowlist and returns 'Unknown action' for anything
+ * else; it is also checked here to be a bare identifier, never a path or a field name. An
+ * exception message is never leaked to the browser — it can contain a Solr URL, a credential
+ * fragment or a filesystem path — and the detail goes to the error log instead. The HTML POST
+ * path is held to the same rule for the same reason: an unhandled throw there would surface
+ * as a PHP fatal, and with display_errors on it renders that message straight into the page.
+ *
+ * For HTML, the boot payload is everything the front end needs that it cannot work out for
+ * itself. It carries no log-derived data; that arrives over fetch(). The timezone in it is
+ * for rendering only, since Solr stores UTC. The active filters are echoed back so the front
+ * end can render the "remove" chips without re-parsing the query string; they were
+ * allowlisted on the way in by Controller.
  *
  * @package Loghound
  * @license MIT
@@ -39,53 +80,31 @@ use Loghound\Panel\Query;
 use Loghound\Panel\Sessions;
 use Loghound\Panel\Settings;
 use Loghound\Security;
-
-// -----------------------------------------------------------------------------
-// 1. Headers
-// -----------------------------------------------------------------------------
+use Loghound\Setup\Installer;
 
 Security::sendSecurityHeaders();
 
-// The panel renders live operational data behind authentication. Caching any of it —
-// in a browser, in a proxy, in a back/forward cache — is wrong in every case.
 header('Cache-Control: no-store, private');
-
-// -----------------------------------------------------------------------------
-// 2. Configuration
-// -----------------------------------------------------------------------------
 
 $configPath = __DIR__ . '/../config/loghound.php';
 $cfg = Config::load($configPath);
 
-// Session cookie hardening, applied before any session is started (Security::csrfToken()
-// and session auth both start one lazily).
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_set_cookie_params([
         'httponly' => true,
         'samesite' => 'Strict',
-        // Only mark the cookie Secure when the request actually arrived over TLS,
-        // otherwise a plain-HTTP install silently loses its session on every request.
         'secure'   => (($_SERVER['HTTPS'] ?? '') !== ''),
         'path'     => '/',
     ]);
 }
 
-// -----------------------------------------------------------------------------
-// 3. Authentication
-// -----------------------------------------------------------------------------
+if (Installer::isNeeded($cfg)) {
+    (new Installer($cfg, dirname(__DIR__)))->handle();
+}
 
 Security::requireAuth((array) $cfg->get('auth', []));
 
-// -----------------------------------------------------------------------------
-// 4. CSRF
-// -----------------------------------------------------------------------------
-
-// Returns immediately for GET/HEAD; exits 403 for anything else without a valid token.
 Security::requireCsrf();
-
-// -----------------------------------------------------------------------------
-// 5. Routing
-// -----------------------------------------------------------------------------
 
 $gw = Gateway::fromConfig($cfg);
 
@@ -106,21 +125,22 @@ $routes = [
 
 $slug = $_GET['v'] ?? 'overview';
 if (!is_string($slug) || !isset($routes[$slug])) {
-    // An unknown view is a typo or a probe. Send the operator to the default rather than
-    // rendering an error page that tells a prober which slugs exist.
     $slug = 'overview';
 }
 
 /** @var Controller $view */
 $view = new $routes[$slug]($cfg, $gw);
 
-// ---- State changes (POST) ----------------------------------------------------
-// Only the Settings view accepts them, and it answers with a redirect target so the
-// browser follows POST/Redirect/GET: a refresh never re-submits, and the page works
-// with JavaScript disabled.
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     if ($view instanceof Settings) {
-        $target = $view->post();
+        try {
+            $target = $view->post();
+        } catch (\Throwable $e) {
+            error_log('loghound/panel: POST failed: ' . $e->getMessage());
+            http_response_code(500);
+            header('Content-Type: text/plain; charset=utf-8');
+            exit("The action could not be completed. See the server error log for details.\n");
+        }
         header('Location: ' . $target, true, 303);
         exit;
     }
@@ -130,12 +150,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     exit("This view does not accept POST.\n");
 }
 
-// ---- JSON data endpoints -----------------------------------------------------
-// `?v=<view>&api=<action>`. The action name is passed to the view, which matches it
-// against its own allowlist and returns 'Unknown action' for anything else.
 $action = $_GET['api'] ?? null;
 if (is_string($action) && $action !== '') {
-    // Belt and braces: an action name is a bare identifier, never a path or a field name.
     if (!preg_match('/^[a-z_]{1,32}$/', $action)) {
         json_out(['error' => 'Unknown action'], 400);
     }
@@ -143,8 +159,6 @@ if (is_string($action) && $action !== '') {
     try {
         $payload = $view->api($action);
     } catch (Throwable $e) {
-        // Never leak an exception message to the browser: it can contain a Solr URL,
-        // a credential fragment or a filesystem path. The detail goes to the error log.
         error_log('[loghound-panel] ' . $e->getMessage());
         json_out(['error' => 'The panel could not complete that request. See the server error log.'], 500);
     }
@@ -152,21 +166,15 @@ if (is_string($action) && $action !== '') {
     json_out($payload, isset($payload['error']) ? 400 : 200);
 }
 
-// ---- HTML -------------------------------------------------------------------
-// The boot payload is everything the front end needs that it cannot work out for itself.
-// It carries no log-derived data — that arrives over fetch().
 $boot = [
     'view'    => $slug,
     'range'   => Query::range(is_string($_GET['range'] ?? null) ? $_GET['range'] : null)['key'],
     'csrf'    => Security::csrfToken(),
     'demo'    => $gw->isDemo(),
-    // Rendering timezone. Solr stores UTC; this is display only.
     'tz'      => (string) $cfg->get('ui.timezone', 'UTC'),
     'query'   => $_SERVER['QUERY_STRING'] ?? '',
     'labels'  => Query::populationLabels(),
     'filters' => (function (): array {
-        // Echo the active filters back so the front end can render the "remove" chips
-        // without re-parsing the query string. Allowlisted on the way in by Controller.
         $out = [];
         $allowed = Query::filterFields();
         foreach ((array) ($_GET['f'] ?? []) as $field => $values) {

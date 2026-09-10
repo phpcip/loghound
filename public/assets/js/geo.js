@@ -138,7 +138,6 @@ const BY_NAME = (() => {
     for (const code of Object.keys(CENTROIDS)) {
         map[CENTROIDS[code][2].toLowerCase()] = code;
     }
-    // A handful of aliases geolocation providers actually emit.
     map['united states of america'] = 'US';
     map['usa'] = 'US';
     map['great britain'] = 'GB';

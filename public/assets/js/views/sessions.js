@@ -14,7 +14,7 @@
 'use strict';
 
 import {
-    api, bytes, byId, clear, dec, durUs, dur, el, fill, hideEmpty, load,
+    api, bytes, byId, clear, dec, durUs, dur, el, fill, hideEmpty, loadCard,
     noDataYet, num, pct, shortHash, urlAddFilter, urlRemoveFilter, when
 } from '../core.js';
 
@@ -118,8 +118,6 @@ function renderRows(data) {
         ]));
         tr.appendChild(el('td', { class: 'num', text: num(doc.hits) }));
         tr.appendChild(el('td', { class: 'num', text: dur(doc.log_span_ms) }));
-        // No beacon means engaged time is genuinely unknown, and it says so instead of
-        // showing a zero that would read as "bounced instantly".
         tr.appendChild(el('td', { class: 'num', text: doc.beacon ? dur(doc.engaged_ms) : '—' }));
         tr.appendChild(el('td', { class: 'clip mono', title: doc.entry || '', text: doc.entry || '—' }));
 
@@ -159,10 +157,6 @@ function renderPager(data) {
     fill(holder, parts);
 }
 
-/* -------------------------------------------------------------------------
- * Drill-down
- * ---------------------------------------------------------------------- */
-
 /** A definition list from [label, value] pairs, skipping empty ones. */
 function kv(pairs) {
     const dl = el('dl', { class: 'kv' });
@@ -198,7 +192,6 @@ async function openDetail(id) {
 function renderDetail(body, data) {
     const s = data.session;
 
-    // --- The four timings, with the beacon caveat stated inline -----------------
     const timings = el('div', { class: 'timing-grid' });
     const add = (key, label, value, defn) => {
         timings.appendChild(el('div', { class: 'timing', dataset: { timing: key } }, [
@@ -225,7 +218,6 @@ function renderDetail(body, data) {
             'shown. They are not zero — nothing measured them. Log span is all there is.'
         ]);
 
-    // --- Evidence: every reason code with its explanation -----------------------
     const reasons = el('ul', { class: 'plane-list' });
     for (const code of (s.reasons || [])) {
         const meta = data.reasons[code];
@@ -238,7 +230,6 @@ function renderDetail(body, data) {
         reasons.appendChild(el('li', { class: 'muted', text: 'No signals fired. This session looked ordinary on every plane.' }));
     }
 
-    // --- Execution plane -------------------------------------------------------
     const execRows = [];
     if (s.beacon) {
         execRows.push(['JavaScript ran', s.js ? 'yes' : 'no', true]);
@@ -288,7 +279,6 @@ function renderDetail(body, data) {
                     ['IPs sharing it (±12h)', s.fp_ips_24h === null ? null : num(s.fp_ips_24h)],
                     ['Referrer', s.referer
                         ? (s.referer_href && s.referer_href !== '#'
-                            // The href was validated server-side by Security::safeUrl().
                             ? el('a', { href: s.referer_href, rel: 'noreferrer noopener', text: s.referer })
                             : el('span', { class: 'mono', text: s.referer }))
                         : null],
@@ -365,35 +355,50 @@ function renderTimeline(data) {
     return el('div', {}, [list, note]);
 }
 
-/* -------------------------------------------------------------------------
- * Entry point
- * ---------------------------------------------------------------------- */
+/**
+ * Load the facet sidebar.
+ */
+function loadFacets() {
+    return loadCard('se-facets', 'Counting facet values', async () => {
+        const data = await api('sessions', 'facets');
+        renderActive(data.active);
+        renderFacets(data.facets);
 
-export default async function init() {
+        const count = byId('se-count');
+        if (count) {
+            count.textContent = num(data.matched) + ' matching · ' + num(data.beacon_count) +
+                ' with beacon data (' + pct(data.beacon_count, data.matched) + ')';
+        }
+    });
+}
+
+/**
+ * Load a page of results.
+ */
+function loadResults() {
+    return loadCard('se-results', 'Searching sessions', async () => {
+        const data = await api('sessions', 'list');
+        renderRows(data);
+        renderPager(data);
+    });
+}
+
+/**
+ * Entry point.
+ *
+ * The table and the sidebar are separate requests: the rows appear as soon as the
+ * documents are back rather than waiting on eight terms facets.
+ */
+export default function init() {
     const close = byId('se-detail-close');
     if (close) {
         close.addEventListener('click', () => { byId('se-detail').hidden = true; });
     }
 
-    await load('se-table-empty', 'sessions', async () => {
-        const data = await api('sessions', 'list');
+    loadResults();
+    loadFacets();
 
-        const count = byId('se-count');
-        if (count) {
-            count.textContent = num(data.numFound) + ' matching · ' +
-                num(data.beacon_count) + ' with beacon data (' + pct(data.beacon_count, data.numFound) + ')';
-        }
-
-        renderActive(data.active);
-        renderFacets(data.facets);
-        renderRows(data);
-        renderPager(data);
-    });
-
-    // A session id in the URL opens straight into the drill-down, so a link to one
-    // session from the fingerprint view lands where it should.
-    const params = new URLSearchParams(window.location.search);
-    const open = params.get('open');
+    const open = new URLSearchParams(window.location.search).get('open');
     if (open) {
         openDetail(open);
     }

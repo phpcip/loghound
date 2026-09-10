@@ -59,7 +59,9 @@ final class Security
      *
      * Referer values come straight from the wire and routinely contain javascript:,
      * data: and vbscript: payloads. Anything that is not plainly http(s) returns '#'
-     * rather than being rendered as a live link.
+     * rather than being rendered as a live link. Control characters and whitespace are
+     * refused along with them, because either can split a header or break out of an
+     * attribute.
      */
     public static function safeUrl(?string $url): string
     {
@@ -71,7 +73,6 @@ final class Security
         if ($scheme !== 'http' && $scheme !== 'https') {
             return '#';
         }
-        // Reject control characters and whitespace that could split a header or attribute.
         if (preg_match('/[\x00-\x20\x7F"\'<>]/', $url)) {
             return '#';
         }
@@ -114,6 +115,10 @@ final class Security
     /**
      * Verify a beacon token and return its issued-at timestamp, or null when invalid.
      *
+     * A token issued in the future is as broken as an expired one and is refused the same
+     * way, with 60 seconds of slack so that ordinary clock skew between the browser's
+     * request and this host is not treated as an attack.
+     *
      * @param int $maxAge Seconds after which a token is refused (default 12h).
      */
     public static function verifyToken(
@@ -136,7 +141,6 @@ final class Security
             return null;
         }
         $age = time() - $issuedAt;
-        // A token from the future is as broken as an expired one; 60s of clock slack.
         if ($age < -60 || $age > $maxAge) {
             return null;
         }
@@ -185,6 +189,9 @@ final class Security
      * prefix check is done against the resolved root so a symlink out of the tree cannot
      * escape. Returns null when the path is missing or outside every allowed root.
      *
+     * The prefix comparison appends a separator to the root before matching, so that
+     * "/var/log-evil" cannot pass itself off as living under "/var/log".
+     *
      * @param string[] $allowedRoots
      */
     public static function safePath(string $path, array $allowedRoots): ?string
@@ -198,7 +205,6 @@ final class Security
             if ($realRoot === false) {
                 continue;
             }
-            // Compare against root + separator so "/var/log-evil" cannot match "/var/log".
             if ($real === $realRoot || str_starts_with($real, rtrim($realRoot, '/') . '/')) {
                 return $real;
             }
@@ -245,9 +251,13 @@ final class Security
      * A custom log pattern is untrusted code. Two failure modes matter: a pattern that
      * does not compile (caught by the @preg_match probe) and a pattern that backtracks
      * catastrophically, which would wedge the ingest daemon permanently. The probe runs
-     * the pattern against a deliberately awkward subject under a low backtrack limit and
-     * measures elapsed time; anything slow or failing is refused at save time, which is
-     * the only moment a human is present to fix it.
+     * the pattern against a subject engineered to expose nested quantifier blowup, under a
+     * low backtrack limit, and measures elapsed time; anything slow or failing is refused
+     * at save time, which is the only moment a human is present to fix it.
+     *
+     * The shape of the pattern is checked before any of that. The /e modifier is long
+     * gone from PHP, but a modifier block we do not explicitly expect is refused anyway
+     * rather than passed to PCRE to see what happens.
      *
      * @return string|null Null when acceptable, otherwise a human-readable reason.
      */
@@ -256,7 +266,6 @@ final class Security
         if (strlen($pattern) > 4096) {
             return 'Pattern is too long (max 4096 bytes).';
         }
-        // The /e modifier is long gone, but reject any modifier block we do not expect.
         if (!preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/s', $pattern)) {
             return 'Pattern must be a delimited regex, e.g. /^(?<ip>\S+) .../';
         }
@@ -264,7 +273,6 @@ final class Security
         $oldLimit = ini_get('pcre.backtrack_limit');
         ini_set('pcre.backtrack_limit', '100000');
 
-        // A subject engineered to expose nested quantifier blowup.
         $subject = str_repeat('a b "c" 123 ', 40) . str_repeat('x', 400);
 
         $start = microtime(true);
@@ -297,6 +305,15 @@ final class Security
      * to serve rather than exposing traffic data to the internet, because an analytics
      * dashboard left open is a data breach and defaults decide outcomes.
      *
+     * The front controller sends an installation that has no credentials to the browser
+     * installer before this is ever reached, so the 'none' branch below is a backstop for
+     * any other caller rather than something an operator is expected to see.
+     *
+     * The username is compared in constant time as well as the password, so that valid
+     * account names cannot be enumerated by timing. A failed attempt then sleeps for a
+     * randomised fraction of a second, which blunts online guessing without needing a
+     * lockout system that an attacker could trip deliberately to deny the operator access.
+     *
      * @param array $cfg The 'auth' section of the config.
      */
     public static function requireAuth(array $cfg): void
@@ -307,8 +324,8 @@ final class Security
             http_response_code(503);
             header('Content-Type: text/plain; charset=utf-8');
             exit(
-                "Loghound is not configured with any authentication.\n" .
-                "Set auth.mode to 'basic' or 'session' in config/loghound.php before serving the panel.\n"
+                "Loghound has not finished being set up, so it has no way to sign you in.\n" .
+                "Open this site in a browser to finish setup, or run bin/loghound-setup on the server.\n"
             );
         }
 
@@ -318,12 +335,10 @@ final class Security
             $okUser = (string) ($cfg['user'] ?? '');
             $hash   = (string) ($cfg['password_hash'] ?? '');
 
-            // Compare the username in constant time too, so it cannot be enumerated.
             $userOk = self::equals($okUser, $user);
             $passOk = $hash !== '' && password_verify($pass, $hash);
 
             if (!$userOk || !$passOk) {
-                // Deliberate delay to blunt online guessing without a full lockout system.
                 usleep(random_int(150000, 400000));
                 header('WWW-Authenticate: Basic realm="Loghound"');
                 http_response_code(401);
@@ -387,8 +402,6 @@ final class Security
         if ($xff === '') {
             return $remote;
         }
-        // Walk right-to-left; the first address that is not itself a trusted proxy is
-        // the closest thing to a real client that we can defend.
         $hops = array_map('trim', explode(',', $xff));
         for ($i = count($hops) - 1; $i >= 0; $i--) {
             $hop = $hops[$i];

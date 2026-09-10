@@ -35,11 +35,17 @@ final class Beacon
     /** Wire protocol version. Bumped only on an incompatible payload change. */
     public const PROTOCOL = 1;
 
-    /** Hard ceilings. A payload claiming more than this is clamped, not believed. */
-    public const MAX_MS          = 86400000;  // 24h — longer than any honest pageview
-    public const MAX_SIGNALS     = 40;        // codes accepted from one payload
-    public const MAX_CODE_LEN    = 40;        // length of one signal code
-    public const MAX_STR         = 128;       // tz / webgl / platform field length
+    /**
+     * Hard ceilings. A payload claiming more than this is clamped, not believed.
+     *
+     * MAX_MS is 24 hours, longer than any honest pageview. MAX_SIGNALS is how many codes are
+     * accepted from one payload and MAX_CODE_LEN the length of one code. MAX_STR bounds the
+     * tz, webgl and platform fields.
+     */
+    public const MAX_MS          = 86400000;
+    public const MAX_SIGNALS     = 40;
+    public const MAX_CODE_LEN    = 40;
+    public const MAX_STR         = 128;
     public const MAX_PATH        = 512;
     public const MAX_INTERACTIONS = 100000;
 
@@ -86,9 +92,13 @@ final class Beacon
      * this plane with the transport and behaviour planes; `client_score_f` is one
      * input among many, recorded so the panel can show what the browser alone said.
      * Negative weights exist because positive evidence of a human is evidence.
+     *
+     * The table is grouped, in order: the definitive markers, where a driver announced
+     * itself; the engine tells; the consistency cross-checks, which are derived server-side
+     * in derive(); the human-presence evidence, or its absence; and finally the lie itself,
+     * beacon_forged.
      */
     public const WEIGHTS = [
-        // Definitive markers: a driver announced itself.
         'automation_webdriver'         => 100,
         'automation_cdc'               => 100,
         'automation_playwright'        => 100,
@@ -97,7 +107,6 @@ final class Beacon
         'automation_nightmare'         => 100,
         'automation_phantom'           => 100,
         'automation_domauto'           => 100,
-        // Engine tells.
         'headless_renderer'            => 90,
         'ua_older_engine'              => 85,
         'ua_newer_engine'              => 85,
@@ -109,19 +118,16 @@ final class Beacon
         'headless_no_concurrency'      => 15,
         'headless_screen_eq_avail'     => 10,
         'headless_no_chrome_runtime'   => 10,
-        // Consistency cross-checks (derived server-side, see derive()).
         'platform_mismatch'            => 35,
         'touch_missing_mobile'         => 30,
         'screen_outer_impossible'      => 25,
         'dpr_odd'                      => 10,
         'tz_unknown'                   => 5,
-        // Human-presence evidence, or its absence.
         'mouse_linear'                 => 40,
         'mouse_static'                 => 25,
         'no_interaction'               => 20,
         'no_scroll_tall_page'          => 10,
         'human_mouse_natural'          => -25,
-        // The lie itself.
         'beacon_forged'                => 90,
     ];
 
@@ -158,28 +164,51 @@ final class Beacon
     }
 
     /**
-     * Mint a token for a session.
+     * Mint a token for a session, bound to the Origin that asked for it.
      *
      * Thin wrapper over Security::mintToken so that callers never have to know the
      * token format, and so the format can change in exactly one place.
+     *
+     * The Origin is part of the signed material, which is what stops a third-party page
+     * from speaking for somebody else's visit. The collector answers with
+     * Access-Control-Allow-Origin: *, so any site on the internet can make a CORS-simple
+     * POST from a visitor's browser — their IP, their User-Agent, therefore their
+     * client_key — and read the response headers. Without this binding, the token it
+     * received would be accepted on later calls and that page could report whatever it
+     * liked about a real person's session; in a bot-detection product the obvious abuse is
+     * to have a human recorded as headless automation. With it, a token minted for
+     * https://evil.example is refused the moment it is presented from anywhere else, and
+     * the rows it staged are attributable to the origin that staged them.
+     *
+     * A NUL separator is used because it cannot occur in either a session id or an Origin
+     * header, so no pair of values can be made to collide by moving the boundary.
      */
-    public function issueToken(string $sessionId, ?int $now = null): string
+    public function issueToken(string $sessionId, ?int $now = null, string $origin = ''): string
     {
-        return Security::mintToken($this->secret, $sessionId, $now ?? time());
+        return Security::mintToken($this->secret, $sessionId . "\0" . $origin, $now ?? time());
     }
 
     /**
-     * Verify a token against a session id.
+     * Verify a token against a session id and the Origin it was minted for.
+     *
+     * The Origin must be the same one issueToken() saw. A mismatch is indistinguishable
+     * from a forged token and is refused the same way.
      *
      * @return int|null The issued-at timestamp, or null when the token is missing,
-     *                  malformed, forged, expired or dated in the future.
+     *                  malformed, forged, expired, dated in the future, or presented
+     *                  from a different Origin.
      */
-    public function verifyToken(string $sessionId, string $token): ?int
+    public function verifyToken(string $sessionId, string $token, string $origin = ''): ?int
     {
         if ($sessionId === '' || $token === '' || $this->secret === '') {
             return null;
         }
-        return Security::verifyToken($this->secret, $sessionId, $token, $this->tokenMaxAge());
+        return Security::verifyToken(
+            $this->secret,
+            $sessionId . "\0" . $origin,
+            $token,
+            $this->tokenMaxAge()
+        );
     }
 
     /**
@@ -192,14 +221,15 @@ final class Beacon
      *
      * JSON_THROW_ON_ERROR is deliberately not used; a malformed body is an expected
      * condition on a public endpoint, not an exceptional one.
+     *
+     * The decode depth is 8, far more than the flat payload needs and low enough that a
+     * deeply nested body cannot cost us stack while being parsed.
      */
     public function decode(string $raw): ?array
     {
         if ($raw === '' || strlen($raw) > $this->maxPayload()) {
             return null;
         }
-        // Depth 8 is far more than the flat payload needs and stops a deeply nested
-        // body from costing us stack while being parsed.
         $data = json_decode($raw, true, 8);
         if (!is_array($data) || array_is_list($data)) {
             return null;
@@ -218,6 +248,19 @@ final class Beacon
      * Note what is NOT taken from the payload: IP, User-Agent, host and referer. The
      * collector reads those from the connection. A client that sends them is ignored.
      *
+     * Values are read once into a local before being tested. Testing the value and then
+     * re-reading the key would let a null slip through the strict in_array() as -1 and then
+     * cast to 0, meaning "the engine FAILED its UA check" — an accusation manufactured out of
+     * a missing field. For the same reason the engine-check field is 1 for matched, 0 for not
+     * matched and -1 for unknown, and anything else is unknown: an unparseable answer must
+     * never read as "failed".
+     *
+     * The event kind is 'h' for hello, 'b' for heartbeat and 'x' for the final flush.
+     * Anything else becomes 'b', the harmless interpretation. The pageview id is
+     * client-generated and only ever used to group one pageview's heartbeats, so a
+     * restrictive charset costs nothing. The environment measurements are stored raw here;
+     * derive() is what turns them into codes.
+     *
      * @param array<string,mixed> $in
      * @return array<string,mixed>
      */
@@ -227,21 +270,13 @@ final class Beacon
         $visible = $this->num($in['vi'] ?? 0, 0, self::MAX_MS);
         $engaged = $this->num($in['en'] ?? 0, 0, self::MAX_MS);
 
-        // Read once into a local: testing the value and then re-reading the key
-        // would let a null slip through the strict in_array() as -1 and then cast
-        // to 0, i.e. "the engine FAILED its UA check" — an accusation manufactured
-        // out of a missing field.
         $uaClaim = $in['uo'] ?? -1;
 
         return [
             'protocol'    => (int) $this->num($in['v'] ?? 0, 0, 1000),
-            // Event kind: 'h' hello, 'b' heartbeat, 'x' final flush. Anything else
-            // becomes 'b', the harmless interpretation.
             'event'       => in_array($in['e'] ?? '', ['h', 'b', 'x'], true) ? (string) $in['e'] : 'b',
             'session_id'  => $this->token($in['s'] ?? '', 64),
             'token'       => $this->token($in['k'] ?? '', 128),
-            // Pageview id: client-generated, only ever used to group this pageview's
-            // heartbeats, so a restrictive charset costs nothing.
             'pv'          => $this->token($in['p'] ?? '', 32),
             'beat'        => (int) $this->num($in['n'] ?? 0, 0, 100000),
 
@@ -254,14 +289,11 @@ final class Beacon
             'scroll_pct'   => (int) $this->num($in['sp'] ?? 0, 0, 100),
 
             'signals'      => $this->codes($in['a'] ?? []),
-            // 1 the engine matched the UA claim, 0 it did not, -1 unknown. Anything
-            // else is unknown: an unparseable answer must never read as "failed".
             'ua_claim'     => in_array($uaClaim, [0, 1, -1], true) ? (int) $uaClaim : -1,
             'tz'           => $this->text($in['tz'] ?? '', self::MAX_STR),
             'webgl'        => $this->text($in['gl'] ?? '', self::MAX_STR),
             'path'         => $this->text($in['u'] ?? '', self::MAX_PATH),
 
-            // Raw environment measurements; derive() turns them into codes.
             'platform'     => $this->text($in['pl'] ?? '', self::MAX_STR),
             'touch'        => (int) $this->num($in['mt'] ?? 0, 0, 32),
             'dpr'          => round((float) $this->num($in['dp'] ?? 0, 0, 32), 3),
@@ -297,6 +329,11 @@ final class Beacon
      * heartbeat queued behind a busy main thread produces a couple of seconds of
      * honest overshoot, and flagging that would be a false accusation.
      *
+     * The wall-clock ceiling is computed first, floored at zero, because a token issued in
+     * the future — clock skew between two machines — would otherwise make it negative. The
+     * other two clocks are then nested under the corrected wall clock, with an inversion
+     * large enough to be deliberate recorded and a small one simply clamped.
+     *
      * @param array<string,mixed> $p        A normalised payload.
      * @param int                 $issuedAt Token issue time (unix seconds).
      * @param int|null            $now      Injectable clock, for tests.
@@ -311,8 +348,6 @@ final class Beacon
         $visible = (int) ($p['visible_ms'] ?? 0);
         $engaged = (int) ($p['engaged_ms'] ?? 0);
 
-        // The wall-clock ceiling. A token issued in the future (clock skew between
-        // two machines) would make this negative, so it is floored at zero.
         $elapsed = max(0, $now - $issuedAt);
         $ceiling = ($elapsed + self::CLOCK_SLACK_SEC) * 1000;
 
@@ -323,8 +358,6 @@ final class Beacon
             $wall = $ceiling;
         }
 
-        // Now nest the other two under the corrected wall clock. An inversion large
-        // enough to be deliberate is recorded; a small one is just clamped.
         if ($visible > $wall) {
             if ($visible - $wall > self::FORGERY_TOLERANCE_MS && !in_array('beacon_forged', $flags, true)) {
                 $flags[] = 'beacon_forged';
@@ -358,6 +391,27 @@ final class Beacon
      * missing (0 / empty) nothing is emitted, because "unknown" must never become
      * "guilty".
      *
+     * The platform check compares navigator.platform against the OS the UA claims. Android
+     * reports its platform as "Linux armv8l", so Linux is an acceptable answer for an Android
+     * UA — but not the reverse. The touch check fires on a UA claiming a phone or tablet from
+     * a device with no touch support at all; the reverse is NOT checked, because that would
+     * flag every touchscreen laptop.
+     *
+     * Everything after that compares display measurements against each other, so it needs the
+     * payload to have carried display measurements at all. A truncated write, an older client
+     * or a browser that exposed nothing reports zeroes, and "no data" must never be read as
+     * "a window with no size", which is a strong signal that sets headless_b. Unknown is not
+     * guilty.
+     *
+     * Within those: a window with no outer dimensions is not on a screen, though it is
+     * legitimately zero inside some cross-origin iframes, which is why it is a hint rather
+     * than proof. A window cannot be meaningfully larger than the screen it sits on, with
+     * slack for multi-monitor setups and browser chrome. A screen with no taskbar or window
+     * chrome anywhere is common on Linux kiosks and full-screen presentations too, hence
+     * weak. And devicePixelRatio absent or zero on a client that DID report a screen counts,
+     * while fractional values do not: those are normal under Windows display scaling, so only
+     * impossible values are treated as evidence.
+     *
      * @param array<string,mixed> $p  A normalised payload.
      * @param string $connUa The User-Agent read from the connection.
      * @return string[] Extra signal codes.
@@ -369,16 +423,11 @@ final class Beacon
         $uaOs     = self::osOf($connUa);
         $uaMobile = (bool) preg_match('/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i', $connUa);
 
-        // navigator.platform versus the OS the UA claims. Android reports its
-        // platform as "Linux armv8l", so Linux is an acceptable answer for an
-        // Android UA — but not the reverse.
         $platOs = self::osOf((string) ($p['platform'] ?? ''));
         if ($uaOs !== '' && $platOs !== '' && $uaOs !== $platOs && !($uaOs === 'a' && $platOs === 'l')) {
             $out[] = 'platform_mismatch';
         }
 
-        // A UA claiming a phone or tablet on a device with no touch support at all.
-        // The reverse is NOT checked: that would flag every touchscreen laptop.
         if ($uaMobile && (int) ($p['touch'] ?? 0) === 0) {
             $out[] = 'touch_missing_mobile';
         }
@@ -388,36 +437,22 @@ final class Beacon
         $ow = (int) ($p['outer_w'] ?? 0);
         $oh = (int) ($p['outer_h'] ?? 0);
 
-        // Everything below compares display measurements against each other, so it
-        // needs the payload to have carried display measurements at all. A truncated
-        // write, an older client, or a browser that exposed nothing reports zeroes —
-        // and "no data" must never be read as "a window with no size", which is a
-        // strong signal that sets headless_b. Unknown is not guilty.
         if ($sw <= 0 || $sh <= 0) {
             return $out;
         }
 
-        // A window with no outer dimensions is not on a screen. Legitimately zero
-        // inside some cross-origin iframes, which is why this is a hint, not proof.
         if ($ow === 0 || $oh === 0) {
             $out[] = 'headless_zero_outer';
         } elseif ($ow > $sw + 64 || $oh > $sh + 128) {
-            // A window cannot be meaningfully larger than the screen it sits on.
-            // The slack covers multi-monitor setups and browser chrome.
             $out[] = 'screen_outer_impossible';
         }
 
-        // A screen with no taskbar or window chrome anywhere. Common on Linux
-        // kiosks and full-screen presentations too, hence weak.
         if (!$uaMobile
             && (int) ($p['avail_w'] ?? 0) === $sw
             && (int) ($p['avail_h'] ?? 0) === $sh) {
             $out[] = 'headless_screen_eq_avail';
         }
 
-        // devicePixelRatio absent or zero on a client that DID report a screen.
-        // Fractional values are normal under Windows display scaling, so only
-        // impossible values count.
         if ((float) ($p['dpr'] ?? 0) <= 0) {
             $out[] = 'dpr_odd';
         }
@@ -455,6 +490,25 @@ final class Beacon
      * — is also accepted, so a caller reading the table directly, and every test in
      * tests/test_beacon.php, works without an adapter in between.
      *
+     * When no rows arrived, plane 3 says nothing was received. That is itself a fact worth
+     * recording — it is what drives the `no_js_on_html` rule — but it is the ONLY thing that
+     * may be recorded: no timings, no counters, no score.
+     *
+     * A row with no pageview id, from an ancient client or a truncated write, still counts;
+     * it gets its own bucket keyed by the row id. Signals are stored as a JSON array in the
+     * staging row. Codes come back in a stable order so that a re-merge produces an identical
+     * document.
+     *
+     * Zero interactions across the whole session is a session-level judgement, which is why
+     * b.js does not emit it: only the server knows the session is over. Score/Rules.php
+     * weights it at 40 once the session has ended.
+     *
+     * Two fields are deliberately absent rather than false. The engine check is absent when
+     * every payload said "unknown", because a browser we could not test is not a browser that
+     * failed the test. tz_match_b compares the browser's IANA zone against the one derived
+     * from the IP's geolocation and is absent when either side is unknown — a session with no
+     * geo data has neither passed nor failed.
+     *
      * @param array<string,mixed>        $session    The session doc built from the log.
      * @param array<int,array<string,mixed>> $beaconRows Rows from `beacon_staging`.
      * @return array<string,mixed> The session doc with beacon fields folded in.
@@ -462,9 +516,6 @@ final class Beacon
     public function mergeIntoSession(array $session, array $beaconRows): array
     {
         if ($beaconRows === []) {
-            // Plane 3 says nothing arrived. That is itself a fact worth recording —
-            // it is what drives the `no_js_on_html` rule — but it is the ONLY thing
-            // we may record. No timings, no counters, no score.
             $session['beacon_b'] = false;
             $session['js_b'] = false;
             return $session;
@@ -479,16 +530,12 @@ final class Beacon
         $webgl = '';
 
         foreach ($beaconRows as $row) {
-            // Unwrap the staging row: the counters live inside the JSON payload
-            // blob, while the row id lives on the row itself.
             $rowId = $row['id'] ?? null;
             if (isset($row['payload']) && is_array($row['payload'])) {
                 $row = $row['payload'];
                 $row['id'] = $rowId;
             }
 
-            // A row with no pageview id (an ancient client, or a truncated write)
-            // still counts: it gets its own bucket keyed by the row id.
             $pv = (string) ($row['pv'] ?? '');
             if ($pv === '') {
                 $pv = '#' . (string) ($row['id'] ?? count($pvs));
@@ -506,7 +553,6 @@ final class Beacon
                 }
             }
 
-            // Signals are stored as a JSON array in the staging row.
             $sig = $row['signals'] ?? [];
             if (is_string($sig)) {
                 $decoded = json_decode($sig, true);
@@ -545,9 +591,6 @@ final class Beacon
             }
         }
 
-        // Zero interactions across the whole session is a session-level judgement,
-        // which is why b.js does not emit it: only the server knows the session is
-        // over. Score/Rules.php weights it at 40 when the session has ended.
         if ($interactions === 0) {
             $codes['no_interaction'] = true;
         }
@@ -562,7 +605,7 @@ final class Beacon
         $session['pageviews_i']      = count($pvs);
 
         $codeList = array_keys($codes);
-        sort($codeList); // stable order so a re-merge produces an identical document
+        sort($codeList);
         $session['automation_ss'] = $codeList;
 
         $session['headless_b'] = false;
@@ -573,8 +616,6 @@ final class Beacon
             }
         }
 
-        // Absent when every payload said "unknown": a browser we could not test is
-        // not a browser that failed the test.
         if ($uaClaimSeen) {
             $session['ua_claim_ok_b'] = !$uaClaimFailed;
         }
@@ -583,9 +624,6 @@ final class Beacon
             $session['webgl_s'] = $webgl;
         }
 
-        // tz_match_b compares the browser's IANA zone against the one derived from
-        // the IP's geolocation. Absent when either side is unknown — a session with
-        // no geo data has not passed and has not failed.
         $geoTz = (string) ($session['tz_s'] ?? '');
         if ($tz !== '' && $geoTz !== '') {
             $session['tz_match_b'] = ($tz === $geoTz);
@@ -676,13 +714,12 @@ final class Beacon
         return '';
     }
 
-    /* ------------------------------------------------------------------ *
-     * Private sanitisers. Each one turns "anything at all" into one type.
-     * ------------------------------------------------------------------ */
-
     /**
      * Coerce to a number inside [min, max]. Non-numeric input becomes $min rather
      * than throwing: a public endpoint receives garbage as a matter of routine.
+     *
+     * NAN and INF are rejected explicitly, because they survive is_numeric() when they arrive
+     * as strings.
      *
      * @param mixed $v
      */
@@ -692,7 +729,6 @@ final class Beacon
             return $min;
         }
         $n = (float) $v;
-        // NAN and INF survive is_numeric() when they arrive as strings.
         if (!is_finite($n)) {
             return $min;
         }
@@ -750,9 +786,50 @@ final class Beacon
      * codes can therefore pollute a facet with junk names but can never inject
      * anything, and unknown codes carry zero weight in clientScore().
      *
+     * An over-length code is DROPPED, not truncated. Truncating would coin a brand-new facet
+     * value out of a hostile string and leave it sitting in the panel's signal list looking
+     * like something we defined.
+     *
      * @param mixed $v
      * @return string[]
      */
+    /**
+     * Is this a signal code the SERVER decides, rather than one the client reports?
+     *
+     * The collector is public and unauthenticated, so every code arriving from the wire is
+     * an assertion by an untrusted party about itself. Most are harmless measurements —
+     * "no plugins", "zero outer height" — and the scoring engine treats them as evidence,
+     * not proof. A few carry decisive weight: `automation_*` alone sets headless_b and a
+     * client_score of 100, which in a bot-detection product is the difference between a
+     * visitor being counted and a visitor being accused.
+     *
+     * Those are exactly the codes Beacon::derive() computes here from measurements the
+     * server can check, so accepting the client's version buys nothing and costs the
+     * ability to be lied to. A page could otherwise submit `automation_webdriver` for a
+     * real person and have them recorded as a headless bot.
+     *
+     * Scoped to exactly the codes derive() produces, and no wider. The automation_* and
+     * most headless_* codes are NOT in this list on purpose: they can only be observed from
+     * inside the page — navigator.webdriver, the chromedriver globals, the WebGL renderer
+     * string — and refusing them from the wire would delete the strongest detection signals
+     * the product has. They are defended by binding the token to an Origin instead, so a
+     * third-party page cannot obtain credentials for a visitor's session in the first place.
+     *
+     * What this stops is narrower and still worth stopping: a client pre-empting or
+     * contradicting a verdict the server reaches from its own measurements, which would let
+     * a page suppress a finding by asserting the opposite before derive() runs.
+     */
+    private static function isServerDerivedCode(string $code): bool
+    {
+        return in_array($code, [
+            'platform_mismatch',
+            'touch_missing_mobile',
+            'headless_zero_outer',
+            'screen_outer_impossible',
+            'beacon_forged',
+        ], true);
+    }
+
     private function codes($v): array
     {
         if (!is_array($v)) {
@@ -760,13 +837,13 @@ final class Beacon
         }
         $out = [];
         foreach ($v as $c) {
-            // An over-length code is DROPPED, not truncated. Truncating would coin
-            // a brand-new facet value out of a hostile string and leave it sitting
-            // in the panel's signal list looking like something we defined.
             if (!is_string($c) || $c === '' || strlen($c) > self::MAX_CODE_LEN) {
                 continue;
             }
             if (!preg_match('/^[a-z0-9_]+$/', $c)) {
+                continue;
+            }
+            if (self::isServerDerivedCode($c)) {
                 continue;
             }
             $out[$c] = true;

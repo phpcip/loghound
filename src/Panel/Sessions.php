@@ -60,65 +60,90 @@ final class Sessions extends Controller
     {
         return match ($action) {
             'list'   => $this->list(),
+            'facets' => $this->facets(),
             'detail' => $this->detail(),
             default  => ['error' => 'Unknown action'],
         };
     }
 
     /**
-     * Search results plus the facet sidebar.
+     * A page of matching sessions.
      *
-     * Two Solr requests: one for the page of documents, one for the facets. They are
-     * separate because Gateway::facet() forces `rows=0` — an aggregate call must never be
-     * able to leak documents by accident, and that guarantee is worth an extra round trip.
+     * Its own request, separate from the facet sidebar, so the table appears as soon as
+     * the documents are back instead of waiting on eight terms facets. Free text goes to
+     * the Gateway as text and is bound as the `uq` parameter by Solr::queryText(); it is
+     * never concatenated into a query.
      *
      * @return array<string,mixed>
      */
     private function list(): array
     {
-        $q = self::text('q', 200);
+        $text = self::text('q', 200);
         $sortKey = self::param('sort', array_keys(Query::sorts()), 'recent');
         $rows = self::rows(self::MAX_ROWS, 25);
         $start = self::start();
 
-        $fqs = $this->sessionFqs();
-
-        $params = [
-            'fq'    => $fqs,
+        $res = $this->gw->search('sessions.list', $this->gw->sessionsCore(), $text, [
+            'fq'    => $this->sessionFqs(),
             'sort'  => Query::sorts()[$sortKey],
             'rows'  => $rows,
             'start' => $start,
             'fl'    => Query::sessionFl(),
-        ];
+        ]);
 
-        // The text goes to the Gateway as text, never as query syntax. Gateway::search()
-        // hands it to Solr::queryText(), which binds it as the `uq` parameter — the only
-        // path in the codebase that accepts something a human typed.
-        $res = $this->gw->search('sessions.list', $this->gw->sessionsCore(), $q, $params);
+        return $this->envelope([
+            'q'        => $text,
+            'sort'     => $sortKey,
+            'rows'     => $rows,
+            'start'    => $start,
+            'numFound' => $res['numFound'],
+            'docs'     => array_map([$this, 'shapeSession'], $res['docs']),
+            'active'   => $this->filters,
+        ]);
+    }
 
-        // Facets over the same query, so the counts describe the result set the operator
-        // is looking at rather than the whole index.
-        $facetDefs = [];
+    /**
+     * Facet counts for the sidebar, over the same query as the result table.
+     *
+     * Identity-shaped fields are filterable but never faceted: `ip_s` and `session_id_s`
+     * have effectively unbounded cardinality, so a terms facet on them is slow and tells
+     * the operator nothing.
+     *
+     * @return array<string,mixed>
+     */
+    private function facets(): array
+    {
+        $text = self::text('q', 200);
+        $skip = ['ip_s', 'session_id_s', 'fp_hash_s', 'as_org_s', 'netname_s'];
+
+        $definitions = [];
         foreach (Query::filterFields() as $field => $label) {
-            // Identity-shaped fields (an IP, a session id) have effectively unbounded
-            // cardinality; they are filterable but faceting them is pointless and slow.
-            if (in_array($field, ['ip_s', 'session_id_s', 'fp_hash_s', 'as_org_s', 'netname_s'], true)) {
+            if (in_array($field, $skip, true)) {
                 continue;
             }
-            $facetDefs[$field] = ['type' => 'terms', 'field' => $field, 'limit' => 12, 'sort' => 'count desc'];
+            $definitions[$field] = ['type' => 'terms', 'field' => $field, 'limit' => 12, 'sort' => 'count desc'];
         }
-        $facetDefs['beacon'] = ['type' => 'query', 'q' => Query::POP_BEACON];
+        $definitions['beacon'] = ['type' => 'query', 'q' => Query::POP_BEACON];
 
-        $f = $this->gw->searchFacet('sessions.facets', $this->gw->sessionsCore(), $q, ['fq' => $fqs], $facetDefs);
+        $f = $this->gw->searchFacet(
+            'sessions.facets',
+            $this->gw->sessionsCore(),
+            $text,
+            ['fq' => $this->sessionFqs()],
+            $definitions
+        );
 
         $facets = [];
         foreach (Query::filterFields() as $field => $label) {
-            if (!isset($facetDefs[$field])) {
+            if (!isset($definitions[$field])) {
                 continue;
             }
             $buckets = [];
-            foreach (self::buckets($f, $field) as $b) {
-                $buckets[] = ['value' => (string) ($b['val'] ?? ''), 'count' => (int) ($b['count'] ?? 0)];
+            foreach (self::buckets($f, $field) as $bucket) {
+                $buckets[] = [
+                    'value' => (string) ($bucket['val'] ?? ''),
+                    'count' => (int) ($bucket['count'] ?? 0),
+                ];
             }
             if ($buckets !== []) {
                 $facets[] = ['field' => $field, 'label' => $label, 'buckets' => $buckets];
@@ -126,14 +151,9 @@ final class Sessions extends Controller
         }
 
         return $this->envelope([
-            'q'         => $q,
-            'sort'      => $sortKey,
-            'rows'      => $rows,
-            'start'     => $start,
-            'numFound'  => $res['numFound'],
-            'docs'      => array_map([$this, 'shapeSession'], $res['docs']),
-            'facets'    => $facets,
-            'active'    => $this->filters,
+            'facets'       => $facets,
+            'active'       => $this->filters,
+            'matched'      => (int) ($f['count'] ?? 0),
             'beacon_count' => self::qcount($f, 'beacon'),
         ]);
     }
@@ -146,13 +166,10 @@ final class Sessions extends Controller
     private function detail(): array
     {
         $id = self::text('id', 128);
-        // Session ids are hex digests (SPEC §5: sha1 of client_key + first_ts + random).
-        // A value that is not shaped like one is refused before it reaches a filter.
         if (!preg_match('/^[A-Za-z0-9_-]{8,128}$/', $id)) {
             return $this->envelope(['error' => 'Not a session id.']);
         }
 
-        // The session document. `id` is the session id on the sessions core (SPEC §4.2).
         $sess = $this->gw->select('sessions.one', $this->gw->sessionsCore(), [
             'q'    => '*:*',
             'fq'   => [Query::term('id', $id)],
@@ -165,9 +182,6 @@ final class Sessions extends Controller
         }
         $doc = $this->shapeSession($sess['docs'][0]);
 
-        // The hit timeline. This is the ONE place the panel reads the hits core for
-        // documents, and it is fq-bounded to a single session and rows-clamped, exactly
-        // as SPEC §10 requires.
         $limit = Security::clampInt($_GET['limit'] ?? null, 10, self::MAX_TIMELINE, 200);
         $hits = $this->gw->select('sessions.hits', $this->gw->hitsCore(), [
             'q'    => '*:*',
@@ -188,14 +202,11 @@ final class Sessions extends Controller
                 'query'   => isset($h['query_s']) ? (string) $h['query_s'] : null,
                 'status'  => isset($h['status_i']) ? (int) $h['status_i'] : null,
                 'bytes'   => isset($h['bytes_l']) ? (int) $h['bytes_l'] : null,
-                // Absent, not zero: SPEC §1. A source that does not log %D has no duration.
                 'dur_us'  => isset($h['dur_us_l']) ? (int) $h['dur_us_l'] : null,
                 'kind'    => (string) ($h['kind_s'] ?? ''),
                 'asset'   => isset($h['asset_kind_s']) ? (string) $h['asset_kind_s'] : null,
                 'proto'   => (string) ($h['proto_s'] ?? ''),
                 'referer' => isset($h['referer_s']) ? (string) $h['referer_s'] : null,
-                // safeUrl runs server-side so a javascript: referer never reaches the DOM
-                // as an href in the first place.
                 'referer_href' => isset($h['referer_s']) ? Security::safeUrl((string) $h['referer_s']) : null,
                 'flags'   => array_values(array_map('strval', (array) ($h['hit_flags_ss'] ?? []))),
             ];
@@ -247,7 +258,6 @@ final class Sessions extends Controller
             ],
             'got_304'   => $bool('got_304_b'),
 
-            // The four timings. beacon=false means the last three are genuinely unknown.
             'beacon'    => $bool('beacon_b'),
             'log_span_ms' => $int('log_span_ms_l'),
             'wall_ms'   => $int('wall_ms_l'),
@@ -310,12 +320,42 @@ final class Sessions extends Controller
 
     public function body(): void
     {
-        // ---- Search bar. A GET form: every search is a bookmarkable URL. --------
-        echo '<form class="card searchbar" method="get" action="" id="se-form">';
+        $this->searchCard();
+
+        echo '<div class="explorer">';
+        $this->facetsCard();
+        $this->resultsCard();
+        echo '</div>';
+
+        echo '<section class="card detail" id="se-detail" hidden>';
+        echo '<div class="card-head"><h2><span class="card-num">03</span><span>Session detail</span></h2>'
+            . '<button type="button" id="se-detail-close" class="ghost small">Close</button></div>';
+        echo '<div id="se-detail-body"></div>';
+        echo '</section>';
+    }
+
+    /**
+     * The search form.
+     *
+     * A GET form, so every search is a bookmarkable URL and the view works with
+     * JavaScript disabled.
+     */
+    private function searchCard(): void
+    {
+        self::cardOpen(
+            'se-search',
+            '01',
+            'Search',
+            'Free text is matched with edismax across path, User-Agent, AS organisation, netname, reverse DNS, '
+            . 'city and country. It is sent to Solr as a bound parameter, never as query syntax.'
+        );
+
+        echo '<form class="searchbar" method="get" action="" id="se-form">';
         echo '<input type="hidden" name="v" value="sessions">';
         echo '<input type="hidden" name="range" value="' . Security::esc($this->range['key']) . '">';
         echo '<label class="sr-only" for="se-q">Search sessions</label>';
-        echo '<input type="search" id="se-q" name="q" placeholder="Search paths, User-Agents, organisations, netnames, cities…" '
+        echo '<input type="search" id="se-q" name="q" '
+            . 'placeholder="Search paths, User-Agents, organisations, netnames, cities" '
             . 'value="' . Security::esc(self::text('q', 200)) . '" autocomplete="off" spellcheck="false">';
         echo '<label class="sr-only" for="se-sort">Sort by</label>';
         echo '<select id="se-sort" name="sort">';
@@ -327,27 +367,36 @@ final class Sessions extends Controller
             'hits'    => 'Most requests',
             'engaged' => 'Most engaged time',
             'span'    => 'Longest log span',
-        ] as $val => $label) {
-            echo '<option value="' . Security::esc($val) . '"' . ($val === $active ? ' selected' : '') . '>'
+        ] as $value => $label) {
+            echo '<option value="' . Security::esc($value) . '"' . ($value === $active ? ' selected' : '') . '>'
                 . Security::esc($label) . '</option>';
         }
         echo '</select>';
-        echo '<button type="submit">Search</button>';
+        echo '<button type="submit" class="primary">Search</button>';
         echo '</form>';
-        echo '<p class="pop">Free text is matched with edismax across path, User-Agent, AS organisation, netname, '
-            . 'reverse DNS, city and country. It is sent to Solr as a bound parameter, never as query syntax.</p>';
 
-        // ---- Results + facets --------------------------------------------------
-        echo '<div class="explorer">';
+        self::cardEnd();
+    }
 
-        echo '<aside class="facets card" id="se-facets" aria-label="Filters">';
-        echo '<h2>Filters</h2>';
+    /** The facet sidebar, loaded separately from the results. */
+    private function facetsCard(): void
+    {
+        echo '<aside class="facets" aria-label="Filters">';
+        self::cardOpen('se-facets', '02', 'Filters');
+        self::skeleton('se-facets', 'rows', 0, 'Counting facet values');
         echo '<div id="se-active"></div>';
         echo '<div id="se-facet-list"></div>';
+        self::cardClose('se-facets');
         echo '</aside>';
+    }
 
-        echo '<section class="results card">';
-        echo '<div class="card-head"><h2>Sessions</h2><span class="mono" id="se-count">—</span></div>';
+    /** The result table. */
+    private function resultsCard(): void
+    {
+        echo '<div class="results">';
+        self::cardOpen('se-results', '', 'Sessions', '', '<span class="job-meta" id="se-count"></span>');
+        self::skeleton('se-results', 'rows', 0, 'Searching sessions');
+
         echo '<div class="table-wrap"><table id="se-table"><thead><tr>'
             . '<th scope="col">Started</th>'
             . '<th scope="col">Verdict</th>'
@@ -359,17 +408,9 @@ final class Sessions extends Controller
             . '<th scope="col" class="num">Engaged</th>'
             . '<th scope="col">Entry</th>'
             . '</tr></thead><tbody></tbody></table></div>';
-        echo '<div class="empty" id="se-table-empty" hidden></div>';
         echo '<div class="pager" id="se-pager"></div>';
-        echo '</section>';
 
+        self::cardClose('se-results');
         echo '</div>';
-
-        // ---- Drill-down panel. Populated on demand, hidden until then. ----------
-        echo '<section class="card detail" id="se-detail" hidden>';
-        echo '<div class="card-head"><h2>Session detail</h2>'
-            . '<button type="button" id="se-detail-close" class="ghost">Close</button></div>';
-        echo '<div id="se-detail-body"></div>';
-        echo '</section>';
     }
 }

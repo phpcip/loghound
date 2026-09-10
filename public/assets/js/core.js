@@ -12,6 +12,13 @@
  *   - DOM is built with document.createElement and textContent. Never innerHTML with
  *     data. The one exception is `html()` below, which exists for the handful of
  *     authored static strings, and which is never handed a value from an API response.
+ *   - Chart tooltips are the one place the panel does build markup from data, because
+ *     ECharts renders a formatter's return value as HTML and there is no DOM node to set
+ *     textContent on. Every dynamic value interpolated into a formatter in charts.js goes
+ *     through esc() below. That is the whole reason esc() is exported: the CSP would stop
+ *     an injected payload from executing, but a defence that rests entirely on one header
+ *     is not a defence, and an AS organisation name is chosen by whoever holds the
+ *     netblock the traffic came from.
  *   - No eval, no new Function, no inline event handlers. The CSP forbids all three and
  *     the panel is written so it never wants them.
  *   - A URL only becomes an href after the server has passed it through
@@ -19,10 +26,6 @@
  */
 
 'use strict';
-
-/* -------------------------------------------------------------------------
- * Boot payload
- * ---------------------------------------------------------------------- */
 
 /**
  * Read the JSON island the server rendered.
@@ -44,10 +47,6 @@ function readBoot() {
 }
 
 export const boot = readBoot();
-
-/* -------------------------------------------------------------------------
- * DOM construction
- * ---------------------------------------------------------------------- */
 
 /**
  * Create an element.
@@ -159,8 +158,6 @@ export function tbody(table, rows) {
             if (cell.class) { classes.push(cell.class); }
             const td = el('td', {
                 class: classes.join(' ') || null,
-                // The full value lives in the title attribute when the cell is clipped,
-                // so a 900-character User-Agent is still readable without breaking layout.
                 title: cell.title || (cell.clip && cell.text ? String(cell.text) : null)
             });
             if (cell.node) {
@@ -200,6 +197,10 @@ export function showEmpty(id, heading, parts) {
     ]);
     node.hidden = false;
     node.classList.add('show');
+    const content = byId(String(id).replace(/-empty$/, '') + '-content');
+    if (content) {
+        content.hidden = true;
+    }
 }
 
 /** Hide an empty state (data arrived after all). */
@@ -208,6 +209,10 @@ export function hideEmpty(id) {
     if (node) {
         node.hidden = true;
         node.classList.remove('show');
+    }
+    const content = byId(String(id).replace(/-empty$/, '') + '-content');
+    if (content) {
+        content.hidden = false;
     }
 }
 
@@ -386,18 +391,28 @@ export function shortHash(hash, keep) {
  * ---------------------------------------------------------------------- */
 
 /**
+ * How long the browser will wait for one panel request before giving up.
+ *
+ * Longer than the server's own Solr timeout (20s by default) so a slow query reports
+ * ITS diagnosis rather than being cut off here, but far short of forever: a request
+ * that hangs until the tab is closed is the failure mode this whole rework exists to
+ * remove. On expiry the card says what timed out and offers a retry.
+ */
+const REQUEST_TIMEOUT_MS = 50000;
+
+/**
  * Fetch a data action for a view.
  *
  * The URL is built from the current query string so the active range and filters travel
- * with every request without each view having to remember them. `same-origin` credentials
- * carry HTTP Basic auth; the CSRF token is only needed for writes, and the panel's writes
- * are ordinary form posts.
+ * with every request without each view having to remember them. `same-origin`
+ * credentials carry HTTP Basic auth.
  *
  * @param {string} view    View slug.
  * @param {string} action  Action name (matched against the view's own allowlist).
  * @param {Object} [extra] Additional query parameters.
+ * @param {AbortSignal} [signal] Caller's cancellation signal, combined with the timeout.
  */
-export async function api(view, action, extra) {
+export async function api(view, action, extra, signal) {
     const params = new URLSearchParams(window.location.search);
     params.set('v', view);
     params.set('api', action);
@@ -408,37 +423,403 @@ export async function api(view, action, extra) {
             }
         }
     }
-    const res = await fetch('?' + params.toString(), {
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json' }
-    });
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    if (signal) {
+        signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+
+    let res;
+    try {
+        res = await fetch('?' + params.toString(), {
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json' },
+            signal: controller.signal
+        });
+    } catch (err) {
+        window.clearTimeout(timer);
+        if (err && err.name === 'AbortError') {
+            const e = new Error(
+                'The request took longer than ' + Math.round(REQUEST_TIMEOUT_MS / 1000) +
+                ' seconds and was given up on. Try a shorter time range, or check that Solr is responding.'
+            );
+            e.transport = true;
+            throw e;
+        }
+        const e = new Error('Could not reach the panel: ' + (err && err.message ? err.message : err));
+        e.transport = true;
+        throw e;
+    }
+    window.clearTimeout(timer);
+
     let data = null;
     try {
         data = await res.json();
     } catch (e) {
-        throw new Error('The panel returned a response that was not JSON (HTTP ' + res.status + ').');
+        const err = new Error('The panel returned a response that was not JSON (HTTP ' + res.status + ').');
+        err.transport = true;
+        throw err;
     }
     if (!res.ok || (data && data.error)) {
-        throw new Error((data && data.error) || 'Request failed with HTTP ' + res.status + '.');
+        const err = new Error((data && data.error) || 'Request failed with HTTP ' + res.status + '.');
+        err.transport = /solr|timed out|timeout|refused|resolve|unreachable|credentials/i.test(err.message);
+        throw err;
     }
     return data;
 }
 
 /**
- * Run a loader and turn any failure into a visible, honest message.
+ * POST a state-changing action, with the CSRF token attached.
  *
- * A view that silently renders nothing when Solr is down is the worst outcome: the
- * operator concludes they have no bot traffic.
+ * Used by the job controls. The panel's other writes are ordinary form posts that work
+ * without JavaScript; jobs cannot be, because they are a poll loop by definition.
+ *
+ * @param {Object} fields Form fields. `action` is required.
  */
-export async function load(emptyId, what, fn) {
-    try {
-        await fn();
-    } catch (err) {
-        showEmpty(emptyId, 'Could not load ' + what, [
-            String(err && err.message ? err.message : err),
-            'The connection banner at the top of the page has more detail if this is a Solr problem.'
-        ]);
+export async function post(fields) {
+    const body = new URLSearchParams();
+    body.set('csrf', boot.csrf || '');
+    for (const key of Object.keys(fields)) {
+        body.set(key, String(fields[key]));
     }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let res;
+    try {
+        res = await fetch('?v=' + encodeURIComponent(boot.view || 'settings'), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Accept: 'application/json'
+            },
+            body: body.toString(),
+            signal: controller.signal
+        });
+    } catch (err) {
+        window.clearTimeout(timer);
+        throw new Error(err && err.name === 'AbortError'
+            ? 'The operation did not respond in time.'
+            : 'Could not reach the panel: ' + (err && err.message ? err.message : err));
+    }
+    window.clearTimeout(timer);
+
+    const data = await res.json().catch(() => null);
+    if (!data) {
+        throw new Error('The panel returned a response that was not JSON (HTTP ' + res.status + ').');
+    }
+    if (data.error) {
+        throw new Error(data.error);
+    }
+    return data;
+}
+
+/* -------------------------------------------------------------------------
+ * Async cards
+ *
+ * Every card on every view goes through loadCard(). That is what makes the page
+ * non-blocking, makes each card independent, gives every one of them a worded
+ * progress line with elapsed seconds, and gives every one of them its own retry.
+ * ---------------------------------------------------------------------- */
+
+/** Cards currently in flight, so a re-entrant load cannot run twice. */
+const inFlight = new Set();
+
+/** Seconds after which a card starts showing how long it has been going. */
+const SHOW_ELAPSED_AFTER = 5;
+
+/** Reveal the page-level connection banner once, with the first real diagnosis. */
+function raiseConnectionBanner(message) {
+    const banner = byId('lh-conn');
+    if (!banner || !banner.hidden) {
+        return;
+    }
+    const detail = byId('lh-conn-detail');
+    if (detail) {
+        detail.textContent = message;
+    }
+    banner.hidden = false;
+}
+
+/**
+ * Run a card's loader, showing progress and handling its failure locally.
+ *
+ * @param {string} id     Card base id, matching Controller::cardOpen().
+ * @param {string} label  What is happening, in words. Never a bare spinner.
+ * @param {Function} loader async () => void — renders into the card's content element.
+ */
+export async function loadCard(id, label, loader) {
+    if (inFlight.has(id)) {
+        return;
+    }
+    inFlight.add(id);
+
+    const card = document.querySelector('[data-card="' + id + '"]');
+    const status = byId(id + '-status');
+    const skel = byId(id + '-skel');
+    const content = byId(id + '-content');
+    const labelNode = status ? status.querySelector('.loading-label') : null;
+    const elapsedNode = status ? status.querySelector('.loading-elapsed') : null;
+
+    const oldError = card ? card.querySelector('.card-error') : null;
+    if (oldError) {
+        oldError.remove();
+    }
+    if (status) {
+        status.hidden = false;
+    }
+    if (skel) {
+        skel.hidden = false;
+    }
+    if (labelNode) {
+        labelNode.textContent = label + '\u2026';
+    }
+    if (elapsedNode) {
+        elapsedNode.textContent = '';
+    }
+
+    const started = Date.now();
+    const ticker = window.setInterval(() => {
+        const seconds = Math.floor((Date.now() - started) / 1000);
+        if (elapsedNode && seconds >= SHOW_ELAPSED_AFTER) {
+            elapsedNode.textContent = seconds + 's';
+            elapsedNode.classList.toggle('loading-slow', seconds >= 20);
+        }
+        if (labelNode && seconds === 20) {
+            labelNode.textContent = label + ' \u2014 still working';
+        }
+    }, 1000);
+
+    try {
+        await loader();
+        if (status) {
+            status.hidden = true;
+        }
+        if (skel) {
+            skel.remove();
+        }
+        if (content) {
+            content.hidden = false;
+        }
+    } catch (err) {
+        if (status) {
+            status.hidden = true;
+        }
+        if (skel) {
+            skel.remove();
+        }
+        renderCardError(id, label, err, () => loadCard(id, label, loader));
+        if (err && err.transport) {
+            raiseConnectionBanner(String(err.message || ''));
+        }
+    } finally {
+        window.clearInterval(ticker);
+        inFlight.delete(id);
+    }
+}
+
+/**
+ * Render a failure inside one card, with a retry that re-runs only that card.
+ *
+ * The rest of the page is untouched: a broken facet must not take the view with it.
+ */
+function renderCardError(id, label, err, retry) {
+    const card = document.querySelector('[data-card="' + id + '"]');
+    if (!card) {
+        return;
+    }
+    const button = el('button', { type: 'button', class: 'small', text: 'Retry' });
+    button.addEventListener('click', () => {
+        button.disabled = true;
+        retry();
+    });
+
+    const box = el('div', { class: 'card-error', role: 'alert' }, [
+        el('h4', { text: 'This section could not load' }),
+        el('p', { text: String(err && err.message ? err.message : err) }),
+        el('p', { class: 'faint', text: 'Everything else on this page is unaffected.' }),
+        el('div', { class: 'card-error-actions' }, [button])
+    ]);
+
+    const content = byId(id + '-content');
+    if (content) {
+        card.insertBefore(box, content);
+    } else {
+        card.appendChild(box);
+    }
+}
+
+/**
+ * Create (or reuse) the chart element inside a card's content area.
+ *
+ * The chart div has to exist and be laid out before ECharts can measure it, so it is
+ * created here after the skeleton is gone rather than sitting hidden behind one.
+ */
+export function cardChart(id, height) {
+    const content = byId(id + '-content');
+    if (!content) {
+        return null;
+    }
+    let node = byId(id);
+    if (!node) {
+        node = el('div', { class: 'chart', id: id, style: 'height:' + (height || 300) + 'px' });
+        content.appendChild(node);
+    }
+    return node;
+}
+
+/**
+ * Update a card's population caption once the real denominators are known.
+ *
+ * The caption is rendered server-side so it is never missing; this refines it.
+ */
+export function setPop(id, text) {
+    const node = byId(id + '-pop');
+    if (node) {
+        node.textContent = text;
+    }
+}
+
+/* -------------------------------------------------------------------------
+ * Jobs
+ *
+ * A long operation is a sequence of server-side steps. The browser starts it, then
+ * polls; each poll executes exactly one bounded step, so no request can time out
+ * however long the whole operation takes. Refreshing reattaches to the running job
+ * rather than starting a second one.
+ * ---------------------------------------------------------------------- */
+
+/** Poll interval. Fast enough to feel live, slow enough not to hammer the box. */
+const JOB_POLL_MS = 700;
+
+/** Job kinds currently being polled, so two clicks cannot start two loops. */
+const polling = new Set();
+
+/**
+ * Start (or reattach to) a job and drive it to completion, rendering as it goes.
+ *
+ * @param {string} kind    Job kind, matching Panel\Jobs::KINDS.
+ * @param {string} mountId Element id to render the job panel into.
+ * @param {Object} [opts]  {title, onDone}
+ */
+export async function runJob(kind, mountId, opts) {
+    const options = opts || {};
+    const mount = byId(mountId);
+    if (!mount || polling.has(kind)) {
+        return;
+    }
+    polling.add(kind);
+
+    try {
+        let job = await post({ action: 'job_start', kind: kind });
+        renderJob(mount, job, kind, options);
+
+        while (job && !job.done) {
+            await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_MS));
+            job = await post({ action: 'job_poll', id: job.id });
+            renderJob(mount, job, kind, options);
+        }
+        if (job && typeof options.onDone === 'function') {
+            options.onDone(job);
+        }
+    } catch (err) {
+        mount.replaceChildren(el('div', { class: 'card-error', role: 'alert' }, [
+            el('h4', { text: 'The operation could not run' }),
+            el('p', { text: String(err && err.message ? err.message : err) })
+        ]));
+    } finally {
+        polling.delete(kind);
+    }
+}
+
+/**
+ * Reattach to a job that is already running, e.g. after a page refresh.
+ *
+ * Returns true when one was found and is now being polled.
+ */
+export async function reattachJob(kind, mountId, opts) {
+    const mount = byId(mountId);
+    if (!mount) {
+        return false;
+    }
+    let job = null;
+    try {
+        job = await api(boot.view || 'settings', 'job_latest', { kind: kind });
+    } catch (e) {
+        return false;
+    }
+    if (!job || !job.job) {
+        return false;
+    }
+    renderJob(mount, job.job, kind, opts || {});
+    if (!job.job.done) {
+        runJob(kind, mountId, opts);
+    }
+    return true;
+}
+
+/** Draw a job's progress bar, step list and controls. */
+function renderJob(mount, job, kind, options) {
+    if (!job) {
+        return;
+    }
+    const running = !job.done;
+
+    const bar = el('span', { class: 'progress' }, [
+        el('span', { class: 'progress-fill', style: 'width:' + (job.percent || 0) + '%' })
+    ]);
+
+    const head = el('div', { class: 'job-head' }, [
+        el('span', { class: 'job-title', text: options.title || 'Operation' }),
+        el('span', {
+            class: 'job-meta',
+            text: (running ? 'step ' + Math.min(job.step + 1, job.total) + ' of ' + job.total : job.state) +
+                ' \u00b7 ' + job.elapsed + 's'
+        })
+    ]);
+
+    const steps = el('ul', { class: 'job-steps' });
+    for (const step of (job.steps || [])) {
+        const state = step.state || 'pending';
+        const mark = { done: '\u2713', failed: '\u2717', running: '\u2192', pending: '\u00b7' }[state] || '\u00b7';
+        const li = el('li', { class: 'job-step-' + state }, [
+            el('span', { class: 'job-mark', 'aria-hidden': 'true', text: mark }),
+            el('span', { text: step.label }),
+            el('span', { class: 'job-step-note', text: step.note || (state === 'pending' ? '' : state) })
+        ]);
+        if (step.detail) {
+            li.appendChild(el('span', { class: 'job-step-detail', text: step.detail }));
+        }
+        steps.appendChild(li);
+    }
+
+    const actions = el('div', { class: 'job-actions' });
+    if (running) {
+        const cancel = el('button', { type: 'button', class: 'ghost small', text: 'Cancel' });
+        cancel.addEventListener('click', async () => {
+            cancel.disabled = true;
+            cancel.textContent = 'Cancelling\u2026';
+            try {
+                await post({ action: 'job_cancel', id: job.id });
+            } catch (e) {
+                cancel.textContent = 'Cancel failed';
+            }
+        });
+        actions.appendChild(cancel);
+    }
+
+    mount.replaceChildren(el('div', { class: 'job' }, [
+        head,
+        bar,
+        el('div', { class: 'loading' }, [
+            el('span', { class: 'loading-label', text: job.label || '' }),
+            el('span', { class: 'loading-elapsed', text: running ? job.elapsed + 's' : '' })
+        ]),
+        steps,
+        actions
+    ]));
 }
 
 /* -------------------------------------------------------------------------
@@ -542,8 +923,6 @@ export function initTheme() {
         });
     }
 
-    // In 'auto', the operating system can change theme under us. Charts have colours
-    // baked into their options, so they need the same notification.
     if (window.matchMedia) {
         const mq = window.matchMedia('(prefers-color-scheme: dark)');
         const handler = () => {
@@ -586,7 +965,6 @@ export function initCopyButtons() {
                 await navigator.clipboard.writeText(text);
                 done(true);
             } catch (e) {
-                // Select the block so the keyboard shortcut works, and say so.
                 const range = document.createRange();
                 range.selectNodeContents(source);
                 const sel = window.getSelection();

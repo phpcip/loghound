@@ -13,7 +13,7 @@
 [Unit]
 Description=Loghound ingest daemon (tail, parse, enrich, index)
 Documentation=file:/opt/loghound/docs/INSTALL.md
-Documentation=https://github.com/cipriandimofte/loghound
+Documentation=https://github.com/phpcip/loghound
 After=network-online.target
 Wants=network-online.target
 

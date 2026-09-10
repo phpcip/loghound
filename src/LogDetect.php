@@ -36,8 +36,8 @@ namespace Loghound;
 
 final class LogDetect
 {
-    /** Never read a config file larger than this — a 200 MB "config" is an attack, not a config. */
-    private const MAX_CONFIG_BYTES = 4194304; // 4 MB
+    /** Never read a config file larger than 4 MB — a 200 MB "config" is an attack, not a config. */
+    private const MAX_CONFIG_BYTES = 4194304;
 
     /** Include/include recursion cap. Real trees are 2-3 deep; 12 is generous. */
     private const MAX_INCLUDE_DEPTH = 12;
@@ -69,10 +69,6 @@ final class LogDetect
         'host'       => 'vhost',
     ];
 
-    // =============================================================================
-    // Ladder step 1 — read the webserver configuration
-    // =============================================================================
-
     /**
      * Parse an Apache configuration tree and return every access log it defines.
      *
@@ -86,6 +82,12 @@ final class LogDetect
      *  - `<VirtualHost>` blocks with `ServerName`, so each log knows which vhost it serves;
      *  - piped (`|/usr/bin/rotatelogs ...`) and `syslog:` targets, which are RECOGNISED and
      *    skipped rather than being emitted as nonsense file paths.
+     *
+     * ServerRoot defaults to the directory holding the first config we were given, which is
+     * what Apache itself effectively does on both the Debian and the RHEL layouts. The vhost
+     * directories are walked as well as Included: on Debian they are reached from
+     * apache2.conf, but on a container image the operator may point us straight at
+     * sites-enabled.
      *
      * @param string[] $configFiles Top-level configs, e.g. /etc/apache2/apache2.conf
      * @param string[] $vhostDirs   Directories scanned for *.conf, e.g. sites-enabled
@@ -107,11 +109,9 @@ final class LogDetect
             'seen'       => [],
             'files'      => 0,
             'serverRoot' => '',
-            'vhost'      => [],   // stack of vhost ServerNames
+            'vhost'      => [],
         ];
 
-        // ServerRoot defaults to the directory holding the first config we were given, which
-        // is what Apache itself effectively does on Debian and RHEL layouts.
         foreach ($configFiles as $f) {
             $real = Security::safePath($f, $state['roots']);
             if ($real !== null) {
@@ -124,8 +124,6 @@ final class LogDetect
             self::apacheWalk($file, $state, 0);
         }
 
-        // Vhost directories are walked too: on Debian they are Included from apache2.conf, but
-        // on a container image the operator may point us straight at sites-enabled.
         foreach ($vhostDirs as $dir) {
             foreach (self::globConfigs($dir . '/*.conf', $state['roots']) as $file) {
                 self::apacheWalk($file, $state, 1);
@@ -189,6 +187,9 @@ final class LogDetect
      * Convenience for `bin/loghound-setup`: it does not need to know which webserver is
      * installed, it just asks for everything and takes whatever comes back.
      *
+     * Apache is discovered first, so that a path claimed by both — impossible in practice —
+     * keeps one answer rather than alternating between runs.
+     *
      * @param array<string,mixed> $discoverCfg Config::get('discover')
      * @return array<string,array> Keyed by absolute log path.
      */
@@ -202,19 +203,37 @@ final class LogDetect
             (array) ($discoverCfg['nginx_configs'] ?? []),
             (array) ($discoverCfg['nginx_vhost_dirs'] ?? [])
         );
-        // Apache first so a path claimed by both (impossible in practice) keeps one answer.
         return $apache + $nginx;
     }
-
-    // =============================================================================
-    // Ladder step 2 — the known-format library
-    // =============================================================================
 
     /**
      * The built-in format library.
      *
      * Every entry is compiled lazily and memoised, because compiling twelve regexes on every
      * call would be wasteful when the tail daemon asks for one by name.
+     *
+     * Order matters for ties. apache_combined is listed before nginx_combined because the two
+     * grammars accept the same bytes and PHP's sort is stable, so an Apache installation —
+     * the common case — gets the Apache answer. The library also contains the format Loghound
+     * itself recommends in docs/INSTALL.md (SPEC §8), and the Kubernetes ingress-nginx
+     * default, which is identified by its trailing fields.
+     *
+     * The JSON formats are parsed natively rather than through a regex. Caddy's field
+     * preference is deliberate: remote_ip is read first and client_ip last, because when
+     * Caddy emits both, client_ip is the one that has had trusted-proxy resolution applied
+     * and must win. Traefik's is the same shape of decision: OriginStatus is the backend's
+     * answer while DownstreamStatus is what the client actually saw, so DownstreamStatus is
+     * applied last and lands on the hit document.
+     *
+     * The fixed-grammar formats are those that cannot be expressed as a LogFormat string and
+     * are matched by regex instead, with every field a named group: HAProxy's client:port,
+     * accept date, frontend and backend/server, its Tq/Tw/Tc/Tr/Tt timers, status and
+     * bytes_read, request and response cookies with the termination state, connection counts
+     * and queues, any optionally captured headers, and the quoted request line. CloudFront is
+     * the other: cs(Host) there is the distribution domain (d111….cloudfront.net) while
+     * x-host-header is the Host the VIEWER actually asked for, which is the site the operator
+     * recognises, so that one becomes `vhost`. CloudFront also percent-encodes the UA,
+     * referer and query in its W3C log.
      *
      * @return array<string,LogFormat>
      */
@@ -227,10 +246,6 @@ final class LogDetect
 
         $lib = [];
 
-        // ---- Apache -------------------------------------------------------------
-        // Order matters for ties: apache_combined is listed before nginx_combined because
-        // the two grammars accept the same bytes and PHP's sort is stable, so an Apache
-        // installation (the common case) gets the Apache answer.
         $lib['apache_combined'] = LogFormat::fromApache(
             '%h %l %u %t "%r" %>s %b "%{Referer}i" "%{User-Agent}i"',
             'apache_combined'
@@ -243,7 +258,6 @@ final class LogDetect
             '%h %l %u %t "%r" %>s %b',
             'apache_common'
         );
-        // The format Loghound recommends in docs/INSTALL.md (SPEC §8).
         $lib['apache_loghound'] = LogFormat::fromApache(
             '%v:%p %h %l %u %t "%r" %>s %O %D "%{Referer}i" "%{User-Agent}i" '
             . '"%{Accept}i" "%{Accept-Language}i" "%{Accept-Encoding}i" '
@@ -253,7 +267,6 @@ final class LogDetect
             'apache_loghound'
         );
 
-        // ---- nginx --------------------------------------------------------------
         $lib['nginx_combined'] = LogFormat::fromNginx(
             self::NGINX_BUILTIN_COMBINED,
             'nginx_combined'
@@ -262,7 +275,6 @@ final class LogDetect
             self::NGINX_BUILTIN_COMBINED . ' "$http_x_forwarded_for"',
             'nginx_combined_xff'
         );
-        // Kubernetes ingress-nginx default. Its trailing fields are what identify it.
         $lib['ingress_nginx'] = LogFormat::fromNginx(
             '$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent '
             . '"$http_referer" "$http_user_agent" $request_length $request_time '
@@ -271,11 +283,8 @@ final class LogDetect
             'ingress_nginx'
         );
 
-        // ---- JSON formats (parsed natively, never through a regex) ---------------
         $lib['caddy_json'] = LogFormat::fromJson('caddy_json', [
             'ts'                                 => 'time',
-            // remote_ip first, client_ip last: when Caddy emits both, client_ip is the one
-            // that has had trusted-proxy resolution applied, so it must win.
             'request.remote_addr'                => 'remote_addr',
             'request.remote_ip'                  => 'remote_addr',
             'request.client_ip'                  => 'remote_addr',
@@ -317,24 +326,21 @@ final class LogDetect
             'request_X-Forwarded-For'     => 'header_in.x-forwarded-for',
             'DownstreamContentSize'       => 'bytes',
             'Duration'                    => 'dur_ns',
-            // OriginStatus is the backend's answer; DownstreamStatus is what the client saw,
-            // which is the one that belongs on the hit document, so it is applied last.
             'OriginStatus'                => 'status',
             'DownstreamStatus'            => 'status',
         ], ['source' => 'Traefik JSON access log']);
 
-        // ---- Fixed-grammar formats (regex, not expressible as a LogFormat string) --
         $lib['haproxy_http'] = LogFormat::fromRegex(
             '~^(?:\S{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+?\[\d+\]:\s+)?'
-            . '([0-9a-fA-F:.]+):(\d+)\s+'                       // client:port
-            . '\[([^\]]+)\]\s+'                                 // accept date
-            . '(\S+)\s+(\S+)\s+'                                // frontend, backend/server
-            . '([\d\-+/]+)\s+'                                  // Tq/Tw/Tc/Tr/Tt timers
-            . '(\d{3}|-1)\s+(\d+|-)\s+'                          // status, bytes_read
-            . '(\S+)\s+(\S+)\s+(\S+)\s+'                         // req cookie, res cookie, term state
-            . '([\d/]+)\s+([\d/]+)\s+'                           // conn counts, queues
-            . '(?:\{[^}]*\}\s+)*'                                // optional captured headers
-            . '"((?:[^"\\\\]|\\\\.)*)"\s*$~',                    // "METHOD uri HTTP/x"
+            . '([0-9a-fA-F:.]+):(\d+)\s+'
+            . '\[([^\]]+)\]\s+'
+            . '(\S+)\s+(\S+)\s+'
+            . '([\d\-+/]+)\s+'
+            . '(\d{3}|-1)\s+(\d+|-)\s+'
+            . '(\S+)\s+(\S+)\s+(\S+)\s+'
+            . '([\d/]+)\s+([\d/]+)\s+'
+            . '(?:\{[^}]*\}\s+)*'
+            . '"((?:[^"\\\\]|\\\\.)*)"\s*$~',
             [
                 'remote_addr', 'remote_port', 'time', 'frontend', 'backend', 'timers',
                 'status', 'bytes', 'cookie.req', 'cookie.res', 'conn_status',
@@ -363,15 +369,11 @@ final class LogDetect
             . "(\\S+)\t(\\S+)\t(\\d+|-)\t([\\d.]+|-)(?:\t.*)?$~",
             [
                 'date', 'time_hms', 'edge_location', 'bytes', 'remote_addr', 'method',
-                // cs(Host) is the CloudFront distribution domain (d111….cloudfront.net);
-                // x-host-header is the Host the VIEWER actually asked for, which is the site
-                // the operator recognises, so that one becomes `vhost`.
                 'cdn_host', 'uri', 'status', 'header_in.referer', 'header_in.user-agent',
                 'query_raw', 'cookie.all', 'edge_result_type', 'edge_request_id',
                 'vhost', 'scheme', 'bytes_in', 'dur_s',
             ],
             'cloudfront',
-            // CloudFront percent-encodes the UA, referer and query in its W3C log.
             ['urldecode' => ['header_in.user-agent', 'header_in.referer', 'query_raw', 'uri']]
         );
 
@@ -401,6 +403,15 @@ final class LogDetect
      * at end-of-line, so common simply does not parse it, and even if it did the missing
      * referer/UA columns would not earn it any structural credit.
      *
+     * W3C-style logs such as CloudFront's carry '#Version' and '#Fields' headers; those
+     * lines and blank ones are not records and must not count against any candidate. The
+     * work is bounded at 200 lines, which is plenty to separate a dozen formats.
+     *
+     * Candidates come back highest-confidence first, and on a tie the RICHER format wins: a
+     * format that captures Sec-CH-UA in addition to everything else is strictly more useful,
+     * and it cannot have got there by luck, because those columns had to be present for it to
+     * parse at all.
+     *
      * @param string[] $lines Sample lines (200 is a good number; order does not matter).
      * @param int      $max   How many candidates to return.
      *
@@ -408,8 +419,6 @@ final class LogDetect
      */
     public static function detectFromSample(array $lines, int $max = 5): array
     {
-        // W3C-style logs (CloudFront) carry '#Version'/'#Fields' headers; blank lines and
-        // comments are not records and must not count against any candidate.
         $lines = array_values(array_filter($lines, static function ($l): bool {
             $l = trim((string) $l);
             return $l !== '' && $l[0] !== '#';
@@ -418,7 +427,6 @@ final class LogDetect
         if ($lines === []) {
             return [];
         }
-        // Bound the work: 200 lines is plenty to separate a dozen formats.
         if (count($lines) > 200) {
             $lines = array_slice($lines, -200);
         }
@@ -461,9 +469,6 @@ final class LogDetect
             ];
         }
 
-        // Highest confidence first; on a tie the richer format wins, because a format that
-        // captures Sec-CH-UA in addition to everything else is strictly more useful and
-        // cannot have got there by luck (the columns had to be present to parse at all).
         usort($candidates, static function (array $a, array $b): int {
             if ($a['confidence'] !== $b['confidence']) {
                 return $b['confidence'] <=> $a['confidence'];
@@ -481,6 +486,15 @@ final class LogDetect
      * neither rewarded nor punished for the fields it does not have — it is punished, in
      * detectFromSample, by simply failing to parse richer lines.
      *
+     * The checks are: field 1 must be a client address, where a '-' is legal but
+     * uninformative and a hostname means HostnameLookups On; the timestamp must actually be
+     * a timestamp; the status must be a real HTTP status; bytes must be numeric or Apache's
+     * '-' for zero; the request line must decompose into method, target and HTTP version;
+     * the referer must be a URL, a '-' or, rarely, a bare path, since junk referers are
+     * common and should not disqualify a format; and a User-Agent field that never contains
+     * a slash is probably not a User-Agent field. A format that produced nothing gradeable
+     * gets no credit at all.
+     *
      * @param array<string,string> $rec
      */
     private static function structuralGrade(array $rec): float
@@ -488,20 +502,18 @@ final class LogDetect
         $score = 0.0;
         $count = 0;
 
-        // --- Field 1 must be a client address -----------------------------------
         if (isset($rec['remote_addr'])) {
             $count++;
             $v = $rec['remote_addr'];
             if (filter_var($v, FILTER_VALIDATE_IP) !== false) {
                 $score += 1.0;
             } elseif ($v === '-' || $v === '') {
-                $score += 0.2;                                    // legal but uninformative
+                $score += 0.2;
             } elseif (preg_match('/^[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/', $v)) {
-                $score += 0.6;                                    // HostnameLookups On
+                $score += 0.6;
             }
         }
 
-        // --- The timestamp must actually be a timestamp --------------------------
         if (isset($rec['time'])) {
             $count++;
             if (self::looksLikeTime($rec['time'])) {
@@ -515,7 +527,6 @@ final class LogDetect
             }
         }
 
-        // --- Status must be a real HTTP status ------------------------------------
         if (isset($rec['status'])) {
             $count++;
             $s = (int) $rec['status'];
@@ -524,7 +535,6 @@ final class LogDetect
             }
         }
 
-        // --- Bytes must be numeric, or Apache's '-' for zero ----------------------
         if (isset($rec['bytes'])) {
             $count++;
             if ($rec['bytes'] === '-' || ctype_digit($rec['bytes'])) {
@@ -532,7 +542,6 @@ final class LogDetect
             }
         }
 
-        // --- The request line must decompose into method + target + HTTP version --
         if (isset($rec['request'])) {
             $count++;
             $score += self::gradeRequestLine($rec['request']);
@@ -552,7 +561,6 @@ final class LogDetect
             }
         }
 
-        // --- Referer is a URL, a '-', or (rarely) a bare path ---------------------
         if (isset($rec['header_in.referer'])) {
             $count++;
             $r = $rec['header_in.referer'];
@@ -561,11 +569,10 @@ final class LogDetect
             } elseif (preg_match('~^[a-z][a-z0-9+.\-]*://~i', $r) || $r[0] === '/') {
                 $score += 1.0;
             } else {
-                $score += 0.3;                                    // junk referers are common
+                $score += 0.3;
             }
         }
 
-        // --- A User-Agent field that never contains a slash is probably not one ---
         if (isset($rec['header_in.user-agent'])) {
             $count++;
             $ua = $rec['header_in.user-agent'];
@@ -576,7 +583,6 @@ final class LogDetect
             }
         }
 
-        // A format that produced nothing gradeable gets no credit at all.
         return $count === 0 ? 0.0 : $score / $count;
     }
 
@@ -585,18 +591,19 @@ final class LogDetect
      *
      * Full credit needs all three parts. A malformed request line is genuinely logged by
      * every webserver (attackers send them constantly), so a partial match still earns
-     * something rather than disqualifying an otherwise correct format.
+     * something rather than disqualifying an otherwise correct format. An aborted request is
+     * legal, and a target with no HTTP version is HTTP/0.9 or a truncated line.
      */
     private static function gradeRequestLine(string $request): float
     {
         if ($request === '-' || $request === '') {
-            return 0.5;                                           // aborted request: legal
+            return 0.5;
         }
         if (preg_match('~^([A-Za-z\-_]{3,20})\s+(\S+)\s+(HTTP/[0-9.]+)$~', $request, $m)) {
             return self::isHttpMethod($m[1]) ? 1.0 : 0.7;
         }
         if (preg_match('~^([A-Za-z\-_]{3,20})\s+(\S+)$~', $request, $m)) {
-            return self::isHttpMethod($m[1]) ? 0.7 : 0.3;         // HTTP/0.9 or truncated
+            return self::isHttpMethod($m[1]) ? 0.7 : 0.3;
         }
         return 0.1;
     }
@@ -624,24 +631,17 @@ final class LogDetect
         if ($v === '') {
             return false;
         }
-        // Apache / nginx $time_local: 10/Sep/2026:09:57:08 +0000
         if (preg_match('~^\d{1,2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2}(\.\d+)?(\s[+-]\d{4})?$~', $v)) {
             return true;
         }
-        // ISO-8601 with T or a space separator.
         if (preg_match('~^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}~', $v)) {
             return true;
         }
-        // Epoch seconds / milliseconds / microseconds, incl. Caddy's float seconds.
         if (preg_match('~^\d{9,19}(\.\d+)?$~', $v)) {
             return true;
         }
         return false;
     }
-
-    // =============================================================================
-    // Ladder step 3 — propose a pattern from a sample
-    // =============================================================================
 
     /**
      * Last-resort: generate a candidate regex from sample lines.
@@ -655,6 +655,16 @@ final class LogDetect
      * The returned pattern is guaranteed to compile and to pass Security::validateUserRegex().
      * Returns null when the sample has no agreed shape, which is the honest answer.
      *
+     * Four things make it give up rather than guess. Fewer than a third of the lines agreeing
+     * on a shape means there is no shape to propose. A shape of one or two tokens is not a
+     * log record — it is what a stack trace, a JSON blob or a blank-ish line tokenizes to, and
+     * proposing a one-group pattern for it would be a confident answer to a question we
+     * cannot answer. A proposal in which nothing was recognised is refused too: the whole
+     * value of a generated pattern is that its groups have MEANING, and a row of f1..f9
+     * placeholders tells the operator nothing they could confirm, which SPEC §8 requires them
+     * to do. Finally, a pattern that would not survive the ReDoS gate, or would not even match
+     * the sample it was derived from, is never handed back.
+     *
      * @param string[] $lines
      */
     public static function proposeRegex(array $lines): ?string
@@ -667,7 +677,6 @@ final class LogDetect
             return null;
         }
 
-        // Group the sample by structural shape and take the most common one.
         $byShape = [];
         foreach ($lines as $line) {
             $tokens = self::shapeTokens((string) $line);
@@ -684,25 +693,18 @@ final class LogDetect
         uasort($byShape, static fn(array $a, array $b): int => $b['count'] <=> $a['count']);
         $winner = reset($byShape);
 
-        // Fewer than a third of the lines agreeing means there is no shape to propose.
         if ($winner['count'] * 3 < count($lines)) {
             return null;
         }
 
         $tokens = $winner['sample'];
 
-        // A log record has columns. One or two tokens is not a shape worth proposing — it is
-        // what a stack trace, a JSON blob or a blank-ish line tokenizes to, and proposing a
-        // one-group pattern for it would be a confident answer to a question we cannot answer.
         if (count($tokens) < 4) {
             return null;
         }
 
         $names = self::nameShapeSlots($tokens);
 
-        // Refuse a proposal that recognised nothing. The whole value of a generated pattern
-        // is that its groups have MEANING; a row of f1..f9 placeholders tells the operator
-        // nothing they could confirm, and SPEC §8 requires them to confirm it.
         $recognised = count(array_intersect($names, ['ip', 'time', 'request', 'status', 'bytes']));
         if ($recognised < 2) {
             return null;
@@ -729,8 +731,6 @@ final class LogDetect
 
         $pattern = '~^' . $regex . '\s*$~';
 
-        // Never hand back something that would not survive the ReDoS gate or would not even
-        // match the sample it was derived from.
         if (Security::validateUserRegex($pattern) !== null) {
             return null;
         }
@@ -768,6 +768,10 @@ final class LogDetect
     /**
      * Tokenize a line into structural slots: bracketed, quoted, or bare.
      *
+     * A quoted slot ends at the next quote that is not backslash-escaped. The number of slots
+     * is capped, because a hostile line could produce thousands while a real log line has
+     * fewer than forty.
+     *
      * @return array<int,array{0:string,1:string}> [kind, value]
      */
     private static function shapeTokens(string $line): array
@@ -792,7 +796,6 @@ final class LogDetect
                 }
             }
             if ($c === '"') {
-                // Walk to the next quote that is not backslash-escaped.
                 $j = $i + 1;
                 while ($j < $len) {
                     if ($line[$j] === '\\') {
@@ -818,7 +821,6 @@ final class LogDetect
             $i = $j;
         }
 
-        // A hostile line could produce thousands of slots; a real log line has under 40.
         return count($tokens) > 64 ? [] : $tokens;
     }
 
@@ -827,7 +829,8 @@ final class LogDetect
      *
      * Naming is driven by content where content is decisive (an IP, a date, a request line,
      * a 3-digit status) and by position only as a fallback, which keeps the proposal useful
-     * on formats whose columns are in an unusual order.
+     * on formats whose columns are in an unusual order. Where position has to decide, it
+     * follows the convention every mainstream format shares: referer first, then user-agent.
      *
      * @param array<int,array{0:string,1:string}> $tokens
      * @return string[]
@@ -840,7 +843,7 @@ final class LogDetect
         $haveRequest = false;
         $haveStatus  = false;
         $haveBytes   = false;
-        $quotedAfter = 0;   // quoted slots seen after the request line
+        $quotedAfter = 0;
         $spare       = 1;
 
         foreach ($tokens as $i => $tok) {
@@ -873,7 +876,6 @@ final class LogDetect
                 continue;
             }
             if ($haveRequest && $kind === 'quoted') {
-                // Convention across every mainstream format: referer then user-agent.
                 $quotedAfter++;
                 if ($quotedAfter === 1) {
                     $names[$i] = 'referer';
@@ -890,10 +892,6 @@ final class LogDetect
         return $names;
     }
 
-    // =============================================================================
-    // Sampling helper
-    // =============================================================================
-
     /**
      * Read the last N lines of a log file without loading the whole thing.
      *
@@ -902,6 +900,9 @@ final class LogDetect
      *
      * The path is resolved through Security::safePath() against the operator's allowed log
      * roots, so this cannot be pointed at /etc/shadow by editing a form field.
+     *
+     * The first line read back may be a partial one, unless the walk reached the start of the
+     * file, and is dropped for that reason.
      *
      * @param string[] $allowedRoots
      * @return string[] Oldest-first.
@@ -930,7 +931,6 @@ final class LogDetect
             fseek($fh, $pos);
             $buf = (string) fread($fh, $read) . $buf;
             $lines = explode("\n", $buf);
-            // The first element may be a partial line unless we reached the start of file.
             if ($pos > 0) {
                 array_shift($lines);
             }
@@ -941,12 +941,18 @@ final class LogDetect
         return array_slice($lines, -$n);
     }
 
-    // =============================================================================
-    // Apache config walking
-    // =============================================================================
-
     /**
      * Read and process one Apache config file, recursing through Include directives.
+     *
+     * A cycle guard is essential: a config that Includes its own directory would otherwise
+     * loop forever. Include paths are resolved relative to ServerRoot, as Apache defines
+     * them, and a directory argument is treated the way Apache treats it, as "every file
+     * inside it".
+     *
+     * A `<VirtualHost>` pushes a fresh, unnamed vhost context that ServerName then fills in,
+     * with any :port suffix stripped, since the vhost identity is the name. `LogFormat
+     * "<fmt>" <nickname>` registers a nickname, and the nickname-less form sets the default
+     * instead. `Define APACHE_LOG_DIR /var/log/apache2` and friends feed the ${VAR} table.
      *
      * @param array<string,mixed> $st Mutable walk state (see discoverFromApacheConfig).
      */
@@ -959,7 +965,6 @@ final class LogDetect
         if ($real === null || !is_file($real) || !is_readable($real)) {
             return;
         }
-        // Cycle guard: a config that Includes its own directory would otherwise loop forever.
         if (isset($st['seen'][$real])) {
             return;
         }
@@ -980,7 +985,6 @@ final class LogDetect
 
             switch ($directive) {
                 case 'define':
-                    // `Define APACHE_LOG_DIR /var/log/apache2`
                     if (isset($args[1])) {
                         $st['defines'][$args[1]['v']] = $args[2]['v'] ?? '';
                     }
@@ -993,7 +997,6 @@ final class LogDetect
                     break;
 
                 case '<virtualhost':
-                    // Push a fresh (unnamed) vhost context; ServerName fills it in.
                     $st['vhost'][] = null;
                     break;
 
@@ -1003,14 +1006,12 @@ final class LogDetect
 
                 case 'servername':
                     if (isset($args[1]) && $st['vhost'] !== []) {
-                        // Strip a :port suffix; the vhost identity is the name.
                         $name = preg_replace('/:\d+$/', '', $args[1]['v']);
                         $st['vhost'][count($st['vhost']) - 1] = $name;
                     }
                     break;
 
                 case 'logformat':
-                    // `LogFormat "<fmt>" <nickname>` — or no nickname, which sets the default.
                     if (isset($args[1])) {
                         $nick = $args[2]['v'] ?? '';
                         $st['formats'][$nick] = $args[1]['raw'];
@@ -1026,11 +1027,9 @@ final class LogDetect
                 case 'includeoptional':
                     if (isset($args[1])) {
                         $spec = self::expandVars($args[1]['v'], $st['defines']);
-                        // Include paths are relative to ServerRoot, as Apache defines them.
                         if ($spec !== '' && $spec[0] !== '/') {
                             $spec = rtrim($st['serverRoot'], '/') . '/' . $spec;
                         }
-                        // Apache treats a directory argument as "every file inside it".
                         if (is_dir($spec)) {
                             $spec = rtrim($spec, '/') . '/*';
                         }
@@ -1046,6 +1045,19 @@ final class LogDetect
     /**
      * Handle a CustomLog / TransferLog directive: resolve the target and the format.
      *
+     * Piped and syslog targets are real and common, and there is no file behind them to tail.
+     * Being explicit about skipping them beats emitting a bogus path the operator then has to
+     * debug.
+     *
+     * The second argument is either a nickname defined by a LogFormat directive or a literal
+     * format string given inline. TransferLog has neither, and uses the most recent
+     * nickname-less LogFormat, falling back to Common Log Format. When the nickname is
+     * defined later in the file, or in a file we could not read, the NAME is recorded so the
+     * setup UI can say exactly what is missing.
+     *
+     * The same file can be written by several vhosts, and all of them are recorded rather
+     * than pretending the log belongs to one.
+     *
      * @param array<int,array{v:string,q:bool,raw:string}> $args
      * @param array<string,mixed> $st
      */
@@ -1056,8 +1068,6 @@ final class LogDetect
         }
         $target = self::expandVars($args[1]['v'], $st['defines']);
 
-        // Piped and syslog targets are real and common, and there is no file to tail. Being
-        // explicit about skipping them beats emitting a bogus path the operator has to debug.
         if ($target === '' || $target[0] === '|' || str_starts_with($target, 'syslog:')) {
             return;
         }
@@ -1065,22 +1075,17 @@ final class LogDetect
             $target = rtrim($st['serverRoot'], '/') . '/' . $target;
         }
 
-        // Second argument: either a nickname defined by LogFormat, or a literal format.
         $formatName = null;
         if ($directive === 'transferlog') {
-            // TransferLog uses the most recent nickname-less LogFormat, else Common Log Format.
             $format = $st['formats'][''] ?? $st['formats']['common'];
         } elseif (isset($args[2])) {
             $arg = $args[2];
             if (str_contains($arg['v'], '%')) {
-                // A literal format string given inline rather than a nickname.
                 $format = $arg['raw'];
             } else {
                 $formatName = $arg['v'];
                 $format = $st['formats'][$formatName] ?? null;
                 if ($format === null) {
-                    // Nickname defined later in the file, or in a file we could not read.
-                    // Record the name so the setup UI can say exactly what is missing.
                     $format = '';
                 }
             }
@@ -1097,8 +1102,6 @@ final class LogDetect
         }
 
         if (isset($st['results'][$target])) {
-            // The same file can be written by several vhosts; record them all rather than
-            // pretending the log belongs to one of them.
             if ($vhost !== null && !in_array($vhost, $st['results'][$target]['vhosts'], true)) {
                 $st['results'][$target]['vhosts'][] = $vhost;
             }
@@ -1123,12 +1126,32 @@ final class LogDetect
      * `export NAME=value` lines out of it is what makes Debian discovery work at all; without
      * it every CustomLog resolves to a literal '${APACHE_LOG_DIR}/access.log'.
      *
+     * Both `export NAME=value` and plain `NAME=value` are captured — we are reading that
+     * shell script, not executing it. The plain form is not an edge case: Debian's envvars
+     * sets SUFFIX with a bare assignment inside an if/else and exports only the values that
+     * USE it, so capturing the exports alone leaves ${APACHE_LOG_DIR} holding a literal
+     * "$SUFFIX", and every discovered log path then points at a directory that does not
+     * exist. Values that would themselves need shell evaluation are skipped.
+     *
+     * The seeded values are then resolved against each other, because envvars references
+     * itself. Two passes, since a value can reference another that referenced a third; a
+     * bounded number of passes rather than a loop, because these files are shallow and an
+     * unbounded loop on a hostile file would not terminate.
+     *
+     * Anything still unresolved is a bare $VAR we could not seed — most often Debian's
+     * SUFFIX, which is empty on every standard install and non-empty only for a second
+     * Apache instance under /etc/apache2-something. The shell expands an unset variable to
+     * nothing, so we do the same: that is what turns "/var/log/apache2$SUFFIX" into the
+     * "/var/log/apache2" that actually exists. Leaving the literal in place would make every
+     * log path undiscoverable, a far worse outcome than assuming empty.
+     *
+     * Distribution defaults are seeded first and overridden by anything actually read.
+     *
      * @param string[] $configFiles
      * @return array<string,string>
      */
     private static function apacheSeedDefines(array $configFiles): array
     {
-        // Sensible distribution defaults, overridden by anything we actually read.
         $defines = [
             'APACHE_LOG_DIR'  => is_dir('/var/log/httpd') ? '/var/log/httpd' : '/var/log/apache2',
             'APACHE_RUN_DIR'  => '/var/run/apache2',
@@ -1149,12 +1172,10 @@ final class LogDetect
             if ($text === null) {
                 continue;
             }
-            // Only `export NAME=value` lines; we are reading, not executing, the shell script.
-            if (preg_match_all('/^\s*export\s+([A-Z_][A-Z0-9_]*)=(.*)$/mi', $text, $m, PREG_SET_ORDER)) {
+            if (preg_match_all('/^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)=(.*)$/mi', $text, $m, PREG_SET_ORDER)) {
                 foreach ($m as $set) {
                     $val = trim($set[2]);
                     $val = trim($val, "\"'");
-                    // Skip values that themselves need shell evaluation.
                     if (str_contains($val, '$(') || str_contains($val, '`')) {
                         continue;
                     }
@@ -1163,9 +1184,14 @@ final class LogDetect
             }
         }
 
-        // Resolve one level of ${VAR} inside the seeded values (envvars does this to itself).
+        for ($pass = 0; $pass < 2; $pass++) {
+            foreach ($defines as $k => $v) {
+                $defines[$k] = self::expandVars($v, $defines);
+            }
+        }
+
         foreach ($defines as $k => $v) {
-            $defines[$k] = self::expandVars($v, $defines);
+            $defines[$k] = preg_replace('/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/', '', $v);
         }
 
         return $defines;
@@ -1198,6 +1224,9 @@ final class LogDetect
      * Returns for each argument both the unquoted VALUE (used for paths and nicknames) and
      * the RAW token including its quotes and `\"` escapes (used for LogFormat strings, whose
      * quoting is part of the format and must be stripped exactly once, by LogFormat itself).
+     *
+     * Block-open tags are normalised on the way out, so that `<VirtualHost *:443>` is
+     * recognised as the same directive as `<VirtualHost>`.
      *
      * @return array<int,array{v:string,q:bool,raw:string}>
      */
@@ -1240,7 +1269,6 @@ final class LogDetect
             $i = $j;
         }
 
-        // Normalise block-open tags so `<VirtualHost *:443>` matches the switch above.
         if ($args !== [] && $args[0]['v'] !== '' && $args[0]['v'][0] === '<') {
             $args[0]['v'] = strtolower(rtrim($args[0]['v'], '>'));
             if (str_starts_with($args[0]['v'], '</')) {
@@ -1251,12 +1279,15 @@ final class LogDetect
         return $args;
     }
 
-    // =============================================================================
-    // nginx config walking
-    // =============================================================================
-
     /**
      * Read and process one nginx config file, recursing through include directives.
+     *
+     * Only `server` blocks change the vhost context; every other block is pushed as a
+     * placeholder so that the matching '}' pops the right thing.
+     *
+     * A log_format directive may carry an `escape=json|default|none` option token, which is
+     * dropped, and nginx concatenates the remaining quoted strings with no separator between
+     * them.
      *
      * @param array<string,mixed> $st
      */
@@ -1293,8 +1324,6 @@ final class LogDetect
             $directive = strtolower($tokens[0]);
 
             if ($type === 'open') {
-                // Only `server` blocks change the vhost context; everything else is pushed
-                // as a placeholder so the matching '}' pops the right thing.
                 $st['vhost'][] = $directive === 'server' ? null : false;
                 continue;
             }
@@ -1313,12 +1342,10 @@ final class LogDetect
                     if (isset($tokens[1])) {
                         $name  = $tokens[1];
                         $parts = array_slice($tokens, 2);
-                        // Drop the `escape=json|default|none` option token if present.
                         $parts = array_values(array_filter(
                             $parts,
                             static fn(string $p): bool => !str_starts_with($p, 'escape=')
                         ));
-                        // nginx concatenates the remaining quoted strings with no separator.
                         $st['formats'][$name] = implode('', $parts);
                     }
                     break;
@@ -1345,6 +1372,10 @@ final class LogDetect
     /**
      * Handle an nginx `access_log` directive.
      *
+     * `access_log off;` disables logging for that context, so there is nothing to tail, and
+     * syslog:, memory: and stderr targets have no file behind them either. The third token is
+     * the format name unless it is an option such as `buffer=32k`.
+     *
      * @param string[] $tokens
      * @param array<string,mixed> $st
      */
@@ -1355,11 +1386,9 @@ final class LogDetect
         }
         $target = $tokens[1];
 
-        // `access_log off;` disables logging for that context — nothing to tail.
         if ($target === 'off' || $target === '') {
             return;
         }
-        // syslog:, memory: and stderr targets have no file behind them.
         if (str_starts_with($target, 'syslog:') || str_starts_with($target, 'memory:')
             || $target === 'stderr' || $target === '/dev/stdout' || $target === '/dev/stderr') {
             return;
@@ -1368,7 +1397,6 @@ final class LogDetect
             $target = rtrim($st['prefix'], '/') . '/' . $target;
         }
 
-        // Third token is the format name unless it is an option like `buffer=32k`.
         $formatName = 'combined';
         if (isset($tokens[2]) && !str_contains($tokens[2], '=') && $tokens[2] !== 'gzip') {
             $formatName = $tokens[2];
@@ -1406,7 +1434,8 @@ final class LogDetect
      * nginx's grammar is small enough to tokenize directly: `#` starts a comment outside
      * quotes, `;` ends a simple directive, `{` opens a block (the tokens before it are the
      * block header), `}` closes one. Quoted strings keep their contents verbatim, which is
-     * essential because a log_format body is full of `;`-free but space-rich text.
+     * essential because a log_format body is full of `;`-free but space-rich text. A `\"`
+     * sequence is kept intact, because inside a log_format it is data.
      *
      * @return array<int,array{0:string,1:string[]}> ['stmt'|'open'|'close', tokens]
      */
@@ -1423,7 +1452,6 @@ final class LogDetect
 
             if ($quote !== '') {
                 if ($c === '\\' && $i + 1 < $len) {
-                    // Keep the escape sequence intact: `\"` inside a log_format is data.
                     $buf .= $c . $text[$i + 1];
                     $i++;
                     continue;
@@ -1439,7 +1467,6 @@ final class LogDetect
             }
 
             if ($c === '"' || $c === "'") {
-                // Flush any bare token that ran straight into the quote.
                 if ($buf !== '') {
                     $tokens[] = $buf;
                     $buf = '';
@@ -1486,10 +1513,6 @@ final class LogDetect
         return $out;
     }
 
-    // =============================================================================
-    // Shared file helpers
-    // =============================================================================
-
     /**
      * The set of directories discovery is allowed to read configuration from.
      *
@@ -1521,13 +1544,14 @@ final class LogDetect
     /**
      * Expand `glob()` and keep only files that resolve inside the allowed config roots.
      *
+     * GLOB_NOSORT would be faster, but a stable order makes discovery reproducible, and
+     * reproducible output is what lets an operator diff two setup runs.
+     *
      * @param string[] $roots
      * @return string[]
      */
     private static function globConfigs(string $spec, array $roots): array
     {
-        // GLOB_NOSORT would be faster but a stable order makes discovery reproducible, and
-        // reproducible output is what lets an operator diff two setup runs.
         $hits = @glob($spec, GLOB_BRACE);
         if ($hits === false) {
             return [];
@@ -1568,6 +1592,8 @@ final class LogDetect
      * Loghound LogFormat in SPEC §8 uses exactly that, so failing to join would mean failing
      * to detect our own recommended format.
      *
+     * An Apache comment has to start the line: a '#' in the middle of a directive is data.
+     *
      * @return string[]
      */
     private static function logicalLines(string $text): array
@@ -1579,7 +1605,6 @@ final class LogDetect
             $line = rtrim($raw);
             if ($pending === '') {
                 $trimmed = ltrim($line);
-                // Apache comments must start the line; a '#' mid-directive is data.
                 if ($trimmed === '' || $trimmed[0] === '#') {
                     continue;
                 }

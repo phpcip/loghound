@@ -144,16 +144,18 @@ final class Asn
      * classifier, it is a short list of names where a generic word would give the wrong
      * answer and the right answer is not in doubt.
      *
+     * The three groups in it are: consumer fibre ISPs whose names contain a hosting keyword;
+     * mobile carriers whose names contain no mobile keyword at all, of which "cellco
+     * partnership" is Verizon Wireless's registered name; and cloud providers whose AS name is
+     * just the brand, with no keyword in it.
+     *
      * @var array<string,string>
      */
     private const TYPE_OVERRIDES = [
-        // Consumer fibre ISPs whose names contain a hosting keyword.
         'google fiber'      => 'isp',
         'amazon connect'    => 'isp',
-        // Mobile carriers whose names contain no mobile keyword at all.
         'sprint'            => 'mobile',
-        'cellco partnership' => 'mobile',   // Verizon Wireless's registered name
-        // Cloud providers whose AS name is just the brand, with no keyword in it.
+        'cellco partnership' => 'mobile',
         'google'            => 'hosting',
         'microsoft'         => 'hosting',
         'apple inc'         => 'hosting',
@@ -241,6 +243,10 @@ final class Asn
     /**
      * The uncached half of lookup(): Cymru, then optionally the RIR, then classify.
      *
+     * The RIR lookup is a second network round trip. It is what finds leased ranges, but it is
+     * also the slowest part, which is why it is separately switchable. Its org name is
+     * preferred only when Cymru gave us nothing.
+     *
      * @return array<string,mixed>
      */
     private function lookupUncached(string $ip): array
@@ -258,8 +264,6 @@ final class Asn
             $out['as_org_s'] = self::clean($cymru['as_name'], 255);
         }
 
-        // The RIR lookup is a second network round trip; it is what finds leased ranges, but
-        // it is also the slowest part, so it is separately switchable.
         $netname = '';
         $orgName = '';
         if (!empty($this->cfg['whois_enabled'])) {
@@ -270,7 +274,6 @@ final class Asn
                 if ($netname !== '') {
                     $out['netname_s'] = self::clean($netname, 255);
                 }
-                // Prefer the RIR's org name only when Cymru gave us nothing.
                 if (!isset($out['as_org_s']) && $orgName !== '') {
                     $out['as_org_s'] = self::clean($orgName, 255);
                 }
@@ -296,6 +299,10 @@ final class Asn
      *   AS      | IP            | BGP Prefix    | CC | Registry | Allocated  | AS Name
      *   15169   | 8.8.8.8       | 8.8.8.0/24    | US | arin     | 1992-12-01 | GOOGLE, US
      *
+     * The header row is told apart from the data by its first column: the header starts with
+     * the literal "AS", a data row with a number. The AS name column carries a trailing
+     * country code ("GOOGLE, US") which is noise and is dropped.
+     *
      * @return array{asn:int,prefix:string,cc:string,registry:string,as_name:string}|null
      */
     private function cymru(string $ip): ?array
@@ -314,7 +321,6 @@ final class Asn
                 continue;
             }
             $cols = array_map('trim', explode('|', $line));
-            // The header row starts with the literal "AS"; data rows start with a number.
             if (count($cols) < 7 || !ctype_digit($cols[0])) {
                 continue;
             }
@@ -323,7 +329,6 @@ final class Asn
                 'prefix'   => $cols[2],
                 'cc'       => $cols[3],
                 'registry' => strtolower($cols[4]),
-                // The AS name column is "GOOGLE, US" — the trailing country code is noise.
                 'as_name'  => (string) preg_replace('/,\s*[A-Z]{2}$/', '', $cols[6]),
             ];
         }
@@ -332,6 +337,12 @@ final class Asn
 
     /**
      * Query the appropriate RIR whois server for the netname and org of an address.
+     *
+     * ARIN needs the 'n +' flag to return the network record with its NetName; the other RIRs
+     * answer a bare address directly. The reply is then read with each RIR's own spelling in
+     * mind: `netname` for RIPE, APNIC, AFRINIC and ARIN alike, matched case-insensitively;
+     * `orgname` for ARIN, `org-name` for RIPE and `owner` for LACNIC; and the free-text
+     * `descr` field that RIPE and APNIC share, as the usual fallback.
      *
      * @param string $registry Cymru's registry column ('arin', 'ripencc', ...).
      * @return array{netname:string,org:string}|null
@@ -343,8 +354,6 @@ final class Asn
             return null;
         }
 
-        // ARIN needs the 'n +' flag to return the network record with its NetName; the other
-        // RIRs answer a bare address directly.
         $query = $server === 'whois.arin.net' ? ('n + ' . $ip . "\r\n") : ($ip . "\r\n");
 
         $body = $this->whoisQuery($server, 43, $query);
@@ -368,16 +377,16 @@ final class Asn
             }
 
             switch ($field) {
-                case 'netname':          // RIPE / APNIC / AFRINIC / ARIN (case-insensitive)
+                case 'netname':
                     $netname = $netname === '' ? $value : $netname;
                     break;
-                case 'orgname':          // ARIN
-                case 'org-name':         // RIPE
+                case 'orgname':
+                case 'org-name':
                 case 'organization':
-                case 'owner':            // LACNIC
+                case 'owner':
                     $org = $org === '' ? $value : $org;
                     break;
-                case 'descr':            // RIPE/APNIC free text — the usual fallback
+                case 'descr':
                     $descr = $descr === '' ? $value : $descr;
                     break;
             }
@@ -398,6 +407,10 @@ final class Asn
      * `fsockopen` covers the connect timeout, `stream_set_timeout` the read timeout, and the
      * accumulated-byte cap covers a server that never stops talking. Together that is the
      * "MUST NOT block ingestion" guarantee for the whois half of this class.
+     *
+     * The connect is @-suppressed: an unreachable whois server is an ordinary, expected
+     * condition here, not something worth emitting a PHP warning into the daemon's log for. A
+     * whois answer is a few kilobytes, so the 256 KB cap means something is wrong.
      */
     private function whoisQuery(string $host, int $port, string $query): ?string
     {
@@ -405,8 +418,6 @@ final class Asn
 
         $errno  = 0;
         $errstr = '';
-        // @-suppressed: an unreachable whois server is an ordinary, expected condition here,
-        // not something worth emitting a PHP warning into the daemon's log for.
         $fp = @fsockopen($host, $port, $errno, $errstr, (float) $timeout);
         if ($fp === false) {
             return null;
@@ -426,7 +437,6 @@ final class Asn
                 break;
             }
             $body .= $chunk;
-            // A whois answer is a few kilobytes; 256 KB means something is wrong.
             if (strlen($body) > 262144 || microtime(true) > $deadline) {
                 break;
             }
@@ -448,6 +458,13 @@ final class Asn
      * lessee's netname, and the lessee is who we actually care about.
      *
      * Returns one of: isp | hosting | vpn | edu | gov | mobile | unknown (SPEC §4.1).
+     *
+     * Separators are normalised first, so that "T-MOBILE-NL" matches both the "t-mobile" and
+     * the "mobile" needles. A VPN or proxy brand then wins over everything, including an
+     * override: "MULLVAD-VPN-EXIT" inside an Amazon allocation is a VPN exit, not a cloud
+     * instance, and that case is the whole reason the netname is consulted at all. The
+     * override table comes next, for names whose correct type contradicts the generic keyword
+     * tables, and the keyword scan last.
      */
     public static function classifyOrg(string $asOrg, string $netname = ''): string
     {
@@ -455,19 +472,14 @@ final class Asn
         if (trim($haystack) === '') {
             return 'unknown';
         }
-        // Normalise separators so "T-MOBILE-NL" matches the "t-mobile" and "mobile" needles.
         $haystack = str_replace(['_', '/', '.', ','], ' ', $haystack);
 
-        // A VPN or proxy brand always wins, even over an override: "MULLVAD-VPN-EXIT" inside
-        // an Amazon allocation is a VPN exit, not a cloud instance, and that is the whole
-        // reason the netname is consulted at all.
         foreach (self::TYPE_KEYWORDS['vpn'] as $needle) {
             if (str_contains($haystack, $needle)) {
                 return 'vpn';
             }
         }
 
-        // Names whose correct type contradicts the generic keyword tables.
         foreach (self::TYPE_OVERRIDES as $phrase => $type) {
             if (str_contains($haystack, $phrase)) {
                 return $type;
@@ -484,10 +496,6 @@ final class Asn
         return 'unknown';
     }
 
-    // =========================================================================
-    // Forward-confirmed reverse DNS
-    // =========================================================================
-
     /**
      * Resolve the PTR for an address and forward-confirm it.
      *
@@ -499,6 +507,10 @@ final class Asn
      * `rdns_claim_failed` carries the heaviest non-definitive weight in SPEC §7. It works
      * because the reverse zone for a crawler's address range is controlled by the crawler's
      * operator and by nobody else.
+     *
+     * A PTR that does not resolve back is not a lie by itself — plenty of legitimate hosts
+     * have stale reverse zones. It is only evidence when combined with a UA that CLAIMS to be
+     * a named crawler.
      *
      * @return array<string,mixed> `rdns_s` and `rdns_ok_b`, or empty when nothing resolved.
      */
@@ -526,9 +538,6 @@ final class Asn
         $name = $this->ptr($ip);
         if ($name !== null) {
             $fields['rdns_s'] = self::clean($name, 255);
-            // The forward confirmation. A PTR that does not resolve back is not a lie by
-            // itself (plenty of legitimate hosts have stale reverse zones) — it is only
-            // evidence when combined with a UA that CLAIMS to be a named crawler.
             $fields['rdns_ok_b'] = $this->forwardConfirms($name, $ip);
         }
 
@@ -545,6 +554,10 @@ final class Asn
 
     /**
      * Resolve the PTR record for an address, or null.
+     *
+     * The name that comes back is checked against the restricted grammar a hostname has;
+     * anything else came from a hostile PTR zone and must not be allowed into a Solr document
+     * or the panel.
      */
     private function ptr(string $ip): ?string
     {
@@ -552,13 +565,11 @@ final class Asn
         if ($qname === null) {
             return null;
         }
-        $answers = $this->dnsQuery($qname, 12); // 12 = PTR
+        $answers = $this->dnsQuery($qname, 12);
         if ($answers === []) {
             return null;
         }
         $name = rtrim((string) $answers[0], '.');
-        // A hostname has a restricted grammar; anything else came from a hostile PTR zone
-        // and must not be allowed into a Solr document or the panel.
         if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9\-._]{0,252}[A-Za-z0-9])?$/', $name)) {
             return null;
         }
@@ -567,11 +578,13 @@ final class Asn
 
     /**
      * Does resolving $name forward produce $ip?
+     *
+     * Asks for the record family the address actually belongs to: A (type 1) for IPv4, AAAA
+     * (type 28) for IPv6.
      */
     private function forwardConfirms(string $name, string $ip): bool
     {
         $isV6 = str_contains($ip, ':');
-        // 1 = A, 28 = AAAA. Ask for the family the address actually belongs to.
         $answers = $this->dnsQuery($name, $isV6 ? 28 : 1);
         if ($answers === []) {
             return false;
@@ -591,6 +604,8 @@ final class Asn
 
     /**
      * Build the in-addr.arpa / ip6.arpa query name for an address.
+     *
+     * IPv4 reverses the octets; IPv6 reverses every nibble, dot-separated.
      */
     private static function reverseName(string $ip): ?string
     {
@@ -602,15 +617,10 @@ final class Asn
             $parts = array_reverse(explode('.', $ip));
             return implode('.', $parts) . '.in-addr.arpa';
         }
-        // IPv6: every nibble, reversed, dot-separated.
         $hex = bin2hex($bin);
         $nibbles = array_reverse(str_split($hex));
         return implode('.', $nibbles) . '.ip6.arpa';
     }
-
-    // =========================================================================
-    // Minimal DNS client
-    // =========================================================================
 
     /**
      * Resolve one name/type over UDP against the system resolvers, with a real timeout.
@@ -624,6 +634,10 @@ final class Asn
      * Scope is deliberately narrow — one question, UDP only, no EDNS, no DNSSEC, truncated
      * answers abandoned. A truncated PTR or A answer is vanishingly rare and the correct
      * behaviour when it happens is "field absent", which is what returning [] produces.
+     *
+     * The read buffer is 4096 bytes, which covers any answer we would accept; more than that
+     * means the response was truncated and it is dropped. A valid but empty answer, NXDOMAIN
+     * or NODATA, is a real result, so the next resolver is not asked.
      *
      * @param int $qtype 1 = A, 12 = PTR, 28 = AAAA
      * @return string[] Answer values (names for PTR, addresses for A/AAAA).
@@ -657,7 +671,6 @@ final class Asn
                 fclose($sock);
                 continue;
             }
-            // 4096 covers any answer we would accept; larger means truncated, which we drop.
             $response = @fread($sock, 4096);
             $meta = stream_get_meta_data($sock);
             fclose($sock);
@@ -670,7 +683,6 @@ final class Asn
             if ($answers !== []) {
                 return $answers;
             }
-            // A valid but empty answer (NXDOMAIN / NODATA) is a real result: stop asking.
             if (self::responseIsAuthoritativeEmpty($response, $packet)) {
                 return [];
             }
@@ -685,6 +697,10 @@ final class Asn
      * and `rdns_s`/`rdns_ok_b` stay absent — which is the honest outcome, and better than
      * falling back to a blocking builtin that could stall ingestion.
      *
+     * An explicit config override wins over the file, which is useful in containers that have
+     * no resolv.conf. A %zone suffix on a link-local IPv6 resolver is stripped. At most two
+     * resolvers are tried, so a dead primary costs one timeout rather than five.
+     *
      * @return string[]
      */
     private function resolvers(): array
@@ -694,7 +710,6 @@ final class Asn
         }
         $out = [];
 
-        // An explicit config override wins; useful in containers with no resolv.conf.
         foreach ((array) ($this->cfg['dns_servers'] ?? []) as $server) {
             if (filter_var((string) $server, FILTER_VALIDATE_IP) !== false) {
                 $out[] = (string) $server;
@@ -706,7 +721,6 @@ final class Asn
             if (is_string($text)
                 && preg_match_all('/^\s*nameserver\s+(\S+)/mi', $text, $m)) {
                 foreach ($m[1] as $server) {
-                    // Strip a %zone suffix on link-local IPv6 resolvers.
                     $server = explode('%', $server)[0];
                     if (filter_var($server, FILTER_VALIDATE_IP) !== false) {
                         $out[] = $server;
@@ -715,14 +729,14 @@ final class Asn
             }
         }
 
-        // Try at most two, so a dead primary costs one timeout rather than five.
         return $this->resolvers = array_slice(array_unique($out), 0, 2);
     }
 
     /**
      * Build a DNS query packet for one question.
      *
-     * Header: random id, flags 0x0100 (standard query, recursion desired), QDCOUNT 1.
+     * Header: random id, flags 0x0100 (standard query, recursion desired), QDCOUNT 1. The
+     * question is asked with QCLASS 1, IN.
      */
     private static function buildQuery(string $qname, int $qtype): ?string
     {
@@ -744,7 +758,7 @@ final class Asn
         $id = random_int(0, 65535);
         $header = pack('n6', $id, 0x0100, 1, 0, 0, 0);
 
-        return $header . $encoded . pack('nn', $qtype, 1); // QCLASS 1 = IN
+        return $header . $encoded . pack('nn', $qtype, 1);
     }
 
     /**
@@ -753,11 +767,15 @@ final class Asn
      * Rejects a response whose transaction id does not match the query's, which is the
      * minimum defence against an off-path spoofed reply.
      *
+     * A set TC bit means the answer was truncated, and we do not retry over TCP. A non-zero
+     * RCODE means an error, and there is nothing to read. Otherwise the question section is
+     * skipped — its name, then QTYPE and QCLASS — and the answers are read, with a PTR name
+     * possibly arriving compressed.
+     *
      * @return string[]
      */
     private static function parseAnswers(string $response, string $query, int $qtype): array
     {
-        // Transaction id must match, or this is not our answer.
         if (substr($response, 0, 2) !== substr($query, 0, 2)) {
             return [];
         }
@@ -766,11 +784,9 @@ final class Asn
         if ($header === false || $header['an'] < 1) {
             return [];
         }
-        // TC bit set means the answer was truncated; we do not retry over TCP.
         if (($header['flags'] & 0x0200) !== 0) {
             return [];
         }
-        // RCODE != 0 means an error; there is nothing to read.
         if (($header['flags'] & 0x000F) !== 0) {
             return [];
         }
@@ -778,12 +794,11 @@ final class Asn
         $offset = 12;
         $len    = strlen($response);
 
-        // Skip the question section.
         for ($i = 0; $i < $header['qd']; $i++) {
             if (!self::skipName($response, $offset)) {
                 return [];
             }
-            $offset += 4;   // QTYPE + QCLASS
+            $offset += 4;
         }
 
         $out = [];
@@ -803,7 +818,7 @@ final class Asn
             $rdata = substr($response, $offset, $rdlength);
 
             if ((int) $rr['type'] === $qtype) {
-                if ($qtype === 12) {                    // PTR: a compressed name
+                if ($qtype === 12) {
                     $namePos = $offset;
                     $name = self::readName($response, $namePos, 0);
                     if ($name !== null && $name !== '') {
@@ -831,7 +846,8 @@ final class Asn
      * Was this a well-formed response that simply had no answer (NXDOMAIN / NODATA)?
      *
      * Used to stop querying the next resolver: a definitive "no such record" is a result,
-     * not a failure, and asking a second server would only add latency.
+     * not a failure, and asking a second server would only add latency. That means NOERROR
+     * with zero answers, or NXDOMAIN.
      */
     private static function responseIsAuthoritativeEmpty(string $response, string $query): bool
     {
@@ -843,14 +859,15 @@ final class Asn
             return false;
         }
         $rcode = $header['flags'] & 0x000F;
-        return $rcode === 0 || $rcode === 3;   // NOERROR with 0 answers, or NXDOMAIN
+        return $rcode === 0 || $rcode === 3;
     }
 
     /**
      * Advance $offset past a (possibly compressed) domain name.
      *
      * Returns false when the name is malformed, which is how a hostile response gets
-     * rejected instead of sending the parser into a loop.
+     * rejected instead of sending the parser into a loop. A compression pointer is two bytes
+     * in total and the name ends there.
      */
     private static function skipName(string $buf, int &$offset): bool
     {
@@ -866,7 +883,6 @@ final class Asn
                 return true;
             }
             if (($l & 0xC0) === 0xC0) {
-                // Compression pointer: two bytes total, and the name ends here.
                 $offset += 2;
                 return true;
             }

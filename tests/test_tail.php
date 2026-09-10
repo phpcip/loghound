@@ -269,7 +269,26 @@ return [
 
         $status = $tail2->status();
         lh_same(1, $status['missed_rotations'], 'the loss must be counted, not hidden');
-        lh_contains((string) $status['note'], 'could not be found', 'status note');
+
+        // This scenario legitimately resolves through one of two paths, decided by
+        // the filesystem's inode allocator, and both are correct:
+        //
+        //  - the new access.log gets a FRESH inode (APFS, and ext4 much of the
+        //    time): the cursor's inode is simply nowhere on disk, so it is
+        //    reported as unrecoverable;
+        //  - the new access.log RECYCLES the inode just freed by unlinking the
+        //    rotated original (routine on ext4): dev+inode then match a cursor
+        //    that belongs to a file which no longer exists, and the line-boundary
+        //    check catches it.
+        //
+        // What matters is the outcome, already asserted above: the new file is
+        // read from the start, and the loss is counted rather than hidden. Pinning
+        // one note string would make this test pass or fail on filesystem
+        // behaviour rather than on the tailer being correct.
+        $note = (string) $status['note'];
+        $explained = str_contains($note, 'could not be found')
+            || str_contains($note, 'inode was recycled');
+        lh_true($explained, 'status note must explain the loss, got: ' . $note);
     },
 
     // ---------------------------------------------------------------------

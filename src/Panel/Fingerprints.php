@@ -76,8 +76,6 @@ final class Fingerprints extends Controller
     {
         $limit = Security::clampInt($_GET['limit'] ?? null, 5, self::MAX_CLUSTERS, 40);
 
-        // Sort key is an allowlist mapped to a literal Solr sort string; the browser
-        // never supplies sort syntax.
         $sortKey = self::param('sort', ['ips', 'sessions', 'hits', 'score', 'recent'], 'ips');
         $sort = [
             'ips'      => 'uniq_ips desc',
@@ -87,8 +85,6 @@ final class Fingerprints extends Controller
             'recent'   => 'last desc',
         ][$sortKey];
 
-        // "Only show clusters that look like a fleet" — a floor on distinct IPs. It is a
-        // clamped integer, never a query fragment.
         $minIps = Security::clampInt($_GET['min_ips'] ?? null, 1, 500, 1);
 
         $facet = [
@@ -105,7 +101,6 @@ final class Fingerprints extends Controller
                     'score'     => 'avg(bot_score_f)',
                     'first'     => 'min(ts_start)',
                     'last'      => 'max(ts_end)',
-                    // Sparkline: activity over the selected range, bounded to 24 buckets.
                     'spark' => [
                         'type'  => 'range',
                         'field' => 'ts_start',
@@ -113,9 +108,6 @@ final class Fingerprints extends Controller
                         'end'   => 'NOW',
                         'gap'   => Query::sparkGap($this->range),
                     ],
-                    // A representative identity for the cluster. Single-bucket terms
-                    // facets rather than a stored field, because the sessions core stores
-                    // almost nothing (SPEC §4.2) and docValues is what we have.
                     'ua'      => ['type' => 'terms', 'field' => 'ua_s', 'limit' => 1],
                     'org'     => ['type' => 'terms', 'field' => 'as_org_s', 'limit' => 1],
                     'astype'  => ['type' => 'terms', 'field' => 'as_type_s', 'limit' => 1],
@@ -126,7 +118,6 @@ final class Fingerprints extends Controller
                     'declared' => ['type' => 'query', 'q' => 'ua_bot_b:true'],
                 ],
             ],
-            // Context for the caption: how many distinct fingerprints exist at all.
             'total_fps' => 'unique(fp_hash_s)',
         ];
 
@@ -165,15 +156,6 @@ final class Fingerprints extends Controller
                 'country'   => self::firstVal($b, 'country'),
                 'beacon'    => self::qcount($b, 'beacon'),
                 'declared'  => self::qcount($b, 'declared') > 0,
-                // The judgement, made server-side so the table and any future export
-                // agree: five or more distinct addresses on a non-mobile network. Mobile
-                // is excluded because a carrier gateway legitimately puts many real
-                // people behind one fingerprint (SPEC §7, fp_cluster_proxy_fleet).
-                // NOTE: the sub-facet is named 'astype', not 'as_type' — reading the
-                // wrong key here silently flagged every mobile cluster as a fleet.
-                // A crawler that declared itself and runs from forty of its owner's own
-                // addresses is not a proxy fleet, so it is excluded from the highlight
-                // even though it satisfies the raw IP-count condition.
                 'fleet'     => $ips >= 5
                     && self::firstVal($b, 'astype') !== 'mobile'
                     && self::qcount($b, 'declared') === 0,
@@ -200,9 +182,6 @@ final class Fingerprints extends Controller
      */
     private function members(): array
     {
-        // A fingerprint is a sha1 hex digest. Validating the shape means a malformed value
-        // is rejected here rather than being quoted into a filter and returning nothing
-        // confusing; a well-formed one is still quoted and escaped below.
         $fp = self::text('fp', 64);
         if (!preg_match('/^[a-f0-9]{8,64}$/i', $fp)) {
             return $this->envelope(['rows' => [], 'error' => 'Not a fingerprint hash.']);
@@ -292,47 +271,67 @@ final class Fingerprints extends Controller
 
     public function body(): void
     {
-        // ---- What the reader is looking at ------------------------------------
-        echo '<section class="card explain">';
-        echo '<h2>What this table is</h2>';
+        $this->explainCard();
+        $this->clustersCard();
+    }
+
+    /**
+     * What the reader is looking at, and the two honest caveats.
+     *
+     * Rendered server-side: it is prose, it never changes, and making it wait on a
+     * request would be theatre.
+     */
+    private function explainCard(): void
+    {
+        self::cardOpen('fp-explain', '01', 'What this table is');
+        echo '<div class="explain">';
         echo '<p><code>fp_hash_s</code> is a hash of the request headers <strong>with the IP address deliberately '
             . 'left out</strong>: User-Agent, Accept, Accept-Language, Accept-Encoding, the Sec-CH-UA set, the '
             . 'Sec-Fetch set, and the HTTP version. Two requests share a fingerprint when they were made by the '
             . 'same client software configured the same way — regardless of where they came from.</p>';
-        echo '<p>A person browsing produces a fingerprint seen from one, two, maybe three addresses. '
-            . 'A scraper behind a rotating proxy pool produces <strong>one fingerprint seen from dozens of '
-            . 'unrelated addresses across unrelated networks</strong>, because the proxy swaps the address and '
-            . 'nothing else. Sort by distinct IPs and the fleet is the first row.</p>';
+        echo '<p>A person browsing produces a fingerprint seen from one, two, maybe three addresses. A scraper '
+            . 'behind a rotating proxy pool produces <strong>one fingerprint seen from dozens of unrelated '
+            . 'addresses across unrelated networks</strong>, because the proxy swaps the address and nothing else. '
+            . 'Sort by distinct IPs and the fleet is the first row.</p>';
         echo '<p class="caveat">Two honest caveats. A large corporate NAT or a mobile carrier gateway can put many '
-            . 'real people behind one fingerprint, which is why mobile ASNs are excluded from the fleet flag. '
-            . 'And distinct-IP counts come from Solr&rsquo;s <code>unique()</code>, which is exact for small '
-            . 'counts and approximate for large ones.</p>';
-        echo '</section>';
+            . 'real people behind one fingerprint, which is why mobile networks are excluded from the fleet flag. '
+            . 'And distinct-IP counts come from Solr&rsquo;s <code>unique()</code>, which is exact for small counts '
+            . 'and approximate for large ones.</p>';
+        echo '</div>';
+        self::cardEnd();
+    }
 
-        // ---- Controls ----------------------------------------------------------
-        echo '<section class="card">';
-        echo '<div class="card-head">';
-        echo '<h2>Clusters</h2>';
-        echo '<div class="controls">';
-        echo '<label for="fp-sort">Sort</label>';
-        echo '<select id="fp-sort">';
+    /**
+     * The cluster table and its controls.
+     */
+    private function clustersCard(): void
+    {
+        $tools = '<div class="controls">';
+        $tools .= '<label for="fp-sort">Sort</label><select id="fp-sort">';
         foreach ([
             'ips'      => 'Distinct IPs',
             'sessions' => 'Sessions',
             'hits'     => 'Requests',
             'score'    => 'Bot score',
             'recent'   => 'Most recent',
-        ] as $val => $label) {
-            echo '<option value="' . Security::esc($val) . '">' . Security::esc($label) . '</option>';
+        ] as $value => $label) {
+            $tools .= '<option value="' . Security::esc($value) . '">' . Security::esc($label) . '</option>';
         }
-        echo '</select>';
-        echo '<label for="fp-min">Min. distinct IPs</label>';
-        echo '<input type="number" id="fp-min" min="1" max="500" value="1" inputmode="numeric">';
-        echo '</div></div>';
+        $tools .= '</select>';
+        $tools .= '<label for="fp-min">Min IPs</label>';
+        $tools .= '<input type="number" id="fp-min" min="1" max="500" value="1" inputmode="numeric">';
+        $tools .= '</div>';
 
-        self::pop('All sessions in the selected range, grouped by header fingerprint.');
+        self::cardOpen(
+            'fp-table',
+            '02',
+            'Clusters',
+            'All sessions in the selected range, grouped by header fingerprint.',
+            $tools
+        );
+        self::skeleton('fp-table', 'rows', 0, 'Building fingerprint clusters');
 
-        echo '<div class="table-wrap"><table id="fp-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="fp-table-el"><thead><tr>'
             . '<th scope="col" class="w-expand"><span class="sr-only">Expand</span></th>'
             . '<th scope="col">Fingerprint</th>'
             . '<th scope="col" class="num">Distinct IPs</th>'
@@ -344,7 +343,7 @@ final class Fingerprints extends Controller
             . '<th scope="col" class="num">Score</th>'
             . '<th scope="col">Verdict</th>'
             . '</tr></thead><tbody></tbody></table></div>';
-        echo '<div class="empty" id="fp-table-empty" hidden></div>';
-        echo '</section>';
+
+        self::cardClose('fp-table');
     }
 }

@@ -28,6 +28,7 @@ declare(strict_types=1);
 namespace Loghound\Panel;
 
 use Loghound\Config;
+use Loghound\Security;
 
 final class Gateway
 {
@@ -72,17 +73,29 @@ final class Gateway
         $solr = null;
         if (!$demo && class_exists('\\Loghound\\Solr')) {
             try {
-                // \Loghound\Solr takes the 'solr' section of the config (base URL, HTTP
-                // auth, core names, timeout) — not the whole config, which holds secrets
-                // it has no business seeing. A failure here is not fatal: the panel
-                // renders its "cannot reach Solr" state instead.
-                $solr = new \Loghound\Solr((array) $cfg->get('solr', []));
+                $solrCfg = (array) $cfg->get('solr', []);
+                $solrCfg['timeout'] = self::queryTimeout($cfg);
+                $solr = new \Loghound\Solr($solrCfg);
             } catch (\Throwable $e) {
                 $solr = null;
             }
         }
 
         return new self($cfg, $solr, $demo);
+    }
+
+    /**
+     * How long a single panel query may take, in seconds.
+     *
+     * Chosen to sit comfortably under the reference install's PHP-FPM
+     * `max_execution_time = 60`, so a slow Solr produces a readable error inside the
+     * panel rather than a killed process and a gateway error page. Operator-tunable via
+     * `ui.query_timeout`, but clamped: no value here may make a request outlive the
+     * process that issued it.
+     */
+    public static function queryTimeout(Config $cfg): int
+    {
+        return Security::clampInt($cfg->get('ui.query_timeout'), 3, 45, 20);
     }
 
     /** Is the panel showing fabricated data? Drives the permanent demo banner. */
@@ -131,10 +144,6 @@ final class Gateway
             return false;
         }
         try {
-            // Solr's ping handler is per-core, so the real client takes a core name.
-            // The brief for this panel specified a no-argument ping, so both shapes are
-            // supported rather than betting on one: the sessions core is the one the
-            // dashboard actually reads, so that is the one worth probing.
             $ref = new \ReflectionMethod($this->solr, 'ping');
             $ok = $ref->getNumberOfParameters() > 0
                 ? (bool) $this->solr->ping($this->sessionsCore())
@@ -165,7 +174,6 @@ final class Gateway
     public function search(string $tag, string $core, string $text, array $params): array
     {
         if ($this->demo) {
-            // Fixtures matches on the bound text the same way, so demo and live agree.
             return $this->select($tag, $core, $params + ['q' => $text === '' ? '*:*' : 'text', 'uq' => $text]);
         }
         if ($this->solr === null) {
@@ -184,7 +192,7 @@ final class Gateway
                 'numFound' => (int) ($resp['response']['numFound'] ?? 0),
             ];
         } catch (\Throwable $e) {
-            $this->error = 'Solr search failed (' . $tag . '): ' . $e->getMessage();
+            $this->error = self::explain($tag, $e);
             return ['docs' => [], 'numFound' => 0];
         }
     }
@@ -214,9 +222,6 @@ final class Gateway
 
         $started = microtime(true);
         try {
-            // queryText() has no facet variant, so the bound-parameter idiom is rebuilt
-            // here from the same pieces: q is the one literal Solr::assertSafeQuery()
-            // accepts, and the text travels as its own parameter.
             $resp = $this->solr->jsonFacet($core, array_merge($params, [
                 'q'  => '{!edismax v=$uq}',
                 'uq' => $text,
@@ -226,7 +231,7 @@ final class Gateway
             $this->note($tag, $core, $started);
             return $this->normaliseFacets($resp);
         } catch (\Throwable $e) {
-            $this->error = 'Solr facet search failed (' . $tag . '): ' . $e->getMessage();
+            $this->error = self::explain($tag, $e);
             return ['count' => 0];
         }
     }
@@ -264,7 +269,7 @@ final class Gateway
             $this->note($tag, $core, $started);
             return $this->normaliseFacets($resp);
         } catch (\Throwable $e) {
-            $this->error = 'Solr query failed (' . $tag . '): ' . $e->getMessage();
+            $this->error = self::explain($tag, $e);
             return ['count' => 0];
         }
     }
@@ -301,7 +306,7 @@ final class Gateway
                 'numFound' => (int) ($resp['response']['numFound'] ?? 0),
             ];
         } catch (\Throwable $e) {
-            $this->error = 'Solr query failed (' . $tag . '): ' . $e->getMessage();
+            $this->error = self::explain($tag, $e);
             return ['docs' => [], 'numFound' => 0];
         }
     }
@@ -324,7 +329,6 @@ final class Gateway
         }
         if (isset($resp['facets']) && is_array($resp['facets'])) {
             $facets = $resp['facets'];
-            // Some clients drop the facet-domain count; recover it from the response header.
             if (!isset($facets['count']) && isset($resp['response']['numFound'])) {
                 $facets['count'] = (int) $resp['response']['numFound'];
             }
@@ -334,6 +338,52 @@ final class Gateway
             return $resp;
         }
         return ['count' => 0] + $resp;
+    }
+
+    /**
+     * Turn a transport exception into a sentence an operator can act on.
+     *
+     * A timeout and a refused connection are different problems with different fixes,
+     * and "Solr query failed" tells them apart for nobody. The query tag is included so
+     * a slow view can be identified without turning on debug logging.
+     */
+    private static function explain(string $tag, \Throwable $e): string
+    {
+        $msg = $e->getMessage();
+        $lower = strtolower($msg);
+
+        if (str_contains($lower, 'timed out') || str_contains($lower, 'timeout')) {
+            return 'Solr did not answer within the panel query timeout while running "' . $tag . '". '
+                . 'Either the query is too heavy for this index (try a shorter time range) '
+                . 'or the node is overloaded.';
+        }
+        if (str_contains($lower, 'could not resolve') || str_contains($lower, 'couldn\'t resolve')) {
+            return 'The Solr hostname could not be resolved while running "' . $tag . '". Check solr.base_url and DNS.';
+        }
+        if (str_contains($lower, 'connection refused') || str_contains($lower, 'failed to connect')) {
+            return 'The connection to Solr was refused while running "' . $tag . '". '
+                . 'Check that the node is up and that the port is reachable from this host.';
+        }
+        if (str_contains($lower, '401') || str_contains($lower, '403') || str_contains($lower, 'unauthor')) {
+            return 'Solr rejected the credentials while running "' . $tag . '". Check solr.http_user and solr.http_pass.';
+        }
+        if (str_contains($lower, '404')) {
+            return 'Solr returned 404 while running "' . $tag . '" — the core name is probably wrong, '
+                . 'or the index has not been created yet.';
+        }
+        return 'Solr query "' . $tag . '" failed: ' . $msg;
+    }
+
+    /**
+     * Forget the last error.
+     *
+     * The error is sticky so a page render can surface it in the banner. A job step needs
+     * to know whether ITS call failed, not whether anything has ever failed, so it clears
+     * first and checks after.
+     */
+    public function resetError(): void
+    {
+        $this->error = null;
     }
 
     /** Record a query in the debug log shown in the panel footer. */

@@ -2,19 +2,23 @@
  * Loghound — Performance view.
  *
  * `dur_us_l` comes from Apache's %D or nginx's $request_time and is genuinely optional:
- * stock `combined` does not log it. So the first thing this view does is check how many
- * of the matched requests actually carried a duration, and if the answer is none it
- * replaces the charts with an explanation of which directive to add rather than drawing
- * an axis full of zeroes.
+ * stock `combined` does not log it. So the headline card checks how many matched requests
+ * actually carried a duration, and if the answer is none it replaces the numbers with an
+ * explanation of which directive to add rather than an axis full of zeroes.
  *
- * Percentiles rather than averages, because the average of a bimodal latency
- * distribution describes nobody's experience. p50, p95 and p99 are shown together, and
- * the mean is shown beside them precisely so the gap between them is visible.
+ * Percentiles rather than averages, because the average of a bimodal latency distribution
+ * describes nobody's experience. p50, p95 and p99 are shown together, and the mean sits
+ * beside them precisely so the gap is visible.
+ *
+ * Four independent cards. Changing either control reloads all four, but each still
+ * settles on its own.
  */
 
 'use strict';
 
-import { api, byId, dec, durUs, el, hideEmpty, load, noDataYet, num, pct, tbody } from '../core.js';
+import {
+    api, byId, cardChart, dec, durUs, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody
+} from '../core.js';
 import { lines, stackedBars, tokens } from '../charts.js';
 
 /** Plain-English meaning for the status codes that actually turn up in web logs. */
@@ -28,21 +32,44 @@ const STATUS_MEANING = {
     504: 'Gateway timeout'
 };
 
-/** Colour for a status class. */
+/** How the two controls describe themselves in a caption. */
+const KIND_LABEL = {
+    html: 'HTML page requests',
+    api: 'API requests',
+    asset: 'static asset requests',
+    all: 'all requests'
+};
+
+/**
+ * The colour for a status class. Affirmative is ink, 5xx is the accent, nothing else.
+ */
 function statusColour(t, status) {
     const first = Math.floor(status / 100);
-    if (first === 2) { return t.good; }
-    if (first === 3) { return t.pop.unknown; }
-    if (first === 4) { return t.warn; }
     if (first === 5) { return t.bad; }
-    return t.pop.unknown;
+    if (first === 4) { return t.warn; }
+    if (first === 3) { return t.mid; }
+    return t.ok;
 }
 
-/** Headline percentiles and the coverage caption. */
+/**
+ * Read the current control state, which every request on this view carries.
+ */
+function controls() {
+    const kind = byId('pf-kind');
+    const who = byId('pf-who');
+    return {
+        kind: kind ? kind.value : 'html',
+        who: who ? who.value : 'all'
+    };
+}
+
+/**
+ * Fill the percentile headline and the coverage caption.
+ */
 function renderHeadline(data) {
-    const card = byId('pf-pop').closest('.card');
+    const scope = byId('pf-headline-content');
     const set = (field, value) => {
-        const node = card.querySelector('[data-field="' + field + '"]');
+        const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
         if (node) {
             node.textContent = value;
         }
@@ -52,59 +79,64 @@ function renderHeadline(data) {
     set('p99', durUs(data.overall.p99));
     set('avg', durUs(data.overall.avg));
 
-    const kindLabel = {
-        html: 'HTML page requests', api: 'API requests', asset: 'static asset requests', all: 'all requests'
-    }[data.kind] || 'requests';
-    const whoLabel = data.who === 'human' ? ', from sessions scored human' : '';
-
-    byId('pf-pop').textContent =
-        num(data.requests) + ' ' + kindLabel + whoLabel + ' in this range. ' +
-        num(data.timed) + ' of them (' + dec(data.timed_pct, 1) + '%) carry a logged duration; ' +
-        'the percentiles above cover only those. Requests without a duration are excluded, not counted as zero.' +
-        // The Humans-only toggle depends on the scorer copying bot_verdict_s down onto
-        // hit documents, which SPEC §4.1 does not require. Say so rather than showing an
-        // empty chart and letting the operator conclude they have no human traffic.
+    setPop('pf-headline',
+        num(data.requests) + ' ' + (KIND_LABEL[data.kind] || 'requests') +
+        (data.who === 'human' ? ', from sessions scored human' : '') + ' in this range. ' +
+        num(data.timed) + ' of them (' + dec(data.timed_pct, 1) + '%) carry a logged duration; the percentiles ' +
+        'cover only those. Requests without a duration are excluded, not counted as zero.' +
         (data.who === 'human' && !data.who_supported
-            ? ' NOTE: hit documents in this index carry no verdict, so the "Humans only" ' +
-              'filter cannot be applied here and matched nothing. Switch back to "All clients".'
-            : '');
+            ? ' NOTE: hit documents in this index carry no verdict, so the "Humans only" filter cannot be applied ' +
+              'here and matched nothing. Switch back to "All clients".'
+            : ''));
 
-    // The one case where the whole view has to say "you are missing a directive".
     if (data.requests > 0 && data.timed === 0) {
-        const node = byId('pf-nodur');
-        node.hidden = false;
-        node.classList.add('show');
-        node.replaceChildren(
-            el('h3', { text: 'No request durations are being logged' }),
-            el('p', {
-                text: 'Not one of the ' + num(data.requests) + ' matched requests carries a dur_us_l value, so ' +
-                    'there is nothing to compute a percentile from. Your log format does not include the request ' +
-                    'duration — the stock Apache "combined" format does not.'
-            }),
-            el('p', { text: 'Add %D to your Apache LogFormat (microseconds), or $request_time to an nginx log_format (seconds):' }),
-            el('pre', {
-                class: 'snippet mono',
-                text: 'LogFormat "%h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined_d'
-            }),
-            el('p', {}, [
-                'The full recommended format, which also enables several detection rules, is in ',
-                el('code', { text: 'docs/INSTALL.md' }),
-                '. Everything else in this view works without it.'
-            ])
-        );
+        showMissingDuration(data.requests);
         return false;
     }
     hideEmpty('pf-nodur');
     return true;
 }
 
-/** Latency over time. */
-function renderOverTime(data, hasDurations) {
-    if (!hasDurations || !data.times.length) {
+/**
+ * Explain that no duration is being logged, and which directive fixes it.
+ */
+function showMissingDuration(requests) {
+    const node = byId('pf-nodur');
+    if (!node) {
+        return;
+    }
+    node.hidden = false;
+    node.classList.add('show');
+    node.replaceChildren(
+        el('h3', { text: 'No request durations are being logged' }),
+        el('p', {
+            text: 'Not one of the ' + num(requests) + ' matched requests carries a dur_us_l value, so there is ' +
+                'nothing to compute a percentile from. Your log format does not include the request duration — ' +
+                'the stock Apache "combined" format does not.'
+        }),
+        el('p', { text: 'Add %D to your Apache LogFormat, or $request_time to an nginx log_format:' }),
+        el('pre', {
+            class: 'snippet mono',
+            text: 'LogFormat "%h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined_d'
+        }),
+        el('p', {}, [
+            'The full recommended format, which also enables several detection rules, is in ',
+            el('code', { text: 'docs/INSTALL.md' }),
+            '. Everything else in this view works without it.'
+        ])
+    );
+}
+
+/**
+ * Draw latency over time, leaving gaps where nothing was measured.
+ */
+function renderLatency(data) {
+    if (!data.timed || !data.times.length) {
         noDataYet('pf-time-empty', 'timed requests');
         return;
     }
     hideEmpty('pf-time-empty');
+    cardChart('pf-time', 300);
     const t = tokens();
     lines('pf-time', data.times, [
         { name: 'p50', color: t.pop.declared, data: data.p50 },
@@ -112,127 +144,116 @@ function renderOverTime(data, hasDurations) {
     ], durUs);
 }
 
-/** Slowest-paths table. */
-function renderPaths(data, hasDurations) {
-    const table = byId('pf-paths');
-    byId('pf-paths-pop').textContent = hasDurations
-        ? 'The busiest paths in this range, with their latency percentiles. The bar compares p50 to p99 on the ' +
-          'same scale — a long bar means the median visitor and the unlucky one percent had very different days.'
-        : 'The busiest paths in this range. Latency columns are empty because no duration is logged.';
-
+/**
+ * Fill the slowest-paths table.
+ */
+function renderPaths(data) {
     if (!data.paths.length) {
-        tbody(table, []);
+        tbody(byId('pf-paths-table'), []);
         noDataYet('pf-paths-empty', 'requests');
         return;
     }
     hideEmpty('pf-paths-empty');
 
-    // Shared scale across rows so the bars are comparable to each other, not each to itself.
-    const worst = data.paths.reduce((m, p) => Math.max(m, p.p99 || 0), 1);
+    const worst = data.paths.reduce((max, row) => Math.max(max, row.p99 || 0), 1);
 
-    tbody(table, data.paths.map((p) => ({
+    tbody(byId('pf-paths-table'), data.paths.map((row) => ({
         cells: [
-            { text: p.path, mono: true, clip: true },
-            { text: num(p.requests), num: true },
-            { text: durUs(p.p50), num: true },
-            { text: durUs(p.p95), num: true },
-            { text: durUs(p.p99), num: true },
+            { text: row.path, mono: true, clip: true },
+            { text: num(row.requests), num: true },
+            { text: durUs(row.p50), num: true },
+            { text: durUs(row.p95), num: true },
+            { text: durUs(row.p99), num: true },
             {
-                node: el('span', { class: 'bar bar-split', title: 'p50 ' + durUs(p.p50) + ' · p99 ' + durUs(p.p99) }, [
+                node: el('span', {
+                    class: 'bar bar-split',
+                    title: 'p50 ' + durUs(row.p50) + ' · p99 ' + durUs(row.p99)
+                }, [
                     el('span', {
-                        class: 'bar-human',
-                        style: 'width:' + (((p.p50 || 0) / worst) * 100).toFixed(2) + '%'
+                        class: 'bar-declared',
+                        style: 'width:' + (((row.p50 || 0) / worst) * 100).toFixed(2) + '%'
                     }),
                     el('span', {
                         class: 'bar-evasive',
-                        style: 'width:' + ((Math.max(0, (p.p99 || 0) - (p.p50 || 0)) / worst) * 100).toFixed(2) + '%'
+                        style: 'width:' + ((Math.max(0, (row.p99 || 0) - (row.p50 || 0)) / worst) * 100).toFixed(2) + '%'
                     })
                 ])
             },
-            { text: p.notfound ? num(p.notfound) : '—', num: true },
-            {
-                text: p.errors ? num(p.errors) : '—',
-                num: true,
-                class: p.errors ? 'chip-bad' : null
-            }
+            { text: row.notfound ? num(row.notfound) : '—', num: true },
+            { text: row.errors ? num(row.errors) : '—', num: true }
         ]
     })));
 }
 
-/** Status codes over time. */
-function renderHeat(data) {
-    if (!data.heat_times.length) {
-        noDataYet('pf-heat-empty', 'requests');
-        return;
-    }
-    hideEmpty('pf-heat-empty');
-    const t = tokens();
-    stackedBars('pf-heat', data.heat_times, [
-        { name: '2xx', color: t.good, data: data.heat.s2 },
-        { name: '3xx', color: t.pop.unknown, data: data.heat.s3 },
-        { name: '4xx', color: t.warn, data: data.heat.s4 },
-        { name: '5xx', color: t.bad, data: data.heat.s5 }
-    ]);
-}
-
-/** Exact status-code table. */
-function renderStatuses(data) {
-    const table = byId('pf-status');
+/**
+ * Draw the status chart and fill the exact-code table.
+ */
+function renderStatus(data) {
     if (!data.statuses.length) {
-        tbody(table, []);
+        tbody(byId('pf-status-table'), []);
         noDataYet('pf-status-empty', 'requests');
         return;
     }
     hideEmpty('pf-status-empty');
-
-    const total = data.statuses.reduce((sum, s) => sum + s.count, 0);
     const t = tokens();
 
-    tbody(table, data.statuses.map((s) => ({
+    stackedBars('pf-heat', data.heat_times, [
+        { name: '2xx', color: t.ok, data: data.heat.s2 },
+        { name: '3xx', color: t.mid, data: data.heat.s3 },
+        { name: '4xx', color: t.warn, data: data.heat.s4 },
+        { name: '5xx', color: t.bad, data: data.heat.s5 }
+    ]);
+
+    const total = data.statuses.reduce((sum, row) => sum + row.count, 0);
+    tbody(byId('pf-status-table'), data.statuses.map((row) => ({
         cells: [
             {
                 node: el('span', {
                     class: 'chip',
-                    text: String(s.status),
-                    style: 'border-color:' + statusColour(t, s.status) + ';color:' + statusColour(t, s.status)
+                    text: String(row.status),
+                    style: 'border-color:' + statusColour(t, row.status) + ';color:' + statusColour(t, row.status)
                 })
             },
-            { text: STATUS_MEANING[s.status] || '—', class: 'muted' },
-            { text: num(s.count), num: true },
+            { text: STATUS_MEANING[row.status] || '—', class: 'muted' },
+            { text: num(row.count), num: true },
             {
-                node: el('span', { class: 'bar', title: pct(s.count, total) }, [
-                    el('span', { style: 'width:' + ((s.count / total) * 100).toFixed(2) + '%' })
+                node: el('span', { class: 'bar', title: pct(row.count, total) }, [
+                    el('span', { style: 'width:' + ((row.count / total) * 100).toFixed(2) + '%' })
                 ])
             }
         ]
     })));
 }
 
-/** Load everything for the current control state. */
-async function refresh() {
-    const kind = byId('pf-kind');
-    const who = byId('pf-who');
+/**
+ * Load all four cards for the current control state.
+ */
+function refresh() {
+    const state = controls();
 
-    await load('pf-paths-empty', 'performance data', async () => {
-        const data = await api('performance', 'summary', {
-            kind: kind ? kind.value : 'html',
-            who: who ? who.value : 'all'
-        });
-        const hasDurations = renderHeadline(data);
-        renderOverTime(data, hasDurations);
-        renderPaths(data, hasDurations);
-        renderHeat(data);
-        renderStatuses(data);
+    loadCard('pf-headline', 'Computing latency percentiles', async () => {
+        renderHeadline(await api('performance', 'headline', state));
+    });
+    loadCard('pf-time', 'Computing latency over time', async () => {
+        renderLatency(await api('performance', 'latency', state));
+    });
+    loadCard('pf-paths', 'Computing per-path percentiles', async () => {
+        renderPaths(await api('performance', 'paths', state));
+    });
+    loadCard('pf-status', 'Faceting response codes', async () => {
+        renderStatus(await api('performance', 'status', state));
     });
 }
 
-/** Entry point. */
-export default async function init() {
+/**
+ * Entry point.
+ */
+export default function init() {
     for (const id of ['pf-kind', 'pf-who']) {
         const node = byId(id);
         if (node) {
             node.addEventListener('change', refresh);
         }
     }
-    await refresh();
+    refresh();
 }

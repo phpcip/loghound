@@ -57,8 +57,6 @@ final class Layout
         $siteName = (string) $cfg->get('site_name', 'Loghound');
         $slug = $view->slug();
 
-        // Cache-buster derived from the asset's own mtime: no build step, but a changed
-        // stylesheet is still picked up immediately instead of after a hard refresh.
         $v = static function (string $rel): string {
             $path = __DIR__ . '/../../public/' . $rel;
             $stamp = is_file($path) ? (string) filemtime($path) : '0';
@@ -73,22 +71,18 @@ final class Layout
         echo '<meta name="robots" content="noindex, nofollow">' . "\n";
         echo '<title>' . Security::esc($view->title() . ' — ' . $siteName) . '</title>' . "\n";
         echo '<link rel="stylesheet" href="' . Security::esc($v('assets/css/panel.css')) . '">' . "\n";
-        // Synchronous, tiny, and first: applies the stored theme before the first paint.
         echo '<script src="' . Security::esc($v('assets/js/theme.js')) . '"></script>' . "\n";
         echo '</head>' . "\n";
         echo '<body data-view="' . Security::esc($slug) . '">' . "\n";
 
-        // Boot payload. A type="application/json" block is inert — the browser never
-        // executes it — and JSON_HEX_TAG in escJs means a "</script>" inside any value
-        // cannot terminate the element early.
         echo '<script type="application/json" id="lh-boot">' . Security::escJs($boot) . '</script>' . "\n";
 
         self::skipLink();
         self::sidebar($siteName, $slug);
 
         echo '<main id="main">' . "\n";
-        self::banners($gw, $cfg);
         self::header($view);
+        self::banners($gw, $cfg);
 
         echo '<div class="view">' . "\n";
         $view->body();
@@ -97,9 +91,6 @@ final class Layout
         self::footer($gw);
         echo "</main>\n";
 
-        // ECharts first (it is a classic UMD script exposing window.echarts), then the
-        // application as an ES module. Both are same-origin, which is what lets the CSP
-        // stay at script-src 'self' and what lets the panel run air-gapped.
         echo '<script src="' . Security::esc($v('assets/vendor/echarts.min.js')) . '" defer></script>' . "\n";
         echo '<script type="module" src="' . Security::esc($v('assets/js/app.js')) . '"></script>' . "\n";
         echo "</body>\n</html>\n";
@@ -131,10 +122,17 @@ final class Layout
     }
 
     /**
-     * Connection / demo banners.
+     * Demo and configuration notices.
      *
-     * Demo mode gets a permanent, unmissable banner. A dashboard that shows fabricated
-     * numbers without saying so is the single worst thing this project could ship.
+     * NOTE WHAT IS NOT HERE: there is no Solr ping. This method used to call one, which
+     * meant EVERY page in the panel blocked on a network round trip before it rendered a
+     * single byte — the exact failure the async rule exists to prevent. Connection
+     * trouble now surfaces two better ways: inside whichever card failed, with a retry,
+     * and in the banner slot below, which the front end reveals when a card reports a
+     * transport error. Both cost no extra request.
+     *
+     * The two checks that remain are free: demo mode is a config flag, and
+     * Config::validate() touches no network.
      */
     private static function banners(Gateway $gw, Config $cfg): void
     {
@@ -144,19 +142,15 @@ final class Layout
                 . 'Turn it off by removing <code>LOGHOUND_DEMO=1</code> from the environment '
                 . 'or <code>\'demo\' =&gt; true</code> from the <code>ui</code> section of <code>config/loghound.php</code>.'
                 . '</div>' . "\n";
-            return;
-        }
-        if (!$gw->ping()) {
-            echo '<div class="banner banner-bad" role="alert">'
-                . '<strong>Solr is not reachable.</strong> '
-                . Security::esc((string) ($gw->error() ?? 'No further detail.'))
-                . ' Check the connection under <a href="?v=settings">Settings</a>, or set '
-                . '<code>LOGHOUND_DEMO=1</code> to explore the panel with sample data.'
-                . '</div>' . "\n";
         }
 
-        // Config problems are worth surfacing on every page, not just in Settings: a
-        // panel that renders zeroes because the beacon secret is missing is a support ticket.
+        echo '<div class="banner banner-bad" id="lh-conn" role="alert" hidden>'
+            . '<strong>Solr is not answering.</strong> '
+            . '<span id="lh-conn-detail"></span> '
+            . 'Run the connection check under <a href="?v=settings">Settings</a>, or set '
+            . '<code>LOGHOUND_DEMO=1</code> to explore the panel with sample data.'
+            . '</div>' . "\n";
+
         $errors = $cfg->validate();
         if ($errors !== []) {
             echo '<div class="banner banner-warn" role="alert"><strong>Configuration needs attention:</strong> '
@@ -165,19 +159,21 @@ final class Layout
         }
     }
 
-    /** Page title, subtitle and the time-range picker. */
+    /**
+     * The page head: H1, lead, then a hairline rule carrying the range picker.
+     *
+     * Nothing sits above the H1 — no kicker, no badge, no breadcrumb. That is rule 5 of
+     * the editorial system and it is not negotiable per page.
+     */
     private static function header(Controller $view): void
     {
         echo '<header class="head">' . "\n";
-        echo '<div class="head-text">';
         echo '<h1>' . Security::esc($view->title()) . '</h1>';
         echo '<p class="sub">' . Security::esc($view->subtitle()) . '</p>';
-        echo "</div>\n";
 
-        // The range picker is a set of links, not a <select>: it survives with JS off,
-        // every range is a bookmarkable URL, and there is no state to keep in sync.
         $current = Query::range(isset($_GET['range']) && is_string($_GET['range']) ? $_GET['range'] : null);
         $slug = $view->slug();
+        echo '<div class="head-tools">';
         echo '<div class="ranges" role="group" aria-label="Time range">';
         foreach (Query::ranges() as $key => $def) {
             $on = $key === $current['key'];
@@ -185,6 +181,8 @@ final class Layout
             echo '<a href="' . Security::esc($qs) . '"' . ($on ? ' class="on" aria-current="true"' : '') . '>'
                 . Security::esc(strtoupper($key)) . '</a>';
         }
+        echo '</div>';
+        echo '<span class="job-meta" id="lh-page-status"></span>';
         echo "</div>\n";
         echo "</header>\n";
     }

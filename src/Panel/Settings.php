@@ -58,15 +58,69 @@ final class Settings extends Controller
         return 'Log sources, storage, privacy, scoring and the beacon snippet.';
     }
 
-    /** This view is rendered entirely server-side; it has no JSON endpoints. */
+    /**
+     * Read-only JSON actions.
+     *
+     * `beacon` was a blocking Solr query inside body() and is now fetched by the page
+     * after it has rendered, because a settings page must not wait on Solr to appear.
+     * `job_latest` lets a reloaded page reattach to an operation that is still running.
+     *
+     * @return array<string,mixed>
+     */
     public function api(string $action): array
     {
-        return ['error' => 'Unknown action'];
+        return match ($action) {
+            'beacon'     => $this->envelope(['beacon' => $this->beaconStatus()]),
+            'job_latest' => $this->latestJob(),
+            default      => ['error' => 'Unknown action'],
+        };
     }
 
-    // -----------------------------------------------------------------------------
-    // State changes
-    // -----------------------------------------------------------------------------
+    /**
+     * The newest job of a requested kind belonging to this operator.
+     *
+     * The kind is checked against Jobs::KINDS before the store is touched, and the store
+     * scopes every lookup to the caller's own session, so this cannot be used to read
+     * somebody else's operation.
+     *
+     * @return array<string,mixed>
+     */
+    private function latestJob(): array
+    {
+        $kind = self::param('kind', Jobs::KINDS, '');
+        if ($kind === '') {
+            return ['error' => 'Unknown operation.'];
+        }
+        try {
+            $job = (new Jobs($this->cfg, $this->gw))->latest($kind);
+        } catch (\Throwable $e) {
+            return ['error' => 'The job store is unavailable.'];
+        }
+        return $this->envelope(['job' => $job]);
+    }
+
+    /**
+     * Handle one of the asynchronous job endpoints, answering with JSON.
+     *
+     * Reached through post(), so the front controller has already enforced both
+     * authentication and the CSRF token: a job endpoint mutates state and is treated
+     * exactly like any other state-changing request. Failure to open the store is
+     * reported as a failure, never silently ignored.
+     *
+     * @param callable(Jobs):array<string,mixed> $fn
+     * @return never
+     */
+    private function jobJson(callable $fn): void
+    {
+        try {
+            $jobs = new Jobs($this->cfg, $this->gw);
+        } catch (\Throwable $e) {
+            error_log('[loghound-panel] job store: ' . Jobs::redact($e->getMessage()));
+            self::sendJson(['error' => 'The job store could not be opened. Check that var/ is writable.'], 500);
+        }
+        $result = $fn($jobs);
+        self::sendJson($result, isset($result['error']) ? 400 : 200);
+    }
 
     /**
      * Handle a settings POST.
@@ -95,15 +149,42 @@ final class Settings extends Controller
             case 'ui':
                 return $this->saveUi();
 
-            case 'test_solr':
-                // Read-only: no config write, just a probe whose result is shown as a flash.
-                return $this->gw->ping()
-                    ? '?v=settings&ok=solr_up'
-                    : '?v=settings&err=solr_down';
+            case 'job_start':
+                $this->jobJson(fn (Jobs $jobs): array => $jobs->start(self::postParam('kind', Jobs::KINDS)));
+
+            case 'job_poll':
+                $this->jobJson(fn (Jobs $jobs): array => $jobs->advance(self::postJobId()));
+
+            case 'job_cancel':
+                $this->jobJson(fn (Jobs $jobs): array => $jobs->cancel(self::postJobId()));
 
             default:
                 return '?v=settings&err=unknown_action';
         }
+    }
+
+    /**
+     * Read a POST field constrained to an allowlist.
+     *
+     * Returns the empty string when the value is absent or not on the list, so a caller
+     * that forgets to check gets a value the job store will refuse rather than one it
+     * will act on.
+     *
+     * @param array<int,string> $allowed
+     */
+    private static function postParam(string $key, array $allowed): string
+    {
+        $value = $_POST[$key] ?? null;
+        return is_string($value) && in_array($value, $allowed, true) ? $value : '';
+    }
+
+    /**
+     * Read a job id from a POST body, shape-checked before it reaches the store.
+     */
+    private static function postJobId(): string
+    {
+        $value = $_POST['id'] ?? null;
+        return is_string($value) && Jobs::isJobId($value) ? $value : '';
     }
 
     /**
@@ -153,9 +234,6 @@ final class Settings extends Controller
             return '?v=settings&err=no_such_source';
         }
 
-        // The log path becomes an argument to the tailer, so it must resolve inside a
-        // permitted root. A glob's directory part is what gets checked (the same rule
-        // Config::validate() applies).
         $roots = (array) $this->cfg->get('allowed_log_roots', []);
         if (Security::safePath(dirname($path), $roots) === null) {
             return '?v=settings&err=path_not_allowed';
@@ -222,9 +300,6 @@ final class Settings extends Controller
         }
         $days = Security::clampInt($_POST['retention_days'] ?? null, 0, 3650, 90);
 
-        // Switching to hash mode without a salt would make Config::validate() fail and
-        // the daemons refuse to start, so one is generated here rather than leaving the
-        // operator with a broken install.
         if ($mode === 'hash' && strlen((string) $this->cfg->get('privacy.ip_salt', '')) < 16) {
             $this->cfg->set('privacy.ip_salt', bin2hex(random_bytes(24)));
         }
@@ -263,7 +338,6 @@ final class Settings extends Controller
         foreach (['bot' => 80, 'likely_bot' => 60, 'unknown' => 40, 'likely_human' => 20] as $k => $default) {
             $t[$k] = Security::clampInt($_POST['threshold'][$k] ?? null, 0, 100, $default);
         }
-        // Thresholds must descend, otherwise a score falls into two bands at once.
         if (!($t['bot'] > $t['likely_bot'] && $t['likely_bot'] > $t['unknown'] && $t['unknown'] > $t['likely_human'])) {
             return '?v=settings&err=bad_thresholds';
         }
@@ -280,8 +354,6 @@ final class Settings extends Controller
     private function saveUi(): string
     {
         $tz = is_string($_POST['timezone'] ?? null) ? $_POST['timezone'] : 'UTC';
-        // Validate against the real tz database rather than a regex: an invalid zone
-        // would make every timestamp in the panel silently fall back to UTC.
         if (!in_array($tz, \DateTimeZone::listIdentifiers(), true)) {
             return '?v=settings&err=bad_timezone';
         }
@@ -289,10 +361,6 @@ final class Settings extends Controller
         $err = $this->persist();
         return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=ui_saved';
     }
-
-    // -----------------------------------------------------------------------------
-    // Rendering
-    // -----------------------------------------------------------------------------
 
     /**
      * Load the detection report, or the demo one.
@@ -358,6 +426,7 @@ final class Settings extends Controller
         $this->solrSection();
         $this->beaconSection();
         $this->privacySection();
+        $this->retentionSection();
         $this->scoringSection();
         $this->displaySection();
     }
@@ -376,11 +445,13 @@ final class Settings extends Controller
             }
         }
 
-        echo '<section class="card">';
-        echo '<h2>Log sources</h2>';
-        echo '<p class="pop">Detected by reading your webserver configuration where possible, and by scoring '
-            . 'sample lines against the known-format library where it is not. Nothing is ingested until you '
-            . 'confirm the mapping below.</p>';
+        self::cardOpen(
+            'set-sources',
+            '01',
+            'Log sources',
+            'Detected by reading your webserver configuration where possible, and by scoring sample lines against '
+            . 'the known-format library where it is not. Nothing is ingested until you confirm the mapping below.'
+        );
 
         if ($sources === []) {
             echo '<div class="empty show">';
@@ -390,7 +461,8 @@ final class Settings extends Controller
                 . 'one, and writes the result to <code>var/detect.json</code>:</p>';
             echo '<pre class="snippet mono">sudo -u loghound php bin/loghound-setup detect</pre>';
             echo '<p>Then reload this page to review what it found.</p>';
-            echo '</div></section>';
+            echo '</div>';
+            self::cardEnd();
             return;
         }
 
@@ -427,7 +499,6 @@ final class Settings extends Controller
             }
             echo '</dl>';
 
-            // ---- Token → field mapping ----------------------------------------
             $mapping = (array) ($src['mapping'] ?? []);
             if ($mapping !== []) {
                 echo '<h4>Field mapping</h4>';
@@ -438,15 +509,12 @@ final class Settings extends Controller
                     echo '<tr>';
                     echo '<td class="mono">' . Security::esc((string) ($m['token'] ?? '')) . '</td>';
                     echo '<td class="mono">' . Security::esc((string) ($m['field'] ?? '')) . '</td>';
-                    // An example value comes straight off the wire — escaped, and never
-                    // rendered as a link or as markup.
                     echo '<td class="mono clip">' . Security::esc((string) ($m['example'] ?? '')) . '</td>';
                     echo '</tr>';
                 }
                 echo '</tbody></table></div>';
             }
 
-            // ---- What is missing, and what it costs ----------------------------
             $missing = (array) ($src['missing'] ?? []);
             if ($missing !== []) {
                 echo '<h4>Not logged — and what that costs you</h4>';
@@ -461,7 +529,6 @@ final class Settings extends Controller
                     . 'of these. Plain <code>combined</code> still works — it just detects less.</p>';
             }
 
-            // ---- Five real lines, rendered as records --------------------------
             $samples = array_slice((array) ($src['samples'] ?? []), 0, 5);
             if ($samples !== []) {
                 echo '<h4>Five lines from this file, parsed</h4>';
@@ -490,41 +557,87 @@ final class Settings extends Controller
             }
             echo '</article>';
         }
-        echo '</section>';
+        self::cardEnd();
     }
 
-    /** Solr connection, read-only, with a probe button. Never prints a credential. */
+    /**
+     * Solr connection, read-only, with the checks offered as asynchronous jobs.
+     *
+     * Nothing here contacts Solr while the page renders. Both checks are stepped jobs the
+     * operator starts, because a ping to an unreachable host and a document count on a
+     * large index are exactly the operations that used to hang a request until PHP-FPM
+     * killed it. Credentials are reported as present or absent and never printed.
+     */
     private function solrSection(): void
     {
         $mode = (string) $this->cfg->get('solr.mode', 'opensolr');
 
-        echo '<section class="card">';
-        echo '<h2>Solr connection</h2>';
+        self::cardOpen('set-solr', '02', 'Solr connection');
         echo '<dl class="kv">';
         echo '<dt>Mode</dt><dd class="mono">' . Security::esc($mode) . '</dd>';
         if ($mode === 'opensolr') {
-            echo '<dt>Account</dt><dd class="mono">' . Security::esc((string) $this->cfg->get('opensolr.email', '—')) . '</dd>';
-            echo '<dt>Region</dt><dd class="mono">' . Security::esc((string) $this->cfg->get('opensolr.region', '—')) . '</dd>';
-            // Presence only. SPEC §9: the key is never printed back, masked or otherwise.
-            echo '<dt>API key</dt><dd>' . ($this->cfg->get('opensolr.api_key') ? '<span class="chip chip-good">Set</span>' : '<span class="chip chip-warn">Missing</span>') . '</dd>';
+            echo '<dt>Account</dt><dd class="mono">'
+                . Security::esc((string) $this->cfg->get('opensolr.email', '—')) . '</dd>';
+            echo '<dt>Region</dt><dd class="mono">'
+                . Security::esc((string) $this->cfg->get('opensolr.region', '—')) . '</dd>';
+            echo '<dt>API key</dt><dd>' . ($this->cfg->get('opensolr.api_key')
+                ? '<span class="chip chip-good">Set</span>'
+                : '<span class="chip chip-warn">Missing</span>') . '</dd>';
         } else {
-            echo '<dt>Base URL</dt><dd class="mono">' . Security::esc((string) $this->cfg->get('solr.base_url', '—')) . '</dd>';
-            echo '<dt>HTTP auth</dt><dd>' . ($this->cfg->get('solr.http_user') ? '<span class="chip chip-good">Configured</span>' : '<span class="chip">None</span>') . '</dd>';
+            echo '<dt>Base URL</dt><dd class="mono">'
+                . Security::esc((string) $this->cfg->get('solr.base_url', '—')) . '</dd>';
+            echo '<dt>HTTP auth</dt><dd>' . ($this->cfg->get('solr.http_user')
+                ? '<span class="chip chip-good">Configured</span>'
+                : '<span class="chip">None</span>') . '</dd>';
         }
         echo '<dt>Hits core</dt><dd class="mono">' . Security::esc($this->gw->hitsCore()) . '</dd>';
         echo '<dt>Sessions core</dt><dd class="mono">' . Security::esc($this->gw->sessionsCore()) . '</dd>';
+        echo '<dt>Query timeout</dt><dd class="mono">'
+            . Security::esc((string) Gateway::queryTimeout($this->cfg)) . 's</dd>';
         echo '</dl>';
 
-        echo '<p class="muted">Connection details are edited in <code>config/loghound.php</code> outside the document '
-            . 'root, not here: the file holds the API key and the beacon secret, and a web form is the wrong place to '
-            . 'put either.</p>';
+        echo '<p class="muted">Connection details are edited in <code>config/loghound.php</code> outside the '
+            . 'document root, not here: the file holds the API key and the beacon secret, and a web form is the '
+            . 'wrong place to put either.</p>';
 
-        echo '<form method="post" action="?v=settings">';
-        self::csrfField();
-        echo '<input type="hidden" name="action" value="test_solr">';
-        echo '<button type="submit">Test connection</button>';
-        echo '</form>';
-        echo '</section>';
+        echo '<div class="job-actions">';
+        echo '<button type="button" class="primary" data-job="solr_connection" data-mount="job-solr">'
+            . 'Run connection check</button>';
+        if ($mode === 'opensolr') {
+            echo '<button type="button" data-job="opensolr_check" data-mount="job-solr">'
+                . 'Validate Opensolr credentials</button>';
+        }
+        echo '</div>';
+        echo '<div id="job-solr"></div>';
+        echo '<p class="muted">Each check runs as a sequence of steps with its own progress, so it cannot time '
+            . 'out however slow the backend is. You can close this page and come back to it.</p>';
+        self::cardClose('set-solr');
+    }
+
+    /**
+     * Retention: what the policy is, and what it would delete.
+     *
+     * The preview is a job for the same reason as the connection check — counting
+     * documents older than a cutoff on a large index is not instant. The panel never
+     * deletes; `bin/loghound-retention` does, and the summary says so.
+     */
+    private function retentionSection(): void
+    {
+        $days = (int) $this->cfg->get('privacy.retention_days', 0);
+
+        self::cardOpen('set-retention', '05', 'Retention preview');
+        echo '<p class="pop">' . ($days > 0
+            ? Security::esc('Documents older than ' . $days . ' days are eligible for deletion.')
+            : 'Retention is disabled, so nothing is ever deleted.') . '</p>';
+        echo '<p class="muted">This counts what is past the retention window. It does not delete anything — '
+            . 'deletion is done by <code>bin/loghound-retention</code>, which is deliberately the only thing in '
+            . 'the product allowed to issue a delete-by-query.</p>';
+        echo '<div class="job-actions">';
+        echo '<button type="button" data-job="retention_preview" data-mount="job-retention">'
+            . 'Preview what would be deleted</button>';
+        echo '</div>';
+        echo '<div id="job-retention"></div>';
+        self::cardClose('set-retention');
     }
 
     /**
@@ -585,8 +698,6 @@ final class Settings extends Controller
                 'hour' => ['type' => 'query', 'q' => 'ts_start:[NOW-1HOUR TO NOW]'],
                 'day'  => ['type' => 'query', 'q' => 'ts_start:[NOW-24HOUR TO NOW]'],
             ]],
-            // Denominator for a coverage percentage: only sessions that were served HTML
-            // could ever have run the beacon, and `pages_i` is how we know they were.
             'eligible' => ['type' => 'query', 'q' => 'pages_i:[1 TO *]'],
         ]);
 
@@ -616,45 +727,19 @@ final class Settings extends Controller
         [$base, $configured] = $this->baseUrl();
         $ver = $this->beaconVersion();
         $src = $base . '/b.js?v=' . $ver;
-        $status = $this->beaconStatus();
         $enabled = (bool) $this->cfg->get('beacon.enabled');
 
-        echo '<section class="card" id="beacon">';
-        echo '<h2>Beacon / JavaScript tracking</h2>';
+        self::cardOpen('set-beacon', '03', 'Beacon / JavaScript tracking');
         echo '<p class="pop">One line of JavaScript, optional. Loghound works without it. This section explains '
             . 'exactly what changes if you add it.</p>';
 
-        // ---- Live status -------------------------------------------------------
-        $ok = $status['hour'] > 0;
-        $everSeen = $status['ever'] > 0;
-        $cls = $ok ? 'beacon-live' : ($everSeen ? 'beacon-stale' : 'beacon-none');
-        $label = $ok ? 'Receiving data' : ($everSeen ? 'Not seen in the last hour' : 'Never seen');
-
-        echo '<div class="beacon-status ' . $cls . '" role="status">';
-        echo '<span class="beacon-dot" aria-hidden="true"></span>';
-        echo '<div class="beacon-status-text">';
-        echo '<strong>Beacon: ' . Security::esc($label) . '</strong>';
-        echo '<span class="muted">';
-        if ($everSeen) {
-            echo Security::esc(number_format($status['hour'])) . ' sessions in the last hour · '
-                . Security::esc(number_format($status['day'])) . ' in the last 24 hours';
-            if ($status['last'] !== null) {
-                // Rendered in UTC here rather than by the front end: this is a
-                // server-side page and there is no reason to round-trip it.
-                $t = strtotime($status['last']);
-                if ($t !== false) {
-                    echo ' · last at <span class="mono">' . Security::esc(gmdate('m/d/Y H:i:s', $t)) . ' UTC</span>';
-                }
-            }
-            if ($status['coverage'] !== null) {
-                echo ' · <span class="mono">' . Security::esc((string) $status['coverage'])
-                    . '%</span> of sessions that were served a page';
-            }
-        } else {
-            echo 'No session in the last 30 days has carried beacon data. '
-                . 'If you have just added the snippet, load a page on your site and refresh this view.';
-        }
-        echo '</span></div></div>';
+        echo '<div class="beacon-status beacon-none" id="beacon-status" role="status">'
+            . '<span class="beacon-dot" aria-hidden="true"></span>'
+            . '<div class="beacon-status-text">'
+            . '<strong id="beacon-status-label">Beacon: checking</strong>'
+            . '<span class="muted" id="beacon-status-detail">Asking the sessions core whether any beacon data has '
+            . 'arrived. This runs after the page renders, so it never holds the page up.</span>'
+            . '</div></div>';
 
         if (!$enabled) {
             echo '<div class="banner banner-warn"><strong>The collector is switched off.</strong> '
@@ -667,7 +752,6 @@ final class Settings extends Controller
                 . 'handing any of this to a colleague.</div>';
         }
 
-        // ---- The three planes, as a before/after -------------------------------
         echo '<div class="planes">';
 
         echo '<div class="plane plane-without">';
@@ -720,7 +804,6 @@ final class Settings extends Controller
             . 'honest time measurement</strong>. Three of the four timing numbers on the Overview page — wall '
             . 'clock, visible and engaged — come from here. The fourth, log span, does not and never will.</p>';
 
-        // ---- Install snippets --------------------------------------------------
         echo '<h3>Install it</h3>';
         echo '<p class="muted">Every snippet points at <code class="mono">' . Security::esc($src) . '</code>. '
             . 'The <code>?v=</code> query is the beacon file&rsquo;s own modification time: the file is served with '
@@ -735,8 +818,6 @@ final class Settings extends Controller
         }, 99);
         PHPCODE;
 
-        // Protocol-relative in the YAML key: a bare "https://" key needs quoting in YAML
-        // and this form sidesteps it while still resolving correctly.
         $schemeless = preg_replace('#^https?:#', '', $src) ?? $src;
         $drupalSnippet = <<<DRUPALCODE
         # your_theme.libraries.yml
@@ -784,13 +865,12 @@ final class Settings extends Controller
                 . Security::esc($s['code']) . '</pre>';
             echo '<div class="snippet-actions">';
             echo '<button type="button" class="ghost" data-copy="' . Security::esc($s['id']) . '">Copy</button>';
-            echo '<span class="muted">' . $s['note'] . '</span>'; // static authored copy
+            echo '<span class="muted">' . $s['note'] . '</span>';
             echo '</div>';
             echo '</div>';
         }
         echo '</div>';
 
-        // ---- Privacy -----------------------------------------------------------
         echo '<h3>What it collects, exactly</h3>';
         echo '<p class="muted"><strong>No cookies are set by default</strong>, and no identifier is written to the '
             . 'visitor&rsquo;s device. Visitor identity is a hash derived server-side from the network prefix and '
@@ -832,7 +912,7 @@ final class Settings extends Controller
             . 'never reveals whether a token was valid. It writes to a local SQLite staging table and does not '
             . 'talk to Solr at all, which keeps Solr credentials out of the public request path.</p>';
 
-        echo '</section>';
+        self::cardEnd();
     }
 
     /** IP privacy mode and retention, with the consequence of each spelled out. */
@@ -841,8 +921,7 @@ final class Settings extends Controller
         $mode = (string) $this->cfg->get('privacy.ip_mode', 'full');
         $days = (int) $this->cfg->get('privacy.retention_days', 90);
 
-        echo '<section class="card">';
-        echo '<h2>Privacy</h2>';
+        self::cardOpen('set-privacy', '04', 'Privacy');
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="privacy">';
@@ -873,7 +952,8 @@ final class Settings extends Controller
         echo '</fieldset>';
 
         echo '<button type="submit" class="primary">Save privacy settings</button>';
-        echo '</form></section>';
+        echo '</form>';
+        self::cardEnd();
     }
 
     /** Per-rule scoring weights and the verdict thresholds. */
@@ -882,8 +962,6 @@ final class Settings extends Controller
         $catalogue = Bots::reasonCatalogue();
         $weights = (array) $this->cfg->get('scoring.weights', []);
         $thresholds = (array) $this->cfg->get('scoring.thresholds', []);
-        // The built-in weights from SPEC §7, used as the placeholder when the operator has
-        // not overridden a rule.
         $defaults = [
             'automation_marker' => 100, 'headless_renderer' => 90, 'ua_claim_failed' => 85,
             'no_js_on_html' => 70, 'fp_cluster_proxy_fleet' => 80, 'ua_secch_mismatch' => 75,
@@ -893,11 +971,13 @@ final class Settings extends Controller
             'beacon_forged' => 90, 'ua_declared_bot' => 100,
         ];
 
-        echo '<section class="card">';
-        echo '<h2>Scoring weights</h2>';
-        echo '<p class="pop">Points added to <code>bot_score_f</code> when a rule fires. Saving bumps '
-            . '<code>rule_version_i</code>, so sessions scored under the old weights stay identifiable. '
-            . 'Existing documents are not rescored.</p>';
+        self::cardOpen(
+            'set-scoring',
+            '06',
+            'Scoring weights',
+            'Points added to bot_score_f when a rule fires. Saving bumps rule_version_i, so sessions scored under '
+            . 'the old weights stay identifiable. Existing documents are not rescored.'
+        );
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
@@ -931,7 +1011,8 @@ final class Settings extends Controller
         echo '</div></fieldset>';
 
         echo '<button type="submit" class="primary">Save scoring</button>';
-        echo '</form></section>';
+        echo '</form>';
+        self::cardEnd();
     }
 
     /** Display preferences. */
@@ -939,16 +1020,12 @@ final class Settings extends Controller
     {
         $tz = (string) $this->cfg->get('ui.timezone', 'UTC');
 
-        echo '<section class="card">';
-        echo '<h2>Display</h2>';
+        self::cardOpen('set-display', '07', 'Display');
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="ui">';
         echo '<label for="tz">Render timestamps in</label> ';
         echo '<select id="tz" name="timezone">';
-        // Solr stores UTC; this only affects rendering. The full tz list is long but it
-        // is a <select>, and guessing from the browser would silently disagree with the
-        // timezone the daemons use.
         foreach (\DateTimeZone::listIdentifiers() as $zone) {
             echo '<option value="' . Security::esc($zone) . '"' . ($zone === $tz ? ' selected' : '') . '>'
                 . Security::esc($zone) . '</option>';
@@ -957,6 +1034,7 @@ final class Settings extends Controller
         echo '<button type="submit" class="primary">Save</button>';
         echo '<p class="muted">Timestamps are always shown as <code>mm/dd/yyyy hh:mm:ss</code>. '
             . 'Solr stores everything in UTC; this setting only changes how it is displayed.</p>';
-        echo '</form></section>';
+        echo '</form>';
+        self::cardEnd();
     }
 }

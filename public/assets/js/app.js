@@ -42,17 +42,12 @@ function start() {
     const slug = document.body.dataset.view || boot.view || 'overview';
     const view = VIEWS[slug];
     if (typeof view === 'function') {
-        // Views are async; an unhandled rejection here would leave the page silently
-        // half-rendered, so the failure is logged where an operator can find it.
         Promise.resolve(view()).catch((err) => {
             window.console.error('[loghound] view "' + slug + '" failed to initialise:', err);
         });
     }
 }
 
-// The module script is deferred by definition, so the DOM is parsed by the time this
-// runs. The readyState check covers the pathological case of a very slow ECharts load
-// changing the ordering.
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);
 } else {

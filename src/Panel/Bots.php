@@ -2,16 +2,20 @@
 /**
  * Loghound — Bot forensics.
  *
- * The rule this view is built around, from SPEC §7: **honest crawlers are not the enemy.**
- * Googlebot and GPTBot get a `bot` verdict because they are bots, but lumping them into
- * the same red bar as a headless Chrome fleet on rotating residential proxies is exactly
- * what makes every other analytics tool useless for this. So the page is split down the
- * middle: declared crawlers on one side, evasive automation on the other, and the two
- * are never summed into a single "bot traffic" figure.
+ * Built around the rule in SPEC §7: honest crawlers are not the enemy. Googlebot and
+ * GPTBot get a `bot` verdict because they are bots, but putting them in the same bar as a
+ * headless Chrome fleet on rotating residential proxies is what makes every other
+ * analytics tool useless for this. So the page is split down the middle — declared
+ * crawlers on one side, evasive automation on the other — and the two are never summed
+ * into one "bot traffic" figure.
  *
- * The second thing this view owes the operator is the *why*. SPEC §1: a verdict with no
- * reasons is a bug. Every bar here is a `bot_reasons_ss` code, and every code carries the
+ * The second thing the view owes the operator is the why. SPEC §1: a verdict with no
+ * reasons is a bug. Every bar is a `bot_reasons_ss` code and every code carries the
  * plain-English description of the rule that fired it.
+ *
+ * Each section is an independent request. The reason facet over `bot_reasons_ss` is the
+ * expensive one, and separating it means the split, the verdict donut and the crawler
+ * roll-call are on screen long before it lands.
  *
  * @package Loghound
  * @license MIT
@@ -28,10 +32,9 @@ final class Bots extends Controller
     /**
      * Human-readable descriptions of the scoring rules from SPEC §7.
      *
-     * Kept here, in the view, rather than fetched from Score/Rules.php: the panel must
-     * still explain a reason code that came from an older `rule_version_i` than the one
-     * currently installed, and an unknown code falls through to being displayed raw
-     * rather than hidden.
+     * Kept in the view rather than read from Score/Rules.php because the panel must still
+     * explain a reason code produced by an older `rule_version_i` than the one currently
+     * installed. An unknown code falls through to being displayed raw rather than hidden.
      *
      * @return array<string,array{label:string,why:string,severity:string}>
      */
@@ -45,11 +48,11 @@ final class Bots extends Controller
             'fp_cluster_proxy_fleet' => ['label' => 'Proxy fleet fingerprint', 'severity' => 'high', 'why' => 'Five or more distinct IPs shared this exact header fingerprint within 24 hours on non-mobile networks. One client, many exits.'],
             'ua_secch_mismatch'      => ['label' => 'Sec-CH-UA mismatch', 'severity' => 'high', 'why' => 'A Chrome User-Agent arrived without Sec-CH-UA, or with one that contradicts it. Chrome always sends its own client hints.'],
             'platform_mismatch'      => ['label' => 'Platform mismatch', 'severity' => 'med', 'why' => 'Sec-CH-UA-Platform disagrees with the operating system the User-Agent claims.'],
-            'rdns_claim_failed'      => ['label' => 'rDNS claim failed', 'severity' => 'high', 'why' => 'It declared itself Googlebot/Bingbot and forward-confirmed reverse DNS did not back that up. Impersonating a crawler is not a mistake anyone makes by accident.'],
+            'rdns_claim_failed'      => ['label' => 'rDNS claim failed', 'severity' => 'high', 'why' => 'It declared itself Googlebot or Bingbot and forward-confirmed reverse DNS did not back that up. Impersonating a crawler is not a mistake anyone makes by accident.'],
             'hosting_asn_browser_ua' => ['label' => 'Datacentre + browser UA', 'severity' => 'low', 'why' => 'A consumer browser User-Agent arriving from a hosting ASN. Weak alone — VPNs and corporate egress look like this — meaningful when stacked.'],
             'tz_mismatch'            => ['label' => 'Timezone mismatch', 'severity' => 'low', 'why' => 'The browser timezone disagrees with the timezone of the IP geolocation.'],
             'no_interaction'         => ['label' => 'No interaction', 'severity' => 'med', 'why' => 'The beacon ran, the session ended, and not one scroll, click or keypress ever happened.'],
-            'no_304_on_repeat'       => ['label' => 'No conditional requests', 'severity' => 'low', 'why' => 'The same assets were fetched again with no If-None-Match/If-Modified-Since. A browser cache would have asked.'],
+            'no_304_on_repeat'       => ['label' => 'No conditional requests', 'severity' => 'low', 'why' => 'The same assets were fetched again with no If-None-Match or If-Modified-Since. A browser cache would have asked.'],
             'periodic_timing'        => ['label' => 'Periodic timing', 'severity' => 'med', 'why' => 'The gaps between requests are too regular across four or more requests. People are not metronomes.'],
             'single_page_10s'        => ['label' => 'Single page, under 10s', 'severity' => 'low', 'why' => 'One page, gone in under ten seconds. Very weak on its own; a bounce looks the same.'],
             'no_assets'              => ['label' => 'No sub-resources', 'severity' => 'med', 'why' => 'HTML was fetched and not a single stylesheet, script, font or image followed it.'],
@@ -79,46 +82,69 @@ final class Bots extends Controller
     public function api(string $action): array
     {
         return match ($action) {
-            'summary' => $this->summary(),
-            default   => ['error' => 'Unknown action'],
+            'split'     => $this->split(),
+            'reasons'   => $this->reasons(),
+            'verdicts'  => $this->verdicts(),
+            'histogram' => $this->histogram(),
+            'classes'   => $this->classes(),
+            'crawlers'  => $this->crawlers(),
+            default     => ['error' => 'Unknown action'],
         };
     }
 
     /**
-     * One request covering verdicts, classes, reasons, the score histogram and both
-     * halves of the declared/evasive split.
+     * The declared / evasive halves, counted separately and never summed.
      *
      * @return array<string,mixed>
      */
-    private function summary(): array
+    private function split(): array
     {
-        $facet = [
-            // Verdict distribution across everything scored.
-            'verdicts' => ['type' => 'terms', 'field' => 'bot_verdict_s', 'limit' => 8],
+        $counts = ['hits' => 'sum(hits_i)', 'uniq_ips' => 'unique(ip_s)'];
 
-            // Class breakdown and reason bars, both restricted to bot-like sessions.
-            //
-            // They sit inside a `query` facet rather than using a `domain` filter,
-            // because \Loghound\Solr::sanitiseFacet() accepts only `domain.excludeTags`
-            // — an arbitrary domain filter is a query fragment, and that class refuses to
-            // pass one it did not build. A nested query facet expresses the same
-            // restriction through a `q` it does validate.
+        $f = $this->gw->facet('bots.split', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $this->sessionFqs(),
+        ], [
+            'declared' => ['type' => 'query', 'q' => Query::POP_DECLARED, 'facet' => $counts],
+            'ai'       => ['type' => 'query', 'q' => Query::POP_AI, 'facet' => $counts],
+            'evasive'  => ['type' => 'query', 'q' => Query::POP_EVASIVE, 'facet' => $counts],
+            'human'    => ['type' => 'query', 'q' => Query::POP_HUMAN],
+        ]);
+
+        $half = function (string $key) use ($f): array {
+            $node = is_array($f[$key] ?? null) ? $f[$key] : [];
+            return [
+                'sessions' => (int) ($node['count'] ?? 0),
+                'hits'     => self::num($node, 'hits'),
+                'uniq_ips' => self::num($node, 'uniq_ips'),
+            ];
+        };
+
+        return $this->envelope([
+            'total'    => (int) ($f['count'] ?? 0),
+            'declared' => $half('declared'),
+            'ai'       => $half('ai'),
+            'evasive'  => $half('evasive'),
+            'human'    => ['sessions' => self::qcount($f, 'human')],
+        ]);
+    }
+
+    /**
+     * Reason codes over bot-like sessions, split by whether the session declared itself.
+     *
+     * The scoping is a nested `query` facet rather than a `domain` filter because
+     * Solr::sanitiseFacet() accepts only `domain.excludeTags` — an arbitrary domain filter
+     * is a query fragment the client did not build, and it refuses to pass one.
+     *
+     * @return array<string,mixed>
+     */
+    private function reasons(): array
+    {
+        $f = $this->gw->facet('bots.reasons', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $this->sessionFqs(),
+        ], [
             'botlike' => ['type' => 'query', 'q' => Query::POP_BOTLIKE, 'facet' => [
-                // `none` on a human session is not information, it is noise, which is why
-                // this is scoped rather than faceted over everything.
-                'classes' => [
-                    'type'  => 'terms',
-                    'field' => 'bot_class_s',
-                    'limit' => 12,
-                    'facet' => [
-                        'uniq_ips' => 'unique(ip_s)',
-                        'hits'     => 'sum(hits_i)',
-                        'score'    => 'avg(bot_score_f)',
-                    ],
-                ],
-
-                // The reason bars, split so the UI can show how much of each reason comes
-                // from crawlers that declared themselves.
                 'reasons' => [
                     'type'  => 'terms',
                     'field' => 'bot_reasons_ss',
@@ -131,28 +157,146 @@ final class Bots extends Controller
                     ],
                 ],
             ]],
+        ]);
 
-            // Score histogram, 5-point buckets. Shows whether the ruleset is producing a
-            // confident bimodal distribution or a mush in the middle — which is how you
-            // tell that weights need tuning.
-            'histogram' => [
-                'type'  => 'range',
-                'field' => 'bot_score_f',
-                'start' => 0,
-                'end'   => 100,
-                'gap'   => 5,
-            ],
+        $botlike = is_array($f['botlike'] ?? null) ? $f['botlike'] : [];
+        $catalogue = self::reasonCatalogue();
+        $rows = [];
+        foreach (self::buckets($botlike, 'reasons') as $bucket) {
+            $code = (string) ($bucket['val'] ?? '');
+            $meta = $catalogue[$code] ?? [
+                'label'    => $code,
+                'why'      => 'No description for this rule code in this panel version.',
+                'severity' => 'med',
+            ];
+            $count = (int) ($bucket['count'] ?? 0);
+            $declared = self::qcount($bucket, 'declared');
+            $rows[] = [
+                'code'      => $code,
+                'label'     => $meta['label'],
+                'why'       => $meta['why'],
+                'severity'  => $meta['severity'],
+                'count'     => $count,
+                'declared'  => $declared,
+                'evasive'   => max(0, $count - $declared),
+                'avg_score' => self::num($bucket, 'score'),
+                'uniq_ips'  => self::num($bucket, 'uniq_ips'),
+            ];
+        }
 
-            // --- The split ---------------------------------------------------------
-            'declared' => ['type' => 'query', 'q' => Query::POP_DECLARED, 'facet' => ['hits' => 'sum(hits_i)', 'uniq_ips' => 'unique(ip_s)']],
-            'ai'       => ['type' => 'query', 'q' => Query::POP_AI, 'facet' => ['hits' => 'sum(hits_i)', 'uniq_ips' => 'unique(ip_s)']],
-            'evasive'  => ['type' => 'query', 'q' => Query::POP_EVASIVE, 'facet' => ['hits' => 'sum(hits_i)', 'uniq_ips' => 'unique(ip_s)']],
-            'human'    => ['type' => 'query', 'q' => Query::POP_HUMAN],
+        return $this->envelope([
+            'botlike' => (int) ($botlike['count'] ?? 0),
+            'reasons' => $rows,
+        ]);
+    }
 
-            // Named crawlers, from the population that self-declares. Note the domain is
-            // `ua_bot_b:true` and not the verdict: a crawler that failed forward-confirmed
-            // rDNS still declared itself, and it must appear here so the operator can see
-            // that the claim was rejected.
+    /**
+     * Verdict distribution across everything scored.
+     *
+     * @return array<string,mixed>
+     */
+    private function verdicts(): array
+    {
+        $f = $this->gw->facet('bots.verdicts', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $this->sessionFqs(),
+        ], [
+            'verdicts' => ['type' => 'terms', 'field' => 'bot_verdict_s', 'limit' => 8],
+        ]);
+
+        $rows = [];
+        foreach (self::buckets($f, 'verdicts') as $bucket) {
+            $rows[] = ['verdict' => (string) ($bucket['val'] ?? ''), 'count' => (int) ($bucket['count'] ?? 0)];
+        }
+
+        return $this->envelope(['total' => (int) ($f['count'] ?? 0), 'verdicts' => $rows]);
+    }
+
+    /**
+     * Bot-score distribution in five-point buckets.
+     *
+     * Shows whether the ruleset is producing a confident bimodal split or a mush in the
+     * middle, which is how an operator knows the weights need tuning.
+     *
+     * @return array<string,mixed>
+     */
+    private function histogram(): array
+    {
+        $f = $this->gw->facet('bots.histogram', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $this->sessionFqs(),
+        ], [
+            'histogram' => ['type' => 'range', 'field' => 'bot_score_f', 'start' => 0, 'end' => 100, 'gap' => 5],
+        ]);
+
+        $rows = [];
+        foreach (self::buckets($f, 'histogram') as $bucket) {
+            $rows[] = ['from' => (float) ($bucket['val'] ?? 0), 'count' => (int) ($bucket['count'] ?? 0)];
+        }
+
+        return $this->envelope(['total' => (int) ($f['count'] ?? 0), 'histogram' => $rows]);
+    }
+
+    /**
+     * Bot classes, restricted to bot-like sessions.
+     *
+     * `none` on a human session is not information, it is noise, which is why the facet is
+     * scoped rather than run over everything.
+     *
+     * @return array<string,mixed>
+     */
+    private function classes(): array
+    {
+        $f = $this->gw->facet('bots.classes', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $this->sessionFqs(),
+        ], [
+            'botlike' => ['type' => 'query', 'q' => Query::POP_BOTLIKE, 'facet' => [
+                'classes' => [
+                    'type'  => 'terms',
+                    'field' => 'bot_class_s',
+                    'limit' => 12,
+                    'facet' => [
+                        'uniq_ips' => 'unique(ip_s)',
+                        'hits'     => 'sum(hits_i)',
+                        'score'    => 'avg(bot_score_f)',
+                    ],
+                ],
+            ]],
+        ]);
+
+        $botlike = is_array($f['botlike'] ?? null) ? $f['botlike'] : [];
+        $rows = [];
+        foreach (self::buckets($botlike, 'classes') as $bucket) {
+            $value = (string) ($bucket['val'] ?? '');
+            $rows[] = [
+                'class'     => $value,
+                'count'     => (int) ($bucket['count'] ?? 0),
+                'hits'      => self::num($bucket, 'hits'),
+                'uniq_ips'  => self::num($bucket, 'uniq_ips'),
+                'avg_score' => self::num($bucket, 'score'),
+                'declared'  => in_array($value, ['declared_crawler', 'ai_crawler', 'monitor'], true),
+            ];
+        }
+
+        return $this->envelope(['botlike' => (int) ($botlike['count'] ?? 0), 'classes' => $rows]);
+    }
+
+    /**
+     * Named crawlers, from the population that self-declares.
+     *
+     * The domain is `ua_bot_b:true` and not the verdict on purpose: a crawler that failed
+     * forward-confirmed rDNS still declared itself, and it must appear here so the
+     * operator can see that the claim was rejected.
+     *
+     * @return array<string,mixed>
+     */
+    private function crawlers(): array
+    {
+        $f = $this->gw->facet('bots.crawlers', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $this->sessionFqs(),
+        ], [
             'selfdeclared' => ['type' => 'query', 'q' => 'ua_bot_b:true', 'facet' => [
                 'crawlers' => [
                     'type'  => 'terms',
@@ -169,110 +313,74 @@ final class Bots extends Controller
                     ],
                 ],
             ]],
-        ];
-
-        $f = $this->gw->facet('bots.summary', $this->gw->sessionsCore(), [
-            'q'  => '*:*',
-            'fq' => $this->sessionFqs(),
-        ], $facet);
-
-        // Nested facet blocks, unwrapped once so the readers below stay flat.
-        $botlike = is_array($f['botlike'] ?? null) ? $f['botlike'] : [];
-        $selfDeclared = is_array($f['selfdeclared'] ?? null) ? $f['selfdeclared'] : [];
-
-        // --- Reasons ---------------------------------------------------------------
-        $catalogue = self::reasonCatalogue();
-        $reasons = [];
-        foreach (self::buckets($botlike, 'reasons') as $b) {
-            $code = (string) ($b['val'] ?? '');
-            $meta = $catalogue[$code] ?? ['label' => $code, 'why' => 'No description for this rule code in this panel version.', 'severity' => 'med'];
-            $count = (int) ($b['count'] ?? 0);
-            $declared = self::qcount($b, 'declared');
-            $reasons[] = [
-                'code'      => $code,
-                'label'     => $meta['label'],
-                'why'       => $meta['why'],
-                'severity'  => $meta['severity'],
-                'count'     => $count,
-                'declared'  => $declared,
-                'evasive'   => max(0, $count - $declared),
-                'avg_score' => self::num($b, 'score'),
-                'uniq_ips'  => self::num($b, 'uniq_ips'),
-            ];
-        }
-
-        // --- Verdicts / classes ----------------------------------------------------
-        $verdicts = [];
-        foreach (self::buckets($f, 'verdicts') as $b) {
-            $verdicts[] = ['verdict' => (string) ($b['val'] ?? ''), 'count' => (int) ($b['count'] ?? 0)];
-        }
-
-        $classes = [];
-        foreach (self::buckets($botlike, 'classes') as $b) {
-            $classes[] = [
-                'class'     => (string) ($b['val'] ?? ''),
-                'count'     => (int) ($b['count'] ?? 0),
-                'hits'      => self::num($b, 'hits'),
-                'uniq_ips'  => self::num($b, 'uniq_ips'),
-                'avg_score' => self::num($b, 'score'),
-                // Which side of the split this class belongs to, decided here so the UI
-                // never has to re-derive it.
-                'declared'  => in_array((string) ($b['val'] ?? ''), ['declared_crawler', 'ai_crawler', 'monitor'], true),
-            ];
-        }
-
-        // --- Histogram -------------------------------------------------------------
-        $histogram = [];
-        foreach (self::buckets($f, 'histogram') as $b) {
-            $histogram[] = ['from' => (float) ($b['val'] ?? 0), 'count' => (int) ($b['count'] ?? 0)];
-        }
-
-        // --- Declared crawler table ------------------------------------------------
-        $crawlers = [];
-        foreach (self::buckets($selfDeclared, 'crawlers') as $b) {
-            $catBuckets = self::buckets($b, 'cat');
-            $crawlers[] = [
-                'name'     => (string) ($b['val'] ?? ''),
-                'category' => (string) ($catBuckets[0]['val'] ?? 'other'),
-                'sessions' => (int) ($b['count'] ?? 0),
-                'hits'     => self::num($b, 'hits'),
-                'uniq_ips' => self::num($b, 'uniq_ips'),
-                'last'     => is_string($b['last'] ?? null) ? $b['last'] : null,
-                'ai'       => self::qcount($b, 'ai') > 0,
-                'verified' => self::qcount($b, 'verified'),
-            ];
-        }
-
-        $node = static fn (string $k): array => is_array($f[$k] ?? null) ? $f[$k] : [];
-
-        return $this->envelope([
-            'total'     => (int) ($f['count'] ?? 0),
-            'reasons'   => $reasons,
-            'verdicts'  => $verdicts,
-            'classes'   => $classes,
-            'histogram' => $histogram,
-            'crawlers'  => $crawlers,
-            'split' => [
-                'declared' => ['sessions' => self::qcount($f, 'declared'), 'hits' => self::num($node('declared'), 'hits'), 'uniq_ips' => self::num($node('declared'), 'uniq_ips')],
-                'ai'       => ['sessions' => self::qcount($f, 'ai'), 'hits' => self::num($node('ai'), 'hits'), 'uniq_ips' => self::num($node('ai'), 'uniq_ips')],
-                'evasive'  => ['sessions' => self::qcount($f, 'evasive'), 'hits' => self::num($node('evasive'), 'hits'), 'uniq_ips' => self::num($node('evasive'), 'uniq_ips')],
-                'human'    => ['sessions' => self::qcount($f, 'human')],
-            ],
         ]);
+
+        $declared = is_array($f['selfdeclared'] ?? null) ? $f['selfdeclared'] : [];
+        $rows = [];
+        foreach (self::buckets($declared, 'crawlers') as $bucket) {
+            $categories = self::buckets($bucket, 'cat');
+            $rows[] = [
+                'name'     => (string) ($bucket['val'] ?? ''),
+                'category' => (string) ($categories[0]['val'] ?? 'other'),
+                'sessions' => (int) ($bucket['count'] ?? 0),
+                'hits'     => self::num($bucket, 'hits'),
+                'uniq_ips' => self::num($bucket, 'uniq_ips'),
+                'last'     => is_string($bucket['last'] ?? null) ? $bucket['last'] : null,
+                'ai'       => self::qcount($bucket, 'ai') > 0,
+                'verified' => self::qcount($bucket, 'verified'),
+            ];
+        }
+
+        return $this->envelope(['declared' => (int) ($declared['count'] ?? 0), 'crawlers' => $rows]);
     }
 
     public function body(): void
     {
-        // ---- The split, stated before anything else --------------------------
-        echo '<section class="split-card">';
+        $this->splitCard();
+        $this->reasonsCard();
+
+        echo '<div class="grid-2">';
+        self::chart(
+            'bf-verdicts',
+            '03',
+            'Verdict distribution',
+            'All scored sessions in the selected range.',
+            300,
+            'Faceting verdicts'
+        );
+        self::chart(
+            'bf-histogram',
+            '04',
+            'Score distribution',
+            'All scored sessions. A healthy ruleset is bimodal — a pile-up in the middle means the weights need tuning.',
+            300,
+            'Bucketing bot scores'
+        );
+        echo '</div>';
+
+        $this->classesCard();
+        $this->crawlersCard();
+    }
+
+    /** The two halves, stated before anything else on the page. */
+    private function splitCard(): void
+    {
+        self::cardOpen('bf-split', '01', 'Declared versus evasive');
+        self::skeleton('bf-split', 'stats', 0, 'Separating declared crawlers from evasive automation');
+
+        echo '<div class="split-card">';
+
         echo '<div class="split-half split-declared">';
         echo '<h2>Declared crawlers</h2>';
-        echo '<p class="split-note">Told us what they were, and the claim held up. Verdict <code>bot</code>, threat none. '
-            . 'They are counted separately everywhere in this panel.</p>';
+        echo '<p class="split-note">Told us what they were, and the claim held up. Verdict <code>bot</code>, '
+            . 'threat none. They are counted separately everywhere in this panel.</p>';
         echo '<div class="split-stats">';
-        echo '<div><span class="stat-value mono" data-field="declared_sessions">—</span><span class="stat-label">Search &amp; SEO sessions</span></div>';
-        echo '<div><span class="stat-value mono" data-field="ai_sessions">—</span><span class="stat-label">AI crawler sessions</span></div>';
-        echo '<div><span class="stat-value mono" data-field="declared_hits">—</span><span class="stat-label">Requests</span></div>';
+        echo '<div><span class="stat-value mono" data-field="declared_sessions">—</span>'
+            . '<span class="stat-label">Search &amp; SEO</span></div>';
+        echo '<div><span class="stat-value mono" data-field="ai_sessions">—</span>'
+            . '<span class="stat-label">AI crawlers</span></div>';
+        echo '<div><span class="stat-value mono" data-field="declared_hits">—</span>'
+            . '<span class="stat-label">Requests</span></div>';
         echo '</div></div>';
 
         echo '<div class="split-half split-evasive">';
@@ -280,18 +388,31 @@ final class Bots extends Controller
         echo '<p class="split-note">Scored as automation and did not say so: headless browsers, scripted clients, '
             . 'spoofed User-Agents, rotating-proxy fleets. This is the half that matters.</p>';
         echo '<div class="split-stats">';
-        echo '<div><span class="stat-value mono" data-field="evasive_sessions">—</span><span class="stat-label">Sessions</span></div>';
-        echo '<div><span class="stat-value mono" data-field="evasive_ips">—</span><span class="stat-label">Distinct IPs</span></div>';
-        echo '<div><span class="stat-value mono" data-field="evasive_hits">—</span><span class="stat-label">Requests</span></div>';
+        echo '<div><span class="stat-value mono" data-field="evasive_sessions">—</span>'
+            . '<span class="stat-label">Sessions</span></div>';
+        echo '<div><span class="stat-value mono" data-field="evasive_ips">—</span>'
+            . '<span class="stat-label">Distinct IPs</span></div>';
+        echo '<div><span class="stat-value mono" data-field="evasive_hits">—</span>'
+            . '<span class="stat-label">Requests</span></div>';
         echo '</div></div>';
-        echo '</section>';
 
-        // ---- Reason bars -------------------------------------------------------
-        echo '<section class="card">';
-        echo '<h2>Why each session was scored</h2>';
-        self::pop('Sessions with verdict bot or likely_bot. A session fires several rules, so the bars sum to more than the session count.');
-        echo '<div class="chart" id="bf-reasons" style="height:480px"></div>';
-        echo '<div class="empty" id="bf-reasons-empty" hidden></div>';
+        echo '</div>';
+        self::cardClose('bf-split');
+    }
+
+    /** The reason bars and the table that explains every code. */
+    private function reasonsCard(): void
+    {
+        self::cardOpen(
+            'bf-reasons',
+            '02',
+            'Why each session was scored',
+            'Sessions with verdict bot or likely_bot. A session fires several rules, so the bars sum to more than '
+            . 'the session count.'
+        );
+        self::skeleton('bf-reasons', 'chart', 420, 'Faceting signal codes');
+
+        echo '<div class="chart" id="bf-reasons-chart" style="height:460px"></div>';
         echo '<div class="table-wrap"><table id="bf-reason-table"><thead><tr>'
             . '<th scope="col">Signal</th>'
             . '<th scope="col">What it means</th>'
@@ -299,18 +420,22 @@ final class Bots extends Controller
             . '<th scope="col" class="num">Declared</th>'
             . '<th scope="col" class="num">Avg score</th>'
             . '</tr></thead><tbody></tbody></table></div>';
-        echo '</section>';
 
-        // ---- Verdict + class + histogram --------------------------------------
-        echo '<div class="grid-2">';
-        self::chart('bf-verdicts', 'Verdict distribution', 'All scored sessions in the selected range.', '280px');
-        self::chart('bf-histogram', 'Score distribution', 'All scored sessions. A healthy ruleset is bimodal — a pile-up in the middle means the weights need tuning.', '280px');
-        echo '</div>';
+        self::cardClose('bf-reasons');
+    }
 
-        echo '<section class="card">';
-        echo '<h2>Bot classes</h2>';
-        self::pop('Sessions with verdict bot or likely_bot, grouped by bot_class_s. Declared classes are marked.');
-        echo '<div class="table-wrap"><table id="bf-classes"><thead><tr>'
+    /** Bot class table. */
+    private function classesCard(): void
+    {
+        self::cardOpen(
+            'bf-classes',
+            '05',
+            'Bot classes',
+            'Sessions with verdict bot or likely_bot, grouped by bot_class_s. Declared classes are marked.'
+        );
+        self::skeleton('bf-classes', 'rows', 0, 'Faceting bot classes');
+
+        echo '<div class="table-wrap"><table id="bf-classes-table"><thead><tr>'
             . '<th scope="col">Class</th>'
             . '<th scope="col">Kind</th>'
             . '<th scope="col" class="num">Sessions</th>'
@@ -318,14 +443,23 @@ final class Bots extends Controller
             . '<th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="num">Avg score</th>'
             . '</tr></thead><tbody></tbody></table></div>';
-        echo '<div class="empty" id="bf-classes-empty" hidden></div>';
-        echo '</section>';
 
-        // ---- Declared crawler roll-call ---------------------------------------
-        echo '<section class="card">';
-        echo '<h2>Declared crawlers, by name</h2>';
-        self::pop('Sessions whose User-Agent self-identifies as a bot (ua_bot_b). Verified = forward-confirmed reverse DNS passed; an unverified Googlebot is an impersonator, not a crawler.');
-        echo '<div class="table-wrap"><table id="bf-crawlers"><thead><tr>'
+        self::cardClose('bf-classes');
+    }
+
+    /** Declared crawler roll-call. */
+    private function crawlersCard(): void
+    {
+        self::cardOpen(
+            'bf-crawlers',
+            '06',
+            'Declared crawlers, by name',
+            'Sessions whose User-Agent self-identifies as a bot. Verified means forward-confirmed reverse DNS '
+            . 'passed; an unverified Googlebot is an impersonator, not a crawler.'
+        );
+        self::skeleton('bf-crawlers', 'rows', 0, 'Faceting crawler names');
+
+        echo '<div class="table-wrap"><table id="bf-crawlers-table"><thead><tr>'
             . '<th scope="col">Crawler</th>'
             . '<th scope="col">Category</th>'
             . '<th scope="col" class="num">Sessions</th>'
@@ -334,7 +468,7 @@ final class Bots extends Controller
             . '<th scope="col" class="num">Verified</th>'
             . '<th scope="col">Last seen</th>'
             . '</tr></thead><tbody></tbody></table></div>';
-        echo '<div class="empty" id="bf-crawlers-empty" hidden></div>';
-        echo '</section>';
+
+        self::cardClose('bf-crawlers');
     }
 }

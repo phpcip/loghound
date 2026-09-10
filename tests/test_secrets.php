@@ -10,6 +10,13 @@
  * The scan itself lives in tests/scan-secrets.php so it can also be used as a
  * pre-commit hook and as a one-off history audit.
  *
+ * The two git-dependent checks pass trivially when there is no .git directory.
+ * A deployed installation is extracted from an archive and has no repository, so
+ * `git check-ignore` there reports everything as committable and would fail the
+ * suite on a machine where the property being protected — what reaches a public
+ * repository — does not exist. The checks are meaningful in a working copy and
+ * meaningless outside one.
+ *
  * @package Loghound
  * @license MIT
  */
@@ -76,6 +83,10 @@ return [
     'config/loghound.php is ignored and has never been committed' => static function (): bool {
         $root = dirname(__DIR__);
 
+        if (!is_dir($root . '/.git')) {
+            return true;
+        }
+
         // Ignored by git.
         exec('cd ' . escapeshellarg($root) . ' && git check-ignore -q config/loghound.php 2>/dev/null', $o, $code);
         if ($code !== 0) {
@@ -100,6 +111,10 @@ return [
 
     'runtime state and credential material cannot be committed' => static function (): bool {
         $root = dirname(__DIR__);
+
+        if (!is_dir($root . '/.git')) {
+            return true;
+        }
 
         // Each of these would leak either visitor data or a credential. They are
         // checked as paths rather than by scanning content, because the danger is

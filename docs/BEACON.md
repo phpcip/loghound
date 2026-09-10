@@ -1,7 +1,10 @@
 # The Loghound beacon
 
-`public/b.js` is a ~6 KB, dependency-free script that a site embeds in one line. It
-does two things, and refuses to do anything else:
+`public/b.js` is a dependency-free script that a site embeds in one line. It ships as
+commented source — there is no build step anywhere in this project — which is about
+33 KB on disk and **roughly 12 KB over the wire**, because both shipped vhost examples
+serve it gzipped with a long cache lifetime. It does two things, and refuses to do
+anything else:
 
 1. **Measures how long a visitor was actually there.** Not "the page was open" —
    three separate clocks, never conflated.
@@ -17,13 +20,20 @@ unreachable the host page is completely unaffected.
 ## 1. Installation
 
 ```html
-<script src="https://loghound.example.com/b.js" async></script>
+<script src="https://loghound.example.com/b.js?v=1" defer></script>
 ```
 
-That is the whole installation. Put it anywhere — `<head>` or before `</body>` —
-`async` means it never blocks rendering. The collector URL is derived from the
-script's own `src` (`.../b.js` → `.../collect.php`), so there is no second URL to
-keep in sync.
+That is the whole installation, and it is the snippet the panel's Settings page
+hands you. Put it anywhere — `<head>` or before `</body>`. `defer` never blocks
+rendering and starts the clocks at parse time rather than after the last image has
+loaded; `async` works too and is marginally earlier, at the cost of a
+non-deterministic start point. The collector URL is derived from the script's own
+`src` (`.../b.js` → `.../collect.php`), so there is no second URL to keep in sync.
+
+The `?v=` query string is the cache buster: `b.js` is served with a long
+`Cache-Control`, so bumping the number makes an upgrade a new URL that visitors
+actually fetch. The Settings page fills it in from the file's own modification
+time.
 
 Optional attributes:
 

@@ -25,6 +25,12 @@ First public release.
   by re-stat'ing the path and by the link count — on Linux a deleted file that a process
   holds open keeps reading forever with no error, so a naive tailer looks perfectly
   healthy while ingesting nothing), and a path that disappears with no replacement.
+- **Inode-recycling detection.** On ext4 a rotate-and-recreate cycle routinely gives the
+  new file the inode number the old one just freed, so a stored `(dev, inode, offset)`
+  cursor matches a file that no longer exists and resuming at it silently skips the start
+  of the new file. A valid cursor always sits immediately after a newline, because only
+  complete lines are ever committed; checking that one byte distinguishes a genuine resume
+  from a recycled inode. The source restarts at 0 and the event is counted, never hidden.
 - Partial-line safety: the committed offset only ever advances past a byte that has a
   terminating newline, so a half-written line cannot corrupt itself or the document id of
   the next one.
@@ -64,6 +70,115 @@ First public release.
   than recreated.
 - Fully non-interactive mode driven by `LOGHOUND_*` environment variables, for Ansible and
   CI. Switches on automatically when stdin is not a terminal.
+
+**Enrichment**
+
+- Geolocation (ezcmd), ASN and network type (Team Cymru), RIR netname (whois), reverse DNS
+  with forward confirmation, and local User-Agent parsing. Each is individually switchable;
+  with all four off and your own Solr, nothing leaves the machine.
+- Every lookup is cached in SQLite, **including negative results** (geo/ASN/whois ≥ 30 days,
+  rDNS ≥ 7), so a repeat visitor costs one lookup per cache window rather than one per
+  request.
+- **Enrichment failure never blocks indexing.** The field is simply absent, and an absent
+  field is never rendered as zero or as an empty string.
+
+**Detection and scoring**
+
+- `bin/loghound-score` — systemd timer, every 60 s. Closes idle sessions, merges beacon
+  data, computes `fp_ips_24h_i` with one Solr JSON Facet per distinct fingerprint in the
+  batch, scores, upserts the session document and recomputes the daily rollup.
+- Seventeen weighted rules across the transport, behavioural and execution planes, 0–100,
+  capped. **Every point added carries a reason code**: `bot_score_f` is always accompanied
+  by `bot_reasons_ss`, and a clean session carries `no_bot_signals` rather than an empty
+  list. Weights and thresholds are config-overridable and `rule_version_i` is written onto
+  every session so a historical verdict stays traceable.
+- `fp_hash_s` — the cross-IP header fingerprint, **excluding the IP by design**, which is
+  what collapses a rotating-proxy fleet back into one row. `fp_cluster_proxy_fleet` (80)
+  is the signal the project is built around; it excludes `as_type_s = mobile` because
+  carrier-grade NAT genuinely puts thousands of real users behind a handful of addresses.
+- **Declared crawlers are classified, not conflated.** Googlebot, Bingbot, GPTBot,
+  ClaudeBot and the rest get `bot_verdict_s = bot` with `bot_class_s` of `declared_crawler`
+  or `ai_crawler`, and the separation is enforced in `Rules::classify()` rather than by a
+  UI checkbox, so every consumer sees the same split. A self-declared crawler that fails
+  forward-confirmed rDNS is `rdns_claim_failed` (95), class `spoofed_ua`, which is a
+  different fact entirely.
+- The daily rollup is **recomputed** from one facet query rather than incremented. An
+  atomic `inc` would double-count whenever a retried request's first response was lost.
+
+**The beacon**
+
+- `public/b.js` — dependency-free, no build step, no cookies, passive and throttled
+  listeners, and completely inert for the host page if the collector is unreachable.
+- **Three clocks, never conflated**: `wall_ms` (the page existed), `visible_ms`
+  (`visibilityState === 'visible'` **and** the window focused), `engaged_ms` (visible and
+  within 30 s of a real interaction). All from `performance.now()` deltas — never
+  `Date.now()`, because an NTP step or a DST change would otherwise be added to somebody's
+  reading time. Segments are closed before the state changes, so accumulation is exact
+  rather than sampled.
+- **Flushes on `pagehide` and `visibilitychange → hidden` with `navigator.sendBeacon()`,
+  which is what lets Loghound measure the last page of a session** — the one a log-only
+  tool structurally cannot see. `unload` is never used: it disables the back/forward cache
+  and does not fire reliably on mobile. A bfcache restore starts a fresh pageview rather
+  than carrying frozen time forward.
+- Heartbeats only while engaged time is advancing, so an idle tab produces one beat rather
+  than 240.
+- Execution-plane signal codes: definitive automation markers, headless-browser tells
+  graded by how much genuine human population sits behind each, UA-claim verification
+  against a probe table of Chrome-version-to-feature (a spoofed User-Agent cannot retrofit
+  V8), consistency cross-checks, and human-presence evidence including mouse-path linearity.
+  Only the four strong headless tells plus any automation marker set `headless_b`.
+- Guards that exist to protect real people: the polyfill guard (a probe must report
+  `[native code]`, or a site loading core-js would get its own visitors flagged), the iOS
+  exclusion (Chrome, Edge, Firefox and Opera on iOS are WebKit in a Chrome-shaped UA), a
+  two-major-version grace, and display checks that stay silent when the payload reported no
+  screen size at all — "no data" must never be read as "a window with no size".
+- `public/collect.php` — public, unauthenticated write path, treated as hostile. POST only,
+  8 KB cap, HMAC token issued by the server, per-IP and per-session token buckets, always
+  `204` with no body so it can never be used as an oracle. **It never touches Solr**: it
+  writes one SQLite staging row, which keeps an indexing round trip off every pageview and
+  keeps Solr credentials out of the most exposed file in the project.
+- Impossible timings are clamped and recorded as `beacon_forged` (90) rather than
+  discarded — **the lie is the evidence**, and dropping it would make the session
+  indistinguishable from a visitor on a slow connection.
+- **When no beacon arrived the timing fields are absent, never zero.** A zero enters every
+  average as a genuine "0 seconds engaged" observation.
+
+**The panel**
+
+- Seven views: Overview, Bot forensics, Fingerprint clusters, Networks, Session explorer,
+  Performance, Settings. Vanilla JS, no framework, no build step, ECharts self-hosted so
+  the CSP can stay closed and the panel works air-gapped.
+- **Authentication fails closed.** With `auth.mode` unset the panel returns 503 and refuses
+  to serve; there is no localhost bypass. CSRF on every state-changing request, strict CSP
+  with no inline script, and a dedicated PHP-FPM pool.
+- `src/Panel/Gateway.php` is the only path to Solr and every query is built server-side
+  from constants and allowlists. **There is no generic Solr passthrough** and there will
+  not be one. `Gateway::facet()` forces `rows=0` so an aggregate call cannot ship documents
+  by accident.
+- Every chart and stat block carries a visible population caption naming what it counts,
+  as a `<p>` rather than a tooltip, so it survives being screenshotted. A metric with no
+  data renders as an em-dash, never as zero.
+- Opt-in demo mode (`LOGHOUND_DEMO=1`) with a fixed-seed synthetic world, banner-labelled
+  on every page. A Solr that is merely unreachable produces an error banner and empty
+  states — never fabricated data.
+
+**Solr schema and retention**
+
+- Two configsets, heavily commented, with `stored="false"` by default and retrieval from
+  docValues; the stock `_text_` catchall and the stock dynamic fields are deleted.
+- No `<lib/>` directives and no `/stream`, `/sql`, `/export`, `/replication`,
+  `/update/extract`, `/debug/dump`, `/terms`, `/tvrh`, `/analysis/*`, `/spell`, `/suggest`,
+  `/browse` or `/elevate` handlers. Each removal is annotated with what it would hand an
+  attacker.
+- `autoSoftCommit maxTime=5000` with `autoCommit maxTime=60000 openSearcher=false`, and
+  cache settings that differ per core because the two workloads are mirror images —
+  autowarm 0 throughout the write-heavy `hits` core, warming on the read-heavy `sessions`
+  core.
+- `bin/loghound-retention` — daily systemd timer issuing a real `delete-by-query` against
+  both cores, plus the SQLite caches. `privacy.rollup_forever` keeps the aggregate daily
+  documents, which carry no per-visitor field, so long-range charts survive the deletion of
+  the detail underneath them. `retention_days = 0` disables deletion and is a supported
+  configuration, not an oversight.
 
 **Installation**
 
@@ -144,6 +259,18 @@ First public release.
 - `docs/PRIVACY.md` — exactly what is collected field by field, what is never collected,
   the three IP modes with their detection cost, what leaves your server, retention, GDPR
   posture, data subject requests, and draft privacy-notice text.
+- `docs/BEACON.md` — the three clocks and why they differ, a worked example, the flush
+  strategy, every field the beacon sends, every signal code with its weight, the wire
+  protocol and anti-forgery scheme, how to extend the UA-claim probe table, and a section
+  on what the beacon cannot detect.
+- `docs/PANEL.md` — the panel's request flow, the notes a security reviewer wants, demo
+  mode, and a frank list of the places `SPEC.md` is wrong or silent and what that cost.
+- `docs/SCHEMA.md` — both cores field by field with the reason each one is indexed,
+  docValued or stored and what it costs, the fingerprint's honest limitation on plain
+  `combined`, index-size arithmetic shown as a breakdown rather than a single number, what
+  to turn off first, and the deliberate omissions from the configsets.
+- `CONTRIBUTING.md` — what the project is for, the rules that are not negotiable, how to
+  write a test, fixture anonymisation rules, and an explicit list of what will be declined.
 
 ### Notes
 
@@ -152,4 +279,4 @@ First public release.
 
 ---
 
-[1.0.0]: https://github.com/cipriandimofte/loghound/releases/tag/v1.0.0
+[1.0.0]: https://github.com/phpcip/loghound/releases/tag/v1.0.0

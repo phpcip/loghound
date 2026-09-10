@@ -82,6 +82,11 @@ final class Geo
     /**
      * Look up an address and return the Solr geo fields it justifies.
      *
+     * Only real, routable addresses are looked up. A private or reserved address has no
+     * location, and asking about one would waste a request and leak the internal topology to
+     * a third party. A negative cache entry yields an empty result deliberately, so that a
+     * known-unanswerable address is not asked about again.
+     *
      * @return array<string,mixed> Empty when geolocation is disabled, impossible or unknown.
      *                             Never contains a key whose value we had to invent.
      */
@@ -90,8 +95,6 @@ final class Geo
         if (empty($this->cfg['geo_enabled'])) {
             return [];
         }
-        // Only real, routable addresses. A private or reserved address has no location, and
-        // asking about one wastes a request and leaks the internal topology to a third party.
         if (!self::isPublicIp($ip)) {
             return [];
         }
@@ -100,17 +103,14 @@ final class Geo
             return $this->memo[$ip];
         }
 
-        // --- Cache ----------------------------------------------------------
         if ($this->state !== null) {
             $hit = false;
             $cached = $this->state->cacheGet('geo', $ip, $hit);
             if ($hit) {
-                // A negative cache entry yields [] — deliberately, so we do not re-ask.
                 return $this->memo[$ip] = ($cached ?? []);
             }
         }
 
-        // --- Live lookup -----------------------------------------------------
         $raw = $this->fetch($ip);
         $fields = $raw === null ? [] : self::extract($raw);
 
@@ -132,6 +132,14 @@ final class Geo
      * Hardened deliberately: no redirect following (a redirect from a third-party service is
      * an SSRF primitive we have no reason to accept), a hard total timeout, and a response
      * size cap so a hostile or broken endpoint cannot stream gigabytes into the tail daemon.
+     * The cap is 256 KB, orders of magnitude more than a geolocation answer needs.
+     *
+     * The URL template is operator-supplied and takes the key and then the IP. Both are
+     * rawurlencoded: the IP has already been validated as an address, but encoding it costs
+     * nothing and removes the whole class of "what if that changes" bugs.
+     *
+     * The User-Agent sent is a real, resolvable project URL, so that an upstream operator who
+     * sees it in their own logs can find out who is calling them.
      *
      * @return array<string,mixed>|null
      */
@@ -143,9 +151,6 @@ final class Geo
             return null;
         }
 
-        // The template is operator-supplied and takes the key then the IP. Both are
-        // rawurlencoded: the IP has already been validated as an address, but encoding it
-        // costs nothing and removes the whole class of "what if that changes" bugs.
         $url = sprintf($endpoint, rawurlencode($key), rawurlencode($ip));
         if (!preg_match('~^https?://~i', $url)) {
             return null;
@@ -161,10 +166,10 @@ final class Geo
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => $timeout,
             CURLOPT_CONNECTTIMEOUT => min(2, $timeout),
-            CURLOPT_FOLLOWLOCATION => false,   // no redirect chasing — SSRF hygiene
+            CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_MAXREDIRS      => 0,
             CURLOPT_PROTOCOLS_STR  => 'http,https',
-            CURLOPT_USERAGENT      => 'Loghound/1.0 (+https://github.com/loghound)',
+            CURLOPT_USERAGENT      => 'Loghound/1.0 (+https://github.com/phpcip/loghound)',
             CURLOPT_HTTPHEADER     => ['Accept: application/json'],
             CURLOPT_ENCODING       => '',
         ]);
@@ -176,7 +181,6 @@ final class Geo
         if (!is_string($body) || $code < 200 || $code >= 300) {
             return null;
         }
-        // 256 KB is orders of magnitude more than a geolocation answer needs.
         if (strlen($body) > 262144) {
             return null;
         }
@@ -193,12 +197,26 @@ final class Geo
      * looked for under several spellings. A key we do not find simply does not appear in the
      * output — it is never defaulted.
      *
+     * The service signals failure with success:false or "0"; anything else is not data. The
+     * payload is then located under `ip_info`, which is the documented place, with the other
+     * spellings and the flat shape tried defensively. A country code is uppercased so the
+     * facet has one bucket per country, and `geo_p` is written as "lat,lon", which is what
+     * Solr's `location` type wants.
+     *
+     * The Kansas centroid check is the important part. A country-only match still comes back
+     * with coordinates — MaxMind's centroid of the contiguous United States — and plotting
+     * them, or naming the city they happen to sit in, would be inventing a location we do not
+     * have, so region, city and the point are all withheld when they are seen. The timezone
+     * survives that check when it is a real IANA identifier: it is derived from the country
+     * or registry rather than from the fake point, and the beacon's tz_match_b cross-check
+     * needs it. Empty-string leftovers are dropped at the end so nothing zero-filled reaches
+     * the document.
+     *
      * @param array<string,mixed> $doc
      * @return array<string,mixed>
      */
     public static function extract(array $doc): array
     {
-        // The service signals failure with success:false / "0"; anything else is not data.
         if (array_key_exists('success', $doc)) {
             $ok = $doc['success'];
             if ($ok === false || $ok === 0 || $ok === '0' || $ok === 'false') {
@@ -206,7 +224,6 @@ final class Geo
             }
         }
 
-        // Locate the payload: ip_info is the documented location, the others are defensive.
         $info = null;
         foreach (['ip_info', 'data', 'result', 'location'] as $wrapper) {
             if (isset($doc[$wrapper]) && is_array($doc[$wrapper])) {
@@ -215,14 +232,13 @@ final class Geo
             }
         }
         if ($info === null) {
-            $info = $doc;   // a flat response
+            $info = $doc;
         }
 
         $out = [];
 
         $country = self::pick($info, ['country_code', 'countryCode', 'country_code2', 'country']);
         if ($country !== null && preg_match('/^[A-Za-z]{2}$/', $country)) {
-            // ISO-3166-1 alpha-2, uppercased so the facet has one bucket per country.
             $out['country_s'] = strtoupper($country);
         }
 
@@ -233,9 +249,6 @@ final class Geo
         $lat = self::pickNumeric($info, ['latitude', 'lat']);
         $lon = self::pickNumeric($info, ['longitude', 'lon', 'lng', 'long']);
 
-        // --- The Kansas centroid check ---------------------------------------
-        // A country-only match still comes back with coordinates. Plotting them, or naming
-        // the city they happen to sit in, would be inventing a location we do not have.
         $countryOnly = $lat !== null && $lon !== null && self::isKansasCentroid($lat, $lon);
 
         if (!$countryOnly) {
@@ -246,19 +259,14 @@ final class Geo
                 $out['city_s'] = self::clean($city, 128);
             }
             if ($lat !== null && $lon !== null && self::plausibleCoords($lat, $lon)) {
-                // Solr's `location` type wants "lat,lon".
                 $out['geo_p'] = round($lat, 5) . ',' . round($lon, 5);
             }
         }
 
-        // The timezone survives the Kansas check when it is a real IANA identifier: it is
-        // derived from the country/registry rather than from the fake point, and the
-        // beacon's tz_match_b cross-check needs it.
         if ($tz !== null && preg_match('~^[A-Za-z]+/[A-Za-z0-9_+\-/]+$~', $tz)) {
             $out['tz_s'] = $tz;
         }
 
-        // Drop empty-string leftovers so nothing zero-filled reaches the document.
         return array_filter($out, static fn($v): bool => $v !== null && $v !== '');
     }
 
@@ -276,13 +284,15 @@ final class Geo
 
     /**
      * Reject coordinates that are out of range or are the null-island (0,0) placeholder.
+     *
+     * Exactly (0,0) is a point in the Gulf of Guinea and is always a missing-data placeholder
+     * rather than a location anybody was at.
      */
     private static function plausibleCoords(float $lat, float $lon): bool
     {
         if ($lat < -90.0 || $lat > 90.0 || $lon < -180.0 || $lon > 180.0) {
             return false;
         }
-        // Exactly (0,0) is in the Gulf of Guinea and is always a missing-data placeholder.
         return !(abs($lat) < 0.0001 && abs($lon) < 0.0001);
     }
 

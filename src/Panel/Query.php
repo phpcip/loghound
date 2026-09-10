@@ -154,12 +154,26 @@ final class Query
      */
     public static function rangeFq(string $field, array $range): string
     {
-        // Field comes from our own callers, never from input, but validate anyway: this
-        // is the one place a typo would become a syntax injection rather than an error.
         if (!Security::isSafeFieldName($field)) {
             throw new \InvalidArgumentException('Unsafe range field');
         }
         return $field . ':[' . $range['start'] . ' TO NOW]';
+    }
+
+    /**
+     * A filter matching everything older than N days on a date field.
+     *
+     * Built entirely from a validated field name and a clamped integer, so no part of it
+     * can originate in a request. Used by the retention preview.
+     *
+     * @throws \InvalidArgumentException when the field name is not on the safe pattern.
+     */
+    public static function rangeUntil(string $field, int $days): string
+    {
+        if (!Security::isSafeFieldName($field)) {
+            throw new \InvalidArgumentException('Unsafe range field');
+        }
+        return $field . ':[* TO NOW-' . Security::clampInt($days, 1, 3650, 90) . 'DAY]';
     }
 
     /**
@@ -304,8 +318,6 @@ final class Query
     public static function textSearch(string $text): array
     {
         $text = trim($text);
-        // Strip any local-param block so a user cannot switch parsers by typing
-        // "{!func}..." into the search box; the rest of the string is bound, not spliced.
         while (preg_match('/^\{![^}]*\}/', $text)) {
             $text = trim((string) preg_replace('/^\{![^}]*\}/', '', $text));
         }
@@ -313,8 +325,6 @@ final class Query
             return ['q' => '*:*'];
         }
         return [
-            // This exact literal is the only non-trivial `q` Solr::assertSafeQuery()
-            // accepts. Do not "improve" it by inlining qf or mm.
             'q'  => '{!edismax v=$uq}',
             'uq' => $text,
             'qf' => self::QF_FIELDS,

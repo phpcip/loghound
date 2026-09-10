@@ -43,9 +43,6 @@ if (is_file($configPath) && !$force) {
 @mkdir($root . '/config', 0750, true);
 @mkdir($root . '/var', 0750, true);
 
-// A random password each run: nobody ends up with a well-known preview credential, and
-// there is nothing to leak if the file is committed by accident (it should not be — add
-// config/ to .gitignore).
 $password = bin2hex(random_bytes(6));
 
 $config = [
@@ -56,12 +53,13 @@ $config = [
         'user'          => 'loghound',
         'password_hash' => password_hash($password, PASSWORD_DEFAULT),
     ],
-    // The beacon is off so Config::validate() does not demand a real HMAC secret for a
-    // preview that never receives one.
     'beacon' => ['enabled' => false, 'secret' => ''],
-    'solr'   => ['mode' => 'custom', 'base_url' => 'http://127.0.0.1:8983/solr'],
-    // The switch that makes the panel render synthetic data. Every page carries a banner
-    // saying so; see src/Panel/Fixtures.php.
+    'solr'   => [
+        'mode'          => 'custom',
+        'base_url'      => 'http://127.0.0.1:8983/solr',
+        'hits_core'     => 'loghound_preview_hits',
+        'sessions_core' => 'loghound_preview_sessions',
+    ],
     'ui'     => ['demo' => true, 'timezone' => 'UTC'],
 ];
 

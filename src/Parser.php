@@ -132,6 +132,17 @@ final class Parser
      * This is what the tail daemon uses: it knows the file, the byte offset and the format,
      * and wants a document or a counted failure.
      *
+     * The document it returns carries `_logged`, the set of fields this log format is even
+     * capable of producing. Without it, "the browser did not send Sec-CH-UA" is
+     * indistinguishable from "the operator does not log Sec-CH-UA", and the two heaviest
+     * header-consistency rules would either fire on every visitor of a plain `combined`
+     * site or never fire at all. Score\Signals reads it and stays silent for any signal the
+     * log cannot speak to, which is the only safe default: a false "this human is a bot"
+     * costs more than a missed detection.
+     *
+     * `_logged` is underscore-prefixed so the indexer strips it. It is a property of the
+     * SOURCE, not of the hit, and has no place in a Solr document.
+     *
      * @return array<string,mixed>|null
      */
     public function parseLine(LogFormat $fmt, string $line, string $src, int $offset): ?array
@@ -145,17 +156,6 @@ final class Parser
         $doc = $this->normalize($raw, $src, $offset, $line, $fmt->timeFormat());
 
         if ($doc !== null) {
-            // Tell the scorer which fields this log format is even capable of
-            // producing. Without it, "the browser did not send Sec-CH-UA" is
-            // indistinguishable from "the operator does not log Sec-CH-UA", and
-            // the two heaviest header-consistency rules would either fire on
-            // every visitor of a plain `combined` site or never fire at all.
-            // Score\Signals reads this and stays silent for any signal the log
-            // cannot speak to, which is the only safe default: a false "this
-            // human is a bot" costs more than a missed detection.
-            //
-            // Underscore-prefixed so the indexer strips it — it is a property of
-            // the SOURCE, not of the hit, and has no place in a Solr document.
             $doc['_logged'] = self::loggedFields($fmt);
         }
 
@@ -169,8 +169,18 @@ final class Parser
      * so it stays correct when an operator changes their LogFormat and the
      * parser is recompiled — there is no second place to keep in sync.
      *
+     * The map inside is from raw capture name to the document field it ends up as. Only
+     * fields a scoring rule actually asks about need to appear in it; anything else is
+     * irrelevant to the "could this have been logged?" question. Request headers arrive
+     * from LogFormat as `header_in.<lowercased header name>` — Apache's %{Name}i and
+     * nginx's $http_name both normalise to that — so they are keyed by the header name
+     * itself. TLS details are not request headers and come through Apache's %{VARNAME}x or
+     * nginx's $ssl_*, so both spellings and both separator styles are accepted.
+     *
      * Results are memoised per format pattern: this runs on every line, and the
-     * answer cannot change for a given compiled format.
+     * answer cannot change for a given compiled format. The memo is bounded, because a
+     * single install has a handful of formats but a test harness can compile many, and a
+     * static that never shrinks would grow with them.
      *
      * @return string[] Sorted, unique normalized field names.
      */
@@ -183,13 +193,6 @@ final class Parser
             return $cache[$key];
         }
 
-        // Raw capture name -> the document field it ends up as. Only fields a
-        // scoring rule actually asks about need to appear here; anything else is
-        // irrelevant to the "could this have been logged?" question.
-        //
-        // Request headers arrive from LogFormat as `header_in.<lowercased
-        // header name>` (Apache %{Name}i and nginx $http_name both normalise to
-        // that), so they are keyed here by the header name itself.
         static $direct = [
             'vhost'      => 'host_s',
             'status'     => 'status_i',
@@ -215,8 +218,6 @@ final class Parser
             'sec-fetch-user'     => 'sec_fetch_user_s',
             'x-forwarded-for'    => 'xff_s',
         ];
-        // TLS details come through Apache's %{VARNAME}x / nginx $ssl_* rather
-        // than as request headers.
         static $env = [
             'ssl_protocol' => 'tls_proto_s',
             'ssl_cipher'   => 'tls_cipher_s',
@@ -237,8 +238,6 @@ final class Parser
                 }
                 continue;
             }
-            // Apache exposes these as %{SSL_PROTOCOL}x, nginx as $ssl_protocol;
-            // accept either spelling and both separator styles.
             $flat = str_replace(['ssl.', '-'], ['ssl_', '_'], $name);
             if (isset($env[$flat])) {
                 $out[$env[$flat]] = true;
@@ -248,8 +247,6 @@ final class Parser
         $fields = array_keys($out);
         sort($fields);
 
-        // Bound the memo: a single install has a handful of formats, but a test
-        // harness can compile many, and this is a static that never shrinks.
         if (count($cache) > 64) {
             $cache = [];
         }
@@ -260,6 +257,52 @@ final class Parser
 
     /**
      * Turn a raw field array into a normalized hit document.
+     *
+     * The document is assembled in sections, and each one has decisions behind it.
+     *
+     * Identity and time. The id is idempotent — derived from the file and the byte offset —
+     * so re-ingesting the same file after a crash overwrites rather than duplicates, which
+     * is what lets the tail daemon restart from a stale offset safely. `ts` is written as an
+     * ISO-8601 instant in UTC with a trailing Z, which is what Solr's pdate wants.
+     *
+     * Request line. Path depth counts real segments, so '/a/b/c' is 3 and '/' is 0.
+     *
+     * Host. When the format has no %v, the vhost is the one the operator told us this file
+     * serves. Either way a :port suffix is stripped and the host lowercased, because hosts
+     * are case-insensitive and a facet on "Example.com" versus "example.com" would split one
+     * site into two.
+     *
+     * Network. `ip_net_s` is derived from the TRUE address, before the privacy transform,
+     * because it is the clustering key that groups a rotating-proxy fleet's exits. Note for
+     * privacy reviewers: in 'hash' mode this deliberately still exposes the /24 (v4) or /48
+     * (v6). That is the same granularity 'truncate' mode publishes, and losing it would
+     * disable the fingerprint/network correlation this product exists to do; it is
+     * documented in docs/PRIVACY.md. A client field that is a hostname rather than an
+     * address — HostnameLookups On, or a proxy that logs a name — is kept as it is: it is
+     * still the client identity, it just is not an address.
+     *
+     * Response. Apache logs '-' for the status when the connection died before one was
+     * chosen; that is genuinely unknown, so the field stays absent rather than becoming 0.
+     * Apache's '-' for %b means something different — zero bytes of body — and is recorded
+     * as the known zero it is.
+     *
+     * Headers. Every header-derived field is ABSENT unless the operator logs the header.
+     * That includes referer_type_s, which is always derivable in principle ('direct' when
+     * there is no referer) but is only emitted when the format actually logs the header,
+     * since otherwise "direct" would be a guess. Sec-CH-UA-Platform arrives quoted
+     * ("Windows") and the quotes are transport syntax, not data. Structured-header booleans
+     * are ?1 for true and ?0 for false, and anything else is garbage. TLS details come from
+     * mod_ssl (%{SSL_PROTOCOL}x) or nginx's $ssl_protocol. JA4 is v2, sourced from HAProxy;
+     * the field is populated if it ever shows up in a log.
+     *
+     * User-Agent. Even an empty UA is hashed: "this client sends no User-Agent" is itself a
+     * stable identity worth clustering on, and one of the loudest bot signals there is.
+     *
+     * Fingerprint. `fp_hash_s` is THE cluster key of SPEC §4.1 — a stable-ish visitor
+     * identity built from network, UA and language, daily-salted under 'hash'.
+     *
+     * Raw line. `raw_s` is stored but not indexed, so it needs no analysis-safety treatment,
+     * but it still has to be valid UTF-8 or the Solr update request itself fails.
      *
      * @param array<string,string> $raw        Output of LogFormat::parse().
      * @param string               $src        Log file this line came from (`src_s`).
@@ -278,12 +321,6 @@ final class Parser
     ): ?array {
         $doc = [];
 
-        // ---------------------------------------------------------------------
-        // Identity and time
-        // ---------------------------------------------------------------------
-
-        // Idempotent id: re-ingesting the same file after a crash overwrites rather than
-        // duplicating, which is why the tail daemon can restart from a stale offset safely.
         $doc['id']    = sha1($src . ':' . $offset);
         $doc['src_s'] = self::sanitizeText($src, 512) ?? $src;
 
@@ -293,12 +330,7 @@ final class Parser
             $this->lastError = 'no parseable timestamp';
             return null;
         }
-        // Solr's pdate wants an ISO-8601 instant in UTC with a trailing Z.
         $doc['ts'] = $ts->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\TH:i:s.v\Z');
-
-        // ---------------------------------------------------------------------
-        // Request line — the other irreducible fact
-        // ---------------------------------------------------------------------
 
         $req = $this->extractRequest($raw);
         if ($req === null) {
@@ -312,40 +344,22 @@ final class Parser
         self::put($doc, 'query_s', $req['query']);
         self::put($doc, 'proto_s', self::normalizeProto($req['proto'] ?? ($raw['proto'] ?? null)));
 
-        // Path depth counts real segments: '/a/b/c' is 3, '/' is 0.
         $doc['path_depth_i'] = count(array_filter(explode('/', $req['path']), 'strlen'));
-
-        // ---------------------------------------------------------------------
-        // Host / vhost
-        // ---------------------------------------------------------------------
 
         $host = $raw['vhost'] ?? ($req['host'] ?? null);
         if (($host === null || $host === '' || $host === '-') && $this->opts['host'] !== '') {
-            // The format has no %v, so the operator told us which vhost this file serves.
             $host = (string) $this->opts['host'];
         }
         if (is_string($host) && $host !== '' && $host !== '-') {
-            // Strip a :port suffix and lowercase: hosts are case-insensitive and a facet on
-            // "Example.com" vs "example.com" would split one site into two.
             $host = strtolower((string) preg_replace('/:\d+$/', '', $host));
             self::put($doc, 'host_s', self::sanitizeText($host, 255));
         }
-
-        // ---------------------------------------------------------------------
-        // Network
-        // ---------------------------------------------------------------------
 
         $ip = trim((string) ($raw['remote_addr'] ?? ''));
         if ($ip !== '' && filter_var($ip, FILTER_VALIDATE_IP) !== false) {
             $isV6 = str_contains($ip, ':');
             $doc['ip_ver_i'] = $isV6 ? 6 : 4;
 
-            // `ip_net_s` is derived from the TRUE address, before the privacy transform,
-            // because it is the clustering key that groups a rotating-proxy fleet's exits.
-            // Note for privacy reviewers: in 'hash' mode this deliberately still exposes the
-            // /24 (v4) or /48 (v6). That is the same granularity 'truncate' mode publishes,
-            // and losing it would disable the fingerprint/network correlation this product
-            // exists to do. Documented in docs/PRIVACY.md.
             $doc['ip_net_s'] = Security::ipNetwork($ip, 24, 48);
 
             $doc['ip_s'] = Security::applyIpPrivacy(
@@ -354,28 +368,19 @@ final class Parser
                 (string) $this->opts['ip_salt']
             );
         } elseif ($ip !== '' && $ip !== '-') {
-            // HostnameLookups On, or a proxy that logs a name. Keep it: it is still the
-            // client identity, it just is not an address.
             self::put($doc, 'ip_s', self::sanitizeText($ip, 255));
         }
-
-        // ---------------------------------------------------------------------
-        // Response
-        // ---------------------------------------------------------------------
 
         $status = $raw['status'] ?? null;
         if (is_string($status) && ctype_digit($status)) {
             $doc['status_i'] = (int) $status;
         }
-        // Apache logs '-' for status when the connection died before one was chosen; that is
-        // genuinely unknown, so the field stays absent rather than becoming 0.
 
         $bytes = $raw['bytes'] ?? ($raw['bytes_out'] ?? null);
         if (is_string($bytes)) {
             if (ctype_digit($bytes)) {
                 $doc['bytes_l'] = (int) $bytes;
             } elseif ($bytes === '-') {
-                // Apache's '-' for %b means "zero bytes of body", which is a known zero.
                 $doc['bytes_l'] = 0;
             }
         }
@@ -385,17 +390,9 @@ final class Parser
             $doc['dur_us_l'] = $durUs;
         }
 
-        // ---------------------------------------------------------------------
-        // Content classification
-        // ---------------------------------------------------------------------
-
         [$kind, $assetKind] = $this->classifyPath($req['path']);
         $doc['kind_s'] = $kind;
         self::put($doc, 'asset_kind_s', $assetKind);
-
-        // ---------------------------------------------------------------------
-        // Headers — every one of these is ABSENT unless the operator logs it
-        // ---------------------------------------------------------------------
 
         $referer = self::header($raw, 'referer');
         if ($referer !== null) {
@@ -403,8 +400,6 @@ final class Parser
             $refHost = self::hostOf($referer);
             self::put($doc, 'referer_host_s', $refHost);
         }
-        // referer_type_s is always derivable ('direct' when there is no referer), but only
-        // when the format actually logs the header — otherwise "direct" would be a guess.
         if (array_key_exists('header_in.referer', $raw)) {
             $doc['referer_type_s'] = $this->refererType(
                 $referer,
@@ -425,10 +420,8 @@ final class Parser
         $secChPlatform = self::header($raw, 'sec-ch-ua-platform');
         $secChMobile   = self::header($raw, 'sec-ch-ua-mobile');
         self::put($doc, 'sec_ch_ua_s', self::sanitizeText($secChUa, 512));
-        // Sec-CH-UA-Platform arrives quoted ("Windows"); the quotes are transport syntax.
         self::put($doc, 'sec_ch_platform_s', self::sanitizeText(trim((string) $secChPlatform, '"'), 64));
         if ($secChMobile !== null) {
-            // Structured-header booleans: ?1 = true, ?0 = false. Anything else is garbage.
             if ($secChMobile === '?1') {
                 $doc['sec_ch_mobile_b'] = true;
             } elseif ($secChMobile === '?0') {
@@ -443,18 +436,12 @@ final class Parser
 
         self::put($doc, 'xff_s', self::sanitizeText(self::header($raw, 'x-forwarded-for'), 512));
 
-        // TLS details come from mod_ssl (%{SSL_PROTOCOL}x) or nginx's $ssl_protocol.
         self::put($doc, 'tls_proto_s', self::sanitizeText($raw['var.ssl_protocol'] ?? null, 32));
         self::put($doc, 'tls_cipher_s', self::sanitizeText($raw['var.ssl_cipher'] ?? null, 128));
-        // JA4 is v2 (HAProxy-sourced); the field is populated if it ever shows up in a log.
         self::put($doc, 'ja4_s', self::sanitizeText(
             $raw['var.ja4'] ?? (self::header($raw, 'x-ja4') ?? null),
             64
         ));
-
-        // ---------------------------------------------------------------------
-        // User-Agent and the bot classification that comes with it
-        // ---------------------------------------------------------------------
 
         $uaLogged = array_key_exists('header_in.user-agent', $raw);
         $uaRaw    = self::header($raw, 'user-agent');
@@ -464,24 +451,17 @@ final class Parser
             $doc['ua_s'] = $uaClean;
         }
         if ($uaLogged) {
-            // Hash even the empty UA: "this client sends no User-Agent" is itself a stable
-            // identity worth clustering on, and it is one of the loudest bot signals there is.
             $doc['ua_hash_s'] = sha1($uaClean);
             foreach (Ua::parse($uaClean)->fields() as $k => $v) {
                 $doc[$k] = $v;
             }
         }
 
-        // ---------------------------------------------------------------------
-        // Fingerprint — THE cluster key (SPEC §4.1)
-        // ---------------------------------------------------------------------
-
         $fp = $this->fingerprint($raw, $doc);
         if ($fp !== null) {
             $doc['fp_hash_s'] = $fp;
         }
 
-        // Stable-ish visitor identity: network + UA + language, daily-salted under 'hash'.
         if (isset($doc['ip_net_s'], $doc['ua_hash_s'])) {
             $base = $doc['ip_net_s'] . '|' . $doc['ua_hash_s'] . '|' . ($acceptLang ?? '');
             $doc['visitor_s'] = $this->opts['ip_mode'] === 'hash'
@@ -489,13 +469,7 @@ final class Parser
                 : substr(sha1($base), 0, 24);
         }
 
-        // ---------------------------------------------------------------------
-        // Raw line, for retroactive rescoring
-        // ---------------------------------------------------------------------
-
         if ($this->opts['keep_raw'] && $line !== '') {
-            // raw_s is stored-but-not-indexed, so it needs no analysis-safety treatment —
-            // but it still has to be valid UTF-8 or the Solr update request itself fails.
             $doc['raw_s'] = self::sanitizeText($line, 8192) ?? '';
         }
 
@@ -521,12 +495,11 @@ final class Parser
         $this->lastError = null;
     }
 
-    // =========================================================================
-    // Timestamp
-    // =========================================================================
-
     /**
      * Recover the request time from whatever shape this format logs it in.
+     *
+     * CloudFront is the awkward one: it splits the instant across two W3C columns, a date
+     * and a time, both of them UTC.
      *
      * @param array<string,string> $raw
      */
@@ -535,7 +508,6 @@ final class Parser
         if (isset($raw['time']) && trim($raw['time']) !== '') {
             return self::parseTimestamp($raw['time'], $format);
         }
-        // CloudFront splits the instant across two W3C columns; both are UTC.
         if (isset($raw['date'], $raw['time_hms'])) {
             return self::parseTimestamp($raw['date'] . 'T' . $raw['time_hms'] . 'Z', null);
         }
@@ -550,6 +522,18 @@ final class Parser
      * the operator's php.ini says — and that would silently shift every timestamp in the
      * index by the server's UTC offset.
      *
+     * The shapes are tried in this order:
+     *
+     *  1. An explicit format from the LogFormat, which wins because it cannot be ambiguous.
+     *  2. Apache %t and nginx $time_local: 10/Sep/2026:09:57:08 +0000, where the fraction is
+     *     optional — HAProxy writes 10/Sep/2026:09:57:08.123 with no offset at all. A
+     *     timestamp with no offset logged is treated as UTC.
+     *  3. ISO-8601 / RFC3339, with a 'T' or a space, with or without an offset. A naive
+     *     string is again interpreted as UTC, because UTC is the fallback zone — never the
+     *     server's local time.
+     *  4. Epoch values, where the magnitude tells us the unit: Caddy logs float seconds,
+     *     Apache's %{msec}t logs milliseconds and %{usec}t microseconds.
+     *
      * @param string|null $format Explicit DateTime::createFromFormat() format, when known.
      */
     public static function parseTimestamp(string $value, ?string $format = null): ?DateTimeImmutable
@@ -560,7 +544,6 @@ final class Parser
             return null;
         }
 
-        // 1. An explicit format from the LogFormat wins — it cannot be ambiguous.
         if ($format !== null && $format !== '') {
             $dt = DateTimeImmutable::createFromFormat($format, $value, $utc);
             if ($dt instanceof DateTimeImmutable) {
@@ -568,14 +551,12 @@ final class Parser
             }
         }
 
-        // 2. Apache %t and nginx $time_local: 10/Sep/2026:09:57:08 +0000 (fraction optional,
-        //    as HAProxy writes 10/Sep/2026:09:57:08.123 with no offset at all).
         if (preg_match(
             '~^(\d{1,2})/([A-Za-z]{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:\s*([+-]\d{4}))?$~',
             $value,
             $m
         )) {
-            $offset = $m[8] ?? '+0000';                 // no offset logged ⇒ treat as UTC
+            $offset = $m[8] ?? '+0000';
             $frac   = isset($m[7]) && $m[7] !== '' ? str_pad(substr($m[7], 0, 3), 3, '0') : '000';
             $rebuilt = sprintf(
                 '%02d/%s/%s:%s:%s:%s.%s %s',
@@ -587,31 +568,26 @@ final class Parser
             }
         }
 
-        // 3. ISO-8601 / RFC3339, with 'T' or a space, with or without an offset.
         if (preg_match('~^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}~', $value)) {
             try {
-                // A naive string (no offset) is interpreted as UTC because $utc is the
-                // fallback zone — never as the server's local time.
                 return (new DateTimeImmutable($value, $utc))->setTimezone($utc);
             } catch (\Exception $e) {
                 return null;
             }
         }
 
-        // 4. Epoch values. Magnitude tells us the unit: Caddy logs float seconds, Apache's
-        //    %{msec}t logs milliseconds, %{usec}t microseconds.
         if (preg_match('~^(\d{9,19})(?:\.(\d+))?$~', $value, $m)) {
             $digits = strlen($m[1]);
             $intPart = $m[1];
             $micro   = 0;
 
-            if ($digits >= 16) {                        // microseconds
+            if ($digits >= 16) {
                 $micro   = (int) substr($intPart, -6);
                 $intPart = substr($intPart, 0, -6);
-            } elseif ($digits >= 13) {                  // milliseconds
+            } elseif ($digits >= 13) {
                 $micro   = ((int) substr($intPart, -3)) * 1000;
                 $intPart = substr($intPart, 0, -3);
-            } elseif (isset($m[2])) {                   // fractional seconds
+            } elseif (isset($m[2])) {
                 $micro = (int) str_pad(substr($m[2], 0, 6), 6, '0');
             }
 
@@ -645,10 +621,6 @@ final class Parser
         return (int) ($dt->format('U') * 1000 + (int) $dt->format('v'));
     }
 
-    // =========================================================================
-    // Request line
-    // =========================================================================
-
     /**
      * Recover method / path / query / protocol from whichever fields the format provides.
      *
@@ -660,6 +632,18 @@ final class Parser
      * Absolute-URI targets (`GET http://host/path HTTP/1.1`) are decomposed, because that is
      * what AWS ALB always logs and what a proxy request looks like — leaving the scheme and
      * host glued to the path would fragment every path facet.
+     *
+     * A request line with no protocol is HTTP/0.9, or one the client truncated. A request
+     * line that is outright garbage — very common, since scanners send raw TLS bytes to
+     * port 80 — is kept as the path, because that preserves the evidence instead of
+     * dropping the hit. A target that was entirely control characters is recorded under a
+     * stable marker for the same reason: the hit exists and has no usable path, and the
+     * probe should still leave a trace.
+     *
+     * Apache's %q carries its own '?' while nginx's $args does not, so the two are joined
+     * differently. `query_s` is stored without the leading '?', because the '?' is a
+     * delimiter rather than data. A '#fragment' is never sent on the wire, but proxies and
+     * bad clients log one anyway, so it is removed.
      *
      * @param array<string,string> $raw
      * @return array{method:?string,path:string,query:?string,proto:?string,host:?string}|null
@@ -677,12 +661,9 @@ final class Parser
                 $target = $m[2];
                 $proto  = $m[3];
             } elseif (preg_match('~^(\S+)\s+(.+)$~', $request, $m)) {
-                // HTTP/0.9, or a request line truncated by the client.
                 $method = $m[1];
                 $target = $m[2];
             } else {
-                // Garbage request line (very common — scanners send raw TLS bytes to :80).
-                // Keeping it as the path preserves the evidence instead of dropping the hit.
                 $target = $request;
             }
         }
@@ -694,7 +675,6 @@ final class Parser
                 $target = $raw['uri_full'];
             } elseif (isset($raw['uri'])) {
                 $target = $raw['uri'];
-                // Apache's %q carries its own '?'; nginx's $args does not.
                 if (isset($raw['query']) && $raw['query'] !== '') {
                     $target .= $raw['query'];
                 } elseif (isset($raw['query_raw']) && $raw['query_raw'] !== '') {
@@ -708,7 +688,6 @@ final class Parser
         }
 
         $host = null;
-        // Absolute URI: split off scheme://host so the path facet stays a path facet.
         if (preg_match('~^[a-z][a-z0-9+.\-]*://~i', $target)) {
             $parts = parse_url($target);
             if (is_array($parts)) {
@@ -721,11 +700,9 @@ final class Parser
         $query = null;
         $qpos  = strpos($target, '?');
         if ($qpos !== false) {
-            // query_s is stored without the leading '?': the '?' is a delimiter, not data.
             $query  = substr($target, $qpos + 1);
             $target = substr($target, 0, $qpos);
         }
-        // A '#fragment' is never sent on the wire, but proxies and bad clients log one.
         $hpos = strpos($target, '#');
         if ($hpos !== false) {
             $target = substr($target, 0, $hpos);
@@ -733,8 +710,6 @@ final class Parser
 
         $path = self::sanitizeText($target, self::MAX_TEXT);
         if ($path === null) {
-            // The target was entirely control characters — the hit exists but has no path,
-            // so record it under a stable marker rather than dropping evidence of the probe.
             $path = '/';
         }
 
@@ -780,32 +755,28 @@ final class Parser
      * the case for plain `combined`. Never 0 — "not measured" and "took no time" are
      * different facts and the Performance view must not conflate them.
      *
+     * The sources, in order of preference: %D, already microseconds and the most precise
+     * thing Apache offers; %{ms}T; %T and nginx's $request_time, in seconds and possibly
+     * fractional; and Traefik's field, which is nanoseconds.
+     *
      * @param array<string,string> $raw
      */
     private function extractDurationUs(array $raw): ?int
     {
-        // %D — already microseconds, the most precise thing Apache offers.
         if (isset($raw['dur_us']) && ctype_digit($raw['dur_us'])) {
             return (int) $raw['dur_us'];
         }
-        // %{ms}T
         if (isset($raw['dur_ms']) && is_numeric($raw['dur_ms'])) {
             return (int) round(((float) $raw['dur_ms']) * 1000);
         }
-        // %T / nginx $request_time — seconds, possibly fractional.
         if (isset($raw['dur_s']) && is_numeric($raw['dur_s'])) {
             return (int) round(((float) $raw['dur_s']) * 1000000);
         }
-        // Traefik logs nanoseconds.
         if (isset($raw['dur_ns']) && is_numeric($raw['dur_ns'])) {
             return (int) round(((float) $raw['dur_ns']) / 1000);
         }
         return null;
     }
-
-    // =========================================================================
-    // Classification
-    // =========================================================================
 
     /**
      * Classify a request path into `kind_s` and, for assets, `asset_kind_s`.
@@ -815,6 +786,12 @@ final class Parser
      * browser unprompted and would inflate the asset ratio that feeds the `no_assets` rule),
      * and robots.txt must never be counted as HTML (crawlers fetching it are not pageviews).
      *
+     * The tests run in this order: our own beacon endpoint; browser-initiated site chrome
+     * that is neither a page nor a real asset request; crawler-facing metadata files;
+     * sub-resources; machine-facing endpoints; pages, meaning an explicit page extension or
+     * no extension at all for pretty URLs; and finally downloads, feeds and anything else
+     * carrying an extension we do not model.
+     *
      * @return array{0:string,1:?string}
      */
     private function classifyPath(string $path): array
@@ -822,19 +799,16 @@ final class Parser
         $lower = strtolower($path);
         $base  = basename($lower);
 
-        // 1. Our own beacon endpoint.
         foreach ((array) $this->opts['beacon_paths'] as $bp) {
             if ($lower === strtolower((string) $bp)) {
                 return ['beacon', null];
             }
         }
 
-        // 2. Browser-initiated site chrome that is not a page and not a real asset request.
         if (str_starts_with($base, 'favicon.') || str_starts_with($base, 'apple-touch-icon')) {
             return ['favicon', null];
         }
 
-        // 3. Crawler-facing metadata files.
         if ($lower === '/robots.txt' || $lower === '/ads.txt' || $lower === '/app-ads.txt'
             || $lower === '/security.txt' || str_starts_with($lower, '/.well-known/')
             || preg_match('~^sitemap.*\.xml(\.gz)?$~', $base) === 1
@@ -848,12 +822,10 @@ final class Parser
             $ext = substr($base, $dot + 1);
         }
 
-        // 4. Sub-resources.
         if ($ext !== '' && isset(self::ASSET_KINDS[$ext])) {
             return ['asset', self::ASSET_KINDS[$ext]];
         }
 
-        // 5. Machine-facing endpoints.
         if (str_starts_with($lower, '/api/') || str_contains($lower, '/api/')
             || str_contains($lower, '/rest/') || str_contains($lower, '/graphql')
             || str_starts_with($lower, '/wp-json/') || str_contains($lower, '/jsonapi')
@@ -861,12 +833,10 @@ final class Parser
             return ['api', null];
         }
 
-        // 6. Pages: an explicit page extension, or no extension at all (pretty URLs).
         if ($ext === '' || in_array($ext, self::HTML_EXTS, true)) {
             return ['html', null];
         }
 
-        // 7. Downloads, feeds, anything else with an extension we do not model.
         return ['other', null];
     }
 
@@ -876,6 +846,10 @@ final class Parser
      * `ad` is tested before `search` on purpose: a paid Google click has a google.com
      * referer AND a gclid, and calling it organic search would overstate SEO performance,
      * which is exactly the kind of quietly-wrong number this project refuses to produce.
+     *
+     * Internal is tested before either of them, because a same-site referer cannot belong to
+     * any of the other categories. A paid click is identified by the click-id the ad network
+     * appends to OUR url, not by the referring host.
      */
     private function refererType(?string $referer, ?string $refHost, ?string $host, ?string $query): string
     {
@@ -883,7 +857,6 @@ final class Parser
             return 'direct';
         }
 
-        // Internal first: a same-site referer cannot be any of the other categories.
         if ($refHost !== null && $host !== null && $refHost === $host) {
             return 'internal';
         }
@@ -895,7 +868,6 @@ final class Parser
             }
         }
 
-        // Paid click: identified by the click-id the ad network appends to OUR url.
         if ($query !== null && $query !== '') {
             parse_str($query, $params);
             foreach (self::AD_CLICK_PARAMS as $p) {
@@ -929,7 +901,8 @@ final class Parser
      * Suffix/substring match of a hostname against a needle list.
      *
      * Entries ending in '.' (e.g. 'google.') match any TLD, which is how one entry covers
-     * google.com, google.co.uk, google.de and the other 190 of them.
+     * google.com, google.co.uk, google.de and the other 190 of them. The match is anchored
+     * at a label boundary, so 'google.' matches 'www.google.co.uk' but not 'notgoogle.com'.
      *
      * @param string[] $needles
      */
@@ -937,7 +910,6 @@ final class Parser
     {
         foreach ($needles as $needle) {
             if (str_ends_with($needle, '.')) {
-                // 'google.' should match 'www.google.co.uk' but not 'notgoogle.com'.
                 if ($host === rtrim($needle, '.')
                     || str_contains('.' . $host, '.' . $needle)) {
                     return true;
@@ -955,7 +927,8 @@ final class Parser
      * Extract the lowercased hostname from a referer URL.
      *
      * Returns null for a referer that is not an absolute URL (a bare path, or junk), because
-     * an invented host would poison the referrer facet.
+     * an invented host would poison the referrer facet. A hostname is a restricted grammar,
+     * and anything that does not fit it came from a forged referer.
      */
     private static function hostOf(string $url): ?string
     {
@@ -964,16 +937,11 @@ final class Parser
             return null;
         }
         $host = strtolower($host);
-        // A hostname is a restricted grammar; anything else came from a forged referer.
         if (!preg_match('/^[a-z0-9._\-\[\]:]{1,253}$/', $host)) {
             return null;
         }
         return $host;
     }
-
-    // =========================================================================
-    // Fingerprint
-    // =========================================================================
 
     /**
      * Compute `fp_hash_s`, the header-tuple fingerprint.
@@ -993,7 +961,9 @@ final class Parser
      * "abc" + "" and "ab" + "c" cannot collide.
      *
      * Returns null when the format logs none of these headers — a constant hash across every
-     * hit would be worse than useless, it would fire the cluster rule on the whole site.
+     * hit would be worse than useless, it would fire the cluster rule on the whole site. At
+     * least one real header has to have been logged: the protocol on its own is not a
+     * fingerprint, it is a two-value enum.
      *
      * @param array<string,string> $raw
      * @param array<string,mixed>  $doc
@@ -1014,8 +984,6 @@ final class Parser
             $doc['proto_s']           ?? '',
         ];
 
-        // At least one real header must have been logged; the protocol alone is not a
-        // fingerprint, it is a two-value enum.
         $headersSeen = false;
         foreach (
             [
@@ -1036,10 +1004,6 @@ final class Parser
 
         return sha1(implode("\n", $parts));
     }
-
-    // =========================================================================
-    // Small helpers
-    // =========================================================================
 
     /**
      * Read a request header from the raw field array, mapping "-" and "" to null.
@@ -1088,14 +1052,18 @@ final class Parser
      *
      * Returns null for values that are empty, "-", or reduce to nothing after cleaning, so
      * the caller's put() drops the field entirely.
+     *
+     * The byte cap is applied BEFORE any multibyte work, so that a hostile 50 MB field
+     * cannot make the mb_* functions do 50 MB of work per line. Invalid sequences are
+     * dropped by round-tripping through mb_convert_encoding(). The characters removed after
+     * that are the C0 controls — none of them kept, not even tab, which has no business in a
+     * log field — plus DEL; all are single ASCII bytes, so a byte-wise class is UTF-8 safe.
      */
     public static function sanitizeText(?string $s, int $max = self::MAX_TEXT): ?string
     {
         if ($s === null) {
             return null;
         }
-        // Hard byte cap BEFORE any multibyte work, so a hostile 50 MB field cannot make
-        // mb_* functions do 50 MB of work per line.
         if (strlen($s) > $max * 4) {
             $s = substr($s, 0, $max * 4);
         }
@@ -1104,11 +1072,8 @@ final class Parser
             return null;
         }
         if (!mb_check_encoding($s, 'UTF-8')) {
-            // Round-tripping through mb_convert_encoding drops the invalid sequences.
             $s = mb_convert_encoding($s, 'UTF-8', 'UTF-8');
         }
-        // C0 controls (keeping none — not even tab, which has no business in a log field)
-        // plus DEL. All are single ASCII bytes, so a byte-wise class is UTF-8 safe.
         $s = (string) preg_replace('/[\x00-\x1F\x7F]/', '', $s);
         if (mb_strlen($s, 'UTF-8') > $max) {
             $s = mb_substr($s, 0, $max, 'UTF-8');

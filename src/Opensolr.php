@@ -52,6 +52,10 @@ final class Opensolr
     private $transport;
 
     /**
+     * The default transport is the Solr client's curl transport, reused rather than
+     * reimplemented: identical shape, identical hardening — no redirect following,
+     * certificate verification on — and one implementation to audit.
+     *
      * @param array<string,mixed> $cfg      The 'opensolr' section of the config.
      * @param callable|null       $transport fn(array $req): array{status:int,body:string,error:string}
      */
@@ -62,8 +66,6 @@ final class Opensolr
         $this->apiKey  = (string) ($cfg['api_key'] ?? '');
         $this->timeout = max(5, (int) ($cfg['timeout'] ?? 60));
 
-        // Reuse the Solr client's curl transport: identical shape, identical hardening
-        // (no redirect following, certificate verification on), one implementation to audit.
         $this->transport = $transport ?? [Solr::class, 'curlTransport'];
     }
 
@@ -74,19 +76,20 @@ final class Opensolr
      * The setup wizard shows these; nothing is hardcoded client-side, so a region added by
      * Opensolr appears without a Loghound release.
      *
+     * The endpoint returns a list rather than an object, so decode() hands it back under a
+     * synthetic key instead of pretending it is a map. Entries are plain strings today; the
+     * object form used by /vector_regions is tolerated too, in case the two endpoints
+     * converge later.
+     *
      * @return string[]
      */
     public function listRegions(): array
     {
         $res = $this->call('regions', [], 'GET');
 
-        // The endpoint returns a list, not an object, so decode() hands it back under a
-        // synthetic key rather than pretending it is a map.
         $list = $res['_list'] ?? [];
         $out = [];
         foreach ((array) $list as $entry) {
-            // Entries are plain strings today. Be tolerant of the object form used by
-            // /vector_regions in case the two endpoints converge later.
             if (is_string($entry)) {
                 $out[] = $entry;
             } elseif (is_array($entry) && isset($entry['environment'])) {
@@ -106,6 +109,9 @@ final class Opensolr
      * silently destroy the operator's data. The caller decides whether an "already exists"
      * response is a failure or a no-op.
      *
+     * Region codes are uppercase identifiers, and anything else is a caller bug or an attempt
+     * to inject into the query string, so the value is validated before it is sent.
+     *
      * @return array<string,mixed> Decoded response.
      */
     public function createIndex(string $indexName, string $region): array
@@ -113,8 +119,6 @@ final class Opensolr
         if (!Security::isSafeCoreName($indexName)) {
             throw new \InvalidArgumentException('Opensolr: invalid index name: ' . $indexName);
         }
-        // Region codes are uppercase identifiers; anything else is a caller bug or an
-        // injection attempt into the query string.
         if (!preg_match('/^[A-Z0-9_]{2,32}$/', $region)) {
             throw new \InvalidArgumentException('Opensolr: invalid region: ' . $region);
         }
@@ -161,6 +165,10 @@ final class Opensolr
      * so a collision cannot leave orphaned indexes accumulating in the
      * operator's account (which they may well be billed for).
      *
+     * A genuine failure — a bad key, a quota, a region that is down — is NOT retried. Whatever
+     * that attempt created is rolled back and the error is surfaced, because retrying with a
+     * different name would not help and would only make the real error harder to find.
+     *
      * @param callable(string):void|null $progress Optional status callback.
      * @return array{install_id:string,hits:string,sessions:string}
      * @throws \RuntimeException When no free name pair could be obtained.
@@ -196,10 +204,6 @@ final class Opensolr
                     $collided = true;
                     break;
                 }
-                // A genuine failure (bad key, quota, region down). Roll back
-                // whatever this attempt created, then surface it — retrying
-                // with a different name would not help and would just make
-                // the real error harder to find.
                 $this->rollbackIndexes($created, $say);
                 throw new \RuntimeException(
                     'Opensolr refused to create ' . $name . ': ' . self::stringifyMsg($res['msg'] ?? 'unknown error')
@@ -219,6 +223,27 @@ final class Opensolr
     }
 
     /**
+     * Delete a managed index.
+     *
+     * Endpoint: GET /delete_index?index_name=
+     *
+     * DESTRUCTIVE, and public only because rollback needs it: when provisioning creates
+     * the first index of a pair and the second name collides, the first has to go, or the
+     * operator accumulates orphaned indexes they may well be billed for. Nothing in the
+     * panel or the daemons calls this; the only callers are the two rollback paths, in
+     * provisionIndexPair() here and in the step-by-step provisioning the installers share.
+     *
+     * @return array<string,mixed>
+     */
+    public function deleteIndex(string $indexName): array
+    {
+        if (!Security::isSafeCoreName($indexName)) {
+            throw new \InvalidArgumentException('Opensolr: invalid index name: ' . $indexName);
+        }
+        return $this->call('delete_index', ['index_name' => $indexName], 'GET');
+    }
+
+    /**
      * Delete indexes created during an attempt that did not complete.
      *
      * Best effort by design: if the cleanup itself fails the operator still
@@ -232,7 +257,7 @@ final class Opensolr
         foreach ($names as $name) {
             try {
                 $say(sprintf('Removing partially created index %s ...', $name));
-                $this->call('delete_index', ['index_name' => $name], 'GET');
+                $this->deleteIndex($name);
             } catch (\Throwable $e) {
                 $say(sprintf(
                     'WARNING: could not remove %s — delete it from your Opensolr control panel.',
@@ -274,6 +299,11 @@ final class Opensolr
      * once after createIndex() and writes the result into the config, after which
      * src/Solr.php is mode-agnostic and simply talks to a Solr node it has credentials for.
      *
+     * connection_url points at the core (…/solr/<index>), and src/Solr.php builds
+     * <base>/<core>/<handler> itself, so the trailing core segment is stripped here to get the
+     * base. Doing it in this one place keeps the "what shape is a base URL" knowledge from
+     * spreading.
+     *
      * @return array{base_url:string,http_user:string,http_pass:string}
      */
     public function connectionDetails(string $indexName): array
@@ -289,9 +319,6 @@ final class Opensolr
             throw new \RuntimeException('Opensolr: no connection_url returned for index ' . $indexName);
         }
 
-        // connection_url points at the core (…/solr/<index>). src/Solr.php builds
-        // <base>/<core>/<handler> itself, so strip the trailing core segment to get the
-        // base. Doing it here keeps the "what shape is a base URL" knowledge in one place.
         $base = preg_replace('#/' . preg_quote($indexName, '#') . '/?$#', '', $url) ?? $url;
 
         return [
@@ -313,6 +340,12 @@ final class Opensolr
      * types the old schema does not define, and the reload fails — leaving the index in a
      * state the operator has to fix from the Opensolr control panel.
      *
+     * The order is explicit and so is the file allowlist. It is deliberately not a glob: a
+     * stray .bak or an editor swap file left in the directory would otherwise be uploaded to
+     * the Solr node. The platform answers {"status":true|false,"msg":...}, and anything
+     * without a truthy status is a failure the operator must see rather than a warning to
+     * hide.
+     *
      * @param string $confDir Local directory, e.g. solr/hits/conf
      * @return array<int,array{file:string,ok:bool,msg:string}> One row per file, for the
      *                                                          setup wizard to display.
@@ -328,8 +361,6 @@ final class Opensolr
             throw new \InvalidArgumentException('Opensolr: configset directory not found: ' . $confDir);
         }
 
-        // Explicit order and an explicit allowlist. Not a glob: a stray .bak or an editor
-        // swap file left in the directory would otherwise be uploaded to the Solr node.
         $order = ['managed-schema.xml', 'solrconfig.xml'];
         $results = [];
 
@@ -342,8 +373,6 @@ final class Opensolr
 
             try {
                 $res = $this->uploadFile($indexName, $path);
-                // The platform answers {"status":true|false,"msg":...}. Anything without a
-                // truthy status is a failure the operator must see, not a warning to hide.
                 $ok = (bool) ($res['status'] ?? false);
                 $results[] = [
                     'file' => $name,
@@ -358,15 +387,15 @@ final class Opensolr
         return $results;
     }
 
-    // =====================================================================================
-    // INTERNALS
-    // =====================================================================================
-
     /**
      * Call a control-plane endpoint.
      *
      * Credentials are appended here and nowhere else, which is what makes the "never log
      * the key" rule auditable: there is exactly one place the key enters a request.
+     *
+     * The GET endpoints on this API read their credentials from the query string; that is the
+     * platform's contract and cannot be changed from this side. POST endpoints take them as
+     * fields, which is the safer of the two and is what uploadFile() uses.
      *
      * @param array<string,string> $params
      * @return array<string,mixed>
@@ -386,9 +415,6 @@ final class Opensolr
         $url = $this->apiBase . '/' . $endpoint;
         $qs  = http_build_query($params, '', '&', PHP_QUERY_RFC3986);
 
-        // GET endpoints on this API read their credentials from the query string; that is
-        // the platform's contract and we cannot change it from this side. POST endpoints
-        // take them as fields, which is the safer of the two and is what uploadFile() uses.
         $res = ($this->transport)([
             'method'          => $method,
             'url'             => $method === 'GET' ? $url . '?' . $qs : $url,
@@ -411,6 +437,11 @@ final class Opensolr
      * verbatim into the body — which is safe here because the only caller-influenced value
      * is the index name, already validated against [A-Za-z0-9_].
      *
+     * The platform caps uploads at roughly 3.5 MB and accepts only xml, txt, zip, aff and dic.
+     * The filename is passed through basename(), so a path can never travel in that field. The
+     * file field is named `userfile`, which is what CodeIgniter's do_upload() reads by default
+     * and what the platform's upload_config_file endpoint expects.
+     *
      * @return array<string,mixed>
      */
     private function uploadFile(string $indexName, string $path): array
@@ -419,12 +450,10 @@ final class Opensolr
         if ($contents === false) {
             throw new \RuntimeException('Opensolr: cannot read ' . $path);
         }
-        // The platform caps uploads at ~3.5 MB and only accepts xml|txt|zip|aff|dic.
         if (strlen($contents) > 3_000_000) {
             throw new \RuntimeException('Opensolr: configset file is too large: ' . basename($path));
         }
 
-        // basename() so a path can never travel in the filename field.
         $filename = basename($path);
 
         $boundary = '----loghound' . bin2hex(random_bytes(16));
@@ -442,8 +471,6 @@ final class Opensolr
             $body .= 'Content-Disposition: form-data; name="' . $name . '"' . $eol . $eol;
             $body .= $value . $eol;
         }
-        // CodeIgniter's do_upload() reads the field named `userfile` by default; that is
-        // what the platform's upload_config_file endpoint calls.
         $body .= '--' . $boundary . $eol;
         $body .= 'Content-Disposition: form-data; name="userfile"; filename="' . $filename . '"' . $eol;
         $body .= 'Content-Type: application/xml' . $eol . $eol;
@@ -474,6 +501,9 @@ final class Opensolr
      * exception, or a log file. The platform echoes request parameters back in some error
      * paths, and one of those parameters is the API key.
      *
+     * /regions answers with a bare JSON array, which is wrapped so that callers always get a
+     * map back.
+     *
      * @param array<string,mixed> $res
      * @return array<string,mixed>
      */
@@ -496,7 +526,6 @@ final class Opensolr
             );
         }
 
-        // /regions answers with a bare JSON array. Wrap it so callers always get a map.
         if (array_is_list((array) $decoded)) {
             return ['_list' => $decoded];
         }
@@ -518,14 +547,15 @@ final class Opensolr
      * containing the key in the first place. It exists because the platform occasionally
      * echoes the request back in an error body, and a secret in an exception message ends
      * up in a stack trace, in a support paste, and in an issue on a public repo.
+     *
+     * The key is also matched inside an echoed query string, in case the platform returned a
+     * normalised or partially encoded form of it.
      */
     private function redact(string $text): string
     {
         if ($this->apiKey !== '') {
             $text = str_replace($this->apiKey, '[api_key redacted]', $text);
         }
-        // Also catch the key appearing inside an echoed query string, in case the platform
-        // returned a normalised or partially encoded form of it.
         return (string) preg_replace('/(api_key=)[^&"\s]+/i', '$1[redacted]', $text);
     }
 

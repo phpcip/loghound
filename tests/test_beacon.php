@@ -581,4 +581,66 @@ return [
         );
         return true;
     },
+
+    'beacon: a token is bound to the Origin it was minted for' => static function () use ($eq, $lhBeacon) {
+        $beacon = $lhBeacon();
+        $sid = 'b' . str_repeat('a', 40);
+
+        $token = $beacon->issueToken($sid, time(), 'https://good.example');
+
+        if ($beacon->verifyToken($sid, $token, 'https://good.example') === null) {
+            throw new \RuntimeException('a token must verify from the origin it was issued to');
+        }
+        if ($beacon->verifyToken($sid, $token, 'https://evil.example') !== null) {
+            throw new \RuntimeException(
+                'a token issued to one origin must NOT verify from another; without this any '
+                . 'third-party page can obtain credentials for a visitor session and report '
+                . 'a real person as headless automation'
+            );
+        }
+        if ($beacon->verifyToken($sid, $token, '') !== null) {
+            throw new \RuntimeException('an absent origin must not satisfy a bound token');
+        }
+        return true;
+    },
+
+    'beacon: the client cannot assert a verdict the server derives' => static function () use ($eq, $lhBeacon) {
+        $beacon = $lhBeacon();
+
+        $payload = $beacon->normalise([
+            'v' => Beacon::PROTOCOL,
+            's' => 'b' . str_repeat('a', 40),
+            'k' => 'x',
+            'a' => [
+                'platform_mismatch',
+                'headless_zero_outer',
+                'beacon_forged',
+                'automation_webdriver',
+                'headless_renderer',
+            ],
+        ]);
+
+        $codes = $payload['signals'] ?? $payload['automation'] ?? [];
+
+        foreach (['platform_mismatch', 'headless_zero_outer', 'beacon_forged'] as $derived) {
+            if (in_array($derived, $codes, true)) {
+                throw new \RuntimeException(
+                    "the client must not be able to assert '{$derived}' — the server derives it, "
+                    . 'and accepting the client version lets a page pre-empt or contradict the '
+                    . 'measurement'
+                );
+            }
+        }
+
+        foreach (['automation_webdriver', 'headless_renderer'] as $observed) {
+            if (!in_array($observed, $codes, true)) {
+                throw new \RuntimeException(
+                    "'{$observed}' must still be accepted from the client — it can only be seen "
+                    . 'from inside the page, and refusing it would delete the strongest '
+                    . 'detection signals the product has'
+                );
+            }
+        }
+        return true;
+    },
 ];

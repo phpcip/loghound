@@ -17,7 +17,7 @@
 'use strict';
 
 import {
-    api, byId, dec, el, hideEmpty, load, noDataYet, num, shortHash, when
+    api, byId, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, shortHash, when
 } from '../core.js';
 import { sparkline, tokens } from '../charts.js';
 
@@ -60,7 +60,6 @@ function clusterRow(row, sparkBuckets) {
 
     tr.appendChild(el('td', { class: 'mono' }, [hashNode(row.fp)]));
 
-    // Distinct IPs is the headline number of this table, so it is emphasised on a fleet.
     tr.appendChild(el('td', { class: 'num' }, [
         row.fleet
             ? el('strong', { text: num(row.uniq_ips) })
@@ -70,8 +69,6 @@ function clusterRow(row, sparkBuckets) {
     tr.appendChild(el('td', { class: 'num', text: num(row.uniq_asns) }));
     tr.appendChild(el('td', { class: 'num', text: num(row.sessions) }));
 
-    // Sparkline: activity across the selected range. Drawn after the row is in the DOM,
-    // because the canvas needs a laid-out width.
     const canvas = el('canvas', {
         class: 'spark',
         'aria-label': 'Activity across the selected range, in ' + sparkBuckets + ' buckets',
@@ -165,8 +162,6 @@ function renderMembers(inner, data) {
     for (const m of data.rows) {
         body.appendChild(el('tr', {}, [
             el('td', { class: 'mono nowrap' }, [
-                // Clicking an address filters the session explorer to it — the natural
-                // next question after "who are these forty machines".
                 el('a', {
                     href: '?v=sessions&f[ip_s][]=' + encodeURIComponent(m.ip),
                     text: m.ip,
@@ -194,33 +189,33 @@ function renderMembers(inner, data) {
     );
 }
 
-/** Load and render the cluster table. */
-async function loadClusters() {
-    const table = byId('fp-table');
-    const sort = byId('fp-sort');
-    const min = byId('fp-min');
+/**
+ * Load and render the cluster table.
+ *
+ * Its own card, so a re-sort or a change of the minimum-IP floor re-runs only this
+ * request and shows its own progress while it does.
+ */
+function loadClusters() {
+    return loadCard('fp-table', 'Building fingerprint clusters', async () => {
+        const table = byId('fp-table-el');
+        const sort = byId('fp-sort');
+        const min = byId('fp-min');
 
-    await load('fp-table-empty', 'fingerprint clusters', async () => {
         const data = await api('fingerprints', 'clusters', {
             sort: sort ? sort.value : 'ips',
             min_ips: min ? min.value : 1
         });
 
-        const body = table.tBodies[0];
-        body.replaceChildren();
+        table.tBodies[0].replaceChildren();
 
-        const popNode = table.closest('.card').querySelector('.pop');
-        if (popNode) {
-            const fleets = data.rows.filter((r) => r.fleet).length;
-            popNode.textContent =
-                num(data.total_sessions) + ' sessions in range across ' + num(data.total_fps) +
-                ' distinct header fingerprints. Showing ' + num(data.rows.length) + '. ' +
-                (fleets
-                    ? fleets + ' cluster' + (fleets === 1 ? '' : 's') + ' below match the proxy-fleet pattern ' +
-                      '(five or more distinct addresses, not a mobile carrier) and are highlighted.'
-                    : 'None match the proxy-fleet pattern in this range.') +
-                ' Distinct-IP counts use Solr unique(), which is exact for small counts and approximate for large ones.';
-        }
+        const fleets = data.rows.filter((row) => row.fleet).length;
+        setPop('fp-table', num(data.total_sessions) + ' sessions in range across ' + num(data.total_fps) +
+            ' distinct header fingerprints. Showing ' + num(data.rows.length) + '. ' +
+            (fleets
+                ? fleets + ' cluster' + (fleets === 1 ? '' : 's') + ' below match the proxy-fleet pattern ' +
+                  '(five or more distinct addresses, not a mobile carrier, not self-declared) and are marked.'
+                : 'None match the proxy-fleet pattern in this range.') +
+            ' Distinct-IP counts use Solr unique(), exact for small counts and approximate for large ones.');
 
         if (!data.rows.length) {
             noDataYet('fp-table-empty', 'fingerprint clusters');
@@ -229,29 +224,28 @@ async function loadClusters() {
         hideEmpty('fp-table-empty');
 
         for (const row of data.rows) {
-            body.appendChild(clusterRow(row, data.spark_buckets));
+            table.tBodies[0].appendChild(clusterRow(row, data.spark_buckets));
         }
 
-        // Sparklines are drawn after layout so each canvas has its real pixel width.
         const t = tokens();
-        for (const canvas of body.querySelectorAll('canvas.spark')) {
+        for (const canvas of table.tBodies[0].querySelectorAll('canvas.spark')) {
             sparkline(canvas, canvas.__spark || [], t.accent);
         }
     });
 }
 
-/** Entry point. */
-export default async function init() {
+/**
+ * Entry point.
+ */
+export default function init() {
     const sort = byId('fp-sort');
     const min = byId('fp-min');
     if (sort) {
         sort.addEventListener('change', () => { expanded.clear(); loadClusters(); });
     }
     if (min) {
-        // `change` rather than `input`: nobody wants a Solr query per keystroke.
         min.addEventListener('change', () => { expanded.clear(); loadClusters(); });
     }
-    // Re-draw sparklines when the theme flips, since they are painted pixels not CSS.
     document.addEventListener('lh:theme', () => {
         const t = tokens();
         for (const canvas of document.querySelectorAll('canvas.spark')) {
@@ -259,5 +253,5 @@ export default async function init() {
         }
     });
 
-    await loadClusters();
+    loadClusters();
 }

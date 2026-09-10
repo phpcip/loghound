@@ -45,10 +45,6 @@ final class Fixtures
     /** Reference "now" for the whole demo world, so every view agrees on the clock. */
     private static ?int $now = null;
 
-    // -----------------------------------------------------------------------------
-    // Public entry points used by Gateway
-    // -----------------------------------------------------------------------------
-
     /**
      * Answer a JSON Facet request against the synthetic world.
      *
@@ -58,8 +54,7 @@ final class Fixtures
      */
     public static function facet(string $tag, array $query, array $facet): array
     {
-        // The tag tells us which core the controller meant; only the perf view reads hits.
-        $docs = str_starts_with($tag, 'perf.') ? self::hits() : self::sessions();
+        $docs = (str_starts_with($tag, 'perf.') || str_contains($tag, 'hits')) ? self::hits() : self::sessions();
         $docs = self::applyQuery($docs, $query);
         return self::compute($docs, $facet);
     }
@@ -72,10 +67,9 @@ final class Fixtures
      */
     public static function select(string $tag, array $params): array
     {
-        $docs = ($tag === 'sessions.hits') ? self::hits() : self::sessions();
+        $docs = str_contains($tag, 'hits') ? self::hits() : self::sessions();
         $docs = self::applyQuery($docs, $params);
 
-        // Sorting mirrors the literal sort strings in Panel\Query::sorts().
         $sort = (string) ($params['sort'] ?? '');
         if ($sort !== '') {
             [$field, $dir] = array_pad(explode(' ', trim($sort), 2), 2, 'asc');
@@ -92,7 +86,6 @@ final class Fixtures
         $rows  = (int) ($params['rows'] ?? 25);
         $page  = array_slice($docs, $start, $rows);
 
-        // Honour `fl` so the demo ships the same field set the real panel would.
         $fl = (string) ($params['fl'] ?? '');
         if ($fl !== '') {
             $keep = array_flip(array_map('trim', explode(',', $fl)));
@@ -169,10 +162,6 @@ final class Fixtures
         ];
     }
 
-    // -----------------------------------------------------------------------------
-    // World generation
-    // -----------------------------------------------------------------------------
-
     /** The demo clock. Frozen per request so all views agree. */
     private static function now(): int
     {
@@ -205,7 +194,6 @@ final class Fixtures
         ];
         $assets = ['/assets/app.css', '/assets/app.js', '/img/logo.svg', '/img/hero.webp', '/fonts/mono.woff2'];
 
-        // Networks the demo draws from: (asn, org, type, netname, country, city, lat, lon).
         $isps = [
             [3320, 'Deutsche Telekom AG', 'isp', 'DTAG-DIAL', 'DE', 'Berlin', 52.52, 13.40],
             [7922, 'Comcast Cable', 'isp', 'CCCH-3', 'US', 'Chicago', 41.88, -87.63],
@@ -236,7 +224,6 @@ final class Fixtures
             ['Edge', 152, 'Windows', 'desktop'],
         ];
 
-        // Declared crawlers. `cat` follows SPEC §4.1 ua_bot_cat_s; `ai` drives ai_crawler_b.
         $crawlers = [
             ['Googlebot', 'search', false, 15169, 'Google LLC', 'hosting', 'GOOGLE-CRAWL', 'US', 'Mountain View', 37.39, -122.08],
             ['bingbot', 'search', false, 8075, 'Microsoft Corporation', 'hosting', 'MSFT-CRAWL', 'US', 'Redmond', 47.67, -122.12],
@@ -249,21 +236,17 @@ final class Fixtures
             ['UptimeRobot', 'monitor', false, 14061, 'DigitalOcean LLC', 'hosting', 'UPTIMEROBOT', 'US', 'New York', 40.71, -74.01],
         ];
 
-        // The star of the demo: one header fingerprint, many hosting IPs, no JS ever.
         $fleetFp = 'a41f9c0e77b3d215e8c6b0d94f2a7c31b58e0d6a';
         $fleetUa = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
 
         $docs = [];
         for ($i = 0; $i < self::SESSIONS; $i++) {
-            // Recency weighting: squaring a uniform draw piles sessions into recent days,
-            // which is what a live site looks like and makes the 1h/6h ranges non-empty.
             $frac = (mt_rand(0, 10000) / 10000) ** 2.2;
             $start = $now - (int) round($frac * 30 * 86400) - mt_rand(0, 900);
 
             $roll = mt_rand(1, 100);
 
             if ($roll <= 14) {
-                // --- Rotating-proxy fleet: the thing nothing else catches. -----------
                 $net = $hostings[mt_rand(0, count($hostings) - 1)];
                 $ip = self::fleetIp($i);
                 $doc = self::baseDoc($start, $ip, $net);
@@ -286,9 +269,7 @@ final class Fixtures
                 $doc['bot_reasons_ss'] = ['fp_cluster_proxy_fleet', 'no_js_on_html', 'hosting_asn_browser_ua', 'no_assets'];
                 $doc['gap_stddev_ms_l'] = mt_rand(40, 260);
             } elseif ($roll <= 22) {
-                // --- Headless automation that did run JS and gave itself away --------
                 $net = $hostings[mt_rand(0, count($hostings) - 1)];
-                // Six rented boxes, reused. Automation is not automatically a fleet.
                 $doc = self::baseDoc($start, self::poolIp('headless', 6, $i, $net[0]), $net);
                 $doc['fp_hash_s'] = '7c1d0b93a4e6f2185d0c93b7ea41f6d208c5b7e9';
                 $doc['fp_ips_24h_i'] = mt_rand(2, 6);
@@ -315,7 +296,6 @@ final class Fixtures
                 $doc['bot_class_s'] = 'headless';
                 $doc['bot_reasons_ss'] = ['automation_marker', 'headless_renderer', 'ua_claim_failed', 'no_interaction', 'tz_mismatch'];
             } elseif ($roll <= 28) {
-                // --- Honest, self-declaring crawlers. Not a threat. ------------------
                 $c = $crawlers[mt_rand(0, count($crawlers) - 1)];
                 $net = [$c[3], $c[4], $c[5], $c[6], $c[7], $c[8], $c[9], $c[10]];
                 $doc = self::baseDoc($start, self::ip($net[0]), $net);
@@ -340,9 +320,7 @@ final class Fixtures
                 $doc['bot_class_s'] = $c[2] ? 'ai_crawler' : ($c[1] === 'monitor' ? 'monitor' : 'declared_crawler');
                 $doc['bot_reasons_ss'] = ['ua_declared_bot'];
             } elseif ($roll <= 34) {
-                // --- Scripted clients: curl/python, no pretence of being a browser ---
                 $net = $hostings[mt_rand(0, count($hostings) - 1)];
-                // A dozen scripted clients, each on its own long-lived address.
                 $doc = self::baseDoc($start, self::poolIp('scripted', 12, $i, $net[0]), $net);
                 $doc['ua_s'] = mt_rand(0, 1) ? 'python-requests/2.32.3' : 'curl/8.7.1';
                 $doc['browser_s'] = 'other';
@@ -360,7 +338,6 @@ final class Fixtures
                 $doc['bot_reasons_ss'] = ['no_js_on_html', 'no_assets', 'hosting_asn_browser_ua', 'periodic_timing'];
                 $doc['gap_stddev_ms_l'] = mt_rand(5, 90);
             } elseif ($roll <= 40) {
-                // --- Genuinely ambiguous. The scorer says so instead of guessing. ----
                 $net = $isps[mt_rand(0, count($isps) - 1)];
                 $doc = self::baseDoc($start, self::ip($net[0]), $net);
                 $b = $browsers[mt_rand(0, count($browsers) - 1)];
@@ -374,7 +351,6 @@ final class Fixtures
                 $doc['bot_class_s'] = 'none';
                 $doc['bot_reasons_ss'] = ['no_js_on_html', 'single_page_10s'];
             } else {
-                // --- Humans. Four timing numbers that differ the way real ones do. ---
                 $net = $isps[mt_rand(0, count($isps) - 1)];
                 $doc = self::baseDoc($start, self::ip($net[0]), $net);
                 $b = $browsers[mt_rand(0, count($browsers) - 1)];
@@ -386,12 +362,10 @@ final class Fixtures
                 $doc['hits_i'] = $pages + $doc['assets_i'];
                 $doc['asset_ratio_f'] = round($doc['assets_i'] / max(1, $doc['hits_i']), 3);
                 $doc['got_304_b'] = mt_rand(0, 10) > 2;
-                $doc['beacon_b'] = mt_rand(1, 100) <= 88; // a few block the beacon
+                $doc['beacon_b'] = mt_rand(1, 100) <= 88;
                 $doc['js_b'] = $doc['beacon_b'];
 
                 if ($doc['beacon_b']) {
-                    // wall > visible > engaged, always, by construction — and the log span
-                    // sits below wall because the last page's dwell is invisible to logs.
                     $wall = mt_rand(20000, 900000);
                     $visible = (int) round($wall * (mt_rand(35, 92) / 100));
                     $engaged = (int) round($visible * (mt_rand(20, 80) / 100));
@@ -409,15 +383,10 @@ final class Fixtures
                 $doc['bot_verdict_s'] = $doc['bot_score_f'] < 20 ? 'human' : 'likely_human';
                 $doc['bot_class_s'] = 'none';
                 $doc['bot_reasons_ss'] = $doc['bot_score_f'] < 20 ? [] : ['single_page_10s'];
-                // A human's fingerprint is derived from the client software AND the
-                // netblock they browse from, which is what makes real human clusters
-                // small: one household, one or two addresses. That contrast is the whole
-                // point of the fingerprint view, so the demo has to reproduce it.
                 $doc['fp_hash_s'] = 'f' . substr(sha1($doc['ua_s'] . '|' . $doc['ip_net_s']), 1);
                 $doc['fp_ips_24h_i'] = mt_rand(1, 3);
             }
 
-            // Session shape derived from whatever branch produced the doc.
             $span = (int) round(($doc['hits_i'] - 1) * mt_rand(400, 9000));
             $doc['log_span_ms_l'] = max(0, $span);
             $doc['ts_end'] = self::iso($start + (int) round($span / 1000));
@@ -487,10 +456,6 @@ final class Fixtures
             'country_s'  => $net[4],
             'city_s'     => $net[5],
             'region_s'   => $net[5],
-            // NOTE: no lat/lon here. SPEC §4 defines `geo_p` as indexed-only (no
-            // docValues), so it cannot be faceted or returned — the Networks map is
-            // therefore built from `country_s` plus a shipped centroid table. See the
-            // handover note in docs/PANEL.md.
             'tz_s'       => $tzByCountry[$net[4]] ?? 'UTC',
             'rdns_ok_b'  => false,
             'beacon_b'   => false,
@@ -504,9 +469,6 @@ final class Fixtures
             $doc['referer_host_s'] = $ref[1];
         }
         $doc['session_id_s'] = $doc['id'];
-        // `visitor_s` is the stable-ish visitor hash from SPEC §4.1 (ip_net + ua_hash +
-        // accept_lang). The Overview's "distinct visitors" counter faces it, so the demo
-        // has to produce one or that number reads as zero.
         $doc['visitor_s'] = substr(sha1($doc['ip_net_s'] . '|' . $net[4]), 0, 20);
         return $doc;
     }
@@ -619,14 +581,12 @@ final class Fixtures
                     $status = 304;
                 }
 
-                // Latency: assets fast, HTML slower, search endpoints slowest, with a
-                // long tail so p99 is meaningfully different from p50.
                 $base = $isAsset ? mt_rand(900, 9000) : mt_rand(18000, 190000);
                 if ($path === '/api' || $path === '/docs') {
                     $base = (int) ($base * 2.4);
                 }
                 if (mt_rand(1, 100) > 96) {
-                    $base *= mt_rand(4, 14); // the tail that p99 exists to show
+                    $base *= mt_rand(4, 14);
                 }
 
                 $hit = [
@@ -653,8 +613,6 @@ final class Fixtures
                 if (!empty($s['referer_s']) && $k === 0) {
                     $hit['referer_s'] = $s['referer_s'];
                 }
-                // A handful of sources genuinely do not log %D. Model that: the field is
-                // absent, and the Performance view must say so rather than show a zero.
                 if (($s['as_type_s'] ?? '') === 'mobile') {
                     unset($hit['dur_us_l']);
                 }
@@ -672,10 +630,6 @@ final class Fixtures
         return gmdate('Y-m-d\TH:i:s\Z', $ts);
     }
 
-    // -----------------------------------------------------------------------------
-    // Miniature JSON-Facet engine
-    // -----------------------------------------------------------------------------
-
     /**
      * Filter the world by a request's `q` and `fq`.
      *
@@ -690,7 +644,6 @@ final class Fixtures
         }
         $q = (string) ($params['q'] ?? '*:*');
         if ($q !== '*:*' && isset($params['uq'])) {
-            // Free-text search: substring match across the same fields the real qf covers.
             $needle = mb_strtolower(trim((string) $params['uq']));
             if ($needle !== '') {
                 $docs = array_values(array_filter($docs, static function (array $d) use ($needle): bool {
@@ -761,7 +714,6 @@ final class Fixtures
     {
         $value = $doc[$field] ?? null;
 
-        // field:[A TO B] — numeric or date range.
         if (str_starts_with($rhs, '[') && str_ends_with($rhs, ']')) {
             $inner = substr($rhs, 1, -1);
             [$lo, $hi] = array_pad(explode(' TO ', $inner, 2), 2, '*');
@@ -778,7 +730,6 @@ final class Fixtures
             return $v >= $lv && $v <= $hv;
         }
 
-        // field:(a OR b OR c)
         if (str_starts_with($rhs, '(') && str_ends_with($rhs, ')')) {
             foreach (explode(' OR ', substr($rhs, 1, -1)) as $opt) {
                 if (self::matches($doc, $field, trim($opt))) {
@@ -788,7 +739,6 @@ final class Fixtures
             return false;
         }
 
-        // field:"quoted literal" or a bare token.
         $want = trim($rhs, '"');
         $want = str_replace(['\\"', '\\\\'], ['"', '\\'], $want);
 
@@ -858,10 +808,6 @@ final class Fixtures
             }
             $type = (string) ($def['type'] ?? '');
 
-            // NOTE: there is deliberately no support for `domain: {filter: ...}` here.
-            // \Loghound\Solr::sanitiseFacet() accepts only `domain.excludeTags`, so a
-            // domain filter would work in the demo and be refused against real Solr —
-            // which is the worst possible kind of difference between the two.
             $scope = $docs;
 
             if ($type === 'query') {
@@ -893,7 +839,7 @@ final class Fixtures
         foreach ($docs as $d) {
             $v = $d[$field] ?? null;
             if ($v === null) {
-                continue; // absent, not "empty" — missing fields never become a bucket
+                continue;
             }
             foreach ((array) $v as $one) {
                 $k = is_bool($one) ? ($one ? 'true' : 'false') : (string) $one;
@@ -910,7 +856,6 @@ final class Fixtures
             $buckets[] = $b;
         }
 
-        // `sort` may reference a sub-facet name ("uniq_ips desc"), same as real Solr.
         $sort = (string) ($def['sort'] ?? 'count desc');
         [$sf, $sd] = array_pad(explode(' ', $sort, 2), 2, 'desc');
         usort($buckets, static function (array $a, array $b) use ($sf, $sd) {
@@ -968,7 +913,6 @@ final class Fixtures
         $end   = self::dateMath((string) ($def['end'] ?? 'NOW'));
         $gap   = self::gapSeconds((string) ($def['gap'] ?? '+1HOUR'));
 
-        // Pre-bucket the documents so this stays linear rather than buckets × docs.
         $binned = [];
         foreach ($docs as $d) {
             $raw = $d[$field] ?? null;

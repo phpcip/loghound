@@ -56,6 +56,15 @@ final class State
     /**
      * Open (creating if needed) the state database.
      *
+     * SQLite is put into exception mode rather than being allowed to return false silently: a
+     * broken state DB must be loud, because the failure mode otherwise is "ingestion restarts
+     * from offset 0".
+     *
+     * The journal is WAL, for concurrent readers during a write and a crash-safe journal, and
+     * synchronous is NORMAL. That is the right trade here: a power cut can lose the last few
+     * offset updates, which re-ingests a handful of lines, and re-ingest is idempotent because
+     * a hit id is sha1(file + offset). FULL would fsync on every batch for no benefit.
+     *
      * @param string $path Filesystem path, e.g. var/state.db. The containing directory is
      *                     created with 0750 so the daemons can write but the world cannot
      *                     read visitor addresses out of it.
@@ -68,16 +77,10 @@ final class State
         }
 
         $this->db = new SQLite3($path, SQLITE3_OPEN_READWRITE | SQLITE3_OPEN_CREATE);
-        // Throw on error instead of returning false silently — a broken state DB must be
-        // loud, because the failure mode otherwise is "ingestion restarts from offset 0".
         $this->db->enableExceptions(true);
         $this->db->busyTimeout(self::BUSY_TIMEOUT_MS);
 
-        // WAL: concurrent readers during a write, and a crash-safe journal.
         $this->db->exec('PRAGMA journal_mode = WAL');
-        // NORMAL is the right trade here: a power cut can lose the last few offset updates,
-        // which re-ingests a handful of lines — and re-ingest is idempotent because the hit
-        // id is sha1(file+offset). FULL would fsync on every batch for no benefit.
         $this->db->exec('PRAGMA synchronous = NORMAL');
         $this->db->exec('PRAGMA foreign_keys = ON');
         $this->db->exec('PRAGMA temp_store = MEMORY');
@@ -93,6 +96,13 @@ final class State
      * Written as plain idempotent CREATE IF NOT EXISTS rather than a versioned migration
      * runner, because the schema is small and additive; `meta.schema_version` records where
      * we are so a future breaking change has something to branch on.
+     *
+     * `sessions_open` holds one row per open session, keyed by `client_key`, which is ip_net
+     * plus ua_hash (SPEC §5.4) and is what both the tailer and the beacon collector look a
+     * session up by. The public collector appends to `beacon_staging` and does nothing else
+     * with it; loghound-score drains it. The three enrichment caches have an identical shape
+     * and are separate tables rather than one table with a namespace column, so that each can
+     * be vacuumed and sized independently.
      */
     private function migrate(): void
     {
@@ -106,8 +116,6 @@ final class State
             )'
         );
 
-        // One row per open session. `client_key` is ip_net + ua_hash (SPEC §5.4) and is what
-        // both the tailer and the beacon collector look a session up by.
         $this->db->exec(
             'CREATE TABLE IF NOT EXISTS sessions_open (
                 session_id  TEXT PRIMARY KEY,
@@ -129,7 +137,6 @@ final class State
                 ON sessions_open (closed_at, last_ts)'
         );
 
-        // The public collector appends here and nothing else; loghound-score drains it.
         $this->db->exec(
             'CREATE TABLE IF NOT EXISTS beacon_staging (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,8 +156,6 @@ final class State
                 ON beacon_staging (client_key, merged)'
         );
 
-        // Three caches, identical shape. Separate tables rather than one table with a
-        // namespace column so each can be vacuumed and sized independently.
         foreach (['cache_geo', 'cache_asn', 'cache_rdns'] as $table) {
             $this->db->exec(
                 'CREATE TABLE IF NOT EXISTS ' . $table . ' (
@@ -198,10 +203,6 @@ final class State
         $this->stmts = [];
         @$this->db->close();
     }
-
-    // =========================================================================
-    // Tail offsets
-    // =========================================================================
 
     /**
      * Read the recorded read position for a log file.
@@ -260,10 +261,6 @@ final class State
     {
         return $this->all('SELECT src, dev, inode, offset, updated_at FROM offsets ORDER BY src');
     }
-
-    // =========================================================================
-    // Sessions
-    // =========================================================================
 
     /**
      * Find the open session for a client key, if one exists and is not stale.
@@ -359,6 +356,9 @@ final class State
      *
      * This is what `bin/loghound-score` polls every 60s to decide what to score.
      *
+     * The batch is bounded: an unbounded query after a long outage would try to load every
+     * session at once.
+     *
      * @return array<int,array<string,mixed>>
      */
     public function listIdleSessions(int $idleSec, int $nowMs, int $limit = 500): array
@@ -371,8 +371,6 @@ final class State
               LIMIT :lim',
             [
                 ':cutoff' => $nowMs - ($idleSec * 1000),
-                // Bound the batch: an unbounded query after a long outage would try to load
-                // every session at once.
                 ':lim'    => Security::clampInt($limit, 1, 5000, 500),
             ]
         );
@@ -436,10 +434,6 @@ final class State
             'data'       => is_array($data) ? $data : [],
         ];
     }
-
-    // =========================================================================
-    // Beacon staging
-    // =========================================================================
 
     /**
      * Store a validated beacon payload for later merging.
@@ -514,6 +508,9 @@ final class State
     /**
      * Mark staged beacons as merged so they are not applied to the session twice.
      *
+     * The ids come from our own SELECT, but they are cast to int anyway: the day someone
+     * passes a request parameter in here, that cast is what keeps it from mattering.
+     *
      * @param int[] $ids
      */
     public function markBeaconsMerged(array $ids): void
@@ -521,8 +518,6 @@ final class State
         if ($ids === []) {
             return;
         }
-        // Ids come from our own SELECT, but they are cast anyway: the day someone passes a
-        // request parameter in here, the cast is what keeps it from mattering.
         $stmt = $this->prepare('UPDATE beacon_staging SET merged = 1 WHERE id = :id');
         $this->db->exec('BEGIN');
         try {
@@ -551,10 +546,6 @@ final class State
         );
         return $this->db->changes();
     }
-
-    // =========================================================================
-    // Enrichment caches
-    // =========================================================================
 
     /**
      * Read a cache entry.
@@ -660,10 +651,6 @@ final class State
         }
     }
 
-    // =========================================================================
-    // Rate limiting
-    // =========================================================================
-
     /**
      * Token-bucket rate limit check. Returns true when the request is allowed.
      *
@@ -676,6 +663,11 @@ final class State
      * read-modify-write race window that would let a burst of parallel requests each see a
      * full bucket, because the UPDATE computes the new level from the stored one.
      *
+     * A bucket is inserted full on first sight; afterwards it is refilled by elapsed time and
+     * one token is spent. A request over budget clamps the balance at -1, so that a sustained
+     * flood cannot drive it to minus a million and lock the visitor out for hours after it
+     * stops.
+     *
      * @param string $key       Bucket identity, e.g. 'ip:203.0.113.7' or 'sess:<id>'.
      * @param int    $perMinute Sustained rate.
      * @param int    $burst     Bucket capacity; defaults to the per-minute rate.
@@ -684,10 +676,9 @@ final class State
     {
         $perMinute = Security::clampInt($perMinute, 1, 100000, 120);
         $capacity  = (float) Security::clampInt($burst ?? $perMinute, 1, 100000, $perMinute);
-        $refill    = $perMinute / 60.0;               // tokens per second
+        $refill    = $perMinute / 60.0;
         $now       = microtime(true);
 
-        // Insert a full bucket on first sight; otherwise refill by elapsed time and spend one.
         $this->run(
             'INSERT INTO ratelimit (k, tokens, updated_at)
              VALUES (:k, :cap - 1.0, :now)
@@ -701,8 +692,6 @@ final class State
         $tokens = (float) ($row['tokens'] ?? 0.0);
 
         if ($tokens < 0.0) {
-            // Over budget. Clamp at -1 so a sustained flood cannot drive the balance to
-            // minus a million and lock the visitor out for hours after it stops.
             $this->run(
                 'UPDATE ratelimit SET tokens = -1.0 WHERE k = :k AND tokens < -1.0',
                 [':k' => $key]
@@ -721,10 +710,6 @@ final class State
         );
         return $this->db->changes();
     }
-
-    // =========================================================================
-    // Meta / counters
-    // =========================================================================
 
     /** Read a small key/value setting, with a default. */
     public function metaGet(string $key, ?string $default = null): ?string
@@ -765,10 +750,6 @@ final class State
     {
         return (int) $this->metaGet('counter:' . $key, '0');
     }
-
-    // =========================================================================
-    // Statement plumbing
-    // =========================================================================
 
     /**
      * Prepare a statement, reusing the compiled form across calls.

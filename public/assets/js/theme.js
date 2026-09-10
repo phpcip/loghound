@@ -19,14 +19,11 @@
     'use strict';
     var mode = 'auto';
     try {
-        // localStorage throws outright in some privacy configurations, and returns null
-        // in a fresh profile. Both mean "no preference stored", not "broken".
         var stored = window.localStorage.getItem('lh-theme');
         if (stored === 'dark' || stored === 'light') {
             mode = stored;
         }
     } catch (e) {
-        /* No stored preference is available. Fall through to 'auto'. */
     }
     document.documentElement.setAttribute('data-theme', mode);
 })();

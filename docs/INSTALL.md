@@ -7,6 +7,7 @@
 - [What each extra header buys you](#what-each-extra-header-buys-you)
 - [nginx](#nginx)
 - [The beacon](#the-beacon)
+- [Solr, and where the two indexes come from](#solr-and-where-the-two-indexes-come-from)
 - [Log retention: what Loghound can and cannot see](#log-retention-what-loghound-can-and-cannot-see)
 - [Loghound and your other log tooling](#loghound-and-your-other-log-tooling)
 - [Upgrading](#upgrading)
@@ -20,7 +21,7 @@
 ## The short version
 
 ```bash
-git clone https://github.com/cipriandimofte/loghound.git
+git clone https://github.com/phpcip/loghound.git
 cd loghound
 
 # Look before you leap. This changes nothing at all.
@@ -299,7 +300,9 @@ One line on your site, before `</body>`:
 <script src="https://loghound.example.com/b.js?v=1" defer></script>
 ```
 
-Under 6 KB, no dependencies, no cookies by default, passive and throttled event listeners.
+No dependencies, no cookies by default, passive and throttled event listeners. It ships as
+readable, commented source — about 33 KB on disk, roughly 12 KB over the wire once the
+vhost gzips it, which the shipped vhost examples do.
 
 **Without it, plane 3 is blind.** Loghound still works — it still does everything on the
 transport and behavioural planes — but headless automation is *inferred* rather than
@@ -308,6 +311,62 @@ other log analyser reports. The two things this project exists to do both need t
 
 The `?v=1` matters: `b.js` is served with a long cache lifetime, so bump the number when
 you upgrade and the new version is a new URL. No stale-beacon problem to debug.
+
+Everything the beacon sends, every signal code it can emit, and the exact wire protocol
+are in [BEACON.md](BEACON.md).
+
+---
+
+## Solr, and where the two indexes come from
+
+The wizard asks one question: **managed Opensolr, or a Solr you run yourself.**
+
+### Managed
+
+You give it the email address and API key from your Opensolr control panel and pick a
+region from the list the platform returns — nothing is hardcoded, so a region added by
+Opensolr shows up without a Loghound release. It then creates both indexes, pushes the
+configset to each (**schema first, then `solrconfig.xml`** — reversed, the core reloads
+against a config referencing field types the old schema does not define and the reload
+fails), reads the connection URL and credentials back, writes them into
+`config/loghound.php`, and verifies. You see `Index created`, `Rebuilt`, `Healthy`, and
+never have to learn what a configset is.
+
+**The index names are generated, not fixed.** Opensolr index names are unique across the
+whole platform, so a hardcoded `loghound_hits` would collide for the second person who
+ever installed this. Both cores share one 8-hex install id:
+
+```
+loghound_9f3c17ab_hits
+loghound_9f3c17ab_sessions
+```
+
+If either name is already taken, **the whole pair is retried with a fresh id** — a
+mismatched pair is confusing to find in an account holding hundreds of indexes — and any
+index the failed attempt already created is deleted before the retry, so a collision
+cannot leave orphans on an account you are billed for. After five attempts it gives up
+with a clear error rather than looping.
+
+**The API key is an account credential**, not a per-index one: it can create, reconfigure
+and delete every index on the account. It is read with terminal echo off, never printed
+back — not even masked, because a masked key in a scrollback is still a key in a
+scrollback — never written to `/var/log/loghound-install.log`, and stripped out of any
+error message the platform echoes back. It lives in `config/loghound.php`, mode `0640`,
+in a `0700` directory the web server user cannot reach.
+
+### Your own Solr
+
+Base URL, optional HTTP basic auth, and the two core names — which are yours to choose;
+a plain `loghound_hits` and `loghound_sessions` are fine on a Solr only you use. Create
+the cores with the configsets from `solr/hits/conf/` and `solr/sessions/conf/`, either
+through the Config Set API or by copying the directories into place.
+
+Solr 9.x. The configsets deliberately load no contrib jars and define no `/stream`,
+`/sql`, `/export`, `/replication`, `/update/extract`, `/terms` or `/browse` handlers;
+[SCHEMA.md](SCHEMA.md) §6 says what each of those would hand an attacker.
+
+**Nothing hardcodes a core name.** Both are read from `solr.hits_core` and
+`solr.sessions_core` in the config, in managed and self-hosted mode alike.
 
 ---
 
@@ -381,6 +440,18 @@ poll, the old inode is drained to EOF before being released, and an outright `rm
 the file is open is detected via the path re-stat and the link count. That last case is
 the subtle one: on Linux an unlinked file that a process holds open keeps reading forever
 with no error, so a naive tailer looks perfectly healthy while ingesting nothing.
+
+**Inode recycling is handled too, and it is the nastiest case of the lot.** On ext4, a
+rotation that renames `access.log` to `access.log.1`, compresses it, unlinks the original
+and creates a fresh `access.log` routinely hands the new file the inode number the old one
+just freed. The stored `(dev, inode, offset)` cursor then *matches* — a file that no
+longer exists — and resuming at that offset silently skips the beginning of the new file.
+The tailer looks healthy and quietly drops lines, which is the worst failure this class
+can have. So the cursor is validated rather than trusted: a valid offset always sits
+immediately after a newline, because only complete lines are ever committed. Reading the
+single byte before the cursor is enough to tell a genuine resume from a recycled inode,
+it costs one byte per startup, and when it fails the source restarts at 0 and the event is
+counted in `MISSED ROTATIONS` rather than hidden.
 
 ---
 

@@ -23,6 +23,54 @@
  *   SIGHUP            re-read the config and rebuild the source list without losing
  *                     a single byte of position (cursors live in SQLite, not memory).
  *
+ * systemd sends SIGTERM on stop and SIGHUP on `systemctl reload`. Without ext-pcntl a
+ * SIGTERM kills the process outright: the pending batch is lost — those lines are simply
+ * re-read on the next start, because cursors only advance on a successful drain — but there
+ * is no clean shutdown, so the daemon warns rather than pretending otherwise. A SIGHUP
+ * reload is cheap for the same reason the cursors survive: they live in SQLite, so
+ * rebuilding every Tail costs nothing but a re-open, no position is lost and no line is read
+ * twice.
+ *
+ * `--status` is a READ-ONLY CLIENT of the running daemon: it reads the status file the
+ * daemon writes once a second. Deliberately not a signal and not a socket — a status query
+ * must never be able to disturb ingestion.
+ *
+ * ---------------------------------------------------------------------------------
+ * ONE STATE INSTANCE
+ * ---------------------------------------------------------------------------------
+ * A single \Loghound\State owns var/state.db: the tail offsets, the open sessions, the
+ * enrichment caches and the beacon staging table. Sharing it means the sessionizer and the
+ * enrichers see the same transactions the tailer does, and that there is exactly one SQLite
+ * writer in this process rather than three fighting over a WAL. Failing to open it is a
+ * deployment problem, not a bug, so it is reported as one clean line and exits EX_CONFIG
+ * instead of dumping an uncaught-exception trace into the journal.
+ *
+ * ---------------------------------------------------------------------------------
+ * THE MAIN LOOP
+ * ---------------------------------------------------------------------------------
+ * Every cycle re-evaluates the source globs, because a glob is a question about the
+ * filesystem RIGHT NOW rather than at startup: a vhost enabled this afternoon, or a log file
+ * recreated after the nightly `find -mtime +10 -delete`, must be picked up without anyone
+ * restarting the daemon. It is done once a second at most, since a handful of glob() calls
+ * is nothing next to the work of actually reading the files, and tailers for paths that have
+ * been gone long enough to be gone for good are dropped.
+ *
+ * A line that fails to parse is COUNTED and SAMPLED, never silently dropped (SPEC §5.2): a
+ * rising parse_errors with an empty sample file would leave an operator with nothing to
+ * debug. One bad source must never take the daemon down, so the others keep ingesting.
+ *
+ * The batch is flushed on whichever comes first, batch_size documents or batch_ms elapsed,
+ * with softCommit only — a hard commit per batch would wreck throughput and is never needed
+ * for near-real-time visibility (SPEC §5.5). The rate window keeps 60 seconds of samples,
+ * because anything older cannot inform a "lines per second now".
+ *
+ * A reload flushes first, so that documents built with the old settings are not mixed into a
+ * batch built with the new ones, and refuses to adopt a broken config: the daemon keeps
+ * running on the old one rather than stopping ingestion because someone fat-fingered a file.
+ * Each cycle then sleeps for the REMAINDER of the poll interval, subtracting the work already
+ * done, which keeps the effective poll rate at poll_ms rather than poll_ms plus processing
+ * time.
+ *
  * @package Loghound
  * @license MIT
  */
@@ -42,10 +90,6 @@ if (PHP_SAPI !== 'cli') {
 
 $ROOT = dirname(__DIR__);
 require_once $ROOT . '/src/autoload.php';
-
-// =============================================================================
-// Arguments
-// =============================================================================
 
 $args = [
     'config'     => $ROOT . '/config/loghound.php',
@@ -99,30 +143,19 @@ function usage(): string
     TXT;
 }
 
-// =============================================================================
-// Paths and status file
-// =============================================================================
-
 $VAR         = $ROOT . '/var';
 $STATUS_FILE = $VAR . '/tail-status.json';
 $BADLINES    = $VAR . '/badlines.log';
 $STATE_DB    = $VAR . '/state.db';
 
-// --status is a read-only client of the running daemon: it reads the status file the
-// daemon writes once a second. Deliberately NOT a signal or a socket — a status query
-// must never be able to disturb ingestion.
 if ($args['status']) {
     exit(printStatus($STATUS_FILE, $args['human']));
 }
 
 if (!is_dir($VAR) && !@mkdir($VAR, 0750, true) && !is_dir($VAR)) {
     fwrite(STDERR, "loghound-tail: cannot create $VAR\n");
-    exit(78); // EX_CONFIG
+    exit(78);
 }
-
-// =============================================================================
-// Config
-// =============================================================================
 
 $cfg = Config::load($args['config']);
 $errors = $cfg->validate();
@@ -134,10 +167,6 @@ if ($errors !== []) {
     fwrite(STDERR, "Run bin/loghound-setup to fix this.\n");
     exit(78);
 }
-
-// =============================================================================
-// Runtime state
-// =============================================================================
 
 /** Set by the signal handlers; the main loop checks it between polls. */
 $RUNNING = true;
@@ -169,15 +198,6 @@ $rateWindow = [];
 $lastFlush  = microtime(true);
 $lastStatus = 0.0;
 
-// =============================================================================
-// Signal handling
-// =============================================================================
-//
-// systemd sends SIGTERM on stop and SIGHUP on `systemctl reload`. Without ext-pcntl a
-// SIGTERM kills the process outright: the pending batch is lost (those lines are simply
-// re-read next start, because cursors only advance on a successful drain) but there is
-// no clean shutdown. Warn rather than pretend.
-
 $havePcntl = extension_loaded('pcntl');
 if ($havePcntl) {
     pcntl_async_signals(true);
@@ -187,8 +207,6 @@ if ($havePcntl) {
     pcntl_signal(SIGINT, static function () use (&$RUNNING): void {
         $RUNNING = false;
     });
-    // SIGHUP = reload config. Cursors are in SQLite, so rebuilding every Tail costs
-    // nothing but a re-open; no position is lost and no line is read twice.
     pcntl_signal(SIGHUP, static function () use (&$RELOAD): void {
         $RELOAD = true;
     });
@@ -196,17 +214,6 @@ if ($havePcntl) {
     logLine('warn', 'ext-pcntl is not loaded: SIGTERM will not flush the pending batch cleanly.');
 }
 
-// =============================================================================
-// Cursor persistence
-// =============================================================================
-
-// ONE State instance for the whole daemon. It owns var/state.db: tail offsets, open
-// sessions, the enrichment caches and the beacon staging table. Sharing it means the
-// sessionizer and the enrichers see the same transactions the tailer does, and there is
-// exactly one SQLite writer in this process rather than three fighting over a WAL.
-//
-// A failure here is a deployment problem, not a bug: report it as one clean line and
-// exit with EX_CONFIG rather than dumping an uncaught-exception trace into the journal.
 $state = null;
 try {
     if (class_exists('\\Loghound\\State')) {
@@ -218,10 +225,6 @@ try {
     exit(78);
 }
 
-// =============================================================================
-// Pipeline
-// =============================================================================
-
 try {
     $pipeline = new Pipeline($cfg, $args['dry_run'], $args['verbose'], $state);
 } catch (\Throwable $e) {
@@ -229,16 +232,8 @@ try {
     exit(78);
 }
 
-// =============================================================================
-// Bad-line sampling
-// =============================================================================
-
 $badSampleCap = (int) $cfg->get('ingest.badline_sample', 200);
 $badSampler   = new BadLineSampler($BADLINES, $badSampleCap);
-
-// =============================================================================
-// Build the source list
-// =============================================================================
 
 buildSources($cfg, $args['from_start'], $cursors, $badSampler, $tails, $sourceMeta, $counters);
 
@@ -256,10 +251,6 @@ logLine('info', sprintf(
     (int) $cfg->get('solr.batch_ms', 2000),
     $args['dry_run'] ? ' [DRY RUN — nothing will be indexed]' : ''
 ));
-
-// =============================================================================
-// Main loop
-// =============================================================================
 
 $pollUs   = max(50, (int) $cfg->get('ingest.poll_ms', 1000)) * 1000;
 $batchMax = max(1, (int) $cfg->get('solr.batch_size', 500));
@@ -281,17 +272,10 @@ do {
     $loopStart = microtime(true);
     $linesThisPoll = 0;
 
-    // ---- Re-evaluate the source globs -----------------------------------
-    // Sources are globs, and a glob is a question about the filesystem RIGHT NOW, not at
-    // startup. A vhost enabled this afternoon, or a log file recreated after the nightly
-    // `find -mtime +10 -delete`, must be picked up without anyone restarting the daemon.
-    // Done once a second at most: a handful of glob() calls is nothing next to the work
-    // of actually reading the files.
     if ($loopStart - $lastRescan >= 1.0) {
         $lastRescan = $loopStart;
         buildSources($cfg, $args['from_start'], $cursors, $badSampler, $tails, $sourceMeta, $counters, true);
 
-        // Drop tailers for paths that have been gone long enough to be gone for good.
         foreach ($tails as $path => $t) {
             $s = $t->status();
             if (($s['missing_for_sec'] ?? null) !== null
@@ -323,9 +307,6 @@ do {
                 $doc = $pipeline->process($line, $offset, $src, $meta);
 
                 if ($doc === null) {
-                    // A line that fails to parse is COUNTED and SAMPLED, never silently
-                    // dropped (SPEC §5.2). A rising parse_errors with an empty sample
-                    // file would leave an operator with nothing to debug.
                     $counters['parse_errors']++;
                     if ($badSampler->record($src, $offset, $line)) {
                         $counters['badlines_kept']++;
@@ -336,47 +317,34 @@ do {
                 $batch[] = $doc;
             });
         } catch (\Throwable $e) {
-            // One bad source must never take the daemon down; the others keep ingesting.
             logLine('error', 'source ' . $path . ': ' . $e->getMessage());
         }
     }
 
-    // ---- Flush ----------------------------------------------------------
-    // Whichever comes first: batch_size documents, or batch_ms elapsed. softCommit
-    // only — a hard commit per batch would wreck throughput and is never needed for
-    // near-real-time visibility (SPEC §5.5).
     $now = microtime(true);
     if (count($batch) >= $batchMax || ($batch !== [] && ($now - $lastFlush) * 1000 >= $batchMs)) {
         flushBatch($pipeline, $batch, $counters, $args['verbose']);
         $lastFlush = $now;
     }
 
-    // ---- Rate window ----------------------------------------------------
     $rateWindow[] = [$now, $linesThisPoll];
-    // Keep 60 seconds of samples; anything older cannot inform a "lines per second now".
     while ($rateWindow !== [] && $now - $rateWindow[0][0] > 60.0) {
         array_shift($rateWindow);
     }
 
-    // ---- Status ---------------------------------------------------------
     if ($now - $lastStatus >= 1.0) {
         writeStatus($STATUS_FILE, $tails, $sourceMeta, $counters, $rateWindow, $batch, $args);
         $lastStatus = $now;
     }
 
-    // ---- Reload ---------------------------------------------------------
     if ($RELOAD) {
         $RELOAD = false;
         logLine('info', 'SIGHUP: reloading configuration');
-        // Flush first so documents built with the old settings are not mixed into a
-        // batch built with the new ones.
         flushBatch($pipeline, $batch, $counters, $args['verbose']);
 
         $newCfg = Config::load($args['config']);
         $newErrors = $newCfg->validate();
         if ($newErrors !== []) {
-            // Refuse to adopt a broken config: keep running on the old one rather than
-            // stopping ingestion because someone fat-fingered a file.
             logLine('error', 'reload rejected, keeping previous config: ' . implode('; ', $newErrors));
         } else {
             $cfg      = $newCfg;
@@ -387,7 +355,7 @@ do {
             $badSampler = new BadLineSampler($BADLINES, (int) $cfg->get('ingest.badline_sample', 200));
 
             foreach ($tails as $t) {
-                $t->close(); // checkpoints before releasing the descriptor
+                $t->close();
             }
             $tails = [];
             $sourceMeta = [];
@@ -400,17 +368,11 @@ do {
         break;
     }
 
-    // Sleep for the remainder of the poll interval. Subtracting the work already done
-    // keeps the effective poll rate at poll_ms rather than poll_ms + processing time.
     $spent = (int) ((microtime(true) - $loopStart) * 1000000);
     if ($spent < $pollUs) {
         usleep($pollUs - $spent);
     }
 } while ($RUNNING);
-
-// =============================================================================
-// Shutdown
-// =============================================================================
 
 logLine('info', 'shutting down');
 flushBatch($pipeline, $batch, $counters, $args['verbose']);
@@ -424,17 +386,21 @@ if ($state !== null && method_exists($state, 'close')) {
 }
 exit(0);
 
-// =============================================================================
-// Functions
-// =============================================================================
-
 /**
  * Expand the configured sources into one Tail per real, readable file.
  *
  * A source `path` may be a glob (`/var/log/apache2/*access.log`), which is the normal
  * case on a box with many vhosts. Every expanded path is re-validated against
  * `allowed_log_roots` — the glob is expanded here, at read time, so validating only the
- * pattern at save time would leave a hole.
+ * pattern at save time would leave a hole. A path is never followed out of the permitted
+ * roots, not even via a symlink placed in the log directory by someone who can write there.
+ *
+ * Plain glob() is used rather than GLOB_BRACE, which is not portable and buys nothing for
+ * the patterns setup produces. A file already being watched is skipped, whether because two
+ * globs matched it or because a previous cycle picked it up.
+ *
+ * A source discovered on a later cycle rather than at startup is worth exactly one log line:
+ * a new vhost coming online is something an operator wants to see in the journal.
  *
  * @param array<string,Tail>               $tails      out-param
  * @param array<string,array<string,mixed>> $sourceMeta out-param
@@ -467,17 +433,14 @@ function buildSources(
             continue;
         }
 
-        // GLOB_BRACE is not portable; plain glob covers the patterns setup produces.
         $matches = glob($pattern) ?: [];
         if ($matches === [] && is_file($pattern)) {
             $matches = [$pattern];
         }
 
         foreach ($matches as $file) {
-            // Never follow a path out of the permitted roots, even via a symlink placed
-            // in the log directory by someone who can write there.
             if (isset($tails[$file])) {
-                continue; // already watched (two globs matched it, or a previous cycle)
+                continue;
             }
 
             $real = Security::safePath($file, $roots);
@@ -494,13 +457,10 @@ function buildSources(
                 continue;
             }
             if (isset($tails[$real])) {
-                continue; // two globs matched the same file
+                continue;
             }
 
             if ($quiet) {
-                // Discovered on a later cycle rather than at startup: worth exactly one
-                // line, because a new vhost coming online is something an operator wants
-                // to see in the journal.
                 logLine('info', 'new log source discovered: ' . $real);
             }
 
@@ -557,6 +517,9 @@ function flushBatch(Pipeline $pipeline, array &$batch, array &$counters, bool $v
  * Written atomically (temp file + rename) so `--status` can never read a half-written
  * JSON document, and once a second at most so a 5000 req/s box does not spend its time
  * serialising status.
+ *
+ * The lines-per-second figure is computed over the rolling window and reported as null,
+ * not 0, when there is not yet a window to average over: an invented zero is a lie.
  */
 function writeStatus(
     string $file,
@@ -567,8 +530,6 @@ function writeStatus(
     array $batch,
     array $args
 ): void {
-    // Lines per second over the rolling window. Reported as null rather than 0 when
-    // there is not yet a window to average over — an invented zero is a lie.
     $rate = null;
     if (count($rateWindow) >= 2) {
         $span = $rateWindow[count($rateWindow) - 1][0] - $rateWindow[0][0];
@@ -627,6 +588,9 @@ function writeStatus(
 /**
  * Render the status file for `--status`, as JSON or as a small human table.
  *
+ * A status file that has not been touched for a while means the daemon died without removing
+ * it, and that is said plainly instead of reporting stale numbers as if they were live.
+ *
  * @return int Process exit code: 0 healthy, 3 stale/absent.
  */
 function printStatus(string $file, bool $human): int
@@ -642,8 +606,6 @@ function printStatus(string $file, bool $human): int
         return 3;
     }
 
-    // A status file that has not been touched for a while means the daemon died without
-    // removing it. Say so instead of reporting stale numbers as if they were live.
     $age = time() - (int) strtotime((string) ($doc['generated_at'] ?? ''));
     $stale = $age > 10;
 
@@ -730,10 +692,6 @@ function logLine(string $level, string $message): void
     fwrite(STDERR, sprintf("[%s] %-5s loghound-tail: %s\n", gmdate('Y-m-d\TH:i:s\Z'), $level, $message));
 }
 
-// =============================================================================
-// Support classes
-// =============================================================================
-
 /**
  * Persists (dev, inode, offset) per log file.
  *
@@ -752,15 +710,21 @@ final class CursorStore
     private ?string $setMethod = null;
 
     /**
+     * \Loghound\State owns the offsets table, so it is used whenever one is available and
+     * there is a single schema with a single writer. The self-contained fallback only runs in
+     * a checkout where State does not exist, which is what keeps this daemon testable on its
+     * own.
+     *
+     * The fallback opens the database in WAL mode, which keeps the scorer and the retention
+     * job readable while the tailer writes, and chmods it to 0640: the state database holds no
+     * secrets, but it does hold the shape of the operator's traffic, and that should stay off
+     * other local users.
+     *
      * @param string       $dbPath Path to var/state.db.
      * @param object|null  $state  The shared \Loghound\State, when it is available.
      */
     public function __construct(string $dbPath, ?object $state = null)
     {
-        // \Loghound\State owns the offsets table; use it whenever we have one, so there
-        // is a single schema and a single writer. The self-contained fallback below only
-        // runs in a checkout where State does not exist, which keeps this daemon testable
-        // on its own.
         if ($state !== null && method_exists($state, 'getOffset') && method_exists($state, 'setOffset')) {
             $this->state = $state;
             $this->getMethod = 'getOffset';
@@ -774,7 +738,6 @@ final class CursorStore
 
         $this->db = new \SQLite3($dbPath);
         $this->db->busyTimeout(5000);
-        // WAL keeps the scorer and the retention job readable while the tailer writes.
         $this->db->exec('PRAGMA journal_mode = WAL');
         $this->db->exec('PRAGMA synchronous = NORMAL');
         $this->db->exec(
@@ -786,8 +749,6 @@ final class CursorStore
             . ' updated_at INTEGER NOT NULL'
             . ')'
         );
-        // The state database holds no secrets, but it does hold the shape of the
-        // operator's traffic; keep it off other local users.
         @chmod($dbPath, 0640);
     }
 
@@ -861,6 +822,9 @@ final class CursorStore
  * SPEC §5.2: an unparseable line is counted and sampled, never silently dropped. The
  * cap matters as much as the sampling — a format that suddenly stops matching would
  * otherwise fill the disk with a copy of the access log within minutes.
+ *
+ * What is already in the file is counted on startup, so that a restart does not reset the cap
+ * and let the file grow without limit across restarts.
  */
 final class BadLineSampler
 {
@@ -874,8 +838,6 @@ final class BadLineSampler
         $this->file = $file;
         $this->cap  = max(0, $cap);
 
-        // Count what is already in the file so a restart does not reset the cap and
-        // let the file grow without limit across restarts.
         if (is_file($file)) {
             $fh = @fopen($file, 'rb');
             if ($fh !== false) {
@@ -892,7 +854,9 @@ final class BadLineSampler
      *
      * The line is stored with its source and offset so an operator can go straight to
      * the original bytes, and control characters are stripped: a log line is
-     * attacker-controlled and this file WILL be read in a terminal.
+     * attacker-controlled and this file WILL be read in a terminal. The C0 controls and DEL
+     * are what go, so that a crafted User-Agent cannot emit escape sequences into the
+     * operator's terminal when they cat the file.
      */
     public function record(string $src, int $offset, string $line): bool
     {
@@ -905,8 +869,6 @@ final class BadLineSampler
             return false;
         }
 
-        // Strip C0 controls and DEL so a crafted User-Agent cannot emit escape sequences
-        // into the operator's terminal when they cat this file.
         $safe = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '?', $line) ?? '';
         $safe = substr($safe, 0, 4096);
 
@@ -1006,13 +968,14 @@ final class Pipeline
      * write, so real ingestion refuses to start; --dry-run is allowed to continue with
      * LogFormat alone, because "does this format match my log?" is a useful question to
      * answer on its own.
+     *
+     * Parser is given the privacy mode, the salt and the raw-retention toggle, because those
+     * decide what the document is allowed to contain and therefore belong at parse time rather
+     * than being stripped out afterwards.
      */
     private function initParser(): void
     {
         if (class_exists('\\Loghound\\Parser')) {
-            // Parser needs the privacy mode, the salt and the raw-retention toggle: they
-            // decide what the document is allowed to contain, so they belong at parse
-            // time rather than being stripped out afterwards.
             $this->parser = new \Loghound\Parser([
                 'ip_mode'  => (string) $this->cfg->get('privacy.ip_mode', 'full'),
                 'ip_salt'  => (string) $this->cfg->get('privacy.ip_salt', ''),
@@ -1047,6 +1010,10 @@ final class Pipeline
      * All three are optional by design (SPEC §5.3): a geo endpoint that is down, a whois
      * server that rate-limits us, a DNS resolver that times out — none of those is a
      * reason to lose a request. The field is simply absent from the document.
+     *
+     * The UA flag is not one of the three: Parser already folds Ua::parse()->fields() into the
+     * document, and the flag exists only so that the raw-only dry-run path can still classify
+     * a User-Agent.
      */
     private function initEnrichers(?object $state): void
     {
@@ -1066,8 +1033,6 @@ final class Pipeline
                 logLine('warn', 'ASN enrichment unavailable: ' . $e->getMessage());
             }
         }
-        // Parser already folds Ua::parse()->fields() into the document; this flag exists
-        // only so the raw-only dry-run path can still classify a User-Agent.
         $this->haveUa = class_exists('\\Loghound\\Enrich\\Ua');
     }
 
@@ -1101,6 +1066,10 @@ final class Pipeline
      *
      * Cached per name: compiling a twenty-column Apache LogFormat into a regex is not
      * free, and every line of a busy log asks for the same one.
+     *
+     * A library name is tried first ('apache_combined', 'nginx_combined', ...). Otherwise the
+     * value is the operator's own LogFormat string, copied out of their webserver config by
+     * the setup wizard, and an nginx format is recognisable by its $variables.
      */
     private function format(string $name): ?object
     {
@@ -1110,12 +1079,8 @@ final class Pipeline
 
         $fmt = null;
         try {
-            // A library name first ('apache_combined', 'nginx_combined', ...).
             $fmt = \Loghound\LogDetect::formatByName($name);
             if ($fmt === null) {
-                // Otherwise it is the operator's own LogFormat string, copied out of
-                // their webserver config by the setup wizard. An nginx format is
-                // recognisable by its $variables.
                 $fmt = str_contains($name, '$')
                     ? \Loghound\LogFormat::fromNginx($name, 'source')
                     : \Loghound\LogFormat::fromApache($name, 'source');
@@ -1131,6 +1096,35 @@ final class Pipeline
     /**
      * Turn one raw log line into a `hits` document, or null when it cannot be parsed.
      *
+     * PARSE. Parser owns the id — sha1 of src plus offset, which is what makes a re-ingest
+     * idempotent — the privacy transform, the kind/asset classification and the header-derived
+     * fields. A parser that throws on a hostile line is a parse failure, not a crash. Under
+     * --dry-run without Parser the step proves the format matches and nothing more. The vhost
+     * is filled in here when the log format does not carry %v and the operator told setup which
+     * site the file belongs to.
+     *
+     * ENRICH. SPEC §5.3: enrichment failure NEVER blocks indexing. Every lookup is wrapped,
+     * every result is merged only where it adds a key, and a miss leaves the field ABSENT
+     * rather than empty — "" and "not known" are different facts, and conflating them poisons
+     * every facet built on the field.
+     *
+     * SESSIONIZE. Sessionizer::assign() requires `_ts_unix`, a private transport-only field
+     * that Parser does not emit, since Parser gives `ts` as the ISO-8601 string Solr wants. It
+     * is derived from that rather than from time(), and the difference matters: replaying a
+     * historical log must produce the sessions it would have produced live, and time() would
+     * collapse a week of traffic into one session in the present. A sessionisation failure is
+     * never fatal — a hit without session_id_s is still a valid `hits` document and
+     * loghound-score can group it later, whereas losing the request entirely would be much
+     * worse. It is logged ONCE rather than per line: a systematic failure, a signature mismatch
+     * or a missing table, applies to every line in the file, and repeating it a thousand times
+     * a second would bury everything else in the journal and cost more than the ingestion.
+     *
+     * STRIP. Anything with a leading underscore is an internal handoff between pipeline stages
+     * (`_ts_unix`, and whatever future stages add) and must never reach Solr: the schema does
+     * not define these, so at best they are silently ignored and at worst a dynamic-field rule
+     * catches them and quietly doubles the index. An absent header stays ABSENT and never
+     * becomes an empty string (SPEC §4.1), for the same reason as above.
+     *
      * @param array<string,mixed> $meta Source descriptor: src, format, host.
      * @return array<string,mixed>|null
      */
@@ -1141,20 +1135,14 @@ final class Pipeline
             return null;
         }
 
-        // ---- Parse ------------------------------------------------------
         if ($this->rawOnly) {
-            // --dry-run without Parser: prove the format matches, nothing more.
             $raw = $fmt->parse($line);
             return is_array($raw) && $raw !== [] ? $raw : null;
         }
 
         try {
-            // Parser owns the id (sha1 of src+offset, which is what makes a re-ingest
-            // idempotent), the privacy transform, kind/asset classification and the
-            // header-derived fields.
             $hit = $this->parser->parseLine($fmt, $line, $src, $offset);
         } catch (\Throwable $e) {
-            // A parser that throws on a hostile line is a parse failure, not a crash.
             return null;
         }
 
@@ -1162,17 +1150,10 @@ final class Pipeline
             return null;
         }
 
-        // The vhost, when the log format does not carry %v and the operator told setup
-        // which site this file belongs to.
         if (!isset($hit['host_s']) && !empty($meta['host'])) {
             $hit['host_s'] = $meta['host'];
         }
 
-        // ---- Enrich -----------------------------------------------------
-        // SPEC §5.3: enrichment failure NEVER blocks indexing. Every lookup is wrapped,
-        // every result is merged only where it adds a key, and a miss leaves the field
-        // ABSENT rather than empty — "" and "not known" are different facts, and
-        // conflating them poisons every facet built on the field.
         $ip = (string) ($hit['ip_s'] ?? '');
         if ($ip !== '') {
             if ($this->geo !== null) {
@@ -1186,15 +1167,8 @@ final class Pipeline
             }
         }
 
-        // ---- Sessionize -------------------------------------------------
         if ($this->sessionizer !== null) {
             try {
-                // BRIDGE: Sessionizer::assign() requires `_ts_unix`, a private
-                // transport-only field that Parser does not currently emit (Parser gives
-                // `ts` as an ISO-8601 string, which is what Solr wants). Deriving it here
-                // rather than calling time() matters: replaying a historical log must
-                // produce the sessions it would have produced live, and time() would
-                // collapse a week of traffic into one session in the present.
                 if (!isset($hit['_ts_unix']) && isset($hit['ts'])) {
                     $t = strtotime((string) $hit['ts']);
                     if ($t !== false) {
@@ -1207,14 +1181,6 @@ final class Pipeline
                     $hit = $out;
                 }
             } catch (\Throwable $e) {
-                // Never fatal. A hit without session_id_s is still a valid `hits`
-                // document; loghound-score can group it later. Losing the request
-                // entirely because sessionisation failed would be much worse.
-                //
-                // Logged ONCE, not once per line: a systematic failure (a signature
-                // mismatch, a missing table) applies to every line in the file, and
-                // repeating it a thousand times a second would bury everything else in
-                // the journal and cost more than the ingestion itself.
                 if (!$this->sessionizerWarned) {
                     $this->sessionizerWarned = true;
                     logLine('warn', 'Sessionizer failed and is being skipped for this run: '
@@ -1223,20 +1189,12 @@ final class Pipeline
             }
         }
 
-        // ---- Strip private fields ---------------------------------------
-        // Anything with a leading underscore is an internal handoff between pipeline
-        // stages (`_ts_unix`, and whatever future stages add). It must never reach Solr:
-        // the schema does not define these, so at best they are silently ignored and at
-        // worst a dynamic-field rule catches them and quietly doubles the index.
         foreach (array_keys($hit) as $k) {
             if (is_string($k) && $k !== '' && $k[0] === '_') {
                 unset($hit[$k]);
             }
         }
 
-        // An absent header must be ABSENT, never an empty string (SPEC §4.1). "" and
-        // "the operator does not log this header" are different facts, and conflating
-        // them poisons every facet built on the field.
         foreach ($hit as $k => $v) {
             if ($v === '' || $v === null) {
                 unset($hit[$k]);
@@ -1298,6 +1256,9 @@ final class Pipeline
      * per batch would open a new searcher every two seconds and destroy throughput for
      * no benefit at all.
      *
+     * Solr answers 200 with an error body more often than people expect, so a non-ok response
+     * is treated as a failure and counted and logged rather than assumed to have worked.
+     *
      * @param array<int,array<string,mixed>> $docs
      */
     public function index(array $docs): void
@@ -1306,8 +1267,6 @@ final class Pipeline
             return;
         }
         $res = $this->solr->addDocs($this->hitsCore, $docs, true);
-        // Solr answers 200 with an error body more often than people expect; treat a
-        // non-ok response as a failure so it is counted and logged rather than assumed.
         if (is_array($res) && isset($res['ok']) && $res['ok'] === false) {
             throw new \RuntimeException((string) ($res['error'] ?? 'Solr rejected the batch'));
         }

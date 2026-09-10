@@ -153,14 +153,28 @@ loghound/
     apache-vhost.conf.example
     nginx-vhost.conf.example
   docs/
-    INSTALL.md  DETECTION.md  SECURITY.md  PRIVACY.md  SCHEMA.md  API.md
+    INSTALL.md             # install, the recommended LogFormat, header-by-header value
+    DETECTION.md           # the three planes, every rule, worked examples, evasion
+    SECURITY.md            # threat model, controls by surface, hardening
+    PRIVACY.md             # what is collected, IP modes, retention, GDPR posture
+    SCHEMA.md              # the operator-facing version of §4, with size arithmetic
+    BEACON.md              # the beacon: clocks, signal codes, wire protocol
+    PANEL.md               # the web panel: request flow, review notes, demo mode
   config/
     loghound.example.php
+  tools/
+    panel-preview.php      # throwaway config so the panel can be looked at without Solr
   tests/
     fixtures/              # real log lines, one file per format
+    helpers.php            # assertion helpers, auto-loaded
     run.php                # dependency-free test runner
-  SPEC.md  README.md  LICENSE  CHANGELOG.md
+  .htaccess                # deny rules for anyone who serves the tree from the repo root
+  SPEC.md  README.md  CONTRIBUTING.md  LICENSE  CHANGELOG.md
 ```
+
+There is no `docs/API.md`: there is no public HTTP API to document. The panel's `?api=`
+endpoints are internal to it and are described in `docs/PANEL.md`; the only public write
+path is `public/collect.php`, whose wire protocol is in `docs/BEACON.md` §5.
 
 ---
 
@@ -309,7 +323,16 @@ Verdict: `bot_score_f` (0–100), `bot_verdict_s`
 
 ## 6. The beacon (`public/b.js`) — plane 3
 
-Served from our own vhost. Sites embed one line. **Under 6 KB minified, no dependencies.**
+Served from our own vhost. Sites embed one line. **No dependencies, no build step.**
+
+Size, measured rather than aspired to: `public/b.js` ships as commented source — there is
+no minifier in the project, because there is no build step (§2) — which is roughly 33 KB on
+disk and **about 12 KB over the wire** once the vhost gzips it, which both shipped vhost
+examples do. An earlier draft of this spec asked for "under 6 KB minified"; that target was
+never met and is not compatible with the rule that every non-obvious line carries an inline
+comment. Readable source that a site owner can audit before embedding it is the better
+trade. If it ever needs to shrink, minify at release time — never by deleting comments from
+the file people read.
 
 ### 6.1 Time measurement — get this exactly right
 
@@ -510,11 +533,19 @@ Charts: ECharts. Dark/light aware. Every chart must state the population it cove
 
 - Host: `opensolr.com` (5.161.242.87). **Do not modify ANY existing vhost, FPM pool, config
   file, cron, or service.** New files only, new pool `loghound`, new vhost file.
-- App root `/opt/loghound`, docroot `/opt/loghound/public`, user `loghound` in group `adm`.
+- App root is `--prefix`, default `/opt/loghound`, docroot `<prefix>/public`, user `loghound`
+  in group `adm`. The reference install lives at `/var/www/workspace/loghound`, so that the
+  box's own management platform picks it up as an application and gives it git deploy,
+  backups and log viewing for free. Every generated artefact follows the prefix.
 - Domain `loghound.opensolr.com` — DNS A record must be added by Cip (Fastmail NS); until then
   test with `curl --resolve`.
-- Solr: Opensolr indexes `loghound_hits`, `loghound_sessions` on region `FINLAND9`
-  (= `fi.solrcluster.com`, Solr 9.6), owner `cip@opensolr.com`.
+- Solr: two Opensolr indexes on region `FINLAND9` (= `fi.solrcluster.com`, Solr 9.6), owner
+  `cip@opensolr.com`. **The names are generated per installation, not fixed**: Opensolr index
+  names are unique across the entire platform, so `Config::coreName()` produces
+  `loghound_<8 hex>_hits` and `loghound_<8 hex>_sessions` from one install id shared by the
+  pair. A collision on either name retries the whole pair with a fresh id and deletes
+  anything the failed attempt created, so a retry never leaves orphaned indexes on the
+  account.
 - It will ingest `/var/log/apache2/opensolr_com_access.log` — **read-only**.
 
 ---

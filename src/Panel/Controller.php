@@ -69,10 +69,6 @@ abstract class Controller
      */
     abstract public function api(string $action): array;
 
-    // -----------------------------------------------------------------------------
-    // Request helpers — the only place $_GET is read
-    // -----------------------------------------------------------------------------
-
     /**
      * Read a string parameter, restricted to an allowlist when one is given.
      *
@@ -103,8 +99,6 @@ abstract class Controller
         if (!is_string($v)) {
             return '';
         }
-        // Strip control characters; they have no meaning in a search box and only serve
-        // to make log output and error messages confusing.
         $v = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $v) ?? '';
         return mb_substr(trim($v), 0, $max);
     }
@@ -134,8 +128,6 @@ abstract class Controller
                 if (!is_string($v) || $v === '') {
                     continue;
                 }
-                // Values are quoted+escaped at query time; cap the length here so a
-                // multi-megabyte filter value cannot be used to bloat a Solr request.
                 $out[$field][] = mb_substr($v, 0, 256);
             }
             if (isset($out[$field])) {
@@ -204,10 +196,6 @@ abstract class Controller
         return Security::clampInt($_GET['start'] ?? null, 0, Security::MAX_START, 0);
     }
 
-    // -----------------------------------------------------------------------------
-    // Shared response fragments
-    // -----------------------------------------------------------------------------
-
     /**
      * Metadata every API response carries.
      *
@@ -273,6 +261,32 @@ abstract class Controller
     }
 
     /**
+     * Emit a JSON response and stop.
+     *
+     * Used by the asynchronous job endpoints, which are POSTs and therefore reach a
+     * controller through the front controller's state-change path rather than its JSON
+     * path. Emitting here keeps the response next to the code that produced it. The same
+     * JSON_HEX_* flags as Security::escJs() are set so a User-Agent containing markup
+     * cannot do anything if this payload is ever rendered somewhere it should not be.
+     *
+     * @param array<string,mixed> $payload
+     * @return never
+     */
+    protected static function sendJson(array $payload, int $status = 200): void
+    {
+        http_response_code($status);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store, private');
+        header('X-Content-Type-Options: nosniff');
+        echo json_encode(
+            $payload,
+            JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+            | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+        exit;
+    }
+
+    /**
      * Render the standard "population covered" caption.
      *
      * Every chart and every stat block in the panel carries one. It is a <p> and not a
@@ -285,20 +299,119 @@ abstract class Controller
     }
 
     /**
-     * Render a chart container plus its heading, caption and empty-state slot.
+     * Open a card and render its header and caption.
      *
-     * Centralised so every chart in the panel is structurally identical: the JS finds the
-     * canvas by id, and the empty state is already in the DOM so a view with no data
-     * never shows an empty grey box.
+     * Emits no loading state on its own: a card whose content is rendered server-side
+     * (the settings forms) calls this and then cardEnd(), while a card whose content
+     * arrives over the wire calls skeleton() in between, which is what adds the progress
+     * strip. Keeping the two apart means a static card can never sit there showing a
+     * progress bar for data it was never going to fetch.
+     *
+     * @param string $id         Base id. Parts are "<id>-status", "-skel", "-content",
+     *                           "-empty", "-pop"; the chart or table keeps the bare id.
+     * @param string $num        Section number, e.g. "01".
+     * @param string $heading    Section label, rendered uppercase.
+     * @param string $population The "what this counts" caption. SPEC §10 requires one.
+     * @param string $tools      Pre-escaped control markup for the right of the header.
      */
-    protected static function chart(string $id, string $heading, string $population, string $height = '300px'): void
+    protected static function cardOpen(
+        string $id,
+        string $num,
+        string $heading,
+        string $population = '',
+        string $tools = ''
+    ): void {
+        $e = Security::esc($id);
+        echo '<section class="card" id="' . $e . '-card" data-card="' . $e . '">';
+        echo '<div class="card-head"><h2>'
+            . '<span class="card-num">' . Security::esc($num) . '</span>'
+            . '<span>' . Security::esc($heading) . '</span></h2>'
+            . $tools
+            . '</div>';
+        if ($population !== '') {
+            echo '<p class="pop" id="' . $e . '-pop">' . Security::esc($population) . '</p>';
+        } else {
+            echo '<p class="pop" id="' . $e . '-pop" hidden></p>';
+        }
+    }
+
+    /**
+     * Emit the loading state for an async card and open its content wrapper.
+     *
+     * The progress strip is a flat bar plus a sentence naming what is happening, because
+     * a bare spinner tells an operator nothing about whether to keep waiting. The
+     * skeleton is flat blocks with a slow opacity pulse rather than a shimmer, since a
+     * shimmer is a gradient and the design system bans gradients.
+     *
+     * The real content is present in the DOM from the first byte and merely hidden, so
+     * table headers and captions are already escaped and laid out before any data
+     * arrives — the front end only ever fills in cells.
+     *
+     * @param string $kind   'chart', 'rows' or 'stats'.
+     * @param int    $height Chart height in pixels, ignored for other kinds.
+     * @param string $label  What the card says it is doing, in words.
+     */
+    protected static function skeleton(
+        string $id,
+        string $kind = 'rows',
+        int $height = 300,
+        string $label = 'Querying Solr'
+    ): void {
+        $e = Security::esc($id);
+
+        echo '<div class="card-status" id="' . $e . '-status" data-label="' . Security::esc($label) . '">'
+            . '<span class="progress progress-indeterminate"><span class="progress-fill"></span></span>'
+            . '<span class="loading">'
+            . '<span class="loading-label">' . Security::esc($label) . '&#8230;</span>'
+            . '<span class="loading-elapsed"></span>'
+            . '</span>'
+            . '</div>';
+
+        echo '<div class="skel-rows" id="' . $e . '-skel" aria-hidden="true">';
+        if ($kind === 'chart') {
+            echo '<div class="skel skel-chart" style="height:'
+                . Security::clampInt($height, 80, 600, 300) . 'px"></div>';
+        } elseif ($kind === 'stats') {
+            echo '<div class="skel skel-line skel-w30" style="height:34px"></div>';
+            echo '<div class="skel skel-line skel-w50"></div>';
+        } else {
+            foreach (['skel-w90', 'skel-w70', 'skel-w90', 'skel-w50', 'skel-w70', 'skel-w30'] as $width) {
+                echo '<div class="skel skel-line ' . $width . '"></div>';
+            }
+        }
+        echo '</div>';
+        echo '<div class="card-content" id="' . $e . '-content" hidden>';
+    }
+
+    /** Close an async card: its content wrapper, its empty-state slot and the section. */
+    protected static function cardClose(string $id): void
     {
-        $eid = Security::esc($id);
-        echo '<section class="card">';
-        echo '<h2>' . Security::esc($heading) . '</h2>';
-        self::pop($population);
-        echo '<div class="chart" id="' . $eid . '" style="height:' . Security::esc($height) . '"></div>';
-        echo '<div class="empty" id="' . $eid . '-empty" hidden></div>';
+        echo '</div>';
+        echo '<div class="empty" id="' . Security::esc($id) . '-empty" hidden></div>';
         echo '</section>';
+    }
+
+    /** Close a card whose content was rendered server-side and needs no loading state. */
+    protected static function cardEnd(): void
+    {
+        echo '</section>';
+    }
+
+    /**
+     * The common case: a card whose entire body is one chart.
+     */
+    protected static function chart(
+        string $id,
+        string $num,
+        string $heading,
+        string $population,
+        int $height = 300,
+        string $label = 'Querying Solr'
+    ): void {
+        self::cardOpen($id, $num, $heading, $population);
+        self::skeleton($id, 'chart', $height, $label);
+        echo '<div class="chart" id="' . Security::esc($id) . '" style="height:'
+            . Security::clampInt($height, 80, 600, 300) . 'px"></div>';
+        self::cardClose($id);
     }
 }

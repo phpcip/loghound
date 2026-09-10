@@ -26,6 +26,43 @@
  *   loghound-retention            delete
  *   loghound-retention --dry-run  report what would be deleted, delete nothing
  *
+ * The script refuses to run under a web SAPI: a delete-by-query job reachable over HTTP is
+ * an unauthenticated way to destroy the index, so it refuses regardless of where somebody
+ * put this file.
+ *
+ * The retention has a floor of one day. A retention of "0.5 days" arriving as a rounding
+ * accident would delete the data the dashboard is currently showing, and there is no undo.
+ *
+ * The cutoff is computed here, in PHP, and formatted as an explicit ISO instant rather than
+ * handed to Solr as "NOW-90DAYS". Two reasons: the same instant is used for both cores so
+ * they cannot drift apart mid-run, and an absolute timestamp is what gets printed in the dry
+ * run — an operator about to delete data should see a date, not an expression.
+ *
+ * Both delete queries are built with Solr::rangeFilter(), which validates the bound, and both
+ * are checked again by Solr::deleteByQuery()'s assertSafeFilter(). Neither takes any input
+ * from outside this file: retention_days comes from a config file only root and the loghound
+ * user can write, and it is cast to int before it is used as arithmetic.
+ *
+ * The session query is the one that matters for rollup preservation. When rollup_forever is
+ * set, the delete is restricted to doc_type_s:session so the handful of rollup documents in
+ * the same core survive; when it is not set, the same cutoff is applied to everything in the
+ * core. A dry run counts instead of deleting, with rows=0 so nothing is fetched, and prints
+ * the exact queries so an operator can see what is about to happen before it happens.
+ *
+ * Sessions are deleted first. If the run dies between the two deletes, the surviving state is
+ * "hits without their session document", which the dashboard tolerates because it queries
+ * sessions, rather than "session documents pointing at hits that no longer exist", which
+ * makes every drill-down a dead end.
+ *
+ * A note on disk, because operators are surprised by this every time: deleting documents in
+ * Lucene marks them deleted, and the bytes come back only when a merge rewrites the segments
+ * that contained them, which happens on the index's own schedule. Both cores set
+ * deletesPctAllowed in solrconfig.xml so that reclaim happens steadily instead of all at
+ * once, and nothing here forces an optimize — a forced merge on a large index rewrites the
+ * whole thing, needs double the disk while it runs, and would stall ingestion for minutes. If
+ * you genuinely need the space back now, do it from the Opensolr control panel during a quiet
+ * period.
+ *
  * @package Loghound
  * @license MIT
  */
@@ -33,8 +70,6 @@
 declare(strict_types=1);
 
 if (PHP_SAPI !== 'cli') {
-    // A delete-by-query job reachable over HTTP is an unauthenticated way to destroy the
-    // index. Refuse, regardless of where somebody put this file.
     http_response_code(404);
     exit;
 }
@@ -61,8 +96,6 @@ if ($days <= 0) {
     exit(0);
 }
 
-// A floor of one day. A retention of "0.5 days" expressed as a rounding accident would
-// delete the data the dashboard is currently showing, and there is no undo.
 if ($days < 1) {
     fwrite(STDERR, "Loghound: privacy.retention_days must be at least 1.\n");
     exit(1);
@@ -72,10 +105,6 @@ $hitsCore    = (string) $cfg->get('solr.hits_core');
 $sessionCore = (string) $cfg->get('solr.sessions_core');
 $rollupForever = (bool) $cfg->get('privacy.rollup_forever', true);
 
-// The cutoff is computed here, in PHP, and formatted as an explicit ISO instant rather
-// than handed to Solr as "NOW-90DAYS". Two reasons: the same instant is used for both
-// cores so they cannot drift apart mid-run, and an absolute timestamp is what gets printed
-// in the dry run — an operator about to delete data should see a date, not an expression.
 $cutoffTs  = time() - ($days * 86400);
 $cutoffIso = gmdate('Y-m-d\TH:i:s\Z', $cutoffTs);
 
@@ -86,28 +115,13 @@ try {
     exit(1);
 }
 
-// ------------------------------------------------------------------------------------------
-// The two delete queries.
-//
-// Both are built with Solr::rangeFilter(), which validates the bound, and both are checked
-// again by Solr::deleteByQuery()'s assertSafeFilter(). Neither takes any input from outside
-// this file — retention_days comes from a config file only root and the loghound user can
-// write, and it is cast to int before it is used as arithmetic.
-// ------------------------------------------------------------------------------------------
-
 $hitsQuery = Solr::rangeFilter('ts', null, $cutoffIso);
 
-// The session query is the one that matters for rollup preservation. When rollup_forever
-// is set, the delete is restricted to doc_type_s:session, so the handful of rollup
-// documents in the same core survive. When it is not set, the same cutoff is applied to
-// everything in the core.
 $sessionQuery = $rollupForever
     ? '+' . Solr::termFilter('doc_type_s', 'session') . ' +' . Solr::rangeFilter('ts_start', null, $cutoffIso)
     : Solr::rangeFilter('ts_start', null, $cutoffIso);
 
 if ($dryRun) {
-    // Count, do not delete. Uses rows=0 so nothing is fetched, and prints the exact queries
-    // so an operator can see what is about to happen before it happens.
     try {
         $hitsCount = (int) ($solr->query($hitsCore, [
             'q' => '*:*', 'fq' => [$hitsQuery], 'rows' => 0,
@@ -134,10 +148,6 @@ if ($dryRun) {
 $failed = false;
 
 try {
-    // Sessions first. If the run dies between the two deletes, the surviving state is
-    // "hits without their session document", which the dashboard tolerates (it queries
-    // sessions), rather than "session documents pointing at hits that no longer exist",
-    // which makes every drill-down a dead end.
     $solr->deleteByQuery($sessionCore, $sessionQuery);
     fwrite(STDOUT, "Deleted sessions older than " . $cutoffIso . "\n");
 } catch (\Throwable $e) {
@@ -152,17 +162,5 @@ try {
     fwrite(STDERR, 'Loghound: hit retention failed: ' . $e->getMessage() . "\n");
     $failed = true;
 }
-
-/*
- * A note on disk, because operators are surprised by this every time:
- *
- * Deleting documents in Lucene marks them deleted. The bytes come back only when a merge
- * rewrites the segments that contained them, which happens on the index's own schedule.
- * Both cores set deletesPctAllowed in solrconfig.xml so that reclaim happens steadily
- * instead of all at once, and nothing here forces an optimize — a forced merge on a large
- * index rewrites the whole thing, needs double the disk while it runs, and would stall
- * ingestion for minutes. If you genuinely need the space back now, do it from the Opensolr
- * control panel during a quiet period.
- */
 
 exit($failed ? 2 : 0);

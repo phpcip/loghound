@@ -136,7 +136,7 @@ far as they are concerned. Loghound sees all three and cross-checks them.
 ## Quickstart
 
 ```bash
-git clone https://github.com/cipriandimofte/loghound.git
+git clone https://github.com/phpcip/loghound.git
 cd loghound
 
 # Look before you leap. This changes nothing.
@@ -168,6 +168,18 @@ It never modifies an existing vhost, pool, cron entry or service, never overwrit
 it did not write, and uses `reload` rather than `restart` so other sites on the box are
 undisturbed. `--dry-run` prints every action and changes nothing; `--uninstall` reverses
 it, prompting before deleting any data.
+
+**Your log files are opened read-only and are never written to, truncated, rotated,
+renamed or deleted.** Every source path is opened `'rb'` and no other mode string appears
+near one anywhere in the codebase; there is a test in the suite that asserts a source
+file's size is unchanged after a full read. Whatever else is already reading those files —
+fail2ban, a log shipper, your own scripts — is unaffected, and so is logrotate.
+
+Ingest is a **systemd daemon**, not a cron job. Cron's floor is sixty seconds, and the
+point of the tailer is that a request shows up in the panel about five seconds after it
+was served. The scorer and the retention job are systemd timers. On a box with no systemd
+the installer falls back to cron for those two and tells you plainly that the daemon then
+needs a supervisor of your own.
 
 The wizard reads your Apache or nginx configuration, finds your `LogFormat` and
 `CustomLog` directives, and shows you the mapping **with five of your own log lines
@@ -277,11 +289,15 @@ beacon is independent of whatever other analytics you run.
 
 | | |
 |---|---|
-| [docs/INSTALL.md](docs/INSTALL.md) | Installation, the recommended `LogFormat`, and exactly which signals each extra header buys you |
+| [docs/INSTALL.md](docs/INSTALL.md) | Installation, the recommended `LogFormat`, exactly which signals each extra header buys you, Solr and Opensolr setup, upgrading, troubleshooting |
 | [docs/DETECTION.md](docs/DETECTION.md) | The three planes, every rule with its weight and rationale, a worked example on real captured traffic, and a frank section on evasion and false positives |
-| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, hardening, how to report a vulnerability |
+| [docs/BEACON.md](docs/BEACON.md) | The beacon: the three clocks, every field it sends, every signal code, the wire protocol, and what it cannot detect |
+| [docs/PANEL.md](docs/PANEL.md) | The web panel: request flow, the notes a security reviewer wants, demo mode |
+| [docs/SCHEMA.md](docs/SCHEMA.md) | Both Solr cores field by field, why each is indexed/docValued/stored, index-size arithmetic, and what to turn off first |
+| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, controls by surface, hardening checklist, known limitations, how to report a vulnerability |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | Exactly what is collected, the three IP modes, retention, GDPR posture, and what to tell your users |
 | [SPEC.md](SPEC.md) | The full technical specification, including the Solr schema |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | What will and will not be merged, the test runner, fixture rules |
 
 ---
 

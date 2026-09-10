@@ -1,63 +1,67 @@
 /*
  * Loghound — Networks view.
  *
- * Three resolutions of the same question. The treemap is sized by sessions and coloured
- * by `as_type_s`, because the interesting finding is never "a lot of traffic from AS14061"
- * — it is "a lot of traffic from a hosting network", and a single-colour treemap hides
- * exactly that.
+ * Five independent cards. The treemap is sized by sessions and coloured by `as_type_s`,
+ * because the interesting finding is never "a lot of traffic from AS14061" — it is "a lot
+ * of traffic from a hosting network", and a single-colour treemap hides exactly that.
  *
- * Every table carries a human/evasive mix bar for the same reason: a row that is 100
- * sessions of humans and a row that is 100 sessions of a scraper look identical until you
- * show the split.
+ * Every table carries a human/declared/evasive mix bar for the same reason: a row of 100
+ * human sessions and a row of 100 scraper sessions look identical until the split shows.
  */
 
 'use strict';
 
-import { api, byId, el, hideEmpty, load, noDataYet, num, pct, tbody } from '../core.js';
+import {
+    api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody
+} from '../core.js';
 import { donut, geoScatter, tokens, treemap } from '../charts.js';
 import { countryName, locate } from '../geo.js';
 
 /**
- * Colour for a network type.
+ * The colour for a network type.
  *
- * Hosting and VPN share the evasive colour because that is the honest reading: a consumer
- * browser User-Agent from either is the same weak signal, and the palette should not
- * imply a distinction the scorer does not make.
+ * Hosting and VPN share the accent because that is the honest reading: a consumer browser
+ * User-Agent from either is the same weak signal, and the palette should not imply a
+ * distinction the scorer does not make.
  */
 function typeColour(t, type) {
     switch (type) {
         case 'isp':     return t.pop.human;
-        case 'mobile':  return t.pop.declared;
+        case 'mobile':  return t.pop.unknown;
         case 'edu':
         case 'gov':     return t.pop.ai;
         case 'hosting':
         case 'vpn':     return t.pop.evasive;
-        default:        return t.pop.unknown;
+        default:        return t.pop.declared;
     }
 }
 
-/** A three-segment bar showing the human / declared / evasive mix of a row. */
+/**
+ * A four-segment bar showing the human / declared / evasive / other mix of a row.
+ */
 function mixBar(row) {
     const total = Math.max(1, row.sessions);
-    const seg = (value, cls) => el('span', {
+    const segment = (value, cls) => el('span', {
         class: cls,
         style: 'width:' + ((value / total) * 100).toFixed(2) + '%',
         title: cls.replace('bar-', '') + ': ' + num(value)
     });
     const other = Math.max(0, row.sessions - row.human - row.declared - row.evasive);
     return el('span', { class: 'bar bar-split' }, [
-        seg(row.human, 'bar-human'),
-        seg(row.declared, 'bar-declared'),
-        seg(row.evasive, 'bar-evasive'),
-        seg(other, 'bar-unknown')
+        segment(row.human, 'bar-human'),
+        segment(row.declared, 'bar-declared'),
+        segment(row.evasive, 'bar-evasive'),
+        segment(other, 'bar-unknown')
     ]);
 }
 
-/** Headline counters. */
-function renderStats(data) {
-    const scope = byId('net-stats');
+/**
+ * Fill the four headline counters.
+ */
+function renderTotals(data) {
+    const scope = byId('net-stats-content');
     const set = (field, value) => {
-        const node = scope.querySelector('[data-field="' + field + '"]');
+        const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
         if (node) {
             node.textContent = value;
         }
@@ -65,94 +69,111 @@ function renderStats(data) {
     set('sessions', num(data.total));
     set('uniq_ips', num(data.uniq_ips));
     set('uniq_asns', num(data.uniq_asns));
-
-    // "From datacentres" is computed here from the as_type facet rather than as another
-    // Solr query: the numbers are already on the page and must agree with each other.
-    let hosting = 0;
-    for (const row of data.astypes) {
-        if (row.as_type === 'hosting' || row.as_type === 'vpn') {
-            hosting += row.sessions;
-        }
-    }
-    set('hosting', num(hosting) + (data.total ? '  (' + pct(hosting, data.total, 0) + ')' : ''));
+    set('hosting', num(data.hosting) + (data.total ? ' · ' + pct(data.hosting, data.total, 0) : ''));
 }
 
-/** ASN treemap. */
-function renderTreemap(data) {
+/**
+ * Draw the ASN treemap, its colour legend and the table beneath it.
+ */
+function renderAsns(data) {
     if (!data.asns.length) {
-        noDataYet('net-treemap-empty', 'network activity');
+        noDataYet('net-asns-empty', 'network activity');
         return;
     }
-    hideEmpty('net-treemap-empty');
+    hideEmpty('net-asns-empty');
     const t = tokens();
 
-    treemap('net-treemap', data.asns.map((a) => ({
-        name: 'AS' + a.asn + (a.org ? ' · ' + a.org : ''),
-        short: a.org || ('AS' + a.asn),
-        value: a.sessions,
-        org: a.org,
-        astype: a.as_type,
-        uniqIps: a.uniq_ips,
-        human: a.human,
-        evasive: a.evasive
+    treemap('net-treemap', data.asns.map((row) => ({
+        name: 'AS' + row.asn + (row.org ? ' · ' + row.org : ''),
+        short: row.org || ('AS' + row.asn),
+        value: row.sessions,
+        org: row.org,
+        astype: row.as_type,
+        uniqIps: row.uniq_ips,
+        human: row.human,
+        evasive: row.evasive
     })), (type) => typeColour(t, type));
 
-    // A legend for the colour dimension, built as DOM so it inherits the panel's type.
-    const card = byId('net-treemap').closest('.card');
-    const existing = card.querySelector('.type-legend');
-    if (existing) {
-        existing.remove();
-    }
-    const legend = el('div', { class: 'type-legend controls', style: 'margin-bottom:8px' });
-    for (const type of ['isp', 'mobile', 'hosting', 'vpn', 'edu', 'gov', 'unknown']) {
-        legend.appendChild(el('span', { class: 'controls', style: 'gap:5px' }, [
-            el('span', {
-                style: 'display:inline-block;width:10px;height:10px;background:' + typeColour(t, type)
-            }),
-            el('span', { class: 'muted', text: type })
-        ]));
-    }
-    byId('net-treemap').parentNode.insertBefore(legend, byId('net-treemap'));
+    renderTypeLegend(t);
+
+    tbody(byId('net-asns-table'), data.asns.map((row) => ({
+        cells: [
+            {
+                node: el('a', {
+                    href: '?v=sessions&f[as_org_s][]=' + encodeURIComponent(row.org || ''),
+                    class: 'mono',
+                    text: 'AS' + row.asn
+                })
+            },
+            { text: row.org || '—', clip: true },
+            { node: el('span', { class: 'chip', text: row.as_type || 'unknown' }) },
+            { text: num(row.sessions), num: true },
+            { text: num(row.uniq_ips), num: true },
+            { text: num(row.hits), num: true },
+            { text: num(row.human), num: true },
+            { text: num(row.evasive), num: true },
+            { node: mixBar(row) }
+        ]
+    })));
 }
 
-/** Network-type donut. */
+/**
+ * Draw the treemap's colour key as DOM, so it inherits the panel's type and palette.
+ */
+function renderTypeLegend(t) {
+    const holder = byId('net-asns-legend');
+    if (!holder) {
+        return;
+    }
+    holder.replaceChildren(...['isp', 'mobile', 'hosting', 'vpn', 'edu', 'gov', 'unknown'].map((type) =>
+        el('span', { class: 'controls', style: 'gap:6px' }, [
+            el('span', { style: 'display:inline-block;width:10px;height:10px;background:' + typeColour(t, type) }),
+            el('span', { class: 'muted', text: type })
+        ])
+    ));
+}
+
+/**
+ * Draw the network-type donut.
+ */
 function renderTypes(data) {
     if (!data.astypes.length) {
         noDataYet('net-types-empty', 'network types');
         return;
     }
     hideEmpty('net-types-empty');
+    cardChart('net-types', 300);
     const t = tokens();
-    donut('net-types', data.astypes.map((r) => ({
-        label: r.as_type || 'unknown',
-        value: r.sessions,
-        color: typeColour(t, r.as_type)
+    donut('net-types', data.astypes.map((row) => ({
+        label: row.as_type || 'unknown',
+        value: row.sessions,
+        color: typeColour(t, row.as_type)
     })), 'sessions', num(data.total));
 }
 
-/** The country scatter. */
+/**
+ * Draw the country scatter, reporting how many sessions could not be placed.
+ */
 function renderMap(data) {
     const points = [];
     let unplaced = 0;
-    const maxSessions = data.countries.reduce((m, c) => Math.max(m, c.sessions), 1);
+    const largest = data.countries.reduce((max, row) => Math.max(max, row.sessions), 1);
 
-    for (const c of data.countries) {
-        const at = locate(c.country);
+    for (const row of data.countries) {
+        const at = locate(row.country);
         if (!at) {
-            unplaced += c.sessions;
+            unplaced += row.sessions;
             continue;
         }
         points.push({
             name: at.name,
             value: [at.lon, at.lat],
-            sessions: c.sessions,
-            ips: c.uniq_ips,
-            human: c.human,
-            evasive: c.evasive,
-            evasiveRate: c.sessions ? c.evasive / c.sessions : 0,
-            // Area-proportional sizing with a floor, so a country with three sessions is
-            // still visible and a country with thirty thousand does not swallow the map.
-            size: Math.max(6, Math.min(42, 6 + Math.sqrt(c.sessions / maxSessions) * 34))
+            sessions: row.sessions,
+            ips: row.uniq_ips,
+            human: row.human,
+            evasive: row.evasive,
+            evasiveRate: row.sessions ? row.evasive / row.sessions : 0,
+            size: Math.max(6, Math.min(42, 6 + Math.sqrt(row.sessions / largest) * 34))
         });
     }
 
@@ -161,126 +182,114 @@ function renderMap(data) {
         return;
     }
     hideEmpty('net-map-empty');
+    cardChart('net-map', 300);
     geoScatter('net-map', points);
 
-    const popNode = byId('net-map').closest('.card').querySelector('.pop');
-    if (popNode) {
-        popNode.textContent =
-            'All sessions in range, plotted at country centroids on a plain lon/lat grid — country resolution ' +
-            'only, and there is no basemap because the panel must work air-gapped. Dot area is sessions; a dot ' +
-            'is drawn in the evasive colour when more than half its sessions were scored as evasive automation.' +
-            (unplaced ? ' ' + num(unplaced) + ' sessions had a country value this build cannot place and are not shown.' : '');
-    }
+    setPop('net-map', 'All sessions in range, plotted at country centroids on a plain lon/lat grid — country ' +
+        'resolution only, and no basemap because the panel must work air-gapped. Dot area is sessions; a dot is ' +
+        'drawn in the accent when more than half its sessions were scored as evasive automation.' +
+        (unplaced ? ' ' + num(unplaced) + ' sessions had a country value this build cannot place.' : ''));
 }
 
-/** Netname table — the level that exposes a leased range. */
+/**
+ * Fill the netblock table.
+ */
 function renderNetnames(data) {
-    const table = byId('net-netnames');
     if (!data.netnames.length) {
-        tbody(table, []);
+        tbody(byId('net-netnames-table'), []);
         noDataYet('net-netnames-empty', 'netblocks');
         return;
     }
     hideEmpty('net-netnames-empty');
 
-    tbody(table, data.netnames.map((r) => ({
+    tbody(byId('net-netnames-table'), data.netnames.map((row) => ({
         cells: [
             {
                 node: el('a', {
-                    href: '?v=sessions&f[netname_s][]=' + encodeURIComponent(r.netname),
+                    href: '?v=sessions&f[netname_s][]=' + encodeURIComponent(row.netname),
                     class: 'mono',
-                    text: r.netname || '—'
+                    text: row.netname || '—'
                 })
             },
-            { text: r.org || '—', clip: true },
-            { node: el('span', { class: 'chip', text: r.as_type || 'unknown' }) },
-            { text: num(r.sessions), num: true },
-            { text: num(r.uniq_ips), num: true },
+            { text: row.org || '—', clip: true },
+            { node: el('span', { class: 'chip', text: row.as_type || 'unknown' }) },
+            { text: num(row.sessions), num: true },
+            { text: num(row.uniq_ips), num: true },
             {
-                // Fingerprint count per netblock: many addresses and ONE fingerprint is
-                // the fleet signature, and this column is where it first shows up.
-                text: num(r.uniq_fps), num: true,
-                title: 'Distinct header fingerprints seen from this netblock. Many addresses sharing very few ' +
+                text: num(row.uniq_fps),
+                num: true,
+                title: 'Distinct header fingerprints from this netblock. Many addresses sharing very few ' +
                     'fingerprints is the rotating-proxy pattern.'
             },
-            { text: num(r.human), num: true },
-            { text: num(r.evasive), num: true },
-            { node: mixBar(r) }
+            { text: num(row.human), num: true },
+            { text: num(row.evasive), num: true },
+            { node: mixBar(row) }
         ]
     })));
 }
 
-/** ASN table. */
-function renderAsns(data) {
-    const table = byId('net-asns');
-    if (!data.asns.length) {
-        tbody(table, []);
-        noDataYet('net-asns-empty', 'autonomous systems');
-        return;
-    }
-    hideEmpty('net-asns-empty');
-
-    tbody(table, data.asns.map((r) => ({
-        cells: [
-            {
-                node: el('a', {
-                    href: '?v=sessions&f[as_org_s][]=' + encodeURIComponent(r.org || ''),
-                    class: 'mono',
-                    text: 'AS' + r.asn
-                })
-            },
-            { text: r.org || '—', clip: true },
-            { node: el('span', { class: 'chip', text: r.as_type || 'unknown' }) },
-            { text: num(r.sessions), num: true },
-            { text: num(r.uniq_ips), num: true },
-            { text: num(r.hits), num: true },
-            { text: num(r.human), num: true },
-            { text: num(r.evasive), num: true },
-            { node: mixBar(r) }
-        ]
-    })));
-}
-
-/** Country table. */
+/**
+ * Fill the country table.
+ */
 function renderCountries(data) {
-    const table = byId('net-countries');
     if (!data.countries.length) {
-        tbody(table, []);
+        tbody(byId('net-countries-table'), []);
         noDataYet('net-countries-empty', 'geolocated sessions');
         return;
     }
     hideEmpty('net-countries-empty');
 
-    tbody(table, data.countries.map((r) => ({
+    tbody(byId('net-countries-table'), data.countries.map((row) => ({
         cells: [
             {
                 node: el('a', {
-                    href: '?v=sessions&f[country_s][]=' + encodeURIComponent(r.country),
-                    text: countryName(r.country)
+                    href: '?v=sessions&f[country_s][]=' + encodeURIComponent(row.country),
+                    text: countryName(row.country)
                 })
             },
-            { text: num(r.sessions), num: true },
-            { text: num(r.uniq_ips), num: true },
-            { text: num(r.human), num: true },
-            { text: num(r.evasive), num: true },
+            { text: num(row.sessions), num: true },
+            { text: num(row.uniq_ips), num: true },
+            { text: num(row.human), num: true },
+            { text: num(row.evasive), num: true },
             {
-                text: (r.cities || []).map((c) => c.city + ' (' + num(c.count) + ')').join(', ') || '—',
+                text: (row.cities || []).map((city) => city.city + ' (' + num(city.count) + ')').join(', ') || '—',
                 clip: true
             }
         ]
     })));
 }
 
-/** Entry point. */
-export default async function init() {
-    await load('net-treemap-empty', 'network data', async () => {
-        const data = await api('networks', 'summary');
-        renderStats(data);
-        renderTreemap(data);
-        renderTypes(data);
-        renderMap(data);
-        renderNetnames(data);
-        renderAsns(data);
-        renderCountries(data);
+/**
+ * Entry point.
+ *
+ * The map and the country table share one request, which is issued once and rendered into
+ * both cards — they are two views of the same facet, not two questions.
+ */
+export default function init() {
+    loadCard('net-stats', 'Counting distinct addresses and networks', async () => {
+        renderTotals(await api('networks', 'totals'));
+    });
+    loadCard('net-asns', 'Faceting autonomous systems', async () => {
+        renderAsns(await api('networks', 'asns'));
+    });
+    loadCard('net-types', 'Faceting network types', async () => {
+        renderTypes(await api('networks', 'types'));
+    });
+    loadCard('net-netnames', 'Faceting netblocks', async () => {
+        renderNetnames(await api('networks', 'netnames'));
+    });
+
+    let geoPromise = null;
+    const geo = () => {
+        if (!geoPromise) {
+            geoPromise = api('networks', 'geo');
+        }
+        return geoPromise;
+    };
+    loadCard('net-map', 'Geolocating sessions', async () => {
+        renderMap(await geo());
+    });
+    loadCard('net-countries', 'Faceting countries', async () => {
+        renderCountries(await geo());
     });
 }

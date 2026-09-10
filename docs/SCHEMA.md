@@ -4,8 +4,17 @@ Two cores, Solr 9.6, classic single-core indexes (not SolrCloud).
 
 | Core | One document per | Queried by |
 |---|---|---|
-| `loghound_hits` | log line | the session drill-down, and the fingerprint facet the scorer runs |
-| `loghound_sessions` | session, plus one per day for the rollup | everything else in the dashboard |
+| hits | log line | the session drill-down, and the fingerprint facet the scorer runs |
+| sessions | session, plus one per day for the rollup | everything else in the dashboard |
+
+**The two cores are named per installation, not `loghound_hits` and `loghound_sessions`.**
+Opensolr index names live in a namespace shared by every account on the platform, are
+permanent once created, and must match `[a-zA-Z0-9_]`. So `Config::coreName()` builds
+`loghound_<install id>_hits` and `loghound_<install id>_sessions` from one 8-hex install id
+shared by the pair — for example `loghound_9f3c17ab_hits`. The names are written into
+`solr.hits_core` / `solr.sessions_core` at setup and everything else reads them from there;
+nothing in the code or in either configset hardcodes a core name. On a Solr you run
+yourself the names are yours to choose and a plain `loghound_hits` is fine.
 
 Configset files: `solr/hits/conf/{managed-schema.xml,solrconfig.xml}` and
 `solr/sessions/conf/{managed-schema.xml,solrconfig.xml}`. Both are heavily commented; this

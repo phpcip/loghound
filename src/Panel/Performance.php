@@ -51,40 +51,85 @@ final class Performance extends Controller
     public function api(string $action): array
     {
         return match ($action) {
-            'summary' => $this->summary(),
-            default   => ['error' => 'Unknown action'],
+            'headline' => $this->headline(),
+            'latency'  => $this->latency(),
+            'paths'    => $this->paths(),
+            'status'   => $this->status(),
+            default    => ['error' => 'Unknown action'],
         };
     }
 
     /**
-     * @return array<string,mixed>
+     * The request scope every action on this view shares.
+     *
+     * Mixing a 3ms cache hit on a PNG into the same percentile as a rendered page
+     * produces a number that describes neither, so the default is HTML only and both
+     * toggles are allowlists.
+     *
+     * @return array{fq:array<int,string>,kind:string,who:string,scope:?string}
      */
-    private function summary(): array
+    private function scope(): array
     {
-        $limit = Security::clampInt($_GET['limit'] ?? null, 5, 100, 25);
-
-        // Which requests to measure. Mixing a 3 ms cache hit on a PNG into the same
-        // percentile as a rendered page produces a number that describes neither, so the
-        // default is HTML only and the toggle is an allowlist.
         $kind = self::param('kind', ['html', 'asset', 'api', 'all'], 'html');
+        $who  = self::param('who', ['all', 'human'], 'all');
+
         $fqs = $this->hitFqs();
         if ($kind !== 'all') {
             $fqs[] = Query::term('kind_s', $kind);
         }
 
-        // Optional: exclude bot traffic from latency. A scraper hammering one endpoint
-        // can dominate a percentile and hide what humans experienced.
-        //
-        // CAVEAT, and the view says so on screen: SPEC §4.1 does NOT define
-        // `bot_verdict_s` on the hits core — the verdict lives on the session document.
-        // The filter therefore only works if the scorer copies the verdict down onto
-        // hits. Rather than silently returning nothing, the request below also counts how
-        // many matched hits carry a verdict at all, so the UI can tell the operator that
-        // the toggle has no effect on their deployment instead of showing an empty chart.
-        $who = self::param('who', ['all', 'human'], 'all');
-        $scopeFilter = $who === 'human' ? Query::POP_HUMAN : null;
+        return [
+            'fq'    => $fqs,
+            'kind'  => $kind,
+            'who'   => $who,
+            'scope' => $who === 'human' ? Query::POP_HUMAN : null,
+        ];
+    }
 
-        $pct = [
+    /**
+     * Wrap a facet body in the population scope, keeping one probe outside it.
+     *
+     * SPEC §4.1 does not define `bot_verdict_s` on the hits core — the verdict lives on
+     * the session document — so the "humans only" toggle works only where the scorer
+     * copies it down. `verdicted` is counted over the UNSCOPED domain so the view can say
+     * the filter has no effect on this deployment instead of drawing an empty chart. A
+     * `domain` filter would be the natural way to express that, but Solr.php accepts only
+     * `domain.excludeTags`, so a nested query facet does the same job.
+     *
+     * @param array<string,mixed> $facet
+     * @return array<string,mixed>
+     */
+    private static function scoped(array $facet, ?string $scopeFilter): array
+    {
+        $probe = ['verdicted' => ['type' => 'query', 'q' => 'bot_verdict_s:[* TO *]']];
+        return $scopeFilter === null
+            ? $facet + $probe
+            : ['scope' => ['type' => 'query', 'q' => $scopeFilter, 'facet' => $facet]] + $probe;
+    }
+
+    /**
+     * Read the scoped half of a response back out.
+     *
+     * @param array<string,mixed> $raw
+     * @return array<string,mixed>
+     */
+    private static function unscope(array $raw, ?string $scopeFilter): array
+    {
+        if ($scopeFilter === null) {
+            return $raw;
+        }
+        return is_array($raw['scope'] ?? null) ? $raw['scope'] : ['count' => 0];
+    }
+
+    /**
+     * The percentile headline and the coverage that every latency number depends on.
+     *
+     * @return array<string,mixed>
+     */
+    private function headline(): array
+    {
+        $scope = $this->scope();
+        $percentiles = [
             'p50' => 'percentile(dur_us_l,50)',
             'p95' => 'percentile(dur_us_l,95)',
             'p99' => 'percentile(dur_us_l,99)',
@@ -92,28 +137,52 @@ final class Performance extends Controller
             'max' => 'max(dur_us_l)',
         ];
 
-        $facet = [
-            'paths' => [
-                'type'  => 'terms',
-                'field' => 'path_s',
-                'limit' => $limit,
-                'sort'  => 'count desc',
-                'facet' => $pct + [
-                    'bytes'  => 'avg(bytes_l)',
-                    'errors' => ['type' => 'query', 'q' => 'status_i:[500 TO 599]'],
-                    'notfound' => ['type' => 'query', 'q' => 'status_i:[400 TO 499]'],
-                    'timed'  => ['type' => 'query', 'q' => 'dur_us_l:[* TO *]'],
-                ],
+        $raw = $this->gw->facet('perf.headline', $this->gw->hitsCore(), [
+            'q'  => '*:*',
+            'fq' => $scope['fq'],
+        ], self::scoped([
+            'overall' => ['type' => 'query', 'q' => '*:*', 'facet' => $percentiles],
+            'timed'   => ['type' => 'query', 'q' => 'dur_us_l:[* TO *]'],
+        ], $scope['scope']));
+
+        $f = self::unscope($raw, $scope['scope']);
+        $overall = is_array($f['overall'] ?? null) ? $f['overall'] : [];
+        $total = (int) ($f['count'] ?? 0);
+        $timed = self::qcount($f, 'timed');
+
+        return $this->envelope([
+            'kind'          => $scope['kind'],
+            'who'           => $scope['who'],
+            'who_supported' => self::qcount($raw, 'verdicted') > 0,
+            'requests'      => $total,
+            'timed'         => $timed,
+            'timed_pct'     => $total > 0 ? round(($timed / $total) * 100, 1) : 0.0,
+            'overall'       => [
+                'p50' => self::num($overall, 'p50'),
+                'p95' => self::num($overall, 'p95'),
+                'p99' => self::num($overall, 'p99'),
+                'avg' => self::num($overall, 'avg'),
+                'max' => self::num($overall, 'max'),
             ],
+        ]);
+    }
 
-            // Overall percentiles, for the headline numbers.
-            'overall' => ['type' => 'query', 'q' => '*:*', 'facet' => $pct],
+    /**
+     * Latency percentiles per time bucket, so a regression has a timestamp.
+     *
+     * Buckets with no timed request report null rather than zero, and the chart draws a
+     * gap rather than a line through a number nobody measured.
+     *
+     * @return array<string,mixed>
+     */
+    private function latency(): array
+    {
+        $scope = $this->scope();
 
-            // Coverage: how many of the matched requests actually carry a duration. This
-            // is the denominator every latency number on this page depends on.
-            'timed' => ['type' => 'query', 'q' => 'dur_us_l:[* TO *]'],
-
-            // Latency over time, so a regression has a timestamp.
+        $raw = $this->gw->facet('perf.latency', $this->gw->hitsCore(), [
+            'q'  => '*:*',
+            'fq' => $scope['fq'],
+        ], self::scoped([
             'over_time' => [
                 'type'  => 'range',
                 'field' => 'ts',
@@ -122,9 +191,102 @@ final class Performance extends Controller
                 'gap'   => $this->range['gap'],
                 'facet' => ['p50' => 'percentile(dur_us_l,50)', 'p95' => 'percentile(dur_us_l,95)'],
             ],
+            'timed' => ['type' => 'query', 'q' => 'dur_us_l:[* TO *]'],
+        ], $scope['scope']));
 
-            // Status heatmap. Classes rather than individual codes: an operator scanning
-            // for trouble wants "when did the 5xx happen", not 47 rows.
+        $f = self::unscope($raw, $scope['scope']);
+        $times = [];
+        $p50 = [];
+        $p95 = [];
+        foreach (self::buckets($f, 'over_time') as $bucket) {
+            $times[] = (string) ($bucket['val'] ?? '');
+            $p50[] = self::num($bucket, 'p50');
+            $p95[] = self::num($bucket, 'p95');
+        }
+
+        return $this->envelope([
+            'timed' => self::qcount($f, 'timed'),
+            'times' => $times,
+            'p50'   => $p50,
+            'p95'   => $p95,
+        ]);
+    }
+
+    /**
+     * Per-path percentiles for the busiest paths.
+     *
+     * @return array<string,mixed>
+     */
+    private function paths(): array
+    {
+        $scope = $this->scope();
+        $percentiles = [
+            'p50' => 'percentile(dur_us_l,50)',
+            'p95' => 'percentile(dur_us_l,95)',
+            'p99' => 'percentile(dur_us_l,99)',
+            'avg' => 'avg(dur_us_l)',
+            'max' => 'max(dur_us_l)',
+        ];
+
+        $raw = $this->gw->facet('perf.paths', $this->gw->hitsCore(), [
+            'q'  => '*:*',
+            'fq' => $scope['fq'],
+        ], self::scoped([
+            'paths' => [
+                'type'  => 'terms',
+                'field' => 'path_s',
+                'limit' => Security::clampInt($_GET['limit'] ?? null, 5, 100, 25),
+                'sort'  => 'count desc',
+                'facet' => $percentiles + [
+                    'bytes'    => 'avg(bytes_l)',
+                    'errors'   => ['type' => 'query', 'q' => 'status_i:[500 TO 599]'],
+                    'notfound' => ['type' => 'query', 'q' => 'status_i:[400 TO 499]'],
+                    'timed'    => ['type' => 'query', 'q' => 'dur_us_l:[* TO *]'],
+                ],
+            ],
+            'timed' => ['type' => 'query', 'q' => 'dur_us_l:[* TO *]'],
+        ], $scope['scope']));
+
+        $f = self::unscope($raw, $scope['scope']);
+        $rows = [];
+        foreach (self::buckets($f, 'paths') as $bucket) {
+            $rows[] = [
+                'path'     => (string) ($bucket['val'] ?? ''),
+                'requests' => (int) ($bucket['count'] ?? 0),
+                'timed'    => self::qcount($bucket, 'timed'),
+                'p50'      => self::num($bucket, 'p50'),
+                'p95'      => self::num($bucket, 'p95'),
+                'p99'      => self::num($bucket, 'p99'),
+                'avg'      => self::num($bucket, 'avg'),
+                'max'      => self::num($bucket, 'max'),
+                'bytes'    => self::num($bucket, 'bytes'),
+                'errors'   => self::qcount($bucket, 'errors'),
+                'notfound' => self::qcount($bucket, 'notfound'),
+            ];
+        }
+
+        return $this->envelope([
+            'timed' => self::qcount($f, 'timed'),
+            'paths' => $rows,
+        ]);
+    }
+
+    /**
+     * Status classes over time, plus the exact codes seen.
+     *
+     * Classes rather than individual codes on the chart: an operator scanning for trouble
+     * wants to know when the 5xx happened, not to read forty-seven rows.
+     *
+     * @return array<string,mixed>
+     */
+    private function status(): array
+    {
+        $scope = $this->scope();
+
+        $raw = $this->gw->facet('perf.status', $this->gw->hitsCore(), [
+            'q'  => '*:*',
+            'fq' => $scope['fq'],
+        ], self::scoped([
             'heat' => [
                 'type'  => 'range',
                 'field' => 'ts',
@@ -138,135 +300,75 @@ final class Performance extends Controller
                     's5' => ['type' => 'query', 'q' => 'status_i:[500 TO 599]'],
                 ],
             ],
-
-            // Exact status codes, for the table under the heatmap.
             'statuses' => ['type' => 'terms', 'field' => 'status_i', 'limit' => 20, 'sort' => 'count desc'],
-        ];
+        ], $scope['scope']));
 
-        // When a population filter is active, everything moves inside a `query` facet so
-        // that `verdicted` below can still be counted over the unfiltered domain. (A
-        // `domain` filter would be the natural way to express this, but Solr.php only
-        // accepts `domain.excludeTags`.)
-        $request = $scopeFilter === null
-            ? $facet + ['verdicted' => ['type' => 'query', 'q' => 'bot_verdict_s:[* TO *]']]
-            : [
-                'scope'     => ['type' => 'query', 'q' => $scopeFilter, 'facet' => $facet],
-                'verdicted' => ['type' => 'query', 'q' => 'bot_verdict_s:[* TO *]'],
-            ];
-
-        $raw = $this->gw->facet('perf.summary', $this->gw->hitsCore(), [
-            'q'  => '*:*',
-            'fq' => $fqs,
-        ], $request);
-
-        // Hits in range that carry a verdict at all — the denominator that decides
-        // whether the "Humans only" toggle means anything on this deployment.
-        $verdicted = self::qcount($raw, 'verdicted');
-        $matchedAll = (int) ($raw['count'] ?? 0);
-
-        $f = $scopeFilter === null
-            ? $raw
-            : (is_array($raw['scope'] ?? null) ? $raw['scope'] : ['count' => 0]);
-
-        $paths = [];
-        foreach (self::buckets($f, 'paths') as $b) {
-            $count = (int) ($b['count'] ?? 0);
-            $paths[] = [
-                'path'     => (string) ($b['val'] ?? ''),
-                'requests' => $count,
-                'timed'    => self::qcount($b, 'timed'),
-                'p50'      => self::num($b, 'p50'),
-                'p95'      => self::num($b, 'p95'),
-                'p99'      => self::num($b, 'p99'),
-                'avg'      => self::num($b, 'avg'),
-                'max'      => self::num($b, 'max'),
-                'bytes'    => self::num($b, 'bytes'),
-                'errors'   => self::qcount($b, 'errors'),
-                'notfound' => self::qcount($b, 'notfound'),
-            ];
-        }
+        $f = self::unscope($raw, $scope['scope']);
 
         $times = [];
-        $p50 = [];
-        $p95 = [];
-        foreach (self::buckets($f, 'over_time') as $b) {
-            $times[] = (string) ($b['val'] ?? '');
-            $p50[] = self::num($b, 'p50');
-            $p95[] = self::num($b, 'p95');
-        }
-
-        $heatTimes = [];
         $heat = ['s2' => [], 's3' => [], 's4' => [], 's5' => []];
-        foreach (self::buckets($f, 'heat') as $b) {
-            $heatTimes[] = (string) ($b['val'] ?? '');
-            foreach (array_keys($heat) as $k) {
-                $heat[$k][] = self::qcount($b, $k);
+        foreach (self::buckets($f, 'heat') as $bucket) {
+            $times[] = (string) ($bucket['val'] ?? '');
+            foreach (array_keys($heat) as $key) {
+                $heat[$key][] = self::qcount($bucket, $key);
             }
         }
 
         $statuses = [];
-        foreach (self::buckets($f, 'statuses') as $b) {
-            $statuses[] = ['status' => (int) ($b['val'] ?? 0), 'count' => (int) ($b['count'] ?? 0)];
+        foreach (self::buckets($f, 'statuses') as $bucket) {
+            $statuses[] = ['status' => (int) ($bucket['val'] ?? 0), 'count' => (int) ($bucket['count'] ?? 0)];
         }
 
-        $overall = is_array($f['overall'] ?? null) ? $f['overall'] : [];
-        $total = (int) ($f['count'] ?? 0);
-        $timed = self::qcount($f, 'timed');
-
         return $this->envelope([
-            'kind'      => $kind,
-            'who'       => $who,
-            // False means the hits core carries no verdicts, so filtering by population
-            // is impossible here. The view says so rather than drawing an empty chart.
-            'who_supported' => $verdicted > 0,
-            'matched_all'   => $matchedAll,
-            'requests'  => $total,
-            'timed'     => $timed,
-            // The share of matched requests that carry %D. The UI refuses to draw the
-            // latency charts when this is zero and explains what to change instead.
-            'timed_pct' => $total > 0 ? round(($timed / $total) * 100, 1) : 0.0,
-            'overall'   => [
-                'p50' => self::num($overall, 'p50'),
-                'p95' => self::num($overall, 'p95'),
-                'p99' => self::num($overall, 'p99'),
-                'avg' => self::num($overall, 'avg'),
-                'max' => self::num($overall, 'max'),
-            ],
-            'paths'     => $paths,
-            'times'     => $times,
-            'p50'       => $p50,
-            'p95'       => $p95,
-            'heat_times' => $heatTimes,
-            'heat'      => $heat,
-            'statuses'  => $statuses,
+            'heat_times' => $times,
+            'heat'       => $heat,
+            'statuses'   => $statuses,
         ]);
     }
 
     public function body(): void
     {
-        // ---- Controls ---------------------------------------------------------
-        echo '<section class="card">';
-        echo '<div class="card-head"><h2>What to measure</h2><div class="controls">';
-        echo '<label for="pf-kind">Request kind</label>';
-        echo '<select id="pf-kind">';
-        foreach (['html' => 'HTML pages', 'api' => 'API endpoints', 'asset' => 'Static assets', 'all' => 'Everything'] as $v => $l) {
-            echo '<option value="' . Security::esc($v) . '">' . Security::esc($l) . '</option>';
+        $this->headlineCard();
+        self::chart(
+            'pf-time',
+            '02',
+            'Latency over time',
+            'Matched requests that carry a duration. p50 and p95 per bucket.',
+            300,
+            'Computing latency percentiles'
+        );
+        $this->pathsCard();
+        $this->statusCard();
+    }
+
+    /** The percentile headline, its controls and the missing-duration explanation. */
+    private function headlineCard(): void
+    {
+        $tools = '<div class="controls">';
+        $tools .= '<label for="pf-kind">Requests</label><select id="pf-kind">';
+        foreach ([
+            'html'  => 'HTML pages',
+            'api'   => 'API endpoints',
+            'asset' => 'Static assets',
+            'all'   => 'Everything',
+        ] as $value => $label) {
+            $tools .= '<option value="' . Security::esc($value) . '">' . Security::esc($label) . '</option>';
         }
-        echo '</select>';
-        echo '<label for="pf-who">Traffic</label>';
-        echo '<select id="pf-who">';
-        foreach (['all' => 'All clients', 'human' => 'Humans only'] as $v => $l) {
-            echo '<option value="' . Security::esc($v) . '">' . Security::esc($l) . '</option>';
+        $tools .= '</select>';
+        $tools .= '<label for="pf-who">Traffic</label><select id="pf-who">';
+        foreach (['all' => 'All clients', 'human' => 'Humans only'] as $value => $label) {
+            $tools .= '<option value="' . Security::esc($value) . '">' . Security::esc($label) . '</option>';
         }
-        echo '</select>';
-        echo '</div></div>';
-        echo '<p class="pop" id="pf-pop">—</p>';
+        $tools .= '</select></div>';
+
+        self::cardOpen('pf-headline', '01', 'What to measure', '', $tools);
+        self::skeleton('pf-headline', 'stats', 0, 'Computing latency percentiles');
 
         echo '<div class="stats">';
         foreach ([
-            ['p50', 'p50 latency', 'Half of requests were faster than this'],
-            ['p95', 'p95 latency', 'One request in twenty was slower'],
-            ['p99', 'p99 latency', 'The worst one percent — where timeouts live'],
+            ['p50', 'p50 latency',  'Half of requests were faster than this'],
+            ['p95', 'p95 latency',  'One request in twenty was slower'],
+            ['p99', 'p99 latency',  'The worst one percent — where timeouts live'],
             ['avg', 'Mean latency', 'Shown for contrast; a long tail drags it away from p50'],
         ] as [$key, $label, $hint]) {
             echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
@@ -275,14 +377,23 @@ final class Performance extends Controller
         }
         echo '</div>';
         echo '<div class="empty" id="pf-nodur" hidden></div>';
-        echo '</section>';
 
-        self::chart('pf-time', 'Latency over time', 'Matched requests that carry a duration. p50 and p95 per bucket.', '300px');
+        self::cardClose('pf-headline');
+    }
 
-        echo '<section class="card">';
-        echo '<h2>Slowest paths</h2>';
-        echo '<p class="pop" id="pf-paths-pop">—</p>';
-        echo '<div class="table-wrap"><table id="pf-paths"><thead><tr>'
+    /** Slowest paths. */
+    private function pathsCard(): void
+    {
+        self::cardOpen(
+            'pf-paths',
+            '03',
+            'Slowest paths',
+            'The busiest paths in this range, with their latency percentiles. The bar compares p50 to p99 on a '
+            . 'shared scale — a long bar means the median visitor and the unlucky one percent had different days.'
+        );
+        self::skeleton('pf-paths', 'rows', 0, 'Computing per-path percentiles');
+
+        echo '<div class="table-wrap"><table id="pf-paths-table"><thead><tr>'
             . '<th scope="col">Path</th>'
             . '<th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="num">p50</th>'
@@ -292,21 +403,29 @@ final class Performance extends Controller
             . '<th scope="col" class="num">4xx</th>'
             . '<th scope="col" class="num">5xx</th>'
             . '</tr></thead><tbody></tbody></table></div>';
-        echo '<div class="empty" id="pf-paths-empty" hidden></div>';
-        echo '</section>';
 
-        self::chart('pf-heat', 'Status codes by time', 'All matched requests, grouped into 2xx / 3xx / 4xx / 5xx.', '320px');
+        self::cardClose('pf-paths');
+    }
 
-        echo '<section class="card">';
-        echo '<h2>Status codes</h2>';
-        self::pop('All matched requests in the selected range.');
-        echo '<div class="table-wrap"><table id="pf-status"><thead><tr>'
+    /** Status classes over time, and the exact codes. */
+    private function statusCard(): void
+    {
+        self::cardOpen(
+            'pf-status',
+            '04',
+            'Status codes',
+            'All matched requests in the selected range, grouped into 2xx / 3xx / 4xx / 5xx.'
+        );
+        self::skeleton('pf-status', 'chart', 320, 'Faceting response codes');
+
+        echo '<div class="chart" id="pf-heat" style="height:320px"></div>';
+        echo '<div class="table-wrap"><table id="pf-status-table"><thead><tr>'
             . '<th scope="col">Status</th>'
             . '<th scope="col">Meaning</th>'
             . '<th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
-        echo '<div class="empty" id="pf-status-empty" hidden></div>';
-        echo '</section>';
+
+        self::cardClose('pf-status');
     }
 }

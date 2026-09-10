@@ -63,10 +63,13 @@ final class Rules
      * The per-rule justification for each number is in the method that implements it —
      * look for the "WEIGHT" paragraph in each rule's docblock.
      *
+     * The table is grouped by how much a rule can do on its own: first the ones that are
+     * decisive alone, at or above the `bot` threshold; then the strong ones, which are
+     * designed to be corroborated; then the behavioural ones, which are meant to stack.
+     *
      * @var array<string,int>
      */
     public const WEIGHTS = [
-        // --- decisive on their own (>= the `bot` threshold) --------------------------
         'automation_marker'      => 100,
         'ua_declared_bot'        => 100,
         'rdns_claim_failed'      => 95,
@@ -75,12 +78,10 @@ final class Rules
         'ua_claim_failed'        => 85,
         'fp_cluster_proxy_fleet' => 80,
 
-        // --- strong, but designed to be corroborated ----------------------------------
         'ua_secch_mismatch'      => 75,
         'platform_mismatch'      => 70,
         'no_js_on_html'          => 70,
 
-        // --- behavioural, meant to stack ----------------------------------------------
         'hosting_asn_browser_ua' => 45,
         'periodic_timing'        => 45,
         'no_interaction'         => 40,
@@ -115,6 +116,14 @@ final class Rules
     private int $ruleVersion;
 
     /**
+     * An override for a rule that does not exist is refused rather than ignored: silently
+     * dropping it would leave an operator convinced they had disabled something.
+     *
+     * A weight of 0 disables a rule entirely, which is a legitimate thing to want. The upper
+     * bound is 200 rather than 100, so that an operator can make a single rule decisive even
+     * after another one is subtracted, but not so high that one typo turns every session into
+     * a bot.
+     *
      * @param array<string,mixed> $scoringCfg The 'scoring' section of the config.
      */
     public function __construct(array $scoringCfg = [])
@@ -123,17 +132,11 @@ final class Rules
 
         foreach ((array) ($scoringCfg['weights'] ?? []) as $code => $weight) {
             if (!isset(self::WEIGHTS[$code])) {
-                // Refuse an override for a rule that does not exist. Silently ignoring it
-                // would leave an operator convinced they had disabled something.
                 throw new \InvalidArgumentException('Rules: unknown rule code in scoring.weights: ' . $code);
             }
             if (!is_numeric($weight)) {
                 throw new \InvalidArgumentException('Rules: weight for ' . $code . ' must be numeric.');
             }
-            // 0 disables a rule entirely, which is a legitimate thing to want. The upper
-            // bound is 200 rather than 100 so an operator can make a single rule decisive
-            // even after another one is subtracted — but not so high that one typo turns
-            // every session into a bot.
             $this->weights[$code] = (int) max(0, min(200, (int) $weight));
         }
 
@@ -201,6 +204,18 @@ final class Rules
     /**
      * Score a session.
      *
+     * A rule disabled by config is skipped entirely rather than evaluated and contributing
+     * zero, so that a disabled rule cannot appear in the reasons with no contribution and
+     * confuse whoever is reading them.
+     *
+     * SPEC §1 requires bot_score_f always to be accompanied by bot_reasons_ss, so a clean
+     * session is given a positive reason of its own rather than an empty array — which also
+     * makes "how many sessions tripped nothing at all" a one-facet question.
+     *
+     * That invariant is asserted rather than merely documented. If the assertion ever throws,
+     * the bug is that a rule contributed points without recording why, which would produce a
+     * verdict nobody can defend and that someone would nonetheless act on.
+     *
      * @param array<string,mixed> $s   Signal map from Signals::fromSession().
      * @param array<string,mixed> $ctx Context:
      *                                 beacon_deployed (bool) — is the beacon actually live
@@ -219,8 +234,6 @@ final class Rules
         foreach (self::codes() as $code) {
             $weight = $this->weights[$code];
             if ($weight === 0) {
-                // Disabled by config. Skip evaluation entirely so a disabled rule cannot
-                // appear in the reasons with a zero contribution and confuse a reader.
                 continue;
             }
             $why = $this->fired($code, $s, $ctx);
@@ -237,9 +250,6 @@ final class Rules
         $class   = $this->classify($s, $reasons, $verdict);
 
         if ($reasons === []) {
-            // SPEC §1: bot_score_f must always be accompanied by bot_reasons_ss. A clean
-            // session has a positive reason of its own rather than an empty array — which
-            // also makes "how many sessions tripped nothing at all" a one-facet question.
             $reasons[] = 'no_bot_signals';
             $detail['no_bot_signals'] = [
                 'weight' => 0,
@@ -247,9 +257,6 @@ final class Rules
             ];
         }
 
-        // The invariant, asserted rather than documented. If this ever throws, the bug is
-        // that a rule contributed points without recording why — which would produce a
-        // verdict nobody can defend, and someone would act on it.
         if ($score > 0 && $detail === []) {
             throw new \LogicException('Rules: scored ' . $score . ' with no reasons. This is a bug.');
         }
@@ -311,6 +318,13 @@ final class Rules
      *    describes an organised operation across many networks, which is the thing an
      *    operator can actually act on.
      *
+     * 4. Automation proven on the execution plane comes next, then a set of headers that
+     *    contradict each other, which means something is lying about what it is.
+     *
+     * 5. Last is `scripted`, for a session with no single tell whose behaviour nonetheless
+     *    adds up. It is the honest label for "we are confident this is not a person, and we
+     *    cannot say what it is".
+     *
      * @param array<string,mixed> $s
      * @param string[]            $reasons
      */
@@ -318,7 +332,6 @@ final class Rules
     {
         $fired = array_flip($reasons);
 
-        // 1 & 2 — declared crawlers.
         if (isset($fired['ua_declared_bot'])) {
             if (isset($fired['rdns_claim_failed'])) {
                 return 'spoofed_ua';
@@ -333,12 +346,10 @@ final class Rules
             return 'declared_crawler';
         }
 
-        // 3 — an organised fleet.
         if (isset($fired['fp_cluster_proxy_fleet'])) {
             return 'proxy_fleet';
         }
 
-        // Automation proven on the execution plane.
         if (isset($fired['automation_marker'])
             || isset($fired['headless_renderer'])
             || isset($fired['ua_claim_failed'])
@@ -347,23 +358,16 @@ final class Rules
             return 'headless';
         }
 
-        // The headers contradict each other: something is lying about what it is.
         if (isset($fired['ua_secch_mismatch']) || isset($fired['platform_mismatch'])) {
             return 'spoofed_ua';
         }
 
-        // No single tell, but the behaviour adds up. `scripted` is the honest label for
-        // "we are confident this is not a person, and we cannot say what it is".
         if ($verdict === 'bot' || $verdict === 'likely_bot') {
             return 'scripted';
         }
 
         return 'none';
     }
-
-    // =====================================================================================
-    // THE RULES
-    // =====================================================================================
 
     /**
      * automation_marker — a definitive automation property was present in the page.
@@ -423,7 +427,8 @@ final class Rules
      *
      * The rule fires ONLY for crawlers on Signals::VERIFIABLE_CRAWLERS, and only when the
      * check actually ran (rdns_ok is a real false, not null). An unverifiable crawler is
-     * taken at its word: being unable to check a claim is not evidence against it.
+     * taken at its word: being unable to check a claim is not evidence against it. A null
+     * rdns_ok means the lookup did not happen or did not resolve — unknown, not failed.
      *
      * @param array<string,mixed> $s
      */
@@ -433,7 +438,6 @@ final class Rules
             return null;
         }
         if (($s['rdns_ok'] ?? null) !== false) {
-            // null means the lookup did not happen or did not resolve — unknown, not failed.
             return null;
         }
         return 'Claims to be ' . (string) ($s['ua_bot_name'] ?? 'a verifiable crawler')
@@ -538,7 +542,8 @@ final class Rules
      *     would sail past the ≥5 test; without this guard every verified search and AI
      *     crawler would be scored 180 and classified `proxy_fleet`, which is exactly the
      *     conflation SPEC §7 says makes existing tools useless. The guard requires a PASSED
-     *     rDNS check, not merely a UA claim, so an impersonator gets no benefit from it.
+     *     rDNS check, not merely a UA claim, so an impersonator gets no benefit from it. The
+     *     exemption has to be EARNED.
      *
      * Null fp_ips_24h (the scorer could not reach Solr) does not fire. "We could not check"
      * is not "this fingerprint is unique".
@@ -554,7 +559,6 @@ final class Rules
         if (($s['as_type'] ?? null) === 'mobile') {
             return null;
         }
-        // The declared-crawler exemption, and it must be EARNED by passing rDNS.
         if (!empty($s['ua_bot']) && ($s['rdns_ok'] ?? null) === true) {
             return null;
         }
@@ -635,6 +639,9 @@ final class Rules
      * disabled. Those users exist, so this asks for one corroborating signal before
      * reaching a verdict of `bot`.
      *
+     * A crawler that never claimed to be a browser is not contradicting itself by not running
+     * JavaScript, so it is excluded.
+     *
      * @param array<string,mixed> $s
      * @param array<string,mixed> $ctx
      */
@@ -650,8 +657,6 @@ final class Rules
             return null;
         }
         if (empty($s['claims_browser'])) {
-            // A crawler that never claimed to be a browser is not contradicting itself by
-            // not running JavaScript.
             return null;
         }
         return 'HTML was served and the client claims to be '
@@ -730,7 +735,8 @@ final class Rules
      * glances at it, and closes it without touching anything. That is a real human with a
      * bounce, and it must not be called a bot on this evidence alone. Note that this rule
      * requires the beacon to have ARRIVED — it is a statement about a measured absence of
-     * interaction, not about the absence of a measurement.
+     * interaction, not about the absence of a measurement. A beacon that arrived without an
+     * interaction count is unknown, and does not fire it either.
      *
      * @param array<string,mixed> $s
      */
@@ -740,7 +746,6 @@ final class Rules
             return null;
         }
         if (($s['interactions'] ?? null) === null) {
-            // The beacon arrived but did not report an interaction count. Unknown.
             return null;
         }
         if ((int) $s['interactions'] > 0) {

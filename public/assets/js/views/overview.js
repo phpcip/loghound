@@ -1,170 +1,157 @@
 /*
  * Loghound — Overview view.
  *
- * Renders the five-population traffic band, the totals, the four timing numbers, and the
- * top-pages table with its population toggle.
- *
- * The timing block is the part to be careful with. All four numbers are computed by the
- * server over ONE population — human sessions that produced a beacon — and the caption
- * says how big that population is and how many sessions were left out. A session with no
- * beacon contributes nothing rather than contributing a zero.
+ * Four independent cards: the headline counters, the four timing numbers, the stacked
+ * traffic band and the top-pages table. Each one is its own request with its own progress
+ * line and its own retry, so the timing block appears the moment it is ready instead of
+ * waiting on the hourly series, and one slow facet cannot hold up the page.
  */
 
 'use strict';
 
-import { api, byId, dur, el, hideEmpty, load, noDataYet, num, pct, tbody } from '../core.js';
+import { api, byId, cardChart, dur, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody } from '../core.js';
 import { barsH, stackedTraffic, tokens } from '../charts.js';
 
 /** Stacking order, bottom to top: most human at the bottom. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
 
-/** Set the text of a [data-field] element inside a container. */
+/**
+ * Set the text of a [data-field] element inside a container.
+ */
 function setField(scope, field, value) {
-    const node = scope.querySelector('[data-field="' + field + '"]');
+    const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
     if (node) {
         node.textContent = value;
     }
 }
 
-/** Populate the five headline counters. */
+/**
+ * Fill the five headline counters and give each one its share of the total.
+ */
 function renderTotals(data) {
-    const scope = byId('ov-stats');
-    if (!scope) {
-        return;
-    }
+    const scope = byId('ov-stats-content');
     for (const key of ORDER) {
         setField(scope, key, num(data.totals[key]));
-    }
-    // Give each counter its share of the total, so "812" is readable as "81% of traffic".
-    for (const key of ORDER) {
-        const stat = scope.querySelector('[data-stat="' + key + '"] .stat-hint');
-        if (stat && data.total_sessions) {
-            stat.textContent = stat.textContent.replace(/ · .*$/, '') +
+        const hint = scope ? scope.querySelector('[data-stat="' + key + '"] .stat-hint') : null;
+        if (hint && data.total_sessions) {
+            hint.textContent = hint.textContent.replace(/ · .*$/, '') +
                 ' · ' + pct(data.totals[key], data.total_sessions) + ' of sessions';
         }
     }
+    setPop('ov-stats', num(data.total_sessions) + ' scored sessions in the selected range, split into five ' +
+        'mutually exclusive populations. Distinct human visitors: ' + num(data.human_detail.visitors) +
+        ' (approximate above ~100).');
 }
 
 /**
- * The four timing numbers plus the comparison bar.
+ * Fill the four timing numbers, their caption and the comparison bar.
  *
- * The population caption is written before the numbers are, deliberately: it is the thing
- * that stops the comparison being misread, and it must be legible in a screenshot.
+ * The population caption is written before the numbers so the comparison cannot be read
+ * without its denominator, which is the entire point of the card.
  */
 function renderTiming(data) {
-    const scope = byId('ov-timing');
+    const scope = byId('ov-timing-content');
     const t = data.timing;
-    if (!scope) {
-        return;
-    }
 
-    const fields = [
+    for (const [key, p50, avg] of [
         ['log_span', t.log_span_p50, t.log_span_avg],
         ['wall', t.wall_p50, t.wall_avg],
         ['visible', t.visible_p50, t.visible_avg],
         ['engaged', t.engaged_p50, t.engaged_avg]
-    ];
-    for (const [key, p50, avg] of fields) {
+    ]) {
         setField(scope, key + '_p50', dur(p50));
         setField(scope, key + '_avg', dur(avg));
     }
 
-    const popNode = byId('ov-timing-pop');
-    if (popNode) {
-        if (!t.population) {
-            popNode.textContent = 'No human session in this range produced beacon data, so wall, visible and ' +
-                'engaged time are unknown. They are shown as em-dashes rather than zeroes.';
-        } else {
-            popNode.textContent =
-                'All four numbers cover the same ' + num(t.population) + ' human sessions that produced beacon ' +
-                'data — ' + pct(t.population, t.humans) + ' of the ' + num(t.humans) + ' human sessions in this ' +
-                'range. The other ' + num(t.without_beacon) + ' had no beacon and are excluded entirely; they are ' +
-                'not counted as zero.';
-        }
-    }
+    setPop('ov-timing', t.population
+        ? 'All four numbers cover the same ' + num(t.population) + ' human sessions that produced beacon data — ' +
+          pct(t.population, t.humans) + ' of the ' + num(t.humans) + ' human sessions in this range. The other ' +
+          num(t.without_beacon) + ' had no beacon and are excluded entirely; they are not counted as zero.'
+        : 'No human session in this range produced beacon data, so wall, visible and engaged time are unknown. ' +
+          'They are shown as em-dashes rather than zeroes.');
 
-    // The contrast line: what a log-only tool would have reported for ALL human sessions,
-    // against what the beacon measured. This is the product's headline claim in one
-    // sentence, and it is generated rather than hard-coded so it cannot go stale.
+    renderTimingComparison(t);
+    renderTimingBars(t);
+}
+
+/**
+ * Generate the one-sentence contrast between what other tools would report and what the
+ * beacon measured, so the claim cannot go stale against the data on screen.
+ */
+function renderTimingComparison(t) {
     const note = byId('ov-timing-note');
-    if (note && t.population && t.engaged_p50 !== null && t.all_log_span_p50 !== null) {
-        const existing = byId('ov-timing-compare');
-        if (existing) {
-            existing.remove();
-        }
-        const ratio = t.engaged_p50 > 0 ? (t.wall_p50 / t.engaged_p50) : null;
-        const line = el('p', { id: 'ov-timing-compare' }, [
-            el('strong', { text: 'On this traffic: ' }),
-            'a log-only tool would report a median of ',
-            el('span', { class: 'mono', text: dur(t.all_log_span_p50) }),
-            ' on site. A JavaScript analytics product would report ',
-            el('span', { class: 'mono', text: dur(t.wall_p50) }),
-            '. The median visitor was actually engaged for ',
-            el('span', { class: 'mono', text: dur(t.engaged_p50) }),
-            ratio && ratio >= 1.2
-                ? ' — ' + ratio.toFixed(1) + '× less than the wall-clock figure.'
-                : '.'
-        ]);
-        note.insertBefore(line, note.firstChild);
+    const existing = byId('ov-timing-compare');
+    if (existing) {
+        existing.remove();
     }
+    if (!note || !t.population || t.engaged_p50 === null || t.all_log_span_p50 === null) {
+        return;
+    }
+    const ratio = t.engaged_p50 > 0 ? (t.wall_p50 / t.engaged_p50) : null;
+    note.insertBefore(el('p', { id: 'ov-timing-compare' }, [
+        el('strong', { text: 'On this traffic: ' }),
+        'a log-only tool would report a median of ',
+        el('span', { class: 'mono', text: dur(t.all_log_span_p50) }),
+        ' on site. A JavaScript analytics product would report ',
+        el('span', { class: 'mono', text: dur(t.wall_p50) }),
+        '. The median visitor was actually engaged for ',
+        el('span', { class: 'mono', text: dur(t.engaged_p50) }),
+        ratio && ratio >= 1.2 ? ' — ' + ratio.toFixed(1) + '× less than the wall-clock figure.' : '.'
+    ]), note.firstChild);
+}
 
-    // A small horizontal comparison, medians only, so the four are seen at a glance.
-    const rows = [
+/**
+ * Draw the four medians as one horizontal comparison, with the accent on the honest
+ * number and nothing else.
+ */
+function renderTimingBars(t) {
+    const th = tokens();
+    barsH('ov-timing-chart', [
         { label: 'Log span', value: t.log_span_p50 || 0, key: 'log_span' },
         { label: 'Wall clock', value: t.wall_p50 || 0, key: 'wall' },
         { label: 'Visible', value: t.visible_p50 || 0, key: 'visible' },
         { label: 'Engaged', value: t.engaged_p50 || 0, key: 'engaged' }
-    ];
-    const th = tokens();
-    barsH('ov-timing-chart', rows.map((r) => ({
-        label: r.label,
-        value: r.value,
-        // Only the honest number gets the accent; the rest are neutral, which is the
-        // visual argument the page is making.
-        color: r.key === 'engaged' ? th.accent : th.pop.unknown,
+    ].map((row) => ({
+        label: row.label,
+        value: row.value,
+        color: row.key === 'engaged' ? th.accent : th.pop.declared,
         extra: 'median'
-    })), { labelWidth: 96, format: dur });
+    })), { labelWidth: 100, format: dur });
 }
 
-/** The stacked traffic band. */
+/**
+ * Draw the stacked traffic band, or explain why there is nothing to draw.
+ */
 function renderSeries(data) {
-    const any = ORDER.some((k) => (data.series[k] || []).some((v) => v > 0));
+    const any = ORDER.some((key) => (data.series[key] || []).some((value) => value > 0));
     if (!any) {
         noDataYet('ov-series-empty', 'sessions');
         return;
     }
     hideEmpty('ov-series-empty');
-    stackedTraffic('ov-series', {
-        times: data.times,
-        series: data.series,
-        labels: data.labels
-    }, ORDER);
+    cardChart('ov-series', 340);
+    stackedTraffic('ov-series', { times: data.times, series: data.series, labels: data.labels }, ORDER);
 }
 
-/** Top pages, for whichever population the toggle has selected. */
-async function loadPages(population) {
-    const table = byId('ov-pages');
-    const popNode = byId('ov-pages-pop');
-    await load('ov-pages-empty', 'top pages', async () => {
+/**
+ * Load the top-pages table for one population.
+ */
+function loadPages(population) {
+    return loadCard('ov-pages', 'Faceting requested paths', async () => {
         const data = await api('overview', 'toppages', { pop: population });
 
-        if (popNode) {
-            popNode.textContent = data.population_label + ' · ' + num(data.total) +
-                ' sessions in range. Counted as sessions that requested the path at least once, ' +
-                'not as raw request count — a session that reloaded a page ten times counts once.';
-        }
+        setPop('ov-pages', data.population_label + ' · ' + num(data.total) + ' sessions in range. Counted as ' +
+            'sessions that requested the path at least once, not as raw request count.');
 
         if (!data.rows.length) {
-            // replaceChildren, not innerHTML: the panel has exactly one innerHTML path
-            // (core.js esc()) and it is never used for data.
-            table.tBodies[0].replaceChildren();
+            tbody(byId('ov-pages-table'), []);
             noDataYet('ov-pages-empty', 'page requests');
             return;
         }
         hideEmpty('ov-pages-empty');
 
         const top = data.rows[0].sessions || 1;
-        tbody(table, data.rows.map((row) => ({
+        tbody(byId('ov-pages-table'), data.rows.map((row) => ({
             cells: [
                 { text: row.path, mono: true, clip: true },
                 { text: num(row.sessions), num: true },
@@ -178,9 +165,11 @@ async function loadPages(population) {
     });
 }
 
-/** Wire the humans/all/bots toggle. */
+/**
+ * Wire the humans/all/bots toggle.
+ */
 function initPageToggle() {
-    const group = document.querySelector('.toggle');
+    const group = document.querySelector('[data-card="ov-pages"] .toggle');
     if (!group) {
         return;
     }
@@ -197,16 +186,20 @@ function initPageToggle() {
     }
 }
 
-/** Entry point. */
-export default async function init() {
+/**
+ * Entry point. The four loads are started together and settle independently.
+ */
+export default function init() {
     initPageToggle();
 
-    await load('ov-series-empty', 'the overview', async () => {
-        const data = await api('overview', 'summary');
-        renderTotals(data);
-        renderTiming(data);
-        renderSeries(data);
+    loadCard('ov-stats', 'Counting sessions by verdict', async () => {
+        renderTotals(await api('overview', 'totals'));
     });
-
-    await loadPages('humans');
+    loadCard('ov-timing', 'Measuring dwell time across four clocks', async () => {
+        renderTiming(await api('overview', 'timing'));
+    });
+    loadCard('ov-series', 'Bucketing sessions by hour', async () => {
+        renderSeries(await api('overview', 'series'));
+    });
+    loadPages('humans');
 }
