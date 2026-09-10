@@ -53,7 +53,7 @@ return [
         $tmp = sys_get_temp_dir() . '/lh_canary_' . bin2hex(random_bytes(4)) . '.php';
         file_put_contents(
             $tmp,
-            "<?php\n\$config = ['api_key' => '" . str_repeat('a1b2c3d4', 4) . "'];\n"
+            "<?php\n\$config = ['api_key' => '" . bin2hex(random_bytes(16)) . "'];\n"
         );
 
         // Run THE REAL SCANNER against the planted file. An earlier version of

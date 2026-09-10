@@ -92,6 +92,13 @@ $allow = [
     // that name a fingerprint field qualify, so a real hex secret sitting on an
     // unrelated line is still caught.
     '/fp_hash|fingerprint|ua_hash|_hash_s|\bfp\b|Fp\s*=/i',
+    // Deliberately fake credentials inside the test suite. Several tests assert that a
+    // secret never reaches rendered output or a job payload, which requires a secret-shaped
+    // value to plant. Two conventions mark them and both are matched here: the literal word
+    // SENTINEL, and values built from an obvious keyboard pattern (a1b2c3d4…, abcdef0123…).
+    // A real credential is neither, so this does not blind the scanner to one.
+    '/SENTINEL/',
+    '/(?:a1b2c3d4|abcdef0123456789|0123456789abcdef|deadbeef|cafebabe)/i',
 ];
 
 /** @return string[] */
