@@ -85,7 +85,17 @@ php_admin_flag[file_uploads] = off
 ; NOTE: open_basedir is a defence in depth, not a primary control. It is here
 ; because it costs nothing and it turns several classes of bug into an error
 ; log line instead of a breach.
-php_admin_value[open_basedir] = /opt/loghound:/tmp
+;
+; The log directory and the webserver config directories are included because the
+; web installer reads them: it parses your Apache or nginx configuration to find
+; your access logs and their exact format, and it shows you real sample lines so
+; you can confirm the field mapping before anything is ingested. Leave them out
+; and setup still completes, but that whole screen finds nothing and you are asked
+; to type paths by hand. Both are read-only to this user by file permissions.
+;
+; Adjust the first path if you installed somewhere other than /opt/loghound, and
+; drop /etc/nginx or /etc/apache2 if you do not run that server.
+php_admin_value[open_basedir] = /opt/loghound:/var/log:/etc/apache2:/etc/nginx:/tmp
 
 ; Functions the panel has no use for and an attacker has every use for.
 php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,proc_nice,dl,pcntl_exec,pcntl_fork
