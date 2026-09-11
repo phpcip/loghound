@@ -65,6 +65,39 @@
         <str name="compressionMode">BEST_COMPRESSION</str>
     </codecFactory>
 
+    <!--
+      ======================================================================================
+      CLASSIC SCHEMA, NOT MANAGED — and this is a correctness decision, not a preference.
+      ======================================================================================
+      With the default ManagedIndexSchemaFactory, SOLR owns the schema file: it reads
+      `managed-schema.xml`, it may rewrite it, and the Schema API can change fields underneath
+      an installation. What this release uploads is then not authoritative — the copy on the
+      index can differ from the copy in the repository, and the only evidence is a diff nobody
+      runs. For a product whose entire job is to be trustworthy about what its numbers mean,
+      a schema the tool cannot guarantee is the one it shipped is not acceptable.
+
+      ClassicIndexSchemaFactory reads `schema.xml` and nothing writes it back. The file in
+      solr/<core>/conf/ IS the schema on the index, or the push failed and said so.
+
+      THE ORDER THIS IMPLIES FOR AN UPGRADE, and it is the reverse of what pushConfigSet()
+      used to do. Solr resolves the schema factory at core load, so:
+
+        1. mapping-ISOLatin1Accent.txt   the schema names it; a schema that lands first would
+                                         reload the core against a missing file and the core
+                                         would not load AT ALL.
+        2. schema.xml                    inert while the index is still on the managed factory,
+                                         which is exactly what makes this step safe.
+        3. solrconfig.xml                this file. The reload it triggers is the one that
+                                         switches the factory, and by then both files it needs
+                                         are already there.
+
+      Every intermediate state loads. A rejection at any step leaves the index running the
+      configset it had. See Opensolr::pushConfigSet() and Setup\Schema::check(), which reports
+      "still on the managed factory" as its own state — because in that state EVERY schema
+      upload is a silent no-op and no operator could diagnose it alone.
+    -->
+    <schemaFactory class="ClassicIndexSchemaFactory"/>
+
     <indexConfig>
         <!--
           64 MB of in-memory buffer before a flush. Larger buffers make larger first-level

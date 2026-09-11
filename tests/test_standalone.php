@@ -118,7 +118,7 @@ function lh_sa_schema(string $core): string
 {
     static $cache = [];
     if (!isset($cache[$core])) {
-        $cache[$core] = (string) file_get_contents(__DIR__ . '/../solr/' . $core . '/conf/managed-schema.xml');
+        $cache[$core] = (string) file_get_contents(__DIR__ . '/../solr/' . $core . '/conf/schema.xml');
     }
     return $cache[$core];
 }
@@ -909,16 +909,24 @@ return [
 
     'both new fields exist on the cores that need them, faceted rather than merely stored'
         => static function (): void {
-            foreach (['hits', 'sessions'] as $core) {
-                $schema = lh_sa_schema($core);
-                lh_contains(
-                    $schema,
-                    '<field name="search_terms_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>',
-                    $core . ': search terms are a real dimension — indexed and docValues, which is what a '
-                    . 'facet and a filter need. Stored-only, like query_s, would be visible on one '
-                    . 'document and countable on none'
-                );
-            }
+            /* INDEXED AND docValues ON BOTH, which is what a facet and a filter need; stored-only,
+               like query_s, would be visible on one document and countable on none.
+
+               `stored` DIFFERS BETWEEN THE TWO, and that is the point rather than an oversight.
+               The session copy is read back by the session dialog and stays stored. The hits copy
+               is in no `fl` anywhere — Query::hitFl() does not ask for it — so storing it wrote
+               the same bytes a second time for a value nothing ever retrieves. docValues still
+               returns it if a future `fl` asks. */
+            lh_contains(
+                lh_sa_schema('sessions'),
+                '<field name="search_terms_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>',
+                'sessions: search terms are a real dimension AND are read back on the dialog'
+            );
+            lh_contains(
+                lh_sa_schema('hits'),
+                '<field name="search_terms_ss" type="strings" indexed="true" stored="false" docValues="true" multiValued="true"/>',
+                'hits: a real dimension, and not stored — nothing reads it off a hit document'
+            );
 
             lh_contains(
                 lh_sa_schema('sessions'),

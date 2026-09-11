@@ -28,8 +28,10 @@ declare(strict_types=1);
 
 use Loghound\Config;
 use Loghound\Enrich\Asn;
+use Loghound\LogDetect;
 use Loghound\Panel\Vocabulary;
 use Loghound\Score\Rules;
+use Loghound\Setup\Steps;
 
 /** The repository root. */
 function lh_claims_root(): string
@@ -91,6 +93,94 @@ function lh_claims_flat(string $relative): string
  * to set them to different values.
  */
 const LH_CLAIMS_ALIAS_KEY = 'maintenance.delete_hits_after_days';
+
+/**
+ * Every file that could publish a `LogFormat` line to an operator.
+ *
+ * Source, panel JavaScript and prose all together, because the incident this group of tests
+ * was written from was one surface disagreeing with another: the card that told the operator
+ * what to paste and the stored format that had to be rebuilt afterwards were maintained in
+ * different files by different hands, and neither knew about the other.
+ *
+ * `tests/` is deliberately absent. A fixture is allowed to contain a stock `combined` line —
+ * that is the point of a fixture — and scanning them would make every one of these tests fail
+ * for the one reason that does not matter.
+ *
+ * @return string[] Repository-relative paths.
+ */
+function lh_claims_format_surfaces(): array
+{
+    $root = lh_claims_root();
+    $files = array_merge(
+        (array) glob($root . '/src/*.php'),
+        (array) glob($root . '/src/*/*.php'),
+        (array) glob($root . '/public/assets/js/*.js'),
+        (array) glob($root . '/public/assets/js/views/*.js'),
+        (array) glob($root . '/docs/*.md'),
+        [$root . '/SPEC.md', $root . '/README.md']
+    );
+
+    $out = [];
+    foreach ($files as $file) {
+        $out[] = ltrim(str_replace($root, '', (string) $file), '/');
+    }
+    sort($out);
+    return $out;
+}
+
+/**
+ * Every `LogFormat "…" nickname` a body of text publishes.
+ *
+ * The `s` flag is load-bearing: the recommended format is ONE Apache directive spread over
+ * five physical lines with continuation backslashes, and a pattern that stopped at a newline
+ * would read the first fifth of it and call the rest prose.
+ *
+ * THE BODY IS MATCHED LAZILY RATHER THAN BY COUNTING ESCAPES, and that is a correction. A
+ * pattern that walked the quoted string properly — `(?:\\.|[^"\\])*` — read Apache's `\"` and
+ * markdown's `\"` and stopped dead on JavaScript's `\\"`, so a `LogFormat` literal pasted into
+ * a panel view was invisible to every test here. Which is the file the defect was in. The
+ * terminator is instead "a quote followed by whitespace and a nickname", which is the shape of
+ * the directive in every escaping convention this repository writes it in. The 1200-character
+ * cap keeps a stray `LogFormat` in prose from swallowing the rest of a file looking for one.
+ *
+ * @return array<int,array{format:string,nickname:string,offset:int}>
+ */
+function lh_claims_logformats(string $body): array
+{
+    if (!preg_match_all(
+        '/LogFormat\s+"(.{0,1200}?)"\s+([A-Za-z0-9_]+)/s',
+        $body,
+        $hits,
+        PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+    )) {
+        return [];
+    }
+
+    $out = [];
+    foreach ($hits as $hit) {
+        $out[] = [
+            'format'   => (string) preg_replace('/\s+/', ' ', $hit[1][0]),
+            'nickname' => (string) $hit[2][0],
+            'offset'   => (int) $hit[0][1],
+        ];
+    }
+    return $out;
+}
+
+/**
+ * The nicknames Apache answers to whether or not anybody defined them.
+ *
+ * Read out of the code's own list rather than retyped, so a name added there is a name these
+ * tests start refusing on the same commit.
+ *
+ * @return string[]
+ */
+function lh_claims_reserved_nicknames(): array
+{
+    $method = new ReflectionMethod(LogDetect::class, 'apacheBuiltinFormats');
+
+    return array_map('strval', array_keys((array) $method->invoke(null)));
+}
 
 /** A private class constant, for a test that has to know what a classifier can produce. */
 function lh_claims_const(string $class, string $name)
@@ -333,6 +423,195 @@ return [
                 count(Rules::WEIGHTS) + 3,
                 count($codes),
                 'the emittable set is the weighted rules plus exactly those three'
+            );
+        },
+
+    'no LogFormat this product publishes reuses a nickname Apache already defines'
+        => static function (): void {
+            $reserved = lh_claims_reserved_nicknames();
+            $checked = 0;
+
+            $surfaces = ['Setup\Steps::recommendedLogFormat()' => Steps::recommendedLogFormat()]
+                + ['Setup\Steps::durationLogFormat()' => Steps::durationLogFormat()];
+
+            foreach (lh_claims_format_surfaces() as $file) {
+                $surfaces[$file] = (string) @file_get_contents(lh_claims_root() . '/' . $file);
+            }
+
+            foreach ($surfaces as $where => $body) {
+                foreach (lh_claims_logformats($body) as $found) {
+                    $checked++;
+                    lh_false(
+                        in_array($found['nickname'], $reserved, true),
+                        $where . ' publishes a LogFormat under the nickname `' . $found['nickname']
+                        . '`, which Apache already defines. Debian and Ubuntu declare it in '
+                        . 'apache2.conf, and redefining it inside a <VirtualHost> does not reliably '
+                        . 'win: configtest passes, the reload succeeds, the lines keep coming out in '
+                        . 'the old shape, and nothing is written to any error log. An operator who '
+                        . 'follows this advice has no way at all to find out it did nothing'
+                    );
+                }
+            }
+
+            lh_true(
+                $checked >= 4,
+                'this test must still be finding the published LogFormat lines; it found ' . $checked
+            );
+        },
+
+    'a LogFormat nickname this product publishes names exactly one format string'
+        => static function (): void {
+            $byNickname = [];
+
+            $surfaces = ['Setup\Steps::recommendedLogFormat()' => Steps::recommendedLogFormat()]
+                + ['Setup\Steps::durationLogFormat()' => Steps::durationLogFormat()];
+
+            foreach (lh_claims_format_surfaces() as $file) {
+                $surfaces[$file] = (string) @file_get_contents(lh_claims_root() . '/' . $file);
+            }
+
+            foreach ($surfaces as $where => $body) {
+                foreach (lh_claims_logformats($body) as $found) {
+                    $byNickname[$found['nickname']][$found['format']][] = $where;
+                }
+            }
+
+            foreach ($byNickname as $nickname => $formats) {
+                $where = [];
+                foreach ($formats as $places) {
+                    $where = array_merge($where, $places);
+                }
+                lh_same(
+                    1,
+                    count($formats),
+                    'the nickname `' . $nickname . '` is published for ' . count($formats)
+                    . ' different format strings, across ' . implode(', ', array_unique($where))
+                    . '. Apache keeps the last definition it reads, so an operator who pastes both '
+                    . 'gets whichever one came second and no warning that the other was discarded — '
+                    . 'the same silent failure as reusing `combined`, one step further in'
+                );
+            }
+        },
+
+    'every surface that suggests changing the log format also says to rescan the source'
+        => static function (): void {
+            /* PROXIMITY, NOT CONTAINMENT. A file-wide search for the word would pass SPEC.md on
+               a `bin/loghound-setup` in its directory listing four hundred lines away, which is
+               not an instruction anybody reading the format block would ever see. The window is
+               the block the reader is actually in. */
+            $window = 2000;
+            $checked = 0;
+
+            foreach (lh_claims_format_surfaces() as $file) {
+                $body = (string) @file_get_contents(lh_claims_root() . '/' . $file);
+
+                foreach (lh_claims_logformats($body) as $found) {
+                    if (!str_contains($found['format'], '%D')) {
+                        continue;
+                    }
+                    $checked++;
+                    $near = substr($body, $found['offset'], $window);
+                    lh_true(
+                        preg_match('/rescan|loghound-setup|re-confirm/i', $near) === 1,
+                        $file . ' publishes a LogFormat carrying %D under `' . $found['nickname']
+                        . '` and does not, within ' . $window . ' characters, tell the operator to '
+                        . 'rescan the source. Loghound stores the compiled format PER SOURCE, so '
+                        . 'taking this advice is what breaks the ingest: from the first line of the '
+                        . 'new shape every line is a parse error, the counter climbs, and nothing '
+                        . 'new reaches the panel. Suggesting the change without the rescan is the '
+                        . 'product breaking on its own instructions'
+                    );
+                }
+            }
+
+            lh_true($checked >= 3, 'this test must still be finding the %D formats; it found ' . $checked);
+        },
+
+    'the rescan advice says why, not just what, and is never a pasteable line'
+        => static function (): void {
+            $advice = Steps::RESCAN_ADVICE;
+
+            foreach (['rescan', 'per source', 'parse error'] as $needle) {
+                lh_contains(
+                    strtolower($advice),
+                    $needle,
+                    'the rescan advice has to name "' . $needle . '". An operator who is told to '
+                    . 'rescan without being told that the stored format is what went wrong will '
+                    . 'skip it the next time, because it reads like housekeeping'
+                );
+            }
+
+            lh_false(
+                str_contains($advice, "\n"),
+                'the advice is prose rendered inside a <p>; a newline in it suggests it was meant '
+                . 'for a <pre>, and the panel puts a Copy button on those'
+            );
+        },
+
+    'docs/INSTALL.md documents all three ways a %D change silently does nothing'
+        => static function (): void {
+            $flat = strtolower(lh_claims_flat('docs/INSTALL.md'));
+
+            $causes = [
+                'the reused nickname' => [
+                    'do not reuse the name',
+                    'apache2.conf',
+                    'virtual host',
+                ],
+                'the reload that never happened' => [
+                    'graceful reload',
+                    'same master process',
+                    'sigusr1',
+                ],
+                'the stored format that is now wrong' => [
+                    'stores the log format',
+                    'parse error',
+                    'rescan the source',
+                ],
+            ];
+
+            foreach ($causes as $cause => $needles) {
+                foreach ($needles as $needle) {
+                    lh_contains(
+                        $flat,
+                        $needle,
+                        'docs/INSTALL.md must document ' . $cause . ', and the phrase "' . $needle
+                        . '" is missing. All three produce the same symptom — a correct config, a '
+                        . 'clean reload, and no durations — so a document that covers two of them '
+                        . 'sends the reader round the two they already checked'
+                    );
+                }
+            }
+
+            lh_contains(
+                $flat,
+                Steps::DURATION_NICKNAME,
+                'and it must name the nickname the panel hands out, or the operator who read the '
+                . 'card and the operator who read the manual are configuring two different things'
+            );
+        },
+
+    'the panel builds its duration advice from the code, not from its own copy of it'
+        => static function (): void {
+            $php = lh_claims_doc('src/Panel/Performance.php');
+            $js = lh_claims_doc('public/assets/js/views/performance.js');
+
+            foreach (['Steps::durationLogFormat()', 'Steps::RESCAN_ADVICE'] as $call) {
+                lh_contains(
+                    $php,
+                    $call,
+                    'the Performance card must build its empty state from ' . $call . '. The nickname '
+                    . 'and the rescan instruction are decided in Setup\Steps and checked against '
+                    . 'docs/INSTALL.md here; a second copy in the panel is a copy nothing compares'
+                );
+            }
+
+            lh_same(
+                [],
+                lh_claims_logformats($js),
+                'and views/performance.js must not carry a LogFormat literal of its own. It did, '
+                . 'with a nickname no PHP test could read — which is how a card can go on '
+                . 'recommending a format the documentation stopped publishing'
             );
         },
 

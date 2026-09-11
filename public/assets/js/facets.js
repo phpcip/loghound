@@ -51,8 +51,10 @@ import { api, boot, byId, clear, el, fill, num } from './core.js';
 import { FILTER_LABELS, dimLabel, dimValue, isFilterable } from './identity.js';
 import {
     basisNote,
+    blockBasisNote,
     clearAllUrl,
     clearFieldUrl,
+    commonBasisNote,
     filterInput,
     operatorControl,
     operatorOf,
@@ -63,8 +65,78 @@ import {
 } from './facetfilter.js';
 import { isPathField, urlMark } from './url.js';
 
-/** Has the panel-wide dimension list been fetched? One request per page load, on first open. */
+/** Has the panel-wide dimension list been fetched? One request per page load. */
 let loaded = false;
+
+/**
+ * Where the operator's shown/hidden choice for the whole panel is kept.
+ *
+ * ONE KEY, NOT ONE PER VIEW. The panel is a single control that scopes every page at once, so
+ * somebody who hid the filters hid the filters — re-deciding it per view would mean the same
+ * gesture had to be repeated seven times and would still leave the eighth page disagreeing
+ * with the seven before it. The name is in the family responsive.js already uses for the rail
+ * (`lh.rail`) and for the accordion (`lh.card.<view>.<id>`).
+ */
+const PANEL_KEY = 'lh.facets';
+
+/**
+ * The width at or above which the panel is a column beside the results.
+ *
+ * The stylesheet's single mode-switch breakpoint, repeated here because the DEFAULT differs
+ * either side of it: a desk screen gets the sidebar, and a phone gets the disclosure closed,
+ * because an expanded dimension list on one column puts the first card several screens down.
+ */
+const DESK = 901;
+
+/**
+ * Has the operator asked for the dimension groups?
+ *
+ * Absent means shown at desk width, which is the default a reader who has never touched the
+ * control gets: the panel exists to be used, and it is wanted most immediately after a filter
+ * has been applied. Storage throws outright in a private window and with site data blocked,
+ * so a refusal falls back to that same default rather than taking the panel away.
+ *
+ * @returns {boolean}
+ */
+function panelShown() {
+    let stored = null;
+    try {
+        stored = window.localStorage.getItem(PANEL_KEY);
+    } catch (e) {
+        void e;
+    }
+    if (stored === 'shown') {
+        return true;
+    }
+    if (stored === 'hidden') {
+        return false;
+    }
+    return window.innerWidth >= DESK;
+}
+
+/**
+ * Record the choice. A storage that refuses still leaves the panel working for this page.
+ *
+ * @param {boolean} shown
+ */
+function rememberPanel(shown) {
+    try {
+        window.localStorage.setItem(PANEL_KEY, shown ? 'shown' : 'hidden');
+    } catch (e) {
+        void e;
+    }
+}
+
+/**
+ * Put the panel's state on its own control, so the words and the ARIA cannot drift apart.
+ *
+ * @param {HTMLElement} toggle
+ * @param {boolean}     shown
+ */
+function labelToggle(toggle, shown) {
+    toggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
+    toggle.textContent = shown ? 'Hide filters' : 'Filter by…';
+}
 
 /**
  * Separator for the field/value keys of the active-filter set.
@@ -240,8 +312,12 @@ function absentRow(group) {
  *
  * Exported because the session explorer's sidebar and the panel-wide bar must look and behave
  * identically. They used to be two renderers and the sidebar was the one nobody recognised.
+ *
+ * `common` is the basis sentence every group in this panel shares, when there is one. A group
+ * whose own sentence is that one leaves it to the panel to say once; a group that is counted
+ * differently keeps it.
  */
-export function renderFacetGroup(group, active, max) {
+export function renderFacetGroup(group, active, max, common) {
     const keys = active || activeKeys();
     const buckets = group.buckets || [];
     const largest = buckets.reduce((acc, bucket) => Math.max(acc, bucket.count || 0), 0);
@@ -267,7 +343,7 @@ export function renderFacetGroup(group, active, max) {
     const chosen = picked.length;
 
     return el('section', {
-        class: 'facet',
+        class: group.filterable === false ? 'facet is-unfilterable' : 'facet',
         dataset: { field: group.field, ns: group.ns || 'f', op: group.op || operatorOf(group.field, group.ns) }
     }, [
         el('h3', { class: 'facet-head' }, [
@@ -279,14 +355,14 @@ export function renderFacetGroup(group, active, max) {
         filterInput(group, head.length),
         list,
         showAllButton(Object.assign({}, group, { truncated: group.truncated || head.length < buckets.length })),
-        basisNote(group),
-        group.filterable === false
-            ? el('p', {
-                class: 'facet-note',
-                text: 'Shown as a distribution only: this dimension is not in the panel\'s filter allowlist yet, ' +
-                    'so its values cannot be pressed.'
-            })
-            : null
+        basisNote(group, common),
+
+        /* SAID ONCE PER PANEL, NOT ONCE PER DIMENSION. Which dimensions are not yet filterable
+           varies; that some of them are not is one fact about the panel, and renderFacetPanel()
+           prints it below the groups. The mark on the group itself is what says WHICH — see
+           `.facet.is-unfilterable`, and the reader who wants the reason finds it in one place
+           rather than reading the same paragraph under four dimensions in a row. */
+        null
     ]);
 }
 
@@ -299,13 +375,33 @@ export function renderFacetGroup(group, active, max) {
  */
 export function renderFacetPanel(holder, groups, note, max) {
     const keys = activeKeys();
-    const rendered = (groups || []).map((group) => renderFacetGroup(group, keys, max));
+    const list = groups || [];
+    const common = commonBasisNote(list);
+    const rendered = list.map((group) => renderFacetGroup(group, keys, max, common));
     if (!rendered.length) {
         fill(holder, [el('p', { class: 'muted', text: 'No dimension has a value in this range and filter set.' })]);
         return;
     }
     void note;
-    fill(holder, [el('div', { class: 'facet-groups' }, rendered)]);
+
+    /* THE TWO PANEL-WIDE SENTENCES, EACH SAID ONCE. Both used to be printed inside every group:
+       the basis sentence under all of them, and the "not filterable yet" paragraph under each
+       dimension that is not. Repeating a statement per column does not make it truer, it makes
+       the column list unreadable and the panel look like it is telling you something new each
+       time. Which dimensions are the unfilterable ones is on the groups themselves. */
+    const unfilterable = list.filter((group) => group && group.filterable === false).length;
+
+    fill(holder, [
+        el('div', { class: 'facet-groups' }, rendered),
+        blockBasisNote(common),
+        unfilterable
+            ? el('p', {
+                class: 'facet-note facet-note-all',
+                text: 'Dimensions shown without pressable values are distributions only: they are not in the '
+                    + 'panel\'s filter allowlist yet.'
+            })
+            : null
+    ]);
 }
 
 /* -------------------------------------------------------------------------
@@ -372,6 +468,15 @@ function renderActive(holder) {
  * Created here rather than emitted by each view's body() for the same reason the host selector
  * and the bandwidth strip are: it belongs on every page, and a control that seven view files
  * each have to remember to render is one that will be missing from the eighth.
+ *
+ * THE PANEL'S STATE IS THE OPERATOR'S, NOT THIS FUNCTION'S. It used to be created `hidden` on
+ * every single page load with nothing written down, and all three of the defects the owner
+ * reported came out of that one line. Applying a filter reloads the page, so the sidebar
+ * vanished at the exact moment the next facet was wanted; the stylesheet's two-column layout
+ * is gated on the panel being open, so a shut panel left the chips and the button as a strip
+ * across the top with every card pushed below it; and hiding the panel was forgotten by the
+ * next navigation. The state is read from storage here and written on every press, so the
+ * panel arrives in the state it was left in and the column exists either way.
  */
 function mount() {
     const existing = byId('lh-filters');
@@ -383,30 +488,54 @@ function mount() {
         return null;
     }
 
+    const shown = panelShown();
     const active = el('div', { class: 'filterbar-active', id: 'lh-filters-active', hidden: true });
     const toggle = el('button', {
         type: 'button',
         class: 'ghost small',
         id: 'lh-facets-toggle',
-        'aria-expanded': 'false',
-        'aria-controls': 'lh-facets-panel',
-        text: 'Filter by…'
+        'aria-controls': 'lh-facets-panel'
     });
-    const panel = el('div', { class: 'fpanel', id: 'lh-facets-panel', hidden: true });
+    const panel = el('div', { class: 'fpanel', id: 'lh-facets-panel', hidden: !shown });
 
+    labelToggle(toggle, shown);
+
+    /* THE CONTROL AND THE GROUPS ARE TWO DIFFERENT THINGS, IN TWO DIFFERENT PLACES, and they
+       used to be one element that could only ever be in one of them.
+
+       `.filterbar` is the applied filters and the button that opens the groups. It belongs to
+       the PAGE — it says what every number on the page is narrowed to — so it goes in the
+       sticky toolbar with the range picker and the host selector, where it stays readable four
+       sections down. That is where the chips do the most good, because a figure whose scope has
+       scrolled off the top is a figure that gets quoted wrongly.
+
+       `.fpanel` is the dimension lists. It belongs beside the RESULTS, as a left column, and it
+       is several hundred pixels tall — pinned inside a toolbar it would cover the page it is
+       filtering. It stays the first child of `.view`, where the stylesheet's two-column rules
+       put it in the first track.
+
+       Splitting them is also what makes the shut state honest. When the whole bar was one
+       element, hiding the groups left the chips and the button with nowhere to be except a
+       band across the top of the content, which is the "horizontal block" that was reported.
+       Now the groups can simply be gone and nothing else moves. */
     const bar = el('div', { class: 'filterbar', id: 'lh-filters' }, [
         active,
-        el('div', { class: 'filterbar-tools' }, [toggle]),
-        panel
+        el('div', { class: 'filterbar-tools' }, [toggle])
     ]);
 
-    view.insertBefore(bar, view.firstChild);
+    const slot = byId('lh-page-tools');
+    if (slot) {
+        slot.insertBefore(bar, slot.querySelector('.pt-scope'));
+    } else {
+        view.insertBefore(bar, view.firstChild);
+    }
+    view.insertBefore(panel, view.firstChild);
 
     toggle.addEventListener('click', () => {
         const open = panel.hidden;
         panel.hidden = !open;
-        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-        toggle.textContent = open ? 'Hide filters' : 'Filter by…';
+        labelToggle(toggle, open);
+        rememberPanel(open);
         if (open && !loaded) {
             load(panel);
         }
@@ -453,6 +582,13 @@ function load(panel) {
  * document, so the sidebar and this bar get it identically and neither can drift.
  *
  * Safe to call on a page with no `.view` container: it does nothing rather than throwing.
+ *
+ * THE FETCH FOLLOWS THE STATE, NOT THE PRESS. The dimension lists were lazy-loaded by the
+ * toggle's own handler, which was correct while the panel could only ever be opened by a
+ * press; a panel that arrives open would have stayed empty for ever. It is asked for here
+ * instead, whenever the panel is on screen and has not been fetched yet, so an operator who
+ * has just applied a filter sees the value selected in the sidebar with no second gesture.
+ * Failure is still stated inside the panel and nowhere else — see load().
  */
 export function initFilterBar() {
     const bar = mount();
@@ -460,6 +596,11 @@ export function initFilterBar() {
         return;
     }
     renderActive(byId('lh-filters-active'));
+
+    const panel = byId('lh-facets-panel');
+    if (panel && !panel.hidden && !loaded) {
+        load(panel);
+    }
 }
 
 export { FILTER_LABELS };

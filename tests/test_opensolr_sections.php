@@ -277,7 +277,8 @@ return [
         $gw = lh_sec_gateway($captured);
 
         $classes = [
-            'overview' => 'Overview', 'bots' => 'Bots', 'fingerprints' => 'Fingerprints',
+            'overview' => 'Overview', 'bots' => 'Bots', 'attacks' => 'Attacks',
+            'fingerprints' => 'Fingerprints',
             'networks' => 'Networks', 'sessions' => 'Sessions', 'performance' => 'Performance',
             'hosts' => 'Hosts', 'indexes' => 'Indexes', 'queries' => 'Queries',
             'callers' => 'Callers', 'usage' => 'Usage', 'settings' => 'Settings',

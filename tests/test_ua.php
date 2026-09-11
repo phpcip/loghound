@@ -144,6 +144,89 @@ return [
         }
     },
 
+    'a User-Agent that declares a crawler without naming one is marked as unnamed' => function (): void {
+        /* THE DEFECT THIS PINS. `unspecified bot` outranks most real crawlers on a live site,
+           and Bot forensics section 06 is headed "Declared crawlers, by name" — so it was
+           ranking the absence of a name second, against Googlebot and GPTBot. The view can
+           only group them below the named ones if it can ASK which is which, and this is the
+           question it asks. */
+        $cases = [
+            'Mozilla/5.0 (compatible; SiteCrawler/1.0)'                       => 'unspecified crawler',
+            'Mozilla/5.0 (compatible; NewsSpider/2.0)'                        => 'unspecified spider',
+            'Mozilla/5.0 (compatible; Zqbot/1.0)'                             => 'unspecified bot',
+            'Mozilla/5.0 (compatible; Zqbot; +mail@example.com)'              => 'unspecified bot',
+            'Mozilla/5.0 (compatible; Acme/1.0; +https://example.com/about)'  => 'unspecified agent',
+        ];
+
+        foreach ($cases as $ua => $name) {
+            $f = Ua::parse($ua)->fields();
+            lh_same($name, $f['ua_bot_name_s'] ?? null, 'name for ' . $ua);
+            lh_same(true, $f['ua_bot_b'] ?? null, 'still a declared bot: ' . $ua);
+            lh_true(
+                Ua::isUnspecified((string) ($f['ua_bot_name_s'] ?? '')),
+                $ua . ' produced a name a by-name table would rank against real crawlers'
+            );
+        }
+    },
+
+    'the +http marker stays a bucket of its own, apart from unspecified bot' => function (): void {
+        /* The two are DIFFERENT EVIDENCE — a client that called itself a bot against one that
+           merely left a contact URL and matched nothing else — and `ua_bot_name_s` is a filter
+           dimension, so each of these strings is in somebody's bookmarked panel URL and in
+           exported files. Merging them would answer a saved filter with zero rows and would
+           split the index's own history. If a change ever makes this test fail, that is what
+           it broke. */
+        $bot = Ua::parse('Mozilla/5.0 (compatible; Zqbot/1.0; +https://example.com/bot)')->fields();
+        $agent = Ua::parse('Mozilla/5.0 (compatible; Acme/1.0; +https://example.com/about)')->fields();
+
+        lh_same('unspecified bot', $bot['ua_bot_name_s'] ?? null, 'a self-declared bot keeps its own name');
+        lh_same('unspecified agent', $agent['ua_bot_name_s'] ?? null, 'a bare contact URL keeps its own name');
+        lh_true(
+            ($bot['ua_bot_name_s'] ?? '') !== ($agent['ua_bot_name_s'] ?? ''),
+            'two genuinely different populations were merged into one stored value'
+        );
+    },
+
+    'isUnspecified answers for the markers and for nothing else' => function (): void {
+        foreach (Ua::UNSPECIFIED_NAMES as $name) {
+            lh_true(Ua::isUnspecified($name), 'isUnspecified for ' . $name);
+        }
+        foreach (['Googlebot', 'GPTBot', 'AhrefsBot', 'UptimeRobot', 'curl', 'facebookexternalhit'] as $name) {
+            lh_false(Ua::isUnspecified($name), 'a real crawler must never be filed as unnamed: ' . $name);
+        }
+        lh_false(Ua::isUnspecified(''), 'the empty string is not a marker');
+        lh_false(Ua::isUnspecified('Unspecified Bot'), 'the list is exact, not a prefix guess');
+    },
+
+    'every last-resort name in the table is declared in UNSPECIFIED_NAMES' => function (): void {
+        /* The list and the table are two places, so they are checked against each other. A
+           sixth last-resort entry added to BOTS without a line here would quietly reappear
+           among the named crawlers in Bot forensics, ranked by a count it earned honestly —
+           which is exactly how the original defect looked. */
+        $table = (new ReflectionClass(Ua::class))->getReflectionConstant('BOTS')->getValue();
+
+        $declared = [];
+        foreach ($table as [, $name]) {
+            if (stripos($name, 'unspecified') === 0) {
+                $declared[$name] = true;
+            }
+        }
+
+        foreach (array_keys($declared) as $name) {
+            lh_true(
+                Ua::isUnspecified($name),
+                $name . ' is minted by the table and is not in Ua::UNSPECIFIED_NAMES'
+            );
+        }
+        foreach (Ua::UNSPECIFIED_NAMES as $name) {
+            lh_true(
+                isset($declared[$name]),
+                $name . ' is declared unnamed but nothing in the table produces it'
+            );
+        }
+        lh_true(count($declared) >= 4, 'the sweep should have seen the markers, saw ' . count($declared));
+    },
+
     'a normal browser is not flagged as a bot' => function (): void {
         $f = Ua::parse(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '

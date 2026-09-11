@@ -249,6 +249,63 @@ function lh_panel_run(string $class, string $action, array $get): array
 }
 
 /**
+ * Run a panel view action against a Solr that answers with a canned `facets` block.
+ *
+ * The fakes above read the REQUEST and hand back an empty response, which is all an injection
+ * test needs. A test about what a view does WITH a facet — the order it puts the rows in, the
+ * flags it hangs off them — needs the response instead, and needs it to be a shape a real Solr
+ * would produce, so the buckets below are written the way the JSON facet API returns them.
+ *
+ * @param array<string,mixed> $facets The `facets` node Solr is to return.
+ * @param array<string,mixed> $get
+ * @return array<string,mixed>
+ */
+function lh_panel_run_faceted(string $class, string $action, array $facets, array $get): array
+{
+    $transport = static function (array $request) use ($facets): array {
+        return [
+            'status' => 200,
+            'body'   => (string) json_encode([
+                'responseHeader' => ['status' => 0],
+                'response'       => ['numFound' => 0, 'docs' => []],
+                'facets'         => $facets,
+            ]),
+            'error'  => '',
+        ];
+    };
+
+    $saved = $_GET;
+    $_GET = $get;
+    try {
+        $cfg = lh_panel_config();
+        $gw = new Gateway($cfg, new Solr((array) $cfg->get('solr'), $transport), false);
+        $result = (new $class($cfg, $gw))->api($action);
+    } finally {
+        $_GET = $saved;
+    }
+    return $result;
+}
+
+/**
+ * One `ua_bot_name_s` bucket, shaped the way Bots::crawlers() asks Solr for it.
+ *
+ * @return array<string,mixed>
+ */
+function lh_panel_crawler_bucket(string $name, int $sessions, string $category = 'other'): array
+{
+    return [
+        'val'      => $name,
+        'count'    => $sessions,
+        'hits'     => $sessions * 3,
+        'uniq_ips' => $sessions,
+        'last'     => '2026-09-10T12:00:00Z',
+        'cat'      => ['buckets' => [['val' => $category, 'count' => $sessions]]],
+        'ai'       => ['count' => 0],
+        'verified' => ['count' => $sessions],
+    ];
+}
+
+/**
  * Render a view's HTML body to a string.
  *
  * @param array<string,mixed> $get
@@ -643,6 +700,81 @@ return [
             $result['total_sessions'],
             'the rollup document matched the time range and was counted as a session'
         );
+    },
+
+    'a crawler with no name is ranked below the named ones, not among them' => function (): void {
+        /* THE DEFECT. Section 06 of Bot forensics is headed "Declared crawlers, by name", and
+           on a real site `unspecified bot` — Enrich\Ua's last-resort marker for a User-Agent
+           that said it was a crawler and named nothing we recognise — came second in it, above
+           every named crawler but one. The facet below is that page: the marker outranks four
+           real crawlers, and `unspecified agent` sits in the middle of them. */
+        $facets = [
+            'count' => 0,
+            'selfdeclared' => ['count' => 700, 'crawlers' => ['buckets' => [
+                lh_panel_crawler_bucket('Googlebot', 300, 'search'),
+                lh_panel_crawler_bucket('unspecified bot', 220),
+                lh_panel_crawler_bucket('bingbot', 90, 'search'),
+                lh_panel_crawler_bucket('unspecified agent', 40),
+                lh_panel_crawler_bucket('GPTBot', 30, 'ai'),
+                lh_panel_crawler_bucket('unspecified crawler', 15),
+                lh_panel_crawler_bucket('AhrefsBot', 5, 'seo'),
+            ]]],
+        ];
+
+        $payload = lh_panel_run_faceted(Bots::class, 'crawlers', $facets, ['range' => '7d']);
+        $rows = $payload['crawlers'];
+
+        $names = array_column($rows, 'name');
+        $flags = array_column($rows, 'unspecified');
+
+        lh_same(
+            ['Googlebot', 'bingbot', 'GPTBot', 'AhrefsBot', 'unspecified bot', 'unspecified agent', 'unspecified crawler'],
+            $names,
+            'the named crawlers come first, each half still ranked by session count'
+        );
+        lh_same([false, false, false, false, true, true, true], $flags, 'and every row says which half it is in');
+
+        /* NOTHING WAS DROPPED, because these sessions are scored `ua_declared_bot` and
+           classified `declared_crawler`, so they are already counted in the declared half
+           stated in section 01. A table that left them out would add up to less than the
+           figure above it with nothing on the page to explain the difference. */
+        lh_same(700, $payload['declared'], 'the population is untouched');
+        lh_same(
+            700,
+            array_sum(array_column($rows, 'sessions')),
+            'a row was dropped: the by-name table no longer accounts for the declared sessions'
+        );
+        lh_same(220, $rows[4]['sessions'], 'and the marker keeps the count it actually earned');
+    },
+
+    'the two unnamed markers stay two rows, each carrying its own filter value' => function (): void {
+        /* `ua_bot_name_s` is a filter dimension (Query::filterFields), so the name in each row
+           is the value a click puts in the URL and the value a saved filter already holds.
+           Folding `unspecified agent` — matched on `+http`, i.e. a contact URL and nothing
+           else — into `unspecified bot` would merge two different populations behind one
+           string AND answer an operator's existing filter with zero rows. */
+        $facets = [
+            'count' => 0,
+            'selfdeclared' => ['count' => 60, 'crawlers' => ['buckets' => [
+                lh_panel_crawler_bucket('unspecified bot', 40),
+                lh_panel_crawler_bucket('unspecified agent', 20),
+            ]]],
+        ];
+
+        $rows = lh_panel_run_faceted(Bots::class, 'crawlers', $facets, ['range' => '7d'])['crawlers'];
+
+        lh_same(2, count($rows), 'the two markers were merged into one bucket');
+        lh_same('unspecified bot', $rows[0]['name'], 'the stored value travels unchanged');
+        lh_same('unspecified agent', $rows[1]['name'], 'and so does the other one');
+        lh_same(40, $rows[0]['sessions'], 'with its own count');
+        lh_same(20, $rows[1]['sessions'], 'and its own');
+
+        foreach ($rows as $row) {
+            lh_true(
+                in_array($row['name'], \Loghound\Enrich\Ua::UNSPECIFIED_NAMES, true),
+                'the view invented a name Enrich\Ua never mints: ' . $row['name']
+            );
+        }
     },
 
     'every sessions-core query the panel issues names the document type it wants' => function (): void {

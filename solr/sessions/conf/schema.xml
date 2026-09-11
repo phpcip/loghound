@@ -47,29 +47,45 @@
     <fieldType name="pfloat" class="solr.FloatPointField" omitNorms="true" positionIncrementGap="0"/>
     <fieldType name="pdate"  class="solr.DatePointField"  omitNorms="true" positionIncrementGap="0"/>
 
-    <fieldType name="location" class="solr.LatLonPointSpatialField" docValues="false"/>
+    <!-- docValues ON, at 8 bytes a document: it lets the point be RETURNED and sorted by
+         distance. A point can never be a facet bucket, so the country-centroid map in
+         Panel\Networks stays the correct way to draw the aggregate. -->
+    <fieldType name="location" class="solr.LatLonPointSpatialField" docValues="true"/>
 
-    <!-- Identical to the hits core's analyser; see that file for why it uses no external
-         word lists. -->
+    <!-- IDENTICAL, BYTE FOR BYTE, to the hits core's analyser, and it has to stay that way:
+         the free-text box searches both planes and a term that tokenises differently on one
+         of them would find a session and not its own requests. solr/hits/conf/schema.xml
+         carries the full reasoning for every filter in it and for the four that were left
+         out; tests/test_shipped_config.php fails if the two drift apart. -->
     <fieldType name="text_general" class="solr.TextField" positionIncrementGap="100">
         <analyzer type="index">
-            <tokenizer class="solr.StandardTokenizerFactory"/>
+            <charFilter class="solr.MappingCharFilterFactory" mapping="mapping-ISOLatin1Accent.txt"/>
+            <tokenizer class="solr.WhitespaceTokenizerFactory"/>
+            <filter class="solr.CJKWidthFilterFactory"/>
+            <filter class="solr.EnglishPossessiveFilterFactory"/>
+            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
             <filter class="solr.WordDelimiterGraphFilterFactory"
                     generateWordParts="1" generateNumberParts="1"
-                    catenateWords="0" catenateNumbers="0" catenateAll="0"
-                    splitOnCaseChange="1" preserveOriginal="1"/>
+                    catenateWords="1" catenateNumbers="1" catenateAll="1"
+                    splitOnCaseChange="1" splitOnNumerics="1" preserveOriginal="1"/>
             <filter class="solr.FlattenGraphFilterFactory"/>
             <filter class="solr.LowerCaseFilterFactory"/>
-            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
+            <filter class="solr.LengthFilterFactory" min="1" max="500"/>
+            <filter class="solr.RemoveDuplicatesTokenFilterFactory"/>
         </analyzer>
         <analyzer type="query">
-            <tokenizer class="solr.StandardTokenizerFactory"/>
+            <charFilter class="solr.MappingCharFilterFactory" mapping="mapping-ISOLatin1Accent.txt"/>
+            <tokenizer class="solr.WhitespaceTokenizerFactory"/>
+            <filter class="solr.CJKWidthFilterFactory"/>
+            <filter class="solr.EnglishPossessiveFilterFactory"/>
+            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
             <filter class="solr.WordDelimiterGraphFilterFactory"
                     generateWordParts="1" generateNumberParts="1"
-                    catenateWords="0" catenateNumbers="0" catenateAll="0"
-                    splitOnCaseChange="1" preserveOriginal="1"/>
+                    catenateWords="1" catenateNumbers="1" catenateAll="1"
+                    splitOnCaseChange="1" splitOnNumerics="1" preserveOriginal="1"/>
             <filter class="solr.LowerCaseFilterFactory"/>
-            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
+            <filter class="solr.LengthFilterFactory" min="1" max="500"/>
+            <filter class="solr.RemoveDuplicatesTokenFilterFactory"/>
         </analyzer>
     </fieldType>
 
@@ -127,10 +143,10 @@
 
     <!-- Status class counters. docValues-only: they are summed for the status heatmap and
          never filtered individually. -->
-    <field name="status_2xx_i" type="pint" indexed="false" stored="false" docValues="true"/>
-    <field name="status_3xx_i" type="pint" indexed="false" stored="false" docValues="true"/>
-    <field name="status_4xx_i" type="pint" indexed="false" stored="false" docValues="true"/>
-    <field name="status_5xx_i" type="pint" indexed="false" stored="false" docValues="true"/>
+    <field name="status_2xx_i" type="pint" indexed="true" stored="false" docValues="true"/>
+    <field name="status_3xx_i" type="pint" indexed="true" stored="false" docValues="true"/>
+    <field name="status_4xx_i" type="pint" indexed="true" stored="false" docValues="true"/>
+    <field name="status_5xx_i" type="pint" indexed="true" stored="false" docValues="true"/>
 
     <!-- Did this session ever receive a 304? Indexed because the no_304_on_repeat rule and
          the forensics view both filter on it. A real browser with a warm cache sends
@@ -192,7 +208,7 @@
     <field name="proto_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <field name="ua_s"          type="string"  indexed="true" stored="true"  docValues="true"/>
-    <field name="ua_hash_s"     type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="ua_hash_s"     type="string"  indexed="false" stored="false" docValues="true"/>
     <field name="browser_s"     type="string"  indexed="true" stored="false" docValues="true"/>
     <field name="browser_ver_i" type="pint"    indexed="true" stored="false" docValues="true"/>
     <field name="os_s"          type="string"  indexed="true" stored="false" docValues="true"/>
@@ -239,7 +255,7 @@
     <field name="tls_proto_s"  type="string" indexed="true" stored="false" docValues="true"/>
     <field name="tls_cipher_s" type="string" indexed="true" stored="false" docValues="true"/>
 
-    <field name="visitor_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="visitor_s" type="string" indexed="false" stored="false" docValues="true"/>
 
     <!-- ==================== IDENTITY THE SITE SUPPLIED ====================
          Neither is ever guessed. Loghound reads no cookie, scrapes no form and hunts no
@@ -423,6 +439,36 @@
       it rather than leaving that to a UI checkbox.
     -->
     <field name="bot_class_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+
+    <!--
+      ========================================================================
+      HOSTILE REQUESTS  (Score\Attacks, rendered by Panel\Attacks)
+      ========================================================================
+      THE UNION OF WHAT THIS SESSION'S HITS MATCHED. Named `hit_flags_ss` and not something
+      session-shaped on purpose: it is the same vocabulary at a coarser grain, exactly as
+      `paths_ss` is the union of the hits' `path_s`, and one name for one vocabulary is what
+      stops two tables of codes drifting apart.
+
+      It is here, duplicated from the hits core, because the questions the two planes answer
+      are different and neither substitutes for the other. "Which requests were answered with a
+      200" is a HITS question — the status and the path have to be read off the same document,
+      and a session that recorded one 2xx and one 4xx says nothing about which of its requests
+      was the hostile one. "Who was doing it, from which network, sharing which fingerprint,
+      across how many addresses" is a SESSIONS question, and answering it from the hits core
+      would mean re-deriving identity per request.
+
+      Sorted on write, so republishing an open session does not rewrite the document with the
+      same content in a different order.
+    -->
+    <field name="hit_flags_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+
+    <!--
+      The rule-table version that judged this session's hits. Three states, exactly as on the
+      hits core: absent is NEVER EVALUATED and is not the same as clean. Written whenever any
+      hit in the session carried one.
+    -->
+    <field name="hit_rules_i" type="pint" indexed="true" stored="false" docValues="true"/>
 
 
     <!-- ==================== DAILY ROLLUP (doc_type_s = rollup_daily) ====================

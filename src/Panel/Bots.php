@@ -25,6 +25,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Enrich\Ua;
 use Loghound\Security;
 
 final class Bots extends Controller
@@ -156,7 +157,9 @@ final class Bots extends Controller
                 'ranked'  => 'ranked by session count',
                 'cap'     => 40,
                 'note'    => 'Verified counts the sessions whose crawler claim passed forward-confirmed '
-                    . 'reverse DNS. A name with sessions and no verified ones is an impersonator.',
+                    . 'reverse DNS. A name with sessions and no verified ones is an impersonator. The '
+                    . 'unspecified rows at the end are not crawler names: they are User-Agents that '
+                    . 'declared themselves a crawler and named nothing recognisable.',
                 'scope'   => ['declared' => 'Sessions that declared themselves'],
                 'columns' => [
                     ['Crawler', 'name', 'text'],
@@ -402,6 +405,21 @@ final class Bots extends Controller
      * forward-confirmed rDNS still declared itself, and it must appear here so the
      * operator can see that the claim was rejected.
      *
+     * THE UNNAMED ONES ARE SORTED TO THE BOTTOM AND FLAGGED, NOT DROPPED. Enrich\Ua's five
+     * last-resort entries mint `unspecified bot`, `unspecified crawler`, `unspecified spider`
+     * and `unspecified agent` for a User-Agent that declared itself a crawler without naming
+     * one we recognise, and on a real site the first of those outranks most named crawlers. In
+     * a table headed "by name" it was therefore ranking the absence of a name second — but it
+     * cannot be filtered out of the population either, because those sessions are scored
+     * `ua_declared_bot`, classified `declared_crawler` (Score\Rules::classify) and counted in
+     * this view's own declared half. Removing them here would leave section 06 adding up to
+     * less than the figure stated above it, with nothing on the page to explain the gap.
+     *
+     * So the partition is a STABLE one over the order Solr already returned: the named rows
+     * keep their count-descending ranking, the unspecified ones follow in theirs, every count
+     * is untouched, and `unspecified` says which half a row came from so the view can put one
+     * sentence in front of the group instead of one beside every row.
+     *
      * @return array<string,mixed>
      */
     private function crawlers(): array
@@ -429,22 +447,33 @@ final class Bots extends Controller
         ]);
 
         $declared = is_array($f['selfdeclared'] ?? null) ? $f['selfdeclared'] : [];
-        $rows = [];
+        $named = [];
+        $unspecified = [];
         foreach (self::buckets($declared, 'crawlers') as $bucket) {
             $categories = self::buckets($bucket, 'cat');
-            $rows[] = [
-                'name'     => (string) ($bucket['val'] ?? ''),
-                'category' => (string) ($categories[0]['val'] ?? 'other'),
-                'sessions' => (int) ($bucket['count'] ?? 0),
-                'hits'     => self::num($bucket, 'hits'),
-                'uniq_ips' => self::num($bucket, 'uniq_ips'),
-                'last'     => is_string($bucket['last'] ?? null) ? $bucket['last'] : null,
-                'ai'       => self::qcount($bucket, 'ai') > 0,
-                'verified' => self::qcount($bucket, 'verified'),
+            $name = (string) ($bucket['val'] ?? '');
+            $row = [
+                'name'        => $name,
+                'category'    => (string) ($categories[0]['val'] ?? 'other'),
+                'sessions'    => (int) ($bucket['count'] ?? 0),
+                'hits'        => self::num($bucket, 'hits'),
+                'uniq_ips'    => self::num($bucket, 'uniq_ips'),
+                'last'        => is_string($bucket['last'] ?? null) ? $bucket['last'] : null,
+                'ai'          => self::qcount($bucket, 'ai') > 0,
+                'verified'    => self::qcount($bucket, 'verified'),
+                'unspecified' => Ua::isUnspecified($name),
             ];
+            if ($row['unspecified']) {
+                $unspecified[] = $row;
+                continue;
+            }
+            $named[] = $row;
         }
 
-        return $this->envelope(['declared' => (int) ($declared['count'] ?? 0), 'crawlers' => $rows]);
+        return $this->envelope([
+            'declared' => (int) ($declared['count'] ?? 0),
+            'crawlers' => array_merge($named, $unspecified),
+        ]);
     }
 
     public function body(): void

@@ -138,7 +138,43 @@ First public release.
 - **Enrichment failure never blocks indexing.** The field is simply absent, and an absent
   field is never rendered as zero or as an empty string.
 
+**Solr configsets**
+
+- **Classic schema, not managed.** `solrconfig.xml` now declares `ClassicIndexSchemaFactory` and
+  the file is `schema.xml`. Under Solr's default managed factory Solr owns the schema and can
+  rewrite it, so what an installation uploads is not authoritative — unacceptable for a product
+  whose job is to be trustworthy about what its numbers mean. `bin/loghound-schema --check` gains
+  a **third state** for this: an index still on the managed factory is reported by name, because
+  in that state every schema upload reports success and changes nothing, and no operator could
+  diagnose it alone. `--apply` fixes it.
+- **The configset push order is reversed, and the order is now a safety property.** The platform
+  reloads the core after each file, so it is dependencies before dependants:
+  `mapping-ISOLatin1Accent.txt`, then `schema.xml`, then `solrconfig.xml`. A schema landing before
+  the file its char filter names would reload the core against a missing file and the core would
+  not load at all. Every intermediate state loads, a rejection at any step leaves the index
+  running the configset it had, and the command names which of the three states the operator is
+  in rather than reporting "something went wrong".
+- **`text_general` rebuilt so full-text search can find anything on screen.** `AS263699`,
+  `74.7.175.172`, `opensolr-search`, `Chrome/150` and fragments of any of them, through
+  `WordDelimiterGraphFilterFactory` with catenation and `preserveOriginal` on a whitespace
+  tokenizer. English stopwords and the Snowball stemmer are deliberately **out**: stopwords make
+  `/a/` and `/in/` unfindable, and stemming machine data collides `/assets` with `/asset`, which
+  is a false match in a tool whose job is telling two requests apart.
+- **A stored/indexed/docValues audit across both schemas**, with the reason recorded per field in
+  `docs/SCHEMA.md`. The one that was a live defect: `dur_us_l` was `indexed="false"` while
+  Performance sent `dur_us_l:[* TO *]` on every page load, which Solr answered from docValues as
+  an uninverted full scan. The session status counters became indexed, so "sessions that received
+  at least one 5xx" is askable. Five stored copies came off the hits core where nothing reads them
+  — `ua_s` alone is ~150 bytes per document written twice — and `docValues` went onto `geo_p`.
+  `id` keeps `docValues="false"` deliberately: 40 bytes of entropy per document that nothing
+  facets, sorts or groups on.
+
 **Detection and scoring**
+
+- `src/Score/Attacks.php` — the hostile-request rule table and matcher, with a closed vocabulary
+  of seventeen pattern codes, a bounded 4 KB request surface and two decoding rounds so
+  `%252e%252e%252f` is seen as `../`. `Sessionizer` folds the union onto the session document
+  under the same field name, exactly as `paths_ss` is the union of the hits' `path_s`.
 
 - `bin/loghound-score` — systemd timer, every 60 s. Closes idle sessions, merges beacon
   data, computes `fp_ips_24h_i`, scores, upserts the session document and recomputes the
@@ -205,10 +241,41 @@ First public release.
 
 **The panel**
 
-- Twelve views: Overview, Bot forensics, Fingerprint clusters, Networks, Session explorer,
-  Performance, Virtual hosts, Index analytics, Query analysis, Who is querying, Plan usage,
-  Settings. Vanilla JS, no framework, no build step, ECharts 5.6.0 self-hosted so the CSP can
-  stay closed and the panel works air-gapped.
+- Thirteen views: Overview, Bot forensics, **Attacks**, Fingerprint clusters, Networks, Session
+  explorer, Performance, Virtual hosts, Index analytics, Query analysis, Who is querying, Plan
+  usage, Settings. Vanilla JS, no framework, no build step, ECharts 5.6.0 self-hosted so the CSP
+  can stay closed and the panel works air-gapped.
+- **Attacks — what was attempted, and what the server ANSWERED.** Hostile probing has been in
+  every access log this product reads since day one and nothing surfaced it. The view is built
+  around one idea that separates it from every other tool in this category: **a traversal attempt
+  answered 404 is noise and the same attempt answered 200 is an incident**, so the answered
+  requests are the first card, alone, and every table on the page is ordered by what the server
+  replied with rather than by volume. Seventeen patterns — traversal and file disclosure,
+  SQL/command/template/JNDI/SSRF/XSS probes, known CVE paths, admin and installer probes,
+  `/.well-known` abuse, credential-endpoint shape, scanner User-Agents, WebDAV verbs, open-proxy
+  probes — each carrying three sentences rendered on the page itself: what it matches, **what it
+  misses**, and **what it over-reports**.
+  **Crawler impersonation is a first-class card**, and it is the case the feature came from: a
+  session claiming `OAI-SearchBot` requesting `/proc/self/environ` and `.env` from
+  `7.32.89.34.bc.googleusercontent.com`. OpenAI's crawler does not run on a rented Compute Engine
+  VM. The rule fires only for a named search or AI crawler whose reverse DNS is *present* and is a
+  general-purpose cloud-tenant name — absent reverse DNS is an enrichment that did not run, not
+  evidence.
+  **It is not a WAF and never says it blocked anything**, because it reads the log after the fact;
+  and a 2xx is never worded as a disclosure, because a site whose error page carries a 200 status
+  is indistinguishable in a log from one that handed over `/etc/passwd`. Both limits are on the
+  page, not in a footnote. See `docs/ATTACKS.md`.
+- Detection runs at **ingest** and writes `hit_flags_ss`, a field the schema had carried unused
+  since the beginning. It cannot run at query time: `query_s` is deliberately unindexed, so the
+  injection probes that live in a query string are invisible to any Solr query, and finding `../`
+  inside `path_s` would be a leading wildcard over every URL the site has ever served. Every
+  evaluated document also carries `hit_rules_i`, so **absent means "never evaluated" and never
+  "clean"** — the view states the period it can actually speak for.
+- **Status is a filterable dimension at last**, in two forms: `status_class_s` (2xx/3xx/4xx/5xx,
+  four buckets, what an operator asks) and `status_i` (the exact code, what an investigator asks).
+  Both are hits-plane only, because a status belongs to a request — a session that recorded one
+  2xx and one 4xx says nothing about which of its requests was which — and the sessions facet
+  layer subtracts them so a status filter can never reach a core that would answer it with zero.
 - **Virtual hosts, as a dimension the whole dashboard understands.** `host_s` is on every hit
   and every session document, and nothing filtered on it — so a machine serving six sites added
   six sites' traffic together and presented it as one number. "Which of my sites takes the most
@@ -515,6 +582,23 @@ First public release.
   `config/loghound.php` and `var/state.db`.
 - `--uninstall` finds the prefix from the installed unit rather than assuming the default,
   and prompts separately before deleting the directory or touching any index.
+- **The teardown is eleven numbered steps, and both front ends print the same eleven.**
+  `Loghound\Setup\Teardown::STEPS` is the one list of what removing Loghound means, in the one
+  order that does not destroy what a later step needs; `install/install.sh --uninstall` prints
+  it as `==> [3/11] Deleting the Loghound indexes` and the panel runs it as a job. A test
+  asserts the shell script prints exactly that list, in that order. A step that bails out early
+  still prints, as a skip, rather than leaving a gap somebody has to assume was fine.
+- **The proof that an index is gone is the account listing, not the delete response.** After
+  the deletes, `install/opensolr-teardown.php` re-reads `GET /get_index_list` and reports each
+  name `GONE` or `PRESENT` (exit 5 when a name survives). A control plane that answered
+  `status: true` has said it accepted the request, which is a weaker claim than the index being
+  gone — and the operator is about to stop being billed on the strength of it. An account that
+  now lists nothing is reported as *unproven* rather than as success: that is what an account
+  holding only these two indexes looks like the moment after they go, and also what a listing
+  that did not work looks like.
+- `install/install.sh` and `bin/loghound-setup` both print their position in the run
+  (`[3/11]`, `[2/6]`), readable with no colour and in a narrow terminal, because these are
+  watched over SSH on a box somebody is in the middle of changing.
 - Everything logged in plain text to `/var/log/loghound-install.log`.
 - Hardened systemd units: `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
   `PrivateTmp`, `PrivateDevices`, empty `CapabilityBoundingSet`, restricted
@@ -523,6 +607,79 @@ First public release.
 - Vhost and FPM pool examples for hand installation, denying `config/`, `src/`, `var/`,
   `bin/`, `tests/`, `.git` and a long list of dangerous extensions — twice, by directory
   and by URL path. `b.js` cacheable with a version query; `collect.php` never cached.
+
+**Removing Loghound, from the panel**
+
+- Settings → **Remove Loghound entirely**: a stepped job that deletes the two Opensolr indexes
+  from the account, proves their absence from the account listing, empties `var/` and removes
+  the configuration, with live progress and a per-step outcome. It uses
+  `install/opensolr-teardown.php` — the same five ownership gates the shell uninstaller
+  goes through — rather than a second implementation.
+- It costs a typed `DELETE EVERYTHING` and, where two-factor is on, a current code. The
+  confirmation arms a one-time grant in that session; the job start spends it. Registering the
+  job kind makes a run pollable and cancellable after the grant is gone — it is not permission
+  to start one, and an unarmed start is refused in the same words as an unknown operation.
+- The six steps that need root are **shown in their place**, with the reason and the command,
+  rather than omitted: there is no `exec`, `shell_exec`, `proc_open` or SSH anywhere in `src/`,
+  `bin/` or `public/`, and that is not being traded for a button that stops a systemd unit. The
+  run ends able to state both halves — everything Loghound created that it could remove is
+  gone, and here is what was deliberately left because it was never ours.
+- `var/state.db` goes with it. It holds the reader's `(dev, inode, offset)` per source, so an
+  uninstall that deleted the indexes and left those behind would leave the daemon believing it
+  had already read those bytes — and a rebuilt index would hold only traffic from the moment of
+  the rebuild onwards.
+- When it finishes the operator lands on the installer, carrying the same one-time grant the
+  reinstall path uses so a browser-only operator is not locked out of a machine they just
+  wiped. A fresh visitor still reads `var/install-token` over a shell.
+- A panel request to an installation that is gone — a card's `?api=` fetch, a job's POST — is
+  now answered with `{"setup": "./"}` and a 409 rather than the installer's HTML, and
+  `assets/js/core.js` follows it. A browser left open on any view while `install/uninstall.sh`
+  ran on the server used to sit there retrying against a configuration that no longer existed.
+
+**Failures are artefacts, not escaped stack traces**
+
+- `src/Diagnostics.php` — one copyable block carrying what was being attempted in the product's
+  own words, which step died, the complete underlying error including whatever the platform or
+  the system returned, and the context to reproduce: release, PHP version, operating system,
+  web server, which front end, which index or file. A copy button in the browser, a clean block
+  in the terminal.
+- **It is designed to be pasted in public, so redaction is the hard requirement.** Two passes:
+  by shape (`api_key=…`, `secret=…`, `https://user:pass@host`) and by value — every secret this
+  installation holds, replaced by name. The Opensolr API key, the beacon signing key, the
+  address salt, the panel password hash, the index HTTP auth password, the account email and
+  session tokens. `tests/test_diagnostics.php` plants each one in a failure path and asserts
+  none reaches the block.
+- Redaction happens where a value is **shown**, never where it is read. On this platform an
+  index's HTTP auth password *is* the account API key, so an earlier blanket redaction of
+  control-plane responses replaced the credential with a marker and every authenticated query
+  failed 401.
+
+**Critical errors, in Settings**
+
+- The second card on the page, and the answer to a question the product could not previously
+  answer: *why is my panel empty?* The tailer's parse errors, a rejected configset, a failed
+  schema push, a source it cannot read and an unreachable control plane were each a separate
+  counter in a separate file, and each needed knowing to go and look.
+- **Critical only — no levels, no severities, no filters.** The admission test is not "was this
+  an error" but "is something not working because of this". A single parse error, one slow
+  query, a retried request that then succeeded and anything that resolved itself are out. An
+  *entire source* failing to parse is in: that is the product silently ingesting nothing, and
+  it has no other symptom.
+- `src/Panel/Incidents.php` supplies both halves under one heading — what is broken now, derived
+  from evidence the product already writes, and a bounded ledger of things that happened and are
+  over. `var/incidents.json`, mode 0600, never under the document root, pruned on every write,
+  identical failures coalesced, redacted in and out. An empty card is the normal state and says
+  so.
+
+**Fixed**
+
+- Settings scrolled sideways at 375px — `scrollWidth` 809 against a 375 viewport with the
+  accordion expanded. Nothing on the page was an element wider than the screen; the overflow was
+  an inline text run, the absolute path to `solr/hits/conf/schema.xml` in the schema card, which
+  a line breaker treats as one word. Card prose may now break an unbreakable token. Pinned by a
+  headless-browser measurement across all twelve views rather than by a source-reading test,
+  because `overflow-x: hidden` would satisfy the latter and is exactly what this project
+  removed once already.
 
 **Tests**
 

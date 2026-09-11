@@ -579,8 +579,21 @@ return [
             $resp = lh_cr_code('public/assets/js/responsive.js');
             lh_contains($resp, 'function setUpControlTips(', 'the card head\'s control is on the tooltip too');
             lh_contains($resp, "'.card-refresh[data-lh-tip]", 'the refresh mark is one of the controls it serves');
-            lh_contains($resp, 'publishSectionTip(target.closest(CONTROL_TIP_SELECTOR))',
+            lh_contains($resp, 'publishSectionTip(target.closest(CONTROL_TIP_REACH))',
                 'it reuses the bar\'s positioner rather than a second one');
+
+            // ONE positioner, and the reach it is given still starts from these two marks. The
+            // literal used to be CONTROL_TIP_SELECTOR itself, which broke the moment a third
+            // kind of cut text — a facet value — joined the same delegated listener. What the
+            // test is actually holding is that the composed reach CONTAINS the two lone marks
+            // and that there is still only one call, not what the composed name happens to be.
+            lh_contains($resp, 'CONTROL_TIP_REACH = CONTROL_TIP_SELECTOR',
+                'and the reach is composed from the lone marks rather than replacing them');
+            lh_same(
+                1,
+                substr_count(lh_cr_fn('public/assets/js/responsive.js', 'setUpControlTips'), 'publishSectionTip('),
+                'the delegated listener positions once, not once per kind of control'
+            );
 
             // Delegated from the document, because core.js creates these controls as each card
             // loads — after this module has run, and repeatedly afterwards.

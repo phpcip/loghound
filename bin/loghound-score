@@ -780,6 +780,19 @@ function buildSessionDoc(array $session, bool $provisional = false): array
         $doc['search_terms_ss'] = array_values($session['terms']);
     }
 
+    /* THE ATTACK SUMMARY, under the three-state rule that governs every optional field here.
+       `hit_rules_i` is written whenever ANY hit in the session carried one, so the session says
+       it was evaluated; `hit_flags_ss` is written only when something actually fired. A session
+       assembled by a tailer that predates the detector carries neither, and Panel\Attacks counts
+       it as unevaluated rather than as clean — which is the difference between "no attacks that
+       week" and "the detector was not deployed that week". */
+    if (($session['atk_rules'] ?? null) !== null) {
+        $doc['hit_rules_i'] = (int) $session['atk_rules'];
+    }
+    if (!empty($session['atk_flags'])) {
+        $doc['hit_flags_ss'] = array_values($session['atk_flags']);
+    }
+
     foreach ((array) ($session['first'] ?? []) as $field => $value) {
         if (str_starts_with((string) $field, '_')) {
             continue;

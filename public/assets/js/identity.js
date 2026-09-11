@@ -122,6 +122,22 @@ export function flagEmoji(code) {
 }
 
 /**
+ * Remove a leading flag from a string that is about to be given one.
+ *
+ * A regional-indicator pair is two code points in the range U+1F1E6–U+1F1FF and nothing else
+ * looks like that, so the match cannot take a letter off an ordinary label. Any separator left
+ * behind — a space, a non-breaking space — goes with it, because "🇩🇪 Germany" minus the flag
+ * is "Germany", not " Germany".
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function stripFlag(text) {
+    return String(text === null || text === undefined ? '' : text)
+        .replace(/^[\u{1F1E6}-\u{1F1FF}]{2}[\s ]*/u, '');
+}
+
+/**
  * The flag as a decorative node, or null when there is nothing honest to draw.
  *
  * role="img" with the country's name as the label, because a screen reader announcing two
@@ -225,25 +241,36 @@ export function dimValue(field, value, opts) {
 
     /* A closed vocabulary gets its mark, wherever the value appears. Putting it HERE rather
        than at each call site is what makes a facet list, a table cell, a session row and a
-       detail dialog agree: they all render a value through this one function. `mark: false`
-       is for the few places where the mark is already on screen beside the value.
+       detail dialog agree: they all render a value through this one function.
 
-       A COUNTRY'S MARK IS ITS FLAG, AND ITS TEXT IS ITS NAME. Same single insertion point,
-       for the same reason: a facet list, a pivot row and a table cell were each free to
-       render `SC` on their own, and most of them did. A caller that has already put a flag
-       beside the value passes `mark: false`; one that genuinely wants the code passes its
-       own `text`. */
+       THIS FUNCTION OWNS THE MARK OUTRIGHT. There used to be a `mark: false` opt-out "for the
+       few places where the mark is already on screen beside the value", and it was never
+       passed by a single call site in the panel — while countryNode() went on prepending a
+       flag of its own beside the one inserted here, so every row of every detail dialog, every
+       cluster member table and the whole countries table drew the flag twice. An escape hatch
+       nobody takes is not an escape hatch; it is a second answer to a question that has one.
+       A caller that genuinely wants different WORDS still passes its own `text`.
+
+       A COUNTRY'S MARK IS ITS FLAG, AND ITS TEXT IS ITS NAME. Same single insertion point, for
+       the same reason: a facet list, a pivot row and a table cell were each free to render
+       `SC` on their own, and most of them did. */
     const country = field === 'country_s';
-    const mark = options.mark === false
-        ? null
-        : (country ? flagNode(raw) : icon(field, raw));
+    const mark = country ? flagNode(raw) : icon(field, raw);
 
     /* A caller that passed the CODE as the text has not chosen the code — it has passed the
        stored value through, which every facet bucket and every pivot row does. Only a caller
        that asked for something genuinely different keeps its own text. */
-    const shown = country && (text === '' || text === raw)
+    const named = country && (text === '' || text === raw)
         ? (countryName(raw) || raw)
         : text;
+
+    /* AND A FLAG INSIDE THE TEXT IS STILL A SECOND FLAG. Stripping it is the same override the
+       vocabulary label already applies to a caller that passed a slug: the mark is this
+       function's to draw, so a pair of regional indicators at the front of somebody's string is
+       removed rather than rendered beside the one drawn above. Costs one regex on a value that
+       does not start with one, and closes the defect for every caller at once instead of for
+       the one that happened to be found. */
+    const shown = stripFlag(named);
 
     if (!isFilterable(field) || options.link === false) {
         const span = el('span', {
@@ -317,13 +344,17 @@ export function countryNode(code, opts) {
     if (cc === '') {
         return el('span', { class: 'muted', text: '—' });
     }
+    /* NO FLAG IS DRAWN HERE. dimValue() inserts the flag as `country_s`'s mark, so the sibling
+       this used to put in front of it was a second one — and this function is what the session
+       explorer's "Where" cell, the fingerprint cluster tables, the networks countries table and
+       every row of the dimension dialog's visitor list go through, so the duplicate was on
+       nearly every surface that names a country. One mark, one owner. */
     const name = countryName(cc) || cc;
-    const flag = flagNode(cc);
     const label = dimValue('country_s', cc, {
         text: name,
         title: 'Filter every view to ' + name + ' (' + cc + ')'
     });
-    return el('span', { class: 'geo' }, [flag, label]);
+    return el('span', { class: 'geo' }, [label]);
 }
 
 /**

@@ -310,6 +310,21 @@ final class Storage
     }
 
     /**
+     * The test-only transport, for code outside this class that builds its own client.
+     *
+     * THE SAME SEAM, NOT A SECOND ONE. The panel's teardown talks to the control plane from its
+     * own job steps, and those have to be testable without touching the network for exactly the
+     * reason provisioning does: getting them wrong deletes indexes out of somebody's account.
+     * Adding a second hook would be a second thing to audit, so the one that already exists is
+     * exposed instead — and it is still inert unless LOGHOUND_TEST=1, which only tests/run.php
+     * sets, so production code reads null here and gets the real curl transport.
+     */
+    public static function testTransport(): ?callable
+    {
+        return getenv('LOGHOUND_TEST') === '1' ? self::$testTransport : null;
+    }
+
+    /**
      * The transport a client should use when the caller did not supply one.
      *
      * @param callable|null $given
@@ -729,14 +744,27 @@ final class Storage
             throw new \RuntimeException('The index name is missing — the previous step did not finish.');
         }
 
-        $localPath = rtrim($root, '/') . '/solr/' . $role . '/conf/managed-schema.xml';
+        $localPath = rtrim($root, '/') . '/solr/' . $role . '/conf/' . Schema::SCHEMA_FILE;
         $localXml  = @file_get_contents($localPath);
         if (!is_string($localXml) || $localXml === '') {
             throw new \RuntimeException('The schema is missing from this checkout: ' . $localPath);
         }
 
+        /* THE SCHEMA THAT IS ACTUALLY IN FORCE, WHICHEVER FACTORY THE INDEX IS ON. An index
+           created by an older Loghound is on Solr's managed factory and its schema is
+           `managed-schema.xml`; one this release set up is on the classic factory and its schema
+           is `schema.xml`. Asking for schema.xml first and falling back is what lets the reuse
+           flow adopt EITHER — and reading the wrong file would compare this release against a
+           document the index is ignoring, which is a confident answer to the wrong question.
+
+           The push that follows uploads the whole configset in dependency order and ends with
+           the solrconfig that switches the factory, so adopting a managed index also upgrades it. */
         $job->note('Reading the schema ' . $core . ' is running …');
-        $liveXml = self::client($cfg)->fetchConfigFile($core, 'managed-schema', 'xml');
+        $client = self::client($cfg);
+        $liveXml = $client->fetchConfigFile($core, 'schema', 'xml');
+        if ($liveXml === null) {
+            $liveXml = $client->fetchConfigFile($core, 'managed-schema', 'xml');
+        }
 
         if ($liveXml === null || self::schemaFieldNames($liveXml) === []) {
             throw new \RuntimeException(

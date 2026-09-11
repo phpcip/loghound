@@ -62,7 +62,7 @@ function lh_reuse_scaffold(): array
     foreach (['hits', 'sessions'] as $role) {
         @mkdir($root . '/solr/' . $role . '/conf', 0750, true);
         file_put_contents(
-            $root . '/solr/' . $role . '/conf/managed-schema.xml',
+            $root . '/solr/' . $role . '/conf/schema.xml',
             '<schema name="loghound-' . $role . '" version="1.6">'
             . '<field name="id" type="string"/>'
             . '<field name="ts_dt" type="pdate"/>'
@@ -70,7 +70,11 @@ function lh_reuse_scaffold(): array
             . '<dynamicField name="*_s" type="string"/>'
             . '</schema>'
         );
-        file_put_contents($root . '/solr/' . $role . '/conf/solrconfig.xml', '<config/>');
+        file_put_contents($root . '/solr/' . $role . '/conf/mapping-ISOLatin1Accent.txt', '"a" => "a"' . "\n");
+        file_put_contents(
+            $root . '/solr/' . $role . '/conf/solrconfig.xml',
+            '<config><schemaFactory class="ClassicIndexSchemaFactory"/></config>'
+        );
     }
 
     $cfg = Config::load($root . '/config/loghound.php');
@@ -93,7 +97,7 @@ function lh_reuse_scaffold(): array
  * @param array<int,string>       $calls   Filled with every request URL, in order.
  * @param array<int,string>       $held    Index names the account holds.
  * @param int|null                $limit   Plan allowance; null means unlimited.
- * @param array<string,string>    $schemas Index name => the managed-schema.xml it runs.
+ * @param array<string,string>    $schemas Index name => the schema.xml it runs.
  */
 function lh_reuse_transport(
     array &$calls,
@@ -194,7 +198,7 @@ function lh_reuse_old_schema(string $role): string
 /** The schema this checkout writes, for an index that is already up to date. */
 function lh_reuse_current_schema(string $root, string $role): string
 {
-    return (string) file_get_contents($root . '/solr/' . $role . '/conf/managed-schema.xml');
+    return (string) file_get_contents($root . '/solr/' . $role . '/conf/schema.xml');
 }
 
 return [
@@ -666,9 +670,9 @@ return [
 
             $uploads = lh_reuse_hits($calls, '/upload_config_file');
             lh_same(
-                2,
+                count(\Loghound\Opensolr::CONFIGSET_FILES),
                 count($uploads),
-                'the schema and the solrconfig go to the ONE index that needed them, and only that one'
+                'the whole configset goes to the ONE index that needed it, and only that one'
             );
             lh_same([], lh_reuse_hits($calls, '/create_index'), 'still nothing created');
             lh_same([], lh_reuse_hits($calls, '/delete_index'), 'still nothing deleted');

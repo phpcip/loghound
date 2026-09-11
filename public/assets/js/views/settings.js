@@ -21,8 +21,12 @@ const JOB_TITLES = {
     solr_connection: 'Solr connection check',
     opensolr_check: 'Opensolr credential check',
     retention_preview: 'Retention preview',
-    source_rescan: 'Log source scan'
+    source_rescan: 'Log source scan',
+    destructive_uninstall: 'Removing Loghound'
 };
+
+/** The job kind that removes this installation. Named once, used three times below. */
+const UNINSTALL = 'destructive_uninstall';
 
 /**
  * Job kinds whose result is a change to this page, keyed to the flash to land on.
@@ -108,6 +112,53 @@ function reattachRunningJobs() {
                 }
             })
             .catch(() => {});
+    }
+}
+
+/**
+ * Run the destructive uninstall, when the server says this browser confirmed it.
+ *
+ * WHY IT STARTS BY ITSELF. The confirmation already happened: the operator typed the words and,
+ * where two-factor is on, produced a current code, and the server answered that POST by arming
+ * a one-time grant and redirecting back here. A second button at this point would be a second
+ * confirmation nobody asked for, sitting in front of an operation the operator has already
+ * confirmed twice. The marker is emitted only in that armed state, and `job_start` spends the
+ * arm, so a reload cannot start a second run and a page load that did not follow a confirmation
+ * cannot start one at all.
+ *
+ * REATTACH, NEVER RESTART, on the other marker. A reload in the middle of a teardown lands
+ * there: the arm was spent when the run began, so there is nothing to start and everything to
+ * watch. The server holds the state, so the page picks the same job back up at the step it had
+ * reached — and a start from that path would be refused anyway, because the arm is gone.
+ *
+ * WHERE IT ENDS. A finished run has deleted config/loghound.php, so this installation no longer
+ * exists and every route on it is the installer. The browser is sent there rather than left
+ * looking at a panel that is gone. A run that STOPPED is left on screen with its diagnostic
+ * block, because nothing local was removed at any point one of those fires and the operator
+ * needs to read why.
+ */
+function initUninstall() {
+    const mount = byId('job-uninstall');
+    if (!mount) {
+        return;
+    }
+
+    const options = {
+        title: JOB_TITLES[UNINSTALL],
+        onDone: (job) => {
+            if (job && job.state === 'done') {
+                window.location.assign('./');
+            }
+        }
+    };
+
+    if (mount.dataset.uninstallArmed === '1') {
+        runJob(UNINSTALL, 'job-uninstall', options);
+        return;
+    }
+
+    if (mount.dataset.uninstallRunning === '1') {
+        reattachJob(UNINSTALL, 'job-uninstall', options).catch(() => {});
     }
 }
 
@@ -319,5 +370,6 @@ export default function init() {
     initSubmitGuards();
     initJobButtons();
     reattachRunningJobs();
+    initUninstall();
     loadBeaconStatus();
 }

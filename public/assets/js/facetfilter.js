@@ -325,11 +325,47 @@ function defaultOperators(group, current) {
  * dimension's own filter lifted, which is the only count that lets a second value be chosen,
  * and a reader who assumes otherwise is reading a different question than the label asks.
  */
-export function basisNote(group) {
-    if (!group || !group.basis_note) {
+export function basisNote(group, common) {
+    if (!group || !group.basis_note || group.basis_note === common) {
         return null;
     }
     return el('p', { class: 'facet-basis', text: group.basis_note });
+}
+
+/**
+ * The sentence every column in a block is saying, when they are all saying the same one.
+ *
+ * ONE FACT ABOUT THE BLOCK IS PRINTED ONCE. "Counts are what each value matches on this page as
+ * filtered." is a property of how the whole block was counted, not of any column, and it was
+ * emitted per group — so the Index view's four-column block printed the identical sentence four
+ * times, each under its own hairline, at four different heights, directly under a card note that
+ * already referred to it. Four copies of one sentence do not make it four facts.
+ *
+ * It stays PER COLUMN the moment the columns disagree, which is not a special case but the
+ * point: a column carrying an exclusion is counted differently from its neighbours, and that
+ * difference is exactly what the reader must not miss. So the rule is "say it once if it is one
+ * thing, say it per column if it is several", and the note only moves when it genuinely is one.
+ *
+ * @param {Array<Object>} groups
+ * @returns {string} The shared sentence, or '' when there is not one.
+ */
+export function commonBasisNote(groups) {
+    const list = (groups || []).map((group) => String((group && group.basis_note) || ''));
+    if (list.length < 2 || list[0] === '') {
+        return '';
+    }
+
+    return list.every((note) => note === list[0]) ? list[0] : '';
+}
+
+/**
+ * That shared sentence as the one node that carries it, spanning the block it describes.
+ *
+ * @param {string} note
+ * @returns {HTMLElement|null}
+ */
+export function blockBasisNote(note) {
+    return note ? el('p', { class: 'facet-basis facet-basis-all', text: note }) : null;
 }
 
 /* -------------------------------------------------------------------------

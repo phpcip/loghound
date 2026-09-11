@@ -1274,11 +1274,18 @@ final class Security
      * costs a header token and it removes the failure this whole mechanism exists to prevent —
      * a shell that emits a map, forgets to ask for the hash, and silently goes back to serving
      * a year-old module graph with no error anywhere to say so.
+     *
+     * $root IS THE SAME TREE THE SHELL WILL EMIT THE MAP FROM, and it has to be, because a hash
+     * taken over a DIFFERENT tree's map matches nothing: the browser refuses the map outright,
+     * resolves every bare specifier as before, and the graph goes stale — silently, with the
+     * policy header looking entirely correct. The installer serves its own responses and
+     * carries its own root, so it passes it; the panel's root and this class's are the same
+     * directory, so it does not have to.
      */
-    public static function sendSecurityHeaders(): void
+    public static function sendSecurityHeaders(?string $root = null): void
     {
         header('Content-Security-Policy: '
-            . "default-src 'self'; script-src 'self' " . Assets::importMapCspHash() . '; '
+            . "default-src 'self'; script-src 'self' " . Assets::importMapCspHash($root) . '; '
             . "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             . "connect-src 'self'; font-src 'self'; object-src 'none'; "
             . "base-uri 'none'; frame-ancestors 'none'; form-action 'self'");

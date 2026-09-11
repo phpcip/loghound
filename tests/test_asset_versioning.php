@@ -105,6 +105,60 @@ return [
 
     /* ------------------------------------------------------------------ the map itself */
 
+    /* ------------------------------------------------------------------ THE ONE THAT BIT */
+
+    'every key and every value in the map is URL-like, not a bare specifier' => function (): void {
+        $map = json_decode(Assets::importMap(), true)['imports'];
+        lh_true($map !== [], 'there is a map to check');
+
+        /* THIS IS THE ASSERTION THE FIRST VERSION OF THIS FILE WAS MISSING, AND IT COST THE
+           WHOLE FEATURE. The map was generated with bare keys and bare values —
+           `"assets/js/core.js": "assets/js/core.js?v=…"` — and Chrome discarded all thirty-two
+           entries with "Ignored an import map value … Bare specifier". Every module then
+           loaded unversioned, which is precisely the state the import map was added to fix,
+           on a page that looked correct in every other way.
+
+           An import map entry is a URL entry only when it LOOKS like one: absolute, or
+           beginning with `/`, `./` or `../`. A bare VALUE is invalid outright. A bare KEY is
+           legal but means something else — it matches an import of that literal string, the
+           way `"lodash"` does — and our modules import `./core.js`, which is resolved to an
+           absolute URL before the map is consulted, and a resolved URL is only ever matched
+           against URL keys. So both sides have to be URL-like or the entry is dead, in two
+           different ways, neither of which raises anything the server can see. */
+        foreach ($map as $key => $value) {
+            lh_true(
+                str_starts_with($key, './') || str_starts_with($key, '../') || str_starts_with($key, '/'),
+                'import map KEY ' . lh_show($key) . ' is a bare specifier. A resolved module URL is '
+                    . 'only matched against URL-like keys, so this entry can never match anything.'
+            );
+            lh_true(
+                str_starts_with($value, './') || str_starts_with($value, '../') || str_starts_with($value, '/'),
+                'import map VALUE ' . lh_show($value) . ' is a bare specifier, which is invalid: the '
+                    . 'browser discards the entry outright and the module loads unversioned.'
+            );
+        }
+    },
+
+    'the map keys are exactly what a relative import resolves to' => function (): void {
+        $map = json_decode(Assets::importMap(), true)['imports'];
+
+        /* The key has to equal the path a specifier resolves to, or the lookup misses. Walked
+           for real rather than asserted in the abstract: for every import in every module,
+           resolve it the way a browser does and require that exact string to be a key. */
+        foreach (Assets::scripts() as $rel) {
+            $source = (string) file_get_contents(dirname(__DIR__) . '/public/' . $rel);
+            foreach (lh_av_imports($source) as $spec) {
+                $target = './' . lh_av_resolve($rel, $spec);
+                lh_has_key(
+                    $map,
+                    $target,
+                    $rel . ' imports ' . $spec . ', which resolves to ' . $target . ' — and that is not '
+                        . 'a key in the map, so the browser would fetch it unversioned'
+                );
+            }
+        }
+    },
+
     'the import map lists every JavaScript file under public/assets' => function (): void {
         $map = json_decode(Assets::importMap(), true);
         lh_true(is_array($map), 'the import map is JSON');
@@ -116,7 +170,7 @@ return [
         foreach ($files as $rel) {
             lh_has_key(
                 $map['imports'],
-                $rel,
+                './' . $rel,
                 $rel . ' is a module on disk and is missing from the import map, so anything that '
                     . 'imports it would be served from cache forever'
             );
@@ -133,11 +187,12 @@ return [
         $map = json_decode(Assets::importMap(), true);
         $root = dirname(__DIR__);
 
-        foreach ($map['imports'] as $rel => $target) {
-            lh_contains($target, '?v=', $rel . ' is mapped to a URL with no version');
+        foreach ($map['imports'] as $key => $target) {
+            lh_contains($target, '?v=', $key . ' is mapped to a URL with no version');
 
+            $rel = ltrim($key, './');
             $stamp = (string) filemtime($root . '/public/' . $rel);
-            lh_same($rel . '?v=' . $stamp, $target, $rel . ' is mapped to its own modification time');
+            lh_same('./' . $rel . '?v=' . $stamp, $target, $key . ' is mapped to its own modification time');
         }
     },
 
@@ -158,7 +213,7 @@ return [
                         . 'does not cover — every module must be imported by a relative path'
                 );
 
-                $target = lh_av_resolve($rel, $spec);
+                $target = './' . lh_av_resolve($rel, $spec);
                 lh_has_key(
                     $map,
                     $target,
@@ -233,11 +288,43 @@ return [
         lh_same($expected, $hash, 'the hash covers the exact bytes the map is emitted as');
 
         $source = (string) file_get_contents(dirname(__DIR__) . '/src/Security.php');
-        lh_contains($source, 'Assets::importMapCspHash()', 'sendSecurityHeaders() puts the hash in the policy');
+        lh_contains($source, 'Assets::importMapCspHash($root)', 'sendSecurityHeaders() puts the hash in the policy');
         lh_false(
             str_contains($source, "script-src 'self' 'unsafe-inline'"),
             'the import map must never be admitted by loosening script-src to unsafe-inline'
         );
+    },
+
+    'the hash and the map it admits are always taken from the same tree' => function (): void {
+        /* A HASH OVER A DIFFERENT TREE'S MAP ADMITS NOTHING, and the failure is the same silent
+           one as a bare specifier: the browser refuses the map, resolves every import as it did
+           before, and the module graph goes stale with the policy header looking perfectly
+           correct. Two shells carry their own root — the sign-in page and the setup wizard —
+           and the wizard is the one that also sends its own headers, so it is the one that can
+           disagree with itself. Proven by construction rather than asserted: two trees whose
+           maps genuinely differ, and a hash that follows the root it was given. */
+        $dir = lh_tmpdir('lh_csp');
+        @mkdir($dir . '/public/assets/js', 0775, true);
+        file_put_contents($dir . '/public/assets/js/only.js', "export const a = 1;\n");
+        touch($dir . '/public/assets/js/only.js', 1000000000);
+
+        $theirs = Assets::importMapCspHash($dir);
+        $ours = Assets::importMapCspHash();
+        lh_true($theirs !== $ours, 'a different tree really does produce a different hash');
+        lh_same(
+            Assets::sha256Csp(Assets::importMap($dir)),
+            $theirs,
+            'and the hash for a tree covers that tree\'s own map, byte for byte'
+        );
+
+        $installer = (string) file_get_contents(dirname(__DIR__) . '/src/Setup/Installer.php');
+        lh_contains(
+            $installer,
+            'Security::sendSecurityHeaders($this->root)',
+            'the installer hashes the tree it is about to emit the map from, not this class\'s own'
+        );
+
+        lh_rmtree($dir);
     },
 
     'the import map tag has no whitespace around the JSON a hash would not cover' => function (): void {
@@ -259,20 +346,20 @@ return [
         file_put_contents($dir . '/public/assets/js/views/x.js', "import { a } from '../core.js';\n");
         touch($dir . '/public/assets/js/core.js', 1000000000);
 
-        $before = json_decode(Assets::importMap($dir), true)['imports']['assets/js/core.js'];
+        $before = json_decode(Assets::importMap($dir), true)['imports']['./assets/js/core.js'];
         $hashBefore = Assets::importMapCspHash($dir);
-        lh_same('assets/js/core.js?v=1000000000', $before, 'the stamp is the modification time');
+        lh_same('./assets/js/core.js?v=1000000000', $before, 'the stamp is the modification time');
 
         clearstatcache();
         touch($dir . '/public/assets/js/core.js', 1000000042);
 
         $fresh = dirname(__DIR__) . '/.lh-assets-probe';
         rename($dir, $fresh);
-        $after = json_decode(Assets::importMap($fresh), true)['imports']['assets/js/core.js'];
+        $after = json_decode(Assets::importMap($fresh), true)['imports']['./assets/js/core.js'];
         $hashAfter = Assets::importMapCspHash($fresh);
         rename($fresh, $dir);
 
-        lh_same('assets/js/core.js?v=1000000042', $after, 'a changed file produces a different URL');
+        lh_same('./assets/js/core.js?v=1000000042', $after, 'a changed file produces a different URL');
         lh_true($before !== $after, 'the URL genuinely changed');
         lh_true($hashBefore !== $hashAfter, 'the CSP hash tracks the map');
 

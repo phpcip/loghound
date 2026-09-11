@@ -220,11 +220,54 @@ final class Ua
         ['phantomjs',             'PhantomJS',           'other',    false],
         ['electron/',             'Electron',            'other',    false],
 
+        /* THE LAST-RESORT MARKERS, AND WHY `unspecified agent` IS NOT FOLDED INTO
+           `unspecified bot`. Five needles, four names, and the obvious tidy-up is to collapse
+           them into one "unnamed crawler" bucket so that the by-name table in Bot forensics
+           stops ranking a non-name second. They stay apart, for two reasons that are both
+           about never changing a number quietly.
+
+           THEY ARE DIFFERENT EVIDENCE. `bot/` and `bot;` are a client that put the word bot in
+           its own product token — it named itself a bot and we failed to recognise which one.
+           `+http` is reached only when nothing above it matched at all: a User-Agent whose
+           sole bot-like property is that it carries a URL, which is a contact link and not a
+           self-declaration. Merging the two would put those populations in one bucket, and
+           nothing downstream could ever take them apart again.
+
+           AND THE NAME IS THE STORED VALUE. `ua_bot_name_s` is a filter dimension
+           (Panel\Query::filterFields), so each of these strings is already sitting in
+           bookmarked panel URLs, in saved filters and in exported CSVs. Renaming or merging
+           one would answer an operator's existing filter with zero rows and would split the
+           index's own history — old documents under the old name, new ones under the merged
+           one — with nothing reported anywhere. Where the two ranked among named crawlers is a
+           PRESENTATION problem, so it is solved in presentation, by Panel\Bots::crawlers(),
+           which changes no count and no stored value. */
         ['crawler',               'unspecified crawler', 'other',    false],
         ['spider',                'unspecified spider',  'other',    false],
         ['bot/',                  'unspecified bot',     'other',    false],
         ['bot;',                  'unspecified bot',     'other',    false],
         ['+http',                 'unspecified agent',   'other',    false],
+    ];
+
+    /**
+     * The display names the last-resort entries above produce.
+     *
+     * A value in this list is not a crawler's name. It is the record of a User-Agent that
+     * declared itself a crawler and named nothing we recognise, and anything that RANKS
+     * crawlers by name has to be able to tell the two apart — a table headed "by name" that
+     * puts `unspecified bot` second is ranking the absence of a name against real ones.
+     *
+     * It is a list here rather than a `str_starts_with($name, 'unspecified')` at each call
+     * site because that test belongs to whoever owns the table: a real crawler is free to
+     * call itself Unspecified-Bot tomorrow, and a caller guessing from the string would file
+     * it under "no name" for ever. This is the only authority for the question.
+     *
+     * @var array<int,string>
+     */
+    public const UNSPECIFIED_NAMES = [
+        'unspecified crawler',
+        'unspecified spider',
+        'unspecified bot',
+        'unspecified agent',
     ];
 
     /** Windows NT version => human name. NT 10.0 covers both 10 and 11; the UA cannot tell. */
@@ -327,6 +370,18 @@ final class Ua
     public function raw(): string
     {
         return $this->raw;
+    }
+
+    /**
+     * Is this `ua_bot_name_s` value a last-resort marker rather than a crawler's name?
+     *
+     * Takes the stored field value, not a Ua object, because the callers are the panel views
+     * reading names back out of a Solr facet — by then the User-Agent that produced them is
+     * long gone.
+     */
+    public static function isUnspecified(string $name): bool
+    {
+        return in_array($name, self::UNSPECIFIED_NAMES, true);
     }
 
     /**

@@ -782,7 +782,7 @@ return [
     },
 
     'the sessions schema defines the marker as a filterable boolean' => static function (): void {
-        $xml = (string) file_get_contents(__DIR__ . '/../solr/sessions/conf/managed-schema.xml');
+        $xml = (string) file_get_contents(__DIR__ . '/../solr/sessions/conf/schema.xml');
 
         if (!preg_match('/<field\s+name="provisional_b"[^>]*>/', $xml, $m)) {
             lh_fail('the sessions schema does not define provisional_b');

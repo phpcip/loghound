@@ -82,43 +82,106 @@
     <fieldType name="pdate"  class="solr.DatePointField"  omitNorms="true" positionIncrementGap="0"/>
 
     <!--
-      Geo point. See the geo_p field for why it is indexed-only by default and what the
-      docValues upgrade costs.
+      Geo point.
+
+      docValues IS ON. It costs 8 bytes per document and it buys two things this schema
+      previously could not have at any price short of a reindex: the point can be RETURNED
+      (so a map can be drawn at the resolution the data actually has, rather than at country
+      centroids) and it can be sorted by distance with geodist(). Neither is used today.
+      A LatLonPointSpatialField can never be a facet bucket — a point is not a term — so the
+      country-centroid map in Panel\Networks remains the correct way to draw the aggregate,
+      and this changes nothing about that.
     -->
-    <fieldType name="location" class="solr.LatLonPointSpatialField" docValues="false"/>
+    <fieldType name="location" class="solr.LatLonPointSpatialField" docValues="true"/>
 
     <!--
       Analysed text, used ONLY by the catchall and the *_txt fields the session explorer's
       edismax searches.
 
-      Deliberately built from filters that need no external files: no stopwords.txt, no
-      synonyms.txt, no protwords.txt. That keeps the configset a two-file push
-      (managed-schema.xml + solrconfig.xml) with nothing to forget, which matters because
-      Opensolr's config editor uploads files one at a time.
+      ======================================================================================
+      THE RULE THIS CHAIN IS BUILT TO: A PERSON MUST BE ABLE TO SEARCH FOR ANYTHING THEY CAN
+      SEE ON SCREEN AND FIND IT.
+      ======================================================================================
+      `AS263699`. `74.7.175.172`. `opensolr-search`. `Chrome/150`. A fragment of any of them.
+      That is what the search box is for in a forensics tool, and it is a different problem
+      from searching prose. Every decision below follows from it.
 
-      ASCIIFolding is here so a search for "munchen" finds "München" in a city or AS-org
-      name. WordDelimiterGraph splits "opensolr-platform" and "Chrome/152.0" into their
-      parts, which is what makes path and UA search actually work.
+      WordDelimiterGraphFilterFactory IS THE WHOLE THING, and its settings are not defaults:
+      generateWordParts + generateNumberParts split `AS263699` into `as` and `263699` and
+      `74.7.175.172` into its four octets; catenateWords + catenateNumbers + catenateAll
+      rejoin them, so `opensolr-search` is also findable as `opensolrsearch`; splitOnNumerics
+      separates letters from digits inside one token; and preserveOriginal keeps the whole
+      untouched string alongside every part, which is what makes an exact paste of a value
+      out of a table match it. FlattenGraphFilterFactory is required after it at INDEX time
+      and must not be present at query time, where the graph is what lets a multi-token
+      expansion match as a phrase.
+
+      ======================================================================================
+      WHAT WAS DELIBERATELY LEFT OUT, AND WHY — this is machine data, not prose
+      ======================================================================================
+      StopFilterFactory        REMOVED. English stopwords on a URL make `/a/`, `/in/`, `/it/`
+                               and `/is/` unfindable. A path segment is not a stopword, and it
+                               needed an external stopwords.txt.
+      SnowballPorterFilter     REMOVED. Stemming machine data is harmful, not merely useless:
+                               `/assets` and `/asset` are different paths, `monitoring` and
+                               `monitor` are different UA tokens, and a stemmer that collides
+                               two distinct identifiers produces a FALSE MATCH in a tool whose
+                               entire job is telling two requests apart. The loss is that
+                               searching `crawlers` no longer finds `crawler`; on this data
+                               that trade is obviously the right way round.
+      SynonymGraphFilter       REMOVED. It needs a synonyms file that would have been empty.
+      HTMLStripCharFilter      REMOVED. There is no markup in a log line, and it would eat a
+                               `<` that a stored XSS probe put in a path — which is precisely
+                               a value this product must be able to find.
+      ICUTokenizerFactory      NOT USED. It lives in Solr's analysis-extras module, which is
+                               present on an Opensolr node and absent from a stock self-hosted
+                               Solr. A configset that will not load on half the installations
+                               is worse than a slightly coarser tokenizer.
+      MappingCharFilterFactory KEPT, and it is the ONE external file this configset ships. See
+                               mapping-ISOLatin1Accent.txt beside this file, and see
+                               Opensolr::pushConfigSet() for why it has to be uploaded BEFORE
+                               the schema rather than after.
+
+      WhitespaceTokenizerFactory rather than StandardTokenizer, because StandardTokenizer
+      applies UAX#29 word rules that throw away punctuation before WordDelimiterGraph ever
+      sees it. Whitespace hands the token over intact and lets WDGF make every decision, which
+      is the only way `Chrome/150.0.0.0` yields both `Chrome`, `150` AND the original string.
+
+      CJKWidth and EnglishPossessive are cheap and cannot cause a false match: the first
+      normalises full-width forms (a real case in city names and IDN hosts), the second strips
+      a trailing 's from an AS organisation name. ASCIIFolding is why a search for `munchen`
+      finds `München`. LengthFilter bounds a hostile 4 KB token, and RemoveDuplicates is
+      required because catenateAll plus preserveOriginal emit duplicates constantly.
     -->
     <fieldType name="text_general" class="solr.TextField" positionIncrementGap="100">
         <analyzer type="index">
-            <tokenizer class="solr.StandardTokenizerFactory"/>
+            <charFilter class="solr.MappingCharFilterFactory" mapping="mapping-ISOLatin1Accent.txt"/>
+            <tokenizer class="solr.WhitespaceTokenizerFactory"/>
+            <filter class="solr.CJKWidthFilterFactory"/>
+            <filter class="solr.EnglishPossessiveFilterFactory"/>
+            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
             <filter class="solr.WordDelimiterGraphFilterFactory"
                     generateWordParts="1" generateNumberParts="1"
-                    catenateWords="0" catenateNumbers="0" catenateAll="0"
-                    splitOnCaseChange="1" preserveOriginal="1"/>
+                    catenateWords="1" catenateNumbers="1" catenateAll="1"
+                    splitOnCaseChange="1" splitOnNumerics="1" preserveOriginal="1"/>
             <filter class="solr.FlattenGraphFilterFactory"/>
             <filter class="solr.LowerCaseFilterFactory"/>
-            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
+            <filter class="solr.LengthFilterFactory" min="1" max="500"/>
+            <filter class="solr.RemoveDuplicatesTokenFilterFactory"/>
         </analyzer>
         <analyzer type="query">
-            <tokenizer class="solr.StandardTokenizerFactory"/>
+            <charFilter class="solr.MappingCharFilterFactory" mapping="mapping-ISOLatin1Accent.txt"/>
+            <tokenizer class="solr.WhitespaceTokenizerFactory"/>
+            <filter class="solr.CJKWidthFilterFactory"/>
+            <filter class="solr.EnglishPossessiveFilterFactory"/>
+            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
             <filter class="solr.WordDelimiterGraphFilterFactory"
                     generateWordParts="1" generateNumberParts="1"
-                    catenateWords="0" catenateNumbers="0" catenateAll="0"
-                    splitOnCaseChange="1" preserveOriginal="1"/>
+                    catenateWords="1" catenateNumbers="1" catenateAll="1"
+                    splitOnCaseChange="1" splitOnNumerics="1" preserveOriginal="1"/>
             <filter class="solr.LowerCaseFilterFactory"/>
-            <filter class="solr.ASCIIFoldingFilterFactory" preserveOriginal="false"/>
+            <filter class="solr.LengthFilterFactory" min="1" max="500"/>
+            <filter class="solr.RemoveDuplicatesTokenFilterFactory"/>
         </analyzer>
     </fieldType>
 
@@ -193,7 +256,7 @@
       High cardinality — this is the most expensive docValues field in the schema, and it is
       also the one `unique(ip_s)` runs against, so it has to be there.
     -->
-    <field name="ip_s" type="string" indexed="true" stored="true" docValues="true"/>
+    <field name="ip_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <!-- 4 or 6. Not indexed: nobody filters on it directly, it is only ever a facet
          alongside something else, which docValues alone can serve. -->
@@ -207,7 +270,7 @@
 
     <!-- Stored: the networks view and the cluster drill-down both print it, and looking it
          up again from the ASN would mean a second query per row. -->
-    <field name="as_org_s" type="string" indexed="true" stored="true" docValues="true"/>
+    <field name="as_org_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <!-- isp|hosting|vpn|edu|gov|mobile|unknown. Seven values, so ordinals are ~1 byte/doc.
          Load-bearing for scoring: hosting_asn_browser_ua and fp_cluster_proxy_fleet both
@@ -292,11 +355,24 @@
       indexed before this field existed. A multi-valued field with no values is not a document
       that searched for nothing.
     -->
-    <field name="search_terms_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+    <field name="search_terms_ss" type="strings" indexed="true" stored="false" docValues="true" multiValued="true"/>
 
     <field name="proto_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <field name="status_i" type="pint" indexed="true" stored="true" docValues="true"/>
+
+    <!--
+      THE STATUS CLASS, AS A TERM. `status_i` above is the exact code and is what an
+      investigator wants; this is the four-bucket question an operator actually asks — was it
+      answered, was it redirected, was it refused, did it break — and a terms facet answers it
+      in one bucket per class instead of sixty buckets the reader has to add up. A range filter
+      on `status_i` cannot be a facet at all, which is why this is a field and not a query.
+
+      WRITTEN ONLY WHERE `status_i` IS, by the same branch in Parser::normalize(). A log line
+      whose status did not parse carries neither, so absent means "not recorded" on both and
+      never "1xx". Six possible values, one short string per document.
+    -->
+    <field name="status_class_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <!-- Response bytes. docValues-only: it is summed and percentiled, never filtered on
          its own, and a DV-only numeric costs no BKD tree. -->
@@ -304,7 +380,7 @@
 
     <!-- Microseconds from %D. ABSENT when the operator does not log %D — never zero, because
          a zero here would silently drag every latency percentile toward the floor. -->
-    <field name="dur_us_l" type="plong" indexed="false" stored="false" docValues="true"/>
+    <field name="dur_us_l" type="plong" indexed="true" stored="false" docValues="true"/>
 
     <!-- html|asset|api|beacon|robots|favicon|other. Drives asset_ratio_f and the page count,
          both of which feed scoring, so it is indexed as well as faceted. -->
@@ -323,11 +399,11 @@
     <!-- Raw User-Agent. Stored: every forensic view prints it, and it is the first thing a
          human looks at. High cardinality but heavily repeated, so stored-field compression
          handles it well (see solrconfig's BEST_COMPRESSION note). -->
-    <field name="ua_s" type="string" indexed="true" stored="true" docValues="true"/>
+    <field name="ua_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <!-- sha1 of the raw UA. Half of the sessionisation key (ip_net + ua_hash), and a
          cheap grouping key that avoids dragging 200-byte strings through aggregations. -->
-    <field name="ua_hash_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="ua_hash_s" type="string" indexed="false" stored="false" docValues="true"/>
 
     <field name="browser_s"     type="string" indexed="true" stored="false" docValues="true"/>
     <field name="browser_ver_i" type="pint"   indexed="true" stored="false" docValues="true"/>
@@ -415,7 +491,7 @@
 
     <!-- Assigned at ingest by Sessionizer. Stored so the drill-down can jump from a hit
          back to its session without a second lookup. -->
-    <field name="session_id_s" type="string" indexed="true" stored="true" docValues="true"/>
+    <field name="session_id_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <!-- 1-based position of this hit within its session. docValues-only: it is used to
          order the timeline, never to filter. -->
@@ -424,7 +500,7 @@
     <!-- Stable-ish visitor hash (ip_net + ua_hash + accept_lang), daily-salted in `hash`
          privacy mode. "Stable-ish" is the honest word: it survives a session boundary but
          not a network change, and the UI must never call it a person. -->
-    <field name="visitor_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="visitor_s" type="string" indexed="false" stored="false" docValues="true"/>
 
 
     <!--
@@ -436,6 +512,23 @@
       otherwise is how tools end up flagging a favicon request as a bot.
     -->
     <field name="hit_flags_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+
+    <!--
+      THE VERSION OF THE PER-HIT RULE TABLE THAT JUDGED THIS REQUEST (Score\Attacks).
+
+      It exists because `hit_flags_ss` absent means two different things — "evaluated, nothing
+      matched" and "never evaluated, because this document predates the detector" — and a view
+      that cannot tell them apart reports a deployment gap as a quiet week. With this field:
+
+        absent                         never evaluated. NOT the same as clean.
+        present, no hit_flags_ss       evaluated under that version; nothing matched.
+        present, with hit_flags_ss     those patterns matched.
+
+      The same contract `rule_version_i` keeps for scoring on the sessions core. Panel\Attacks
+      states the period it can actually speak for from this field and refuses to imply anything
+      about documents outside it.
+    -->
+    <field name="hit_rules_i" type="pint" indexed="true" stored="false" docValues="true"/>
 
 
     <!--

@@ -126,6 +126,16 @@ final class Sessionizer
     /** Number of paths copied onto the session document (SPEC §4.2: capped at 50). */
     public const PATHS_ON_DOC = 50;
 
+    /**
+     * Distinct attack codes tracked per session.
+     *
+     * A hard bound rather than a guess: Score\Attacks defines a CLOSED vocabulary, so a real
+     * session can never exceed its size, and anything past that is a corrupted aggregate or a
+     * forged hit rather than a finding. Set above the table's current size so adding a rule
+     * does not silently start truncating; the cost of the bound is one comparison per hit.
+     */
+    private const MAX_TRACKED_FLAGS = 64;
+
     /** @var object The State instance; see the interface assumptions in the class docblock. */
     private object $state;
 
@@ -544,6 +554,8 @@ final class Sessionizer
                 'own_hits'   => 0,
                 'own_assets' => 0,
                 'terms'      => [],
+                'atk_flags'  => [],
+                'atk_rules'  => null,
                 'first'      => self::identityOf($hit),
         ];
     }
@@ -717,6 +729,20 @@ final class Sessionizer
             $agg['terms'][$term] = 1;
         }
 
+        if (isset($hit['hit_rules_i']) && is_numeric($hit['hit_rules_i'])) {
+            $agg['atk_rules'] = (int) $hit['hit_rules_i'];
+        }
+
+        foreach ((array) ($hit['hit_flags_ss'] ?? []) as $flag) {
+            if (!is_string($flag) || $flag === '' || isset($agg['atk_flags'][$flag])) {
+                continue;
+            }
+            if (count((array) ($agg['atk_flags'] ?? [])) >= self::MAX_TRACKED_FLAGS) {
+                break;
+            }
+            $agg['atk_flags'][$flag] = 1;
+        }
+
         $uri = $path . (isset($hit['query_s']) && $hit['query_s'] !== '' ? '?' . $hit['query_s'] : '');
         if ($uri !== '' && ($kind === 'asset' || $kind === 'favicon')) {
             if (isset($agg['uris'][$uri])) {
@@ -863,6 +889,19 @@ final class Sessionizer
             'own_assets'   => (int) ($agg['own_assets'] ?? 0),
             'gaps'         => $gaps,
             'terms'        => self::sortedTerms($agg['terms'] ?? []),
+
+            /* THE UNION OF WHAT ITS HITS MATCHED, and the version that judged them. Sorted for
+               the same reason terms are: an open session is republished on every scorer run, and
+               a set whose order drifted would rewrite the document for input that had not
+               changed. `atk_rules` stays NULL when no hit in the session carried a version,
+               which is the honest reading of a session assembled by a tailer that predates the
+               detector — the document then carries no version either, and the Attacks view
+               counts it as unevaluated rather than as clean. */
+            'atk_flags'    => self::sortedFlags($agg['atk_flags'] ?? []),
+            'atk_rules'    => isset($agg['atk_rules']) && is_numeric($agg['atk_rules'])
+                ? (int) $agg['atk_rules']
+                : null,
+
             'first'        => (array) ($agg['first'] ?? []),
         ];
 
@@ -888,6 +927,29 @@ final class Sessionizer
      * @param mixed $terms
      * @return array<int,string>
      */
+    /**
+     * The session's distinct attack codes, in a stable order.
+     *
+     * Bounded by the same cap the accumulator applies, so a corrupted aggregate read back out
+     * of SQLite cannot put an unbounded list on a document. Sorted for republish stability.
+     *
+     * @param mixed $flags
+     * @return array<int,string>
+     */
+    private static function sortedFlags($flags): array
+    {
+        if (!is_array($flags) || $flags === []) {
+            return [];
+        }
+        $list = array_values(array_filter(
+            array_map('strval', array_keys($flags)),
+            static fn (string $f): bool => $f !== ''
+        ));
+        sort($list);
+
+        return array_slice($list, 0, self::MAX_TRACKED_FLAGS);
+    }
+
     private static function sortedTerms($terms): array
     {
         if (!is_array($terms) || $terms === []) {

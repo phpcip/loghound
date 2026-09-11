@@ -155,7 +155,7 @@ return [
         },
 
     'every hits filter field is defined by the hits schema' => static function (): void {
-        $defined = lh_filter_schema_fields('solr/hits/conf/managed-schema.xml');
+        $defined = lh_filter_schema_fields('solr/hits/conf/schema.xml');
 
         foreach (array_keys(Query::hitFilterFields()) as $field) {
             if (!in_array($field, $defined, true)) {
@@ -169,10 +169,13 @@ return [
 
     'every sidebar filter field reaches a field the sessions schema defines'
         => static function (): void {
-            $defined = lh_filter_schema_fields('solr/sessions/conf/managed-schema.xml');
+            $defined = lh_filter_schema_fields('solr/sessions/conf/schema.xml');
             $aliases = Query::sessionFilterAliases();
 
-            foreach (array_keys(Query::filterFields()) as $field) {
+            /* THE SESSIONS SUBSET. The master allowlist now carries hits-only dimensions, so the
+               question this test asks has to be asked of the list the sessions plane actually
+               offers — Facets::sessions() reads that one, and so does the sidebar. */
+            foreach (array_keys(Query::sessionFilterFields()) as $field) {
                 $onCore = $aliases[$field] ?? $field;
                 if (!in_array($onCore, $defined, true)) {
                     throw new \RuntimeException(
@@ -184,8 +187,31 @@ return [
             }
         },
 
+    'a hits-only dimension is defined by the hits core and absent from the sessions core'
+        => static function (): void {
+            $hits = lh_filter_schema_fields('solr/hits/conf/schema.xml');
+            $sessions = lh_filter_schema_fields('solr/sessions/conf/schema.xml');
+            $offered = Query::filterFields();
+
+            lh_true(Query::hitsOnlyFields() !== [], 'the hits-only list is not empty');
+
+            foreach (Query::hitsOnlyFields() as $field) {
+                lh_true(isset($offered[$field]), $field . ' is a dimension at all');
+                lh_true(in_array($field, $hits, true), $field . ' is defined by the hits schema');
+                lh_false(
+                    in_array($field, $sessions, true),
+                    $field . ' is listed as hits-only, so the sessions schema must NOT define it — '
+                    . 'if it does, the subtraction is hiding a dimension that would have worked'
+                );
+                lh_false(
+                    isset(Query::sessionFilterFields()[$field]),
+                    $field . ' must not reach the sessions plane'
+                );
+            }
+        },
+
     'an alias only ever renames a field into one that exists' => static function (): void {
-        $defined = lh_filter_schema_fields('solr/sessions/conf/managed-schema.xml');
+        $defined = lh_filter_schema_fields('solr/sessions/conf/schema.xml');
         $offered = Query::filterFields();
 
         foreach (Query::sessionFilterAliases() as $from => $to) {

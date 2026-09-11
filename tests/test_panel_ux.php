@@ -448,7 +448,28 @@ return [
                 'Escape must work with focus anywhere on the page');
             lh_contains($js, "node.setAttribute('inert', '')", 'the page behind must be unreachable');
             lh_contains($js, "node.removeAttribute('inert')", 'and reachable again afterwards');
-            lh_contains($js, 'if (!opener && document.activeElement', 'a dialog opened from code still restores focus');
+            /* A DIALOG OPENED FROM CODE STILL RESTORES FOCUS. The value browser is reached by
+               pressing "Show all" in a facet list, which is not a `data-lh-open` row, so no
+               frame is minted for it by the delegated handler — openDialog() mints one from
+               whatever had focus. The condition used to read `!opener`; it is now `!stack.length`
+               for the same reason and with one addition: every opener calls openDialog() TWICE,
+               once for the loading state and once with the real heading, and the second call
+               must not be counted as a second dialog. */
+            lh_contains($js, 'if (!stack.length)', 'a dialog opened from code still restores focus');
+            lh_contains($js, 'active !== document.body ? active : null',
+                'and it never records <body> as the thing to go back to');
+
+            /* NESTING HAS A DEFINED MEANING AND A WAY BACK. A row inside an open dialog opens
+               another one — Bot forensics' class dialog lists "Recent visitors", and each row is
+               a session. The opener used to be a single variable that this overwrote with the
+               in-dialog row, which openDialog() then detached microseconds later by refilling
+               the body; closing returned focus to an orphan, silently. */
+            lh_contains($js, 'const stack = []', 'the dialogs that are open are a stack, not a variable');
+            lh_contains($js, 'stack.push({ opener: node, reopen: run })',
+                'a row that opens a dialog records how to get back to the one it opened from');
+            lh_contains($js, 'function restoreInsideDialog(',
+                'and closing puts focus on that row again, in the rebuilt parent');
+            lh_contains($js, 'MAX_DEPTH', 'the chain is bounded, so a loop in the data cannot build one nobody can close');
         },
 
     'nothing that cannot be pressed behaves as though it can' =>
@@ -738,6 +759,7 @@ return [
             $gw = \Loghound\Panel\Gateway::fromConfig($cfg);
             $views = [
                 \Loghound\Panel\Overview::class, \Loghound\Panel\Bots::class,
+                \Loghound\Panel\Attacks::class,
                 \Loghound\Panel\Fingerprints::class, \Loghound\Panel\Networks::class,
                 \Loghound\Panel\Sessions::class, \Loghound\Panel\Performance::class,
                 \Loghound\Panel\Hosts::class, \Loghound\Panel\Indexes::class,
@@ -794,6 +816,38 @@ return [
                 }
             }
             lh_true($checked > 40, 'the scan should have found plenty of call sites, found ' . $checked);
+        },
+
+    'the unnamed crawlers stay below the named ones when a column is sorted' =>
+        function (): void {
+            /* MEASURED: Bot forensics section 06 is headed "Declared crawlers, by name" and
+               ranked `unspecified bot` second — Enrich\Ua's marker for a User-Agent that
+               declared itself a crawler and named nothing recognisable. Those sessions are
+               counted in the declared half stated in section 01, so they cannot be dropped;
+               they are grouped below the named rows behind ONE line instead.
+
+               The grouping is a SECOND <tbody>, and the only reason it holds is that
+               sorttable.js reorders the first body and leaves the others alone. That is a
+               cross-file assumption with nothing in either file to enforce it: the day the
+               sorter walks every body, the group and its sentence get dealt into the middle of
+               the table and the line reads "below:" with Googlebot under it. */
+            $view = lh_ux_code('public/assets/js/views/bots.js');
+            $sorter = lh_ux_code('public/assets/js/sorttable.js');
+            $php = lh_ux_code('src/Panel/Bots.php');
+
+            lh_contains(
+                $php,
+                'Ua::isUnspecified',
+                'Bots.php decides what counts as unnamed on its own, instead of asking Enrich\Ua'
+            );
+            lh_contains($view, 'row.unspecified', 'bots.js ignores the flag the server computes for it');
+            lh_contains($view, 'table.appendChild(group)', 'the unnamed group is no longer a body of its own');
+            lh_contains(
+                $sorter,
+                'table.tBodies[0]',
+                'sorttable.js no longer sorts only the first body, so the unnamed crawler group and the '
+                . 'line introducing it can be dealt into the middle of the table by one click'
+            );
         },
 
     'a truncated cell can still be read in full' =>

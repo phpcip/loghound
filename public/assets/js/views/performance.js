@@ -130,15 +130,55 @@ function ignoredFilterNote(data) {
 }
 
 /**
+ * The fix for a missing duration, as the server built it.
+ *
+ * NOT A LITERAL IN THIS FILE. The nickname and the rescan sentence come from Setup\Steps via
+ * a hidden node the Performance card renders, so the panel, the installer and docs/INSTALL.md
+ * cannot end up publishing three slightly different versions of the same advice. Every field
+ * is optional: if the node is ever missing, the empty state loses a line rather than rendering
+ * the word "undefined" at an operator who is already having a bad day.
+ *
+ * @returns {{line: string, custom: string, rescan: string}}
+ */
+function durationFix() {
+    const node = byId('pf-logformat');
+    const data = node ? node.dataset : {};
+    return {
+        line: data.line || '',
+        custom: data.custom || '',
+        rescan: data.rescan || ''
+    };
+}
+
+/**
  * Explain that no duration is being logged, and which directive fixes it.
+ *
+ * THREE INSTRUCTIONS, NOT ONE, because doing only the first is how this silently fails.
+ * Defining the format does nothing until a CustomLog references the nickname, and changing
+ * the shape of the line breaks the stored format for that source until it is rescanned — so a
+ * card that stopped at the LogFormat line would be telling the operator to break their own
+ * ingest and then leaving them to find out from a parse-error counter nobody was watching.
  */
 function showMissingDuration(requests) {
+    const fix = durationFix();
+
     showEmpty('pf-headline-empty', 'No request durations are being logged', [
         'Not one of the ' + num(requests) + ' matched requests records how long it took, so there is ' +
             'nothing to compute a percentile from. Your log format does not include the request duration — ' +
             'the stock Apache "combined" format does not.',
-        'Add %D to your Apache LogFormat, or $request_time to an nginx log_format:',
-        snippet('LogFormat "%h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined_d'),
+        'Add %D to your Apache LogFormat, or $request_time to an nginx log_format. Give the format its ' +
+            'own name: Debian and Ubuntu already define "combined" in apache2.conf, and redefining that ' +
+            'name inside a virtual host does not reliably win — the config is accepted, the reload ' +
+            'succeeds, and the lines keep coming out in the old shape.',
+        fix.line ? snippet(fix.line) : null,
+        fix.custom ? 'Then point the log at it, which is the half people forget — a format that nothing ' +
+            'references changes nothing:' : null,
+        fix.custom ? snippet(fix.custom) : null,
+        fix.rescan ? el('p', {}, [
+            fix.rescan + ' ',
+            el('a', { href: '?v=settings', text: 'Open Settings' }),
+            '.'
+        ]) : null,
         el('p', {}, [
             'The full recommended format, which also enables several detection rules, is in ',
             el('code', { text: 'docs/INSTALL.md' }),

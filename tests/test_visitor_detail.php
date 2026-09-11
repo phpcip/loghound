@@ -668,8 +668,31 @@ return [
             lh_contains($js, "scrim.addEventListener('click', closeDialog)", 'the overlay must close it');
             lh_contains($js, "event.key !== 'Escape'", 'Escape must close it');
             lh_contains($js, "event.key !== 'Tab'", 'Tab must be trapped while it is open');
-            lh_contains($js, 'opener.focus()', 'focus must go back to whatever opened it');
             lh_contains($js, "'aria-modal': 'true'", 'a modal must announce itself as one');
+
+            /* FOCUS GOES BACK TO A NODE THAT IS STILL THERE. The restore used to be a bare
+               `opener.focus()` guarded by `document.contains()`, and a silent miss on that
+               guard is how a keyboard operator ended up at the top of the document: a dialog
+               opened from a row INSIDE another dialog overwrote the opener with that row, and
+               the row was detached microseconds later when the body was refilled. One helper
+               now owns every restore path and reports whether focus actually moved. */
+            lh_contains($js, 'function focusIfPossible(', 'one place puts focus back');
+            lh_contains($js, 'document.activeElement === node', 'and it knows whether it worked');
+            lh_contains($js, 'focusIfPossible(frame ? frame.opener : null)',
+                'closing the last dialog returns focus to whatever opened it');
+
+            /* HIDING HAS TO HIDE. `closeDialog()` sets `hidden`, which only works because the
+               browser's own stylesheet says `[hidden] { display: none }` — the weakest origin
+               there is. `.lh-dialog` is `display: flex`, so the author rule won, Close set the
+               attribute, the dialog stayed on screen, and the next press found `hidden` already
+               true and returned early. Measured in a browser: the panel now computes
+               `display: none` for the closed dialog. */
+            $css = lh_vd_file('public/assets/css/panel.css');
+            lh_contains(
+                $css,
+                '[hidden] { display: none !important; }',
+                'the hidden attribute must beat any display rule, or closing a dialog does nothing'
+            );
 
             // Escape is bound to the DOCUMENT, not to the panel. A panel-scoped Escape only
             // works while focus is already inside the panel, which makes it useless in the one

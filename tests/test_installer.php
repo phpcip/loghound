@@ -60,7 +60,7 @@ function lh_inst_scaffold(): array
 
     foreach (['hits', 'sessions'] as $core) {
         mkdir($root . '/solr/' . $core . '/conf', 0755, true);
-        foreach (['managed-schema.xml', 'solrconfig.xml'] as $file) {
+        foreach (\Loghound\Opensolr::CONFIGSET_FILES as $file) {
             $from = lh_inst_root() . '/solr/' . $core . '/conf/' . $file;
             if (is_file($from)) {
                 copy($from, $root . '/solr/' . $core . '/conf/' . $file);
@@ -1661,7 +1661,14 @@ return [
             lh_same('FINLAND9', $stored['opensolr']['region'], 'the chosen region is kept');
 
             $uploads = array_filter($calls, static fn (string $u): bool => str_contains($u, 'upload_config_file'));
-            lh_same(4, count($uploads), 'two files uploaded to each of the two indexes');
+            /* THREE files per index now: the mapping file the schema names, the schema, and the
+               solrconfig that makes it authoritative. Opensolr::CONFIGSET_FILES is the list and
+               the order, and the order is the safety property — see its docblock. */
+            lh_same(
+                3 * 2,
+                count($uploads),
+                'every configset file uploaded to each of the two indexes'
+            );
         } finally {
             Storage::useTestTransport(null);
             lh_rmtree($root);

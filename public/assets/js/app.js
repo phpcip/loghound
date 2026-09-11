@@ -20,6 +20,7 @@ import { initSortableTables } from './sorttable.js';
 
 import overview from './views/overview.js';
 import bots from './views/bots.js';
+import attacks from './views/attacks.js';
 import fingerprints from './views/fingerprints.js';
 import networks from './views/networks.js';
 import sessions from './views/sessions.js';
@@ -51,6 +52,7 @@ function honours(control) {
 const VIEWS = {
     overview: overview,
     bots: bots,
+    attacks: attacks,
     fingerprints: fingerprints,
     networks: networks,
     sessions: sessions,

@@ -134,6 +134,7 @@ namespace Loghound\Bin;
 
 use Loghound\Beacon\Doc;
 use Loghound\Config;
+use Loghound\Diagnostics;
 use Loghound\Setup\Detector;
 use Loghound\Setup\Job;
 use Loghound\Setup\Pairs;
@@ -206,6 +207,11 @@ if (!$isFirstRun) {
 if ($doReset && !performReset($cfg, $UI)) {
     exit(1);
 }
+
+/* SIX STEPS, DECLARED BEFORE THE FIRST ONE PRINTS. The wizard runs all six on every path that
+   is not --detect-only, so the total is known rather than guessed, and each heading below can
+   say where in the run the operator is instead of only what is happening. */
+$UI->plan(6);
 
 $UI->step(1, 'Checking this server has what Loghound needs');
 
@@ -364,6 +370,7 @@ try {
     $cfg->save();
 } catch (\Throwable $e) {
     $UI->err('Could not write the config: ' . $e->getMessage());
+    $UI->problem('Writing the configuration', 'Saving ' . $configPath, $e, ['File' => $configPath], $cfg);
     exit(1);
 }
 
@@ -793,17 +800,20 @@ function runJob(Config $cfg, Ui $UI, string $root, string $kind, array $params):
         $job = Job::create($root . '/var/setup', $kind, $params);
     } catch (\Throwable $e) {
         $UI->err('Could not start: ' . $e->getMessage());
+        $UI->problem('Running the ' . $kind . ' setup job', 'Creating the job', $e, [], $cfg);
         return false;
     }
 
     $reported = false;
+    $failed   = '';
 
-    $ok = $job->runAll($cfg, $root, static function (string $key, string $label, string $state, string $detail) use ($UI, &$reported): void {
+    $ok = $job->runAll($cfg, $root, static function (string $key, string $label, string $state, string $detail) use ($UI, &$reported, &$failed): void {
         if ($state === 'done') {
             $UI->ok('  ' . $label . ($detail !== '' ? ' — ' . $detail : ''));
         } elseif ($state === 'error') {
             $UI->err('  ' . $label . ':');
             $UI->raw(wordwrap('      ' . $detail, 76, "\n      "));
+            $failed = $label;
             $reported = true;
         } else {
             $UI->info('  ' . $label . ($detail !== '' ? ' — ' . $detail : ''));
@@ -812,6 +822,15 @@ function runJob(Config $cfg, Ui $UI, string $root, string $kind, array $params):
 
     if (!$ok && !$reported && $job->error() !== '') {
         $UI->err('  ' . $job->error());
+    }
+    if (!$ok) {
+        $UI->problem(
+            'Running the ' . $kind . ' setup job',
+            $failed !== '' ? $failed : 'A step of the job',
+            $job->error() !== '' ? $job->error() : 'The step reported a failure with no message.',
+            ['Job' => $kind],
+            $cfg
+        );
     }
     return $ok;
 }
@@ -1269,10 +1288,32 @@ final class Ui
         fwrite(STDOUT, str_repeat('=', max(20, strlen($s))) . "\n\n");
     }
 
-    /** A numbered step heading. */
+    /**
+     * How many steps the run has, so each heading can say where in it the operator is.
+     *
+     * Zero until a run declares itself, in which case a heading prints its ordinal alone. A
+     * total that is not known is left unstated rather than guessed: a run that prints "3 of 8"
+     * and then finishes at six has told the operator something untrue about their own machine.
+     */
+    private int $steps = 0;
+
+    /** Declare the length of the sequence about to start. */
+    public function plan(int $total): void
+    {
+        $this->steps = max(0, $total);
+    }
+
+    /**
+     * A numbered step heading.
+     *
+     * `[3/6]` rather than `[3]`. A heading on its own says what is happening and not how much
+     * is left, and this is watched over SSH on a box somebody is in the middle of changing. It
+     * stays legible with no colour and in a narrow terminal: five characters of ASCII.
+     */
     public function step(int $n, string $s): void
     {
-        fwrite(STDOUT, $this->bold("[$n] $s") . "\n");
+        $where = $this->steps > 0 ? "[$n/{$this->steps}]" : "[$n]";
+        fwrite(STDOUT, $this->bold("$where $s") . "\n");
     }
 
     /** A horizontal rule for the source-confirmation block. */
@@ -1315,6 +1356,31 @@ final class Ui
     public function err(string $s): void
     {
         fwrite(STDERR, $this->red('xx') . '  ' . $s . "\n");
+    }
+
+    /**
+     * The whole of a failure, as one block the operator can select and post.
+     *
+     * THE SAME ARTEFACT THE PANEL SHOWS, from the same builder, so a bug reported from a
+     * terminal and the same bug reported from a browser arrive in the same shape. It names what
+     * was being attempted in the product's own words, which step died, the complete underlying
+     * error including whatever the platform or the system returned, and the release, PHP
+     * version, operating system and web server it happened on.
+     *
+     * Printed between two rules and with no colour inside them, so a copy out of a terminal is
+     * the block and nothing else. On stderr, beside the `xx` line it explains.
+     *
+     * @param \Throwable|string    $error
+     * @param array<string,string> $facts
+     */
+    public function problem(string $doing, string $step, $error, array $facts = [], ?Config $cfg = null): void
+    {
+        $block = Diagnostics::block(Diagnostics::capture($doing, $step, $error, $facts, $cfg, \dirname(__DIR__)));
+
+        fwrite(STDERR, "\n" . str_repeat('-', 76) . "\n");
+        fwrite(STDERR, $block . "\n");
+        fwrite(STDERR, str_repeat('-', 76) . "\n");
+        fwrite(STDERR, "Copy everything between the rules into your bug report.\n\n");
     }
 
     /**

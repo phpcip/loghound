@@ -45,6 +45,45 @@ function lh_rp_code(string $relative): string
     return (string) preg_replace('#/\*.*?\*/#s', '', lh_rp_file($relative));
 }
 
+/**
+ * The body of one JavaScript function, by brace matching from its declaration.
+ *
+ * Some assertions here are about WHICH function a call sits in rather than whether a file
+ * mentions it anywhere: "countryNode draws no flag of its own" is true of that body and false
+ * of identity.js as a whole, which of course still calls flagNode — in the one place that owns
+ * the mark. A file-wide substring check cannot tell those two apart, and the flag was drawn
+ * twice on nearly every surface for exactly that reason.
+ *
+ * Takes the source rather than a path, so a caller that has already stripped comments is not
+ * made to read the file a second time.
+ */
+function lh_rp_fn_body(string $source, string $name): string
+{
+    $at = strpos($source, 'function ' . $name . '(');
+    if ($at === false) {
+        return '';
+    }
+    $open = strpos($source, '{', $at);
+    if ($open === false) {
+        return '';
+    }
+
+    $depth = 0;
+    $length = strlen($source);
+    for ($i = $open; $i < $length; $i++) {
+        if ($source[$i] === '{') {
+            $depth++;
+        } elseif ($source[$i] === '}') {
+            $depth--;
+            if ($depth === 0) {
+                return substr($source, $open + 1, $i - $open - 1);
+            }
+        }
+    }
+
+    return '';
+}
+
 /** Every stylesheet and every page head, for the rules that must hold across all of them. */
 function lh_rp_heads(): array
 {
@@ -374,12 +413,62 @@ return [
         function (): void {
             $js = lh_rp_file('public/assets/js/identity.js');
             lh_contains($js, "import { icon } from './icons.js'", 'one place decides');
-            lh_contains($js, 'options.mark === false', 'one place decides whether a value carries a mark');
             lh_contains($js, 'country ? flagNode(raw) : icon(field, raw)',
                 'a country\'s mark is its flag; every other closed vocabulary gets a drawn one');
             lh_contains($js, "const country = field === 'country_s';",
                 'and its text is its name, in the same one place — the facet list, the pivot row, '
                     . 'the table cell and the dialog all render a value through dimValue');
+
+            /* ONCE MEANS ONCE, AND THE OPT-OUT IS WHY IT WAS TWICE. dimValue() used to honour
+               `mark: false` "for the few places where the mark is already on screen beside the
+               value", and NO call site in the panel ever passed it — while countryNode() went
+               on prepending a flag of its own next to the one dimValue inserts. Every row of
+               every detail dialog, the session explorer's Where cell, the fingerprint cluster
+               tables and the whole countries table drew the flag twice.
+
+               So the assertion is inverted: the escape hatch must NOT come back, because an
+               escape hatch nobody takes is just a second answer waiting to disagree with the
+               first. */
+            lh_false(
+                str_contains($js, 'options.mark === false'),
+                'the mark has no opt-out: dimValue() owns it, and a caller that drew its own is '
+                    . 'how the country flag came to be rendered twice on nearly every surface'
+            );
+            lh_false(
+                (bool) preg_match('/mark\s*:\s*false/', lh_rp_file('public/assets/js/detail.js')
+                    . lh_rp_file('public/assets/js/facets.js')
+                    . lh_rp_file('public/assets/js/facetfilter.js')),
+                'and no caller asks for one'
+            );
+        },
+
+    'a flag is drawn once per value, whoever assembled the text around it' =>
+        function (): void {
+            /* THE SECOND HALF OF THE SAME FIX. Removing the sibling flag from countryNode()
+               closes the one call site that was found; stripping a flag out of the text closes
+               it for the call site that has not been written yet. It is the same override
+               dimValue() already applies when a caller passes a slug where words belong. */
+            $js = lh_rp_file('public/assets/js/identity.js');
+
+            lh_contains($js, 'export function stripFlag(', 'there is one place that removes a duplicate flag');
+            lh_contains($js, 'const shown = stripFlag(', 'and dimValue() puts every caller\'s text through it');
+
+            /* countryNode() is the function the bug was reported from: the session explorer, the
+               cluster member tables, the countries table and every row of the dimension dialog's
+               visitor list all render a country through it. */
+            $node = lh_rp_fn_body($js, 'countryNode');
+            lh_true($node !== '', 'countryNode is still there to check');
+            lh_false(
+                str_contains($node, 'flagNode('),
+                'countryNode must not draw a flag of its own beside the one dimValue inserts'
+            );
+            lh_contains($node, "dimValue('country_s'", 'it renders the country through the one function');
+
+            /* The regex has to take the pair and whatever separated it from the words, and must
+               not touch a label that merely starts with a letter. */
+            $strip = lh_rp_fn_body($js, 'stripFlag');
+            lh_contains($strip, '\u{1F1E6}-\u{1F1FF}', 'a flag is a regional-indicator pair and nothing else');
+            lh_contains($strip, '{2}', 'a pair, not one character');
         },
 
     'the navigation rail is collapsed by default and remembers being opened' =>
@@ -496,13 +585,111 @@ return [
             lh_contains($css, '.explorer { display: grid; grid-template-columns: 292px minmax(0, 1fr);',
                 'the explorer is two columns at desk width');
             lh_contains($css, '.view.has-facet-column', 'the expanded filter panel becomes the left column too');
-            lh_contains($css, '.view.has-facet-column > .filterbar', 'and the cards take the second one');
+
+            /* WHAT IS IN THE COLUMN IS THE GROUPS, AND ONLY THE GROUPS. It used to be the whole
+               `.filterbar` — the applied chips and the show/hide button along with the dimension
+               lists — and that is what made the shut state a full-width band: hiding the groups
+               left the chips and the control with nowhere to be except across the top of the
+               content, with every card pushed below. The chips are page scope and belong in the
+               sticky toolbar with the range picker; `.fpanel` is what stays beside the results. */
+            lh_contains($css, '.view.has-facet-column:not(.lh-facets-shut) > .fpanel',
+                'the dimension lists are the first column, and the cards take the second');
+            lh_false(
+                str_contains($css, '.view.has-facet-column > .filterbar'),
+                'the applied chips and the filter control are not in the column — they are page '
+                    . 'scope, and leaving them here is what turned the shut state into a band'
+            );
 
             // The collapse to one column is a phone answer and has to stay one.
             lh_contains($css, '@media (max-width: 1120px)', 'one column only when two will not fit');
 
             $js = lh_rp_file('public/assets/js/responsive.js');
             lh_contains($js, "classList.toggle('has-facet-column'", 'the panel keeps its owner; only a class moves');
+        },
+
+    'a statement about a block of columns is printed once, not once per column' =>
+        function (): void {
+            /* THE DEFECT, ON THE INDEX VIEW'S FOUR-COLUMN BLOCK. "Counts are what each value
+               matches on this page as filtered." is one fact about how the whole block was
+               counted, and it was emitted per group — so the identical sentence appeared four
+               times, each under its own hairline, at four different heights, directly below a
+               card note that already referred to it. The facet sidebar did the same, once per
+               dimension, and printed "Shown as a distribution only…" once per unfilterable one.
+
+               This is the guard, because it creeps back every time a renderer is added: the
+               per-group note may only be rendered through a call that knows what the block as a
+               whole is saying, and the shared sentence has exactly one node that carries it. */
+            $ff = lh_rp_file('public/assets/js/facetfilter.js');
+            lh_contains($ff, 'export function commonBasisNote(', 'one place decides what every column shares');
+            lh_contains($ff, 'export function blockBasisNote(', 'and one node carries it for the block');
+            lh_contains($ff, 'group.basis_note === common', 'a column whose sentence is the shared one stays quiet');
+
+            /* A COLUMN COUNTED DIFFERENTLY KEEPS ITS OWN NOTE, and that is not a loose end: a
+               column carrying an exclusion is counted with its own filter lifted, which is
+               exactly the difference the reader must not miss. commonBasisNote() returns '' the
+               moment the columns disagree, so every one of them prints again. */
+            lh_contains($ff, 'list.every((note) => note === list[0])',
+                'the sentence only moves when every column really is saying it');
+
+            foreach (['public/assets/js/facets.js', 'public/assets/js/views/opensolr.js'] as $module) {
+                $js = lh_rp_file($module);
+                if (!str_contains($js, 'basisNote(')) {
+                    continue;
+                }
+                lh_false(
+                    (bool) preg_match('/basisNote\(\s*group\s*\)/', $js),
+                    $module . ' renders the basis note per group with no idea what the block is saying, '
+                        . 'which is how one sentence came to be printed four times under four columns'
+                );
+                lh_contains($js, 'commonBasisNote(', $module . ' asks what the block shares before printing it');
+            }
+
+            /* The sidebar's other repeated paragraph, under every dimension that is not yet
+               filterable. Which ones those are is on the groups; why is said once. */
+            $facets = lh_rp_file('public/assets/js/facets.js');
+            lh_contains($facets, 'facet-note-all', 'the "distributions only" note has a single place too');
+            lh_contains($facets, "'facet is-unfilterable'", 'and the groups themselves say which ones they are');
+        },
+
+    'the page toolbar is one bar, pinned under the section nav, built from what a view declares' =>
+        function (): void {
+            $css = lh_rp_declarations('public/assets/css/panel.css');
+            $js = lh_rp_file('public/assets/js/responsive.js');
+
+            /* SIBLING OF `.view`, for the reason `.set-nav` already is: sticky inside a flex
+               column or a grid is sticky within one item box and has no travel at all. */
+            lh_contains($css, '.page-tools {', 'the page controls have a bar of their own');
+            lh_contains($css, 'top: calc(var(--lh-topbar-h, 0px) + var(--set-nav-h));',
+                'it pins under the section nav wherever that bar actually is — a phone puts a '
+                    . 'fixed navigation bar above it, and assuming otherwise put this one on top of it');
+            lh_contains($js, 'main.insertBefore(bar, view)', 'and it is a sibling of the view, never inside it');
+
+            /* THE JUMP OFFSET IS THE SUM. A second pinned bar means a jump lands the heading
+               underneath it, which is the defect `--set-nav-h` was added to fix one bar ago. */
+            lh_contains($css, 'scroll-margin-top: calc(var(--set-nav-h) + var(--page-tools-h) + 20px);',
+                'every card clears both bars');
+            lh_contains(
+                lh_rp_declarations('public/assets/css/mobile.css'),
+                'var(--page-tools-h)',
+                'including on a phone, where there are three bars to clear'
+            );
+
+            /* CONDENSED IS SHORTER, and it is one row rather than a stack — measured in
+               tests/test_browser.php, declared here. */
+            lh_contains($css, '.page-tools.is-stuck {', 'the bar has a condensed state');
+            lh_contains($css, 'flex-wrap: nowrap;', 'which is one row that scrolls rather than several that stack');
+
+            /* THE CONTROLS MOVE, THEY ARE NOT REDRAWN. A second copy of the host selector or the
+               chips is a second thing to keep in step, and the two disagree the first time one
+               is re-rendered by a fetch. */
+            $adopt = lh_rp_fn_body($js, 'adoptPageTools');
+            lh_true($adopt !== '', 'one function gathers the page controls');
+            lh_contains($adopt, "'.head-tools', '#lh-filters', '#lh-readout'", 'the three that scope the page');
+            lh_contains($adopt, 'node.parentElement !== bar', 'and it is idempotent, because two of them arrive late');
+
+            /* A VIEW THAT DECLARES NO FACETS MUST NOT GROW A "Filter by" THAT DOES NOTHING —
+               the same rule Controller::toolbar() already enforces for the range picker. */
+            lh_contains($adopt, 'bar.hidden = bar.querySelector(', 'an empty bar is two rules of chrome and no controls');
         },
 
     'a status never wears a control\'s clothes, and a control never reads as text' =>

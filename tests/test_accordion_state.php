@@ -225,6 +225,8 @@ function lh_acc_cards(string $html): array
 function lh_acc_expected(): array
 {
     return [
+        'attacks'      => ['atk-answered', 'atk-patterns', 'atk-requests', 'atk-who',
+                           'atk-impersonation', 'atk-when', 'atk-pivot', 'atk-explain'],
         'bots'         => ['bf-split', 'bf-reasons', 'bf-verdicts', 'bf-histogram', 'bf-classes',
                            'bf-crawlers', 'bf-pivot'],
         'callers'      => ['cl-filters', 'cl-volume', 'cl-who', 'cl-cross', 'cl-explain'],
@@ -238,9 +240,10 @@ function lh_acc_expected(): array
         'queries'      => ['qy-filters', 'qy-volume', 'qy-shapes', 'qy-latency', 'qy-zero',
                            'qy-slow', 'qy-explain'],
         'sessions'     => ['se-search', 'se-facets', 'se-results'],
-        'settings'     => ['set-finish', 'set-ops', 'set-check', 'set-sources', 'set-solr',
-                           'set-cache', 'set-beacon', 'set-privacy', 'set-retention', 'set-scoring',
-                           'set-auth', 'set-2fa', 'set-display', 'set-reinstall'],
+        'settings'     => ['set-finish', 'set-errors', 'set-ops', 'set-check', 'set-sources',
+                           'set-solr', 'set-cache', 'set-beacon', 'set-privacy', 'set-retention',
+                           'set-scoring', 'set-auth', 'set-2fa', 'set-display', 'set-reinstall',
+                           'set-uninstall'],
         'usage'        => ['usage-bw', 'usage-window', 'usage-limits'],
     ];
 }

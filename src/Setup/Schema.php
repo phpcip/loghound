@@ -86,6 +86,21 @@ final class Schema
     /** The live schema could not be read, so nothing can be concluded about it. */
     public const UNREADABLE = 'unreadable';
 
+    /**
+     * The index is still on Solr's MANAGED schema factory, so schema.xml is being ignored.
+     *
+     * The third state, and the one an operator cannot diagnose alone. With
+     * ManagedIndexSchemaFactory in force Solr reads `managed-schema.xml` and owns it; the
+     * `schema.xml` this release uploads sits in the configset doing nothing, and EVERY future
+     * schema push is a silent no-op that reports success. Nothing is broken, nothing errors,
+     * and no field ever arrives.
+     *
+     * It is ranked worse than BEHIND because behind is a state a push fixes and this is the
+     * state in which a push cannot fix anything. `--apply` resolves it by uploading the whole
+     * configset in dependency order, which ends with the solrconfig that switches the factory.
+     */
+    public const MANAGED = 'managed';
+
     /** There is no index name in the configuration — this installation is not set up. */
     public const UNCONFIGURED = 'unconfigured';
 
@@ -123,6 +138,7 @@ final class Schema
     private const SEVERITY = [
         self::UNCONFIGURED,
         self::UNREADABLE,
+        self::MANAGED,
         self::BEHIND,
         self::CURRENT,
     ];
@@ -159,14 +175,36 @@ final class Schema
     }
 
     /**
-     * The managed schema this release ships for one role.
+     * The name of the schema file in a configset.
+     *
+     * `schema.xml`, because this release declares ClassicIndexSchemaFactory. It was
+     * `managed-schema.xml`, which meant Solr owned the file and could rewrite it, so what this
+     * installation uploaded was not authoritative. One constant, so the installer, the reuse
+     * path, the upgrade command and the panel cannot disagree about which file is the schema.
+     */
+    public const SCHEMA_FILE = 'schema.xml';
+
+    /**
+     * The name Solr uses for the schema when an index is still on the MANAGED factory.
+     *
+     * Kept because check() has to be able to read the schema that is actually in force on an
+     * index that has not been upgraded yet, and on such an index that is this file and not
+     * SCHEMA_FILE.
+     */
+    public const MANAGED_SCHEMA_FILE = 'managed-schema.xml';
+
+    /** The marker in a live solrconfig that says the classic factory is in force. */
+    private const CLASSIC_FACTORY = 'ClassicIndexSchemaFactory';
+
+    /**
+     * The schema this release ships for one role.
      *
      * @throws \RuntimeException When the checkout does not contain it, which is a broken
      *                           installation rather than a broken index and is said as much.
      */
     public static function localSchema(string $root, string $role): string
     {
-        $path = self::confDir($root, $role) . '/managed-schema.xml';
+        $path = self::confDir($root, $role) . '/' . self::SCHEMA_FILE;
         $xml = @file_get_contents($path);
         if (!is_string($xml) || $xml === '') {
             throw new \RuntimeException('The schema is missing from this installation: ' . $path);
@@ -267,6 +305,33 @@ final class Schema
      *
      * @return array<string,mixed>
      */
+    /**
+     * Does this index's live solrconfig declare the classic schema factory?
+     *
+     * THREE ANSWERS, and the null is the important one. True means schema.xml is authoritative
+     * on that index. False means it is not, and that is the state no push can talk its way out
+     * of. NULL means the solrconfig could not be read at all — a control plane that did not
+     * answer, an account that lost the file — and a check that cannot be performed is a failed
+     * check, never a passed one, so it is reported as "unknown" rather than folded into either
+     * of the other two.
+     *
+     * A substring test rather than an XML parse, deliberately: the declaration may be written
+     * as `solr.ClassicIndexSchemaFactory` or bare, inside a comment-heavy file, and a parse
+     * that threw on somebody's hand-edited solrconfig would turn a diagnostic into an outage.
+     * A false positive here can only come from the words appearing in a comment, which would
+     * be a solrconfig somebody wrote specifically to mislead this check.
+     */
+    private static function liveFactoryIsClassic(Opensolr $client, string $core): ?bool
+    {
+        $why = null;
+        $xml = $client->fetchConfigFile($core, 'solrconfig', 'xml', $why);
+        if (!is_string($xml) || $xml === '') {
+            return null;
+        }
+
+        return preg_match('/<schemaFactory[^>]*ClassicIndexSchemaFactory/i', $xml) === 1;
+    }
+
     private static function inspectOne(Config $cfg, string $root, string $role, Opensolr $client): array
     {
         $role = self::role($role);
@@ -294,8 +359,22 @@ final class Schema
         $expected = self::expectedFields($root, $role);
         $row['expected'] = count($expected);
 
+        /* THE FACTORY BEFORE THE FIELDS. An index still on the managed factory ignores the
+           schema.xml this release uploads, so comparing fields there would answer a question
+           the operator cannot act on: they would push, be told it succeeded, and nothing would
+           change. Asking costs one extra control-plane read on a command that already makes
+           two, and it is the only way to distinguish "behind" from "cannot be fixed by a push".
+
+           An unreadable solrconfig does NOT become MANAGED. Not knowing which factory is in
+           force is not evidence that it is the wrong one, and the field comparison below still
+           has something useful to say. */
+        $classic = self::liveFactoryIsClassic($client, $core);
+
         $why = null;
-        $liveXml = $client->fetchConfigFile($core, 'managed-schema', 'xml', $why);
+        $liveXml = $client->fetchConfigFile($core, 'schema', 'xml', $why);
+        if ($liveXml === null && $classic !== true) {
+            $liveXml = $client->fetchConfigFile($core, 'managed-schema', 'xml', $why);
+        }
         $live = is_string($liveXml) ? Storage::schemaFieldNames($liveXml) : [];
 
         if ($liveXml === null || $live === []) {
@@ -312,6 +391,24 @@ final class Schema
         $row['live'] = count($live);
         $row['missing'] = Storage::schemaShortfall($localXml, $liveXml);
         $row['extra'] = array_values(array_diff($live, $expected));
+
+        if ($classic === false) {
+            $row['state'] = self::MANAGED;
+            $row['message'] = $core . ' is still running Solr\'s MANAGED schema factory, so the '
+                . 'schema.xml this release uploads is being ignored and every schema upload to it '
+                . 'reports success while changing nothing. '
+                . ($row['missing'] === []
+                    ? 'The schema in force happens to declare every field this release writes, so '
+                        . 'nothing is being discarded today — but the next schema change would be.'
+                    : 'The schema in force is missing ' . count($row['missing']) . ' of the '
+                        . count($expected) . ' fields this release writes ('
+                        . self::namedList($row['missing']) . '), and no push can add them until the '
+                        . 'factory is switched.')
+                . ' Running this with --apply uploads the whole configset in dependency order, '
+                . 'which ends with the solrconfig.xml that switches the factory; from then on '
+                . 'schema.xml is authoritative.';
+            return $row;
+        }
 
         if ($row['missing'] === []) {
             $row['state'] = self::CURRENT;
@@ -384,7 +481,12 @@ final class Schema
                 continue;
             }
 
-            if ($state !== self::BEHIND) {
+            /* BEHIND AND MANAGED ARE BOTH PUSHABLE, and MANAGED is the one that needs it most:
+               it is the state in which every previous push reported success and changed nothing,
+               so refusing to push here would leave the operator with a command that diagnoses a
+               problem and declines to fix it. The push is safe in both, for the same reason — the
+               live schema HAS been read, so this is not overwriting a schema nobody looked at. */
+            if ($state !== self::BEHIND && $state !== self::MANAGED) {
                 $failed = true;
                 $rows[] = [
                     'role'    => $role,
@@ -414,10 +516,16 @@ final class Schema
                     'core'    => $core,
                     'state'   => 'pushed',
                     'files'   => $files,
-                    'message' => 'Added ' . count((array) ($found['missing'] ?? [])) . ' field'
-                        . (count((array) ($found['missing'] ?? [])) === 1 ? '' : 's') . ' to ' . $core
-                        . ', uploaded solrconfig.xml, and reloaded the core. Documents already in the '
-                        . 'index were not touched.',
+                    'message' => ($state === self::MANAGED
+                        ? 'Uploaded the whole configset to ' . $core . ' in dependency order and '
+                            . 'switched it to the classic schema factory, so ' . self::SCHEMA_FILE
+                            . ' is authoritative on it from now on. '
+                        : 'Added ' . count((array) ($found['missing'] ?? [])) . ' field'
+                            . (count((array) ($found['missing'] ?? [])) === 1 ? '' : 's') . ' to '
+                            . $core . ', uploaded solrconfig.xml, and reloaded the core. ')
+                        . 'Documents already in the index were not touched, so a field added today '
+                        . 'is absent from every document written before it — which is what the '
+                        . 'three-state rule in the schema comments is about.',
                 ];
                 continue;
             }
@@ -442,12 +550,18 @@ final class Schema
     /**
      * Say exactly which file was rejected and what state that leaves the index in.
      *
-     * The two halves of a configset are not equivalent and a half-applied push is not a vague
-     * "something went wrong": the schema is uploaded first and a rejected schema means the
-     * solrconfig upload is not attempted at all, so the index is untouched and a re-run is
-     * completely safe. A rejected solrconfig after an accepted schema is the other case — the
-     * new fields are live and the old solrconfig still is — and an operator has to be told
-     * which of the two they are looking at before they decide what to do next.
+     * THE THREE HALTING POINTS ARE THREE DIFFERENT SITUATIONS, and the operator has to be told
+     * which one they are in before they decide what to do next. The push runs in dependency
+     * order (Opensolr::CONFIGSET_FILES), it stops at the first rejection, and every state it can
+     * stop in is one where the core still loads:
+     *
+     *   mapping rejected     nothing reached the index at all.
+     *   schema rejected      the support file is on the index and unused; the schema in force is
+     *                        unchanged. A re-run is completely safe.
+     *   solrconfig rejected  the support file and the new schema.xml are both on the index, and
+     *                        the index is still on the MANAGED factory, so schema.xml is being
+     *                        ignored and the schema in force is still the old one. This is the
+     *                        case an operator would otherwise misread as success.
      *
      * @param array<int,array{file:string,ok:bool,msg:string}> $files
      */
@@ -458,19 +572,32 @@ final class Schema
             $byName[(string) $file['file']] = $file;
         }
 
-        $schema = $byName['managed-schema.xml'] ?? null;
+        $schema = $byName[self::SCHEMA_FILE] ?? null;
         $config = $byName['solrconfig.xml'] ?? null;
 
+        $support = $byName[Opensolr::CONFIGSET_FILES[0]] ?? null;
+
+        if ($support !== null && !$support['ok']) {
+            return $core . ': ' . Opensolr::CONFIGSET_FILES[0] . ' was rejected ('
+                . (string) $support['msg'] . '). Nothing else was uploaded, because '
+                . self::SCHEMA_FILE . ' names that file and a core that reloads without it does not '
+                . 'load at all. This index is untouched and still running the configset it had. It '
+                . 'is safe to run this again.';
+        }
+
         if ($schema !== null && !$schema['ok']) {
-            return $core . ': managed-schema.xml was rejected (' . (string) $schema['msg'] . '). '
-                . 'solrconfig.xml was not uploaded, so nothing on this index changed and it is still '
-                . 'running the configset it had. It is safe to run this again.';
+            return $core . ': ' . self::SCHEMA_FILE . ' was rejected (' . (string) $schema['msg'] . '). '
+                . 'solrconfig.xml was not uploaded, so the schema in force on this index is unchanged '
+                . 'and it is still running the configset it had. It is safe to run this again.';
         }
 
         if ($config !== null && !$config['ok']) {
-            return $core . ': the new schema was uploaded and the core reloaded with it, but '
-                . 'solrconfig.xml was rejected (' . (string) $config['msg'] . '). The fields this '
-                . 'release writes are now there; the index is still running its previous solrconfig. '
+            return $core . ': ' . self::SCHEMA_FILE . ' was uploaded but solrconfig.xml was rejected ('
+                . (string) $config['msg'] . '). READ THIS ONE CAREFULLY: solrconfig.xml is what '
+                . 'switches the index to the classic schema factory, so until it lands the index is '
+                . 'still on the MANAGED factory, the schema.xml now sitting in its configset is being '
+                . 'IGNORED, and the fields this release writes are NOT there however successful the '
+                . 'schema upload looked. The index still serves and still holds everything it held. '
                 . 'Run this again to finish. If it keeps being rejected, upload solrconfig.xml for this '
                 . 'index from the Opensolr control panel by hand.';
         }

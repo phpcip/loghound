@@ -40,7 +40,9 @@ import {
     api, bytes, dec, dur, durUs, el, fill, num, pct, populationLabel, shortHash, when
 } from './core.js';
 import { closeDialog, dialogFail, isCurrent, openDialog, registerOpener } from './dialog.js';
-import { clientNode, countryNode, dimLabel, dimValue, flagNode, networkNode, verdictChip } from './identity.js';
+import {
+    clientNode, countryNode, dimLabel, dimValue, flagNode, networkNode, valueText, verdictChip
+} from './identity.js';
 import { markSortable } from './sorttable.js';
 import { countryName } from './geo.js';
 import { outLink, pathCell, urlMark } from './url.js';
@@ -373,7 +375,11 @@ export async function openSession(id) {
     /* THE WHOLE ID IS IN THE SUBTITLE. The heading is a 12-character prefix because a full
        session id does not fit one, and on the failure path that prefix was all that stayed on
        screen — so an operator reporting "this visit will not open" had nothing to quote. */
-    const handle = openDialog(
+    /* THE HANDLE IS REASSIGNED, and that is not tidying up. The second openDialog() below bumps
+       the generation, so a catch that tested the FIRST handle's token could never be true: every
+       throw out of renderSession() or markSortable() was swallowed whole, leaving the dialog
+       frozen on "Loading" with nothing on screen and nothing in the console to say why. */
+    let handle = openDialog(
         'Session ' + String(id).slice(0, 12),
         'Loading the visit and its request trail\u2026 · ' + String(id)
     );
@@ -384,13 +390,16 @@ export async function openSession(id) {
         }
         const s = data.session;
         const where = [s.city, s.country].filter(Boolean).join(', ');
-        openDialog(
+
+        /* THE VERDICT IS A SLUG IN THE PAYLOAD AND MUST NOT BE ONE ON SCREEN. `likely_human` is
+           what Solr stores and what the URL carries; a person reads "Likely human". */
+        handle = openDialog(
             s.ident || s.ip || 'Session',
-            [when(s.ts_start), where, s.as_org, s.verdict].filter(Boolean).join(' · ')
+            [when(s.ts_start), where, s.as_org, valueText('bot_verdict_s', s.verdict)]
+                .filter(Boolean).join(' · ')
         );
-        const body = document.getElementById('lh-dialog-body');
-        renderSession(body, data);
-        markSortable(body);
+        renderSession(handle.body, data);
+        markSortable(handle.body);
     } catch (err) {
         if (isCurrent(handle.generation)) {
             dialogFail(handle.body, err, () => openSession(id));
@@ -612,19 +621,26 @@ function statTile(label, value, hint) {
  * @param {string} value The value, exactly as it was rendered.
  */
 export async function openDimension(field, value) {
-    const handle = openDialog(String(value), dimLabel(field) + ' — counting sessions…');
+    /* THE HEADING IS THE WORDS, NEVER THE SLUG. Both of these openDialog() calls printed the
+       stored value straight out: a bot class dialog was titled `proxy_fleet`, a verdict dialog
+       `likely_human`, a network type `hosting`. The slug is what the URL carries and what Solr
+       holds; valueText() is the one place that says what a person reads, and the reason it
+       exists is that every surface kept growing its own answer.
+
+       `handle` is reassigned for the same reason as in openSession(): the second open bumps the
+       generation, so a catch testing the first token could never fire. */
+    let handle = openDialog(valueText(field, value), dimLabel(field) + ' — counting sessions…');
     try {
         const data = await api('sessions', 'dimension', { field: field, value: value });
         if (!isCurrent(handle.generation)) {
             return;
         }
-        openDialog(
-            String(data.value),
+        handle = openDialog(
+            valueText(field, data.value),
             data.label + ' · ' + num(data.sessions) + ' sessions in ' + (data.range_label || 'range')
         );
-        const body = document.getElementById('lh-dialog-body');
-        renderDimension(body, data);
-        markSortable(body);
+        renderDimension(handle.body, data);
+        markSortable(handle.body);
     } catch (err) {
         if (isCurrent(handle.generation)) {
             dialogFail(handle.body, err, () => openDimension(field, value));

@@ -405,8 +405,57 @@ LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\"
 CustomLog ${APACHE_LOG_DIR}/example_com_access.log loghound
 ```
 
-Then `apache2ctl configtest && systemctl reload apache2`, and re-run
-`loghound-setup` so it picks up the new format.
+Then reload and re-run the wizard so it picks up the new format:
+
+```sh
+apache2ctl configtest && systemctl reload apache2
+sudo -u loghound php /opt/loghound/bin/loghound-setup
+```
+
+### Three ways this silently does nothing, in the order people hit them
+
+Every one of these leaves you with a correct-looking config, a clean reload, and no
+duration in the panel. None of them writes anything to any error log.
+
+**1. Do not reuse the name `combined`.** Debian and Ubuntu already define that nickname in
+`apache2.conf`, and redefining it inside a virtual host does not reliably win. You edit the
+file, you reload, the config is correct, and the lines keep coming out in the old shape
+with nothing anywhere to tell you why. Give your format its own name, as above. If all you
+want is the duration for the Performance view, `combined_d` is a fine name for it:
+
+```apache
+LogFormat "%h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\"" combined_d
+CustomLog ${APACHE_LOG_DIR}/example_com_access.log combined_d
+```
+
+A format that nothing references changes nothing, so the `CustomLog` line is not optional.
+
+**2. Reload, and check that the reload really happened.** A graceful reload keeps the same
+master process, so the process start time does not move and the server looks untouched
+whether or not you ran it. Compare the modification time of the vhost against the last
+`AH00493: SIGUSR1 received.  Doing graceful restart` in `error.log`. A config edited hours
+ago on a server that was never reloaded is the most common version of this.
+
+**3. Tell Loghound the shape changed.** This is the one that bites after you have done the
+first two correctly. Loghound compiles and **stores the log format per source**, so the
+moment a line gains a field the stored format has no column for, every new line becomes a
+parse error. The lines are still being written and still being read; the parse-error
+counter climbs and nothing new appears in the panel. Re-run `bin/loghound-setup`, or
+rescan the source under **Settings › Log sources**, and check
+`bin/loghound-tail --status --human` afterwards — parse errors should be back to zero
+within a minute.
+
+Loghound does not yet detect this for you. It could: the condition is a source that was
+parsing cleanly and suddenly is not, right after its lines changed shape. It is not
+shipped because the tailer's `parse_errors` is a single process-wide counter with no
+per-source attribution, and a warning derived from it could not tell "this source changed
+format" from "somebody pointed a vulnerability scanner at the site" — which would teach
+you to ignore the warning that is right. Until it exists, the rescan is yours to remember,
+and every place in the panel that suggests a format change says so.
+
+**The quickest way to see which of the three you are in:** look at one real line in the
+log file. If it has no duration in it, you are in 1 or 2. If it has one and the panel is
+still empty, you are in 3.
 
 **Be honest with yourself about the trade.** These lines are roughly two to three times
 longer than `combined`. On a site doing ten million requests a day that is real disk. On
@@ -483,6 +532,12 @@ access_log /var/log/nginx/example_com_access.log loghound;
 ```
 
 Then `nginx -t && systemctl reload nginx`, and re-run `loghound-setup`.
+
+The three failures above apply here too, with one difference: nginx defines `combined`
+itself and refuses a second definition outright, so cause 1 is a startup error rather than
+silence. Causes 2 and 3 are identical — reload for real, then rescan the source, because
+Loghound stores the format per source and a line that gained `$request_time` no longer
+matches the one it stored.
 
 JSON log formats are first-class — if you already emit JSON, point Loghound at it and the
 detector will recognise it.
@@ -928,11 +983,22 @@ index, because a push replaces the whole configset and pushing blind over a sche
 might be newer would delete the fields that newer release writes. Run it again when the
 platform answers.
 
-A push that only half lands says which file was rejected and what state that leaves the
-index in: a rejected `managed-schema.xml` stops the push before `solrconfig.xml` is sent,
-so the index is untouched and re-running is safe; a rejected `solrconfig.xml` after an
-accepted schema means the new fields are live and the index is still on its previous
-solrconfig.
+**Three states, not two.** `--check` can also report that an index is still running Solr's
+**managed** schema factory. That is the one an operator cannot diagnose alone: in that state the
+`schema.xml` this release uploads is ignored, every schema push reports success and changes
+nothing, and no field ever arrives. `--apply` fixes it by uploading the whole configset in
+dependency order, ending with the `solrconfig.xml` that switches the factory.
+
+A push that only half lands says which file was rejected and what state that leaves the index
+in. The three halting points are three different situations:
+
+- **`mapping-ISOLatin1Accent.txt` rejected** — nothing reached the index at all.
+- **`schema.xml` rejected** — the support file is on the index and unused; the schema in force is
+  unchanged. Re-running is completely safe.
+- **`solrconfig.xml` rejected** — the support file and the new `schema.xml` are both on the index,
+  but the index is still on the managed factory, so `schema.xml` is being **ignored** and the
+  fields this release writes are **not** there however successful the schema upload looked. The
+  index still serves everything it held. Run it again to finish.
 
 The verdict is written to `var/schema-check.json`, which is what the **Solr** card on the
 panel's Settings page reads — so running this over SSH updates what the browser shows. The
@@ -986,19 +1052,57 @@ left strictly alone.
 
 ### The order, and why
 
-1. **Units and both timers** stop first, so nothing re-creates the files about to be
-   removed or holds the service user open.
-2. **The Opensolr indexes**, while `config/loghound.php` still exists — the API key that
-   authorises the deletion is in it.
-3. **The vhost**, after `apachectl -t` / `nginx -t` passes without it. If the test fails,
+The run prints eleven numbered steps — `==> [3/11] Deleting the Loghound indexes` — so a
+terminal watched over SSH always says where it is, and a step that bails out early still
+prints, as a skip, rather than leaving a gap you have to assume was fine. Colour is optional
+and nothing depends on the terminal being wide.
+
+**It is the same eleven, under the same names, that the panel runs.** The list lives once, in
+`Loghound\Setup\Teardown::STEPS`, and a test asserts the shell script prints exactly it, in
+order. Two front ends that disagree about what a teardown *is* are two front ends nobody can
+check against each other.
+
+1. **Services and timers** stop first, so nothing re-creates the files about to be removed
+   or holds the service user open.
+2. **Proving your account owns these indexes**, while `config/loghound.php` still exists —
+   the API key that authorises the deletion is in it.
+3. **Deleting the Loghound indexes**, and only on the confirmation described below.
+4. **Confirming they are gone from your account.** The account listing is re-read and each
+   name is reported `GONE` or `PRESENT`. *The proof is the listing, not the delete
+   response*: a control plane that answered `status: true` has told you it accepted the
+   request, which is a weaker claim than the index being gone — and you are about to stop
+   being billed for it on the strength of that claim.
+5. **The vhost**, after `apachectl -t` / `nginx -t` passes without it. If the test fails,
    the server is **not** reloaded and keeps serving its last good configuration. This runs
    on boxes with other people's sites on them.
-4. **The FPM pool**, then its socket.
-5. **The command links**, the cron fallback, any logrotate fragment.
-6. **The credentials**, overwritten before they are unlinked.
-7. **The install tree**, if you say yes.
-8. **The system user** last, with its `adm` membership dropped first and separately — so a
-   `userdel` that fails still leaves an account that can no longer read `/var/log`.
+6. **The FPM pool**, then its socket.
+7. **The command links**, the cron fallback, any logrotate fragment.
+8. **The credentials and local data**, overwritten before they are unlinked.
+9. **The install tree**, if you say yes.
+10. **The system user**, with its `adm` membership dropped first and separately — so a
+    `userdel` that fails still leaves an account that can no longer read `/var/log`.
+11. **What was NOT removed**, printed in full, so you never have to guess.
+
+### From the panel instead
+
+Settings → **Remove Loghound entirely** runs the same eleven steps as a job you can watch,
+and performs the five it can: proving ownership, deleting, confirming absence, emptying
+`var/`, and removing the configuration. The other six need root, and the panel does not
+pretend otherwise — there is no `exec`, `shell_exec`, `proc_open` or SSH anywhere in `src/`,
+`bin/` or `public/`, and that is not being traded for a button that stops a systemd unit.
+Each of those six is still shown in its place, saying why it needs a shell, and the run ends
+by naming the command that finishes the job.
+
+It costs a typed `DELETE EVERYTHING` and, where two-factor is on, a current code — the same
+price as turning two-factor off, for an action that is strictly more destructive. When it
+finishes you land on the installer, carrying a one-time grant so you are not asked for
+`var/install-token` on a machine you have just wiped. A fresh visitor still has to read that
+file over a shell.
+
+**`var/state.db` holds the reader's `(dev, inode, offset)` for every log file.** Deleting the
+indexes without clearing those would leave the daemon believing it had already read those
+bytes, so a rebuilt index would hold only traffic from the moment of the rebuild onwards.
+Both paths remove it.
 
 ### What it destroys, and what it asks first
 
@@ -1036,6 +1140,14 @@ Each of these is a separate question, asked by name:
   are gone, the config is unreadable, the listing comes back empty — **nothing is deleted.**
   A check that could not be performed is a failed check. The two names are printed instead,
   so you can remove them in the Opensolr control panel if you want to.
+
+  Afterwards the account is listed **again**, and each name is reported `GONE` or `PRESENT`.
+  A name still present means the platform accepted a delete it has not acted on, and you are
+  told so rather than left believing you are finished. An account that now lists nothing at
+  all is reported as *unproven* rather than as success: it is what an account holding only
+  these two indexes looks like the moment after they go, and it is also what a listing that
+  did not work looks like, and neither reading is available from here. Both names are
+  printed so you can check them.
 
   On a `solr.mode = custom` install, no core is touched at all: Loghound will not unload a
   core from a Solr it does not manage.

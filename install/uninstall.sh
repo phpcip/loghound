@@ -16,15 +16,32 @@
 # Every flag install.sh accepts in uninstall mode is accepted here and passed straight
 # through: --dry-run, --non-interactive, --yes, --prefix, --user. See `install.sh --help`.
 #
-# WHAT IT REMOVES, in the order install.sh documents in its own header: the units and both
-# timers, the Opensolr indexes this installation provisioned (only on an explicit
-# confirmation, and only after the platform confirms the account holds them), the vhost,
-# the FPM pool, the command links, the credentials, and optionally the install tree and the
-# service user.
+# WHAT IT REMOVES, as eleven numbered steps printed in this order — the same eleven, under the
+# same names, that the panel's own "Remove Loghound entirely" card runs as a job, because two
+# front ends that disagree about what a teardown IS are two front ends nobody can check against
+# each other. The list lives once, in Loghound\Setup\Teardown::STEPS, and a test asserts this
+# script prints exactly it:
 #
-# WHAT IT NEVER DOES: delete an index whose ownership it could not prove, reload a web
-# server into a configuration that does not pass its own configtest, touch a source log
-# file, or remove anything outside the install prefix that install.sh did not create.
+#    1. Services and timers
+#    2. Proving your account owns these indexes
+#    3. Deleting the Loghound indexes
+#    4. Confirming they are gone from your account
+#    5. Web server configuration
+#    6. PHP-FPM pool
+#    7. Command links and scheduler fragments
+#    8. Credentials and local data
+#    9. Install tree
+#   10. System user
+#   11. What was NOT removed
+#
+# Every heading carries its position, so a run watched over SSH always says where it is, and a
+# step that bails out early still prints — as a skip — rather than leaving a gap somebody has to
+# assume was fine.
+#
+# WHAT IT NEVER DOES: delete an index whose ownership it could not prove, call a delete
+# accepted without re-reading the account listing to prove the name is gone, reload a web
+# server into a configuration that does not pass its own configtest, touch a source log file,
+# or remove anything outside the install prefix that install.sh did not create.
 #
 # =============================================================================
 

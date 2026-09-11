@@ -50,9 +50,19 @@
  *   DELETED <index name>
  *   ABSENT  <index name>                (planned, but the account does not hold it)
  *   FAILED  <index name> <message>
+ *   GONE    <index name>                (the account listing no longer holds it)
+ *   PRESENT <index name>                (the account listing STILL holds it)
+ *
+ * THE PROOF IS THE ACCOUNT LISTING, NOT THE DELETE RESPONSE. A control plane that answers
+ * a delete with `status: true` has told you it accepted the request, which is a different
+ * claim from "the index is gone" — an accepted delete can still fail behind the API, and an
+ * operator who is about to be billed for an index needs the stronger statement. So `--delete`
+ * re-reads GET /get_index_list afterwards and reports each name as GONE or PRESENT. A listing
+ * that cannot be read afterwards is reported as unverified: it is not evidence of absence.
  *
  * EXIT CODES: 0 the requested work completed, 2 usage error, 3 nothing was done because
- * ownership could not be established, 4 a deletion was attempted and failed.
+ * ownership could not be established, 4 a deletion was attempted and failed, 5 every delete
+ * was accepted but the account listing still holds at least one of the names.
  *
  * @package Loghound
  * @license MIT
@@ -192,6 +202,76 @@ final class OpensolrTeardown
     }
 
     /**
+     * Delete each index the account was proven to hold, reporting per name.
+     *
+     * A failure on one name does not abandon the others: an operator who is being billed for
+     * two indexes is not helped by a run that gave up after the first. Every message is taken
+     * through safeMessage() before it can reach a terminal or an install log.
+     *
+     * Shared with the panel, which drives the same teardown from a job, so there is exactly one
+     * implementation of "delete these and say what happened" to audit.
+     *
+     * @param string[] $present Names confirmOwned() found in the account listing.
+     * @return array{deleted:string[],failed:array<string,string>}
+     */
+    public static function deleteAll(Opensolr $api, array $present): array
+    {
+        $deleted = [];
+        $failed  = [];
+
+        foreach ($present as $name) {
+            if (!preg_match(self::NAME_RE, $name)) {
+                $failed[$name] = 'not a Loghound index name';
+                continue;
+            }
+            try {
+                $api->deleteIndex($name);
+                $deleted[] = $name;
+            } catch (\Throwable $e) {
+                $failed[$name] = self::safeMessage($e);
+            }
+        }
+
+        return ['deleted' => $deleted, 'failed' => $failed];
+    }
+
+    /**
+     * Check a fresh account listing for the names that were just deleted.
+     *
+     * AN EMPTY LISTING IS NOT EVIDENCE OF ABSENCE, for the same reason confirmOwned() refuses
+     * to read one as evidence of ownership: a restricted key, a control-plane hiccup and an
+     * account with nothing left in it are indistinguishable from here. The caller passes the
+     * listing it managed to read, and a listing it could not read is reported as unverified
+     * rather than quietly counted as success.
+     *
+     * @param string[] $names   The names that were deleted.
+     * @param string[] $account Index names Opensolr::listIndexes() returned, afterwards.
+     * @return array{gone:string[],present:string[]}
+     * @throws \RuntimeException when the listing came back empty, which is not proof.
+     */
+    public static function verifyAbsent(array $names, array $account): array
+    {
+        if ($account === []) {
+            throw new \RuntimeException(
+                'The Opensolr account listing came back empty, so it is not evidence that anything '
+                . 'was removed. Check the account at https://opensolr.com.'
+            );
+        }
+
+        $gone    = [];
+        $present = [];
+        foreach ($names as $name) {
+            if (in_array($name, $account, true)) {
+                $present[] = $name;
+            } else {
+                $gone[] = $name;
+            }
+        }
+
+        return ['gone' => $gone, 'present' => $present];
+    }
+
+    /**
      * Build a verdict row.
      *
      * @param string[] $names
@@ -278,18 +358,38 @@ final class OpensolrTeardown
             return 0;
         }
 
-        $failed = 0;
-        foreach ($owned['present'] as $name) {
-            try {
-                $api->deleteIndex($name);
-                self::line('DELETED', $name);
-            } catch (\Throwable $e) {
-                self::line('FAILED', $name . ' ' . self::safeMessage($e));
-                $failed++;
-            }
+        $outcome = self::deleteAll($api, $owned['present']);
+        foreach ($outcome['deleted'] as $name) {
+            self::line('DELETED', $name);
+        }
+        foreach ($outcome['failed'] as $name => $why) {
+            self::line('FAILED', $name . ' ' . $why);
         }
 
-        return $failed > 0 ? 4 : 0;
+        if ($outcome['deleted'] === []) {
+            return $outcome['failed'] === [] ? 0 : 4;
+        }
+
+        try {
+            $check = self::verifyAbsent($outcome['deleted'], $api->listIndexes());
+        } catch (\Throwable $e) {
+            self::line('REASON', 'the account could not be listed again, so absence is unproven: '
+                . self::safeMessage($e));
+            return $outcome['failed'] === [] ? 5 : 4;
+        }
+
+        foreach ($check['gone'] as $name) {
+            self::line('GONE', $name);
+        }
+        foreach ($check['present'] as $name) {
+            self::line('PRESENT', $name);
+        }
+
+        if ($outcome['failed'] !== []) {
+            return 4;
+        }
+
+        return $check['present'] === [] ? 0 : 5;
     }
 
     /**

@@ -75,7 +75,7 @@ most load-bearing fact about this codebase.
 | What it is | Your webserver's access logs, parsed and indexed by Loghound | The request log of the Opensolr search indexes your account owns |
 | Where it lives | Loghound's **own two indexes**, `solr.hits_core` and `solr.sessions_core` | Opensolr's analytics shards, on the platform |
 | How the panel reads it | `src/Panel/Gateway.php` → `src/Solr.php` → `solr.base_url` | `src/OpensolrLog.php` / `src/Opensolr.php` → `https://opensolr.com/solr_manager/api` |
-| Views | Overview, Bot forensics, Fingerprint clusters, Networks, Session explorer, Performance, Virtual hosts | Index analytics, Query analysis, Who is querying |
+| Views | Overview, Bot forensics, Attacks, Fingerprint clusters, Networks, Session explorer, Performance, Virtual hosts | Index analytics, Query analysis, Who is querying |
 | Both at once | — | Who is querying, and only that view |
 
 ### Gateway is the only route to Loghound's own Solr — and nothing else has a route to Solr at all
@@ -185,6 +185,36 @@ When a card's error looks like a transport problem, `core.js` also reveals the p
 check under Settings. The banner markup is rendered by `Layout::banners()` and starts
 hidden; nothing pinged anything to decide that.
 
+### A failure is an artefact, not an escaped stack trace
+
+`src/Diagnostics.php`. When something breaks, an operator should be able to copy **one block**
+and post it so the bug gets found quickly. So a failure carries what was being attempted in
+the product's own words, which step it died on, the complete underlying error including
+whatever the platform or the system returned, and the context to reproduce — release, PHP
+version, operating system, web server, which front end, which index or file. One row per fact,
+aligned on a colon, no colour, timestamps in `mm/dd/yyyy hh:mm:ss UTC` like every other date
+in the panel.
+
+In the browser it is rendered through `snippet()` with a copy button, so it scrolls inside
+itself and cannot widen the page. In a terminal it is the same block, printed.
+
+**It is designed to be pasted in public, so redaction is the hard requirement.** Gathering
+everything into one place creates a new sink, and a sink is where secrets leak. Two passes:
+by SHAPE (`api_key=…`, `secret=…`, `https://user:pass@host`, and the rest of the
+credential-shaped parameter names) and by VALUE — every secret this installation actually
+holds, replaced by name, which catches the same key arriving without a label. The Opensolr
+API key, the beacon signing key, the address salt, the panel password hash, the index HTTP
+auth password, the account email and any session token are all on the list, and
+`tests/test_diagnostics.php` plants each one in a failure path and asserts none reaches the
+block.
+
+**Redaction happens here, at the sink, and never where a value is read.** That distinction is
+load bearing on this platform: Opensolr sets a new index's HTTP auth password *to the account
+API key*, so an earlier attempt that scrubbed API-key-shaped strings out of control-plane
+responses replaced the credential Loghound needs with a marker and every authenticated query
+afterwards failed 401. A response carries its values through intact
+(`tests/test_secret_boundaries.php`); containment belongs to each place a value is shown.
+
 ---
 
 ## Anatomy of a card
@@ -260,7 +290,7 @@ One Solr round trip answers a whole sidebar, however many dimensions it has.
 "All of" is **withheld**, not shown-and-disabled, on a single-valued field: `a AND b` over one
 value per document is empty by construction, and a control whose only possible answer is zero
 results is worse than no control. The arity comes from `Query::multiValuedFilterFields()`, and a
-test reads `solr/sessions/conf/managed-schema.xml` and fails if the two disagree.
+test reads `solr/sessions/conf/schema.xml` and fails if the two disagree.
 
 "None of" is the one the product was missing. `-as_type_s:("hosting")` is "everything except
 hosting"; it works for one value and for a set. It is also what finally expresses an **absent**
@@ -358,7 +388,7 @@ draw chips the server was honouring.
 
 ### Cross-tabulations
 
-Three, each answering a question its view cannot otherwise answer, each asked as a nested JSON
+Four, each answering a question its view cannot otherwise answer, each asked as a nested JSON
 facet folded into a request the view was already making — no extra round trip:
 
 | View | Pivot | The question |
@@ -366,6 +396,7 @@ facet folded into a request the view was already making — no extra round trip:
 | Overview | country × verdict | which countries send people and which send automation |
 | Bot forensics | bot class × network type | a declared crawler on hosting is ordinary; a headless browser on consumer broadband is not |
 | Networks | network type × verdict | should I rate-limit this address space |
+| Attacks | attack pattern × status class | what the server actually **answered** each kind of probe with — the same probe answered 404 and answered 200 are a non-event and an incident |
 
 Every cell links through to the view filtered by **both** dimensions at once, each keeping the
 operator it already had. The inner facet is limited, so the cells of a row do **not** add up to
@@ -469,6 +500,23 @@ moment it is ready instead of waiting on the hourly series.
 `split`, `reasons`, `verdicts`, `histogram`, `classes`, `crawlers`. The `bot_reasons_ss`
 facet is the expensive one; separating it means the declared/evasive split, the verdict
 donut and the crawler roll-call are on screen long before it lands.
+
+### Attacks — 6 requests, 8 cards
+
+`answered`, `patterns`, `requests`, `who`, `impersonation`, `when`. Five of the six read the
+**hits** core, because a status and a path have to come off the same document — a session that
+recorded one 2xx and one 4xx says nothing about which of its requests was the hostile one.
+`impersonation` is the exception and reads **sessions**, because identity is a session property.
+
+The pattern facet feeds two cards (the table and the cross-tab) from one request. The
+answered-requests card is the only card in the panel outside the session explorer that reads
+documents rather than facets, and it is bounded twice: by the population (answered attempts
+only, which is a handful on a healthy site) and by a 200-row clamp.
+
+Ordering is the point of the page. Both ranked tables sort by **what the server answered**
+first and by volume last, which is the opposite of every other tool in this category. See
+[ATTACKS.md](ATTACKS.md) for the rule table and, per rule, what it misses and what it
+over-reports.
 
 ### Networks — 5 requests, 6 cards
 
@@ -637,11 +685,57 @@ fetch and the job controls; everything else on the page works with scripting dis
 line matters for the source list: confirming a source and removing one are plain forms and
 work without scripting, while **rescanning is a job** and therefore needs it.
 
-Settings registers a job kind of its own, `source_rescan`, alongside the three built-ins.
-Discovery walks the Apache and nginx config trees following every `Include`, then tails and
-grades up to twenty files, so it is exactly the shape of work that must not run inside one
-request. Demo mode withholds the kind rather than hiding the button, which refuses it at
-start, poll and cancel in one place.
+Settings registers job kinds of its own alongside the three built-ins: `source_rescan`,
+`schema_check` and `destructive_uninstall`. Discovery walks the Apache and nginx config trees
+following every `Include`, then tails and grades up to twenty files, so it is exactly the
+shape of work that must not run inside one request. Demo mode withholds the kinds rather than
+hiding the buttons, which refuses them at start, poll and cancel in one place.
+
+#### Critical errors
+
+The second card on the page, because it is the answer to a question the product could not
+previously answer: *why is my panel empty?* The tailer's parse errors, a rejected configset, a
+failed schema push, a source it cannot read and an unreachable control plane were each a
+separate counter in a separate file, and each needed knowing to go and look.
+
+**Critical only — no levels, no severities, no filters.** Every level control turns the
+question into "which one should I be looking at", and the answer to that is always "all of
+them", which is how a list of errors becomes a list nobody reads. The admission test is not
+"was this an error" but "is something not working because of this". In: the tailer stopped or
+cannot read a source, a configset rejected, a schema push failed, the control plane
+unreachable, Solr refusing writes, a job died, nowhere to write. Out: a single parse error,
+one slow query, a retried request that then succeeded, a warning, anything informational,
+anything that resolved itself.
+
+The one real edge is parsing. A single unparsed line is nothing — logs contain rubbish and
+the parser drops it on purpose. An *entire source* failing to parse is the product silently
+ingesting nothing, which is indistinguishable from an empty panel and has no other symptom,
+so it is in.
+
+`src/Panel/Incidents.php` supplies two things under one heading: what is broken **now**,
+derived from evidence the product already writes (the tailer's status document, the saved
+schema verdict, the configuration, the writability of `var/`), and a bounded **ledger** of
+things that happened and are over, which no later probe could rediscover. A derived entry
+disappears by itself when the condition clears; a recorded one can be cleared by hand and
+anything still true comes straight back, which is what stops the card being a place a real
+problem can be dismissed. The ledger is `var/incidents.json`, mode 0600, never under the
+document root, capped, pruned on every write, identical failures coalesced, and redacted both
+on the way in and on the way back out. Each entry carries the copyable block described above.
+
+An empty card is the normal state and says so.
+
+#### Remove Loghound entirely
+
+`destructive_uninstall`, 11 steps — the same eleven `install/uninstall.sh` prints, from
+`Loghound\Setup\Teardown::STEPS`, so the browser and the terminal show the same run. The panel
+performs the five that need no root (prove ownership, delete, confirm absence from the account
+listing, empty `var/`, remove the configuration) and shows the other six in their place with
+the reason and the command. See [docs/INSTALL.md](INSTALL.md#uninstalling).
+
+It is armed by a POST carrying the typed words and a current second factor, which records a
+one-time grant in that session; `job_start` spends it. Registering the kind is what makes a
+run pollable and cancellable after the grant is gone — it is not permission to start one, and
+an unarmed start is refused in the same words as an unknown operation.
 
 ---
 
@@ -1028,7 +1122,7 @@ panel something.
 ### 1. `geo_p` cannot feed the map — still true
 
 SPEC §4.1 gives `geo_p` **indexed, no docValues**, and both shipped configsets implement it
-that way (`solr/hits/conf/managed-schema.xml:221`, `solr/sessions/conf/managed-schema.xml:153`).
+that way (`solr/hits/conf/schema.xml:221`, `solr/sessions/conf/schema.xml:153`).
 Solr can search such a field but cannot facet on it or return it, so there is no way to
 aggregate coordinates. The Networks map is therefore built from `country_s` counts plotted
 at country centroids shipped in `public/assets/js/geo.js`, and is labelled
@@ -1045,7 +1139,7 @@ does not define one there.
 
 The shipped sessions configset closes the gap: `text_all` plus the full `path_txt`,
 `ua_txt`, `as_org_txt`, `netname_txt`, `rdns_txt`, `city_txt`, `country_txt` set with their
-copyFields (`solr/sessions/conf/managed-schema.xml:353-378`), which is exactly what
+copyFields (`solr/sessions/conf/schema.xml:353-378`), which is exactly what
 `Query::QF_FIELDS` searches. Free-text search on the explorer works.
 
 **Still worth fixing in the spec:** §4.2 should say so, or the next person to build a
@@ -1056,7 +1150,7 @@ code gap.
 ### 3. `bot_verdict_s` is not on `hits`, but Performance wants to filter by it — still true
 
 The verdict lives on the session document (§4.2) and appears in the sessions schema only
-(`solr/sessions/conf/managed-schema.xml:277`). The Performance view's "Humans only" toggle
+(`solr/sessions/conf/schema.xml:277`). The Performance view's "Humans only" toggle
 needs it per-request. `Performance::scoped()` handles this by counting, over the *unscoped*
 domain, how many matched hits carry a verdict at all, and telling the operator plainly when
 the filter cannot be applied — rather than drawing an empty chart.

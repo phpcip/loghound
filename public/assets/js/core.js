@@ -728,6 +728,9 @@ export async function api(view, action, extra, signal) {
         err.transport = true;
         throw err;
     }
+    if (goneToSetup(data)) {
+        return data;
+    }
     if (!res.ok || (data && data.error)) {
         const err = new Error((data && data.error) || 'Request failed with HTTP ' + res.status + '.');
         err.transport = /solr|timed out|timeout|refused|resolve|unreachable|credentials/i.test(err.message);
@@ -737,6 +740,37 @@ export async function api(view, action, extra, signal) {
         lastStamp = data.cache;
     }
     return data;
+}
+
+/**
+ * Has this installation been removed underneath the page, and if so, go to the installer.
+ *
+ * THE CASE THIS EXISTS FOR. `install/uninstall.sh` is run on the server, or the panel's own
+ * removal finishes, while a browser is sitting on a view whose cards poll. Every one of those
+ * requests is now answered by public/index.php with `{"setup": "./"}` — the panel's own
+ * language for "there is no panel any more" — and without this they would each be rendered as
+ * a card error with a retry button, aimed at an installation that no longer exists.
+ *
+ * NAVIGATION IS ONE-WAY AND HAPPENS ONCE. Twelve cards can be in flight at the same moment, so
+ * the flag stops eleven redundant assigns; and the target is never the server's string, only
+ * the fixed relative root, so nothing in a response can steer the browser anywhere.
+ *
+ * The caller is handed the payload back rather than an exception, because the page is leaving
+ * and a thrown error would paint a failure on a card for the moment before it does.
+ *
+ * @param {Object} data
+ * @returns {boolean}
+ */
+let leaving = false;
+function goneToSetup(data) {
+    if (!data || typeof data.setup !== 'string' || data.setup === '') {
+        return false;
+    }
+    if (!leaving) {
+        leaving = true;
+        window.location.assign('./');
+    }
+    return true;
 }
 
 /**
@@ -854,6 +888,9 @@ export async function post(fields) {
     const data = await res.json().catch(() => null);
     if (!data) {
         throw new Error('The panel returned a response that was not JSON (HTTP ' + res.status + ').');
+    }
+    if (goneToSetup(data)) {
+        return data;
     }
     if (data.error) {
         const err = new Error(data.error);
@@ -1304,6 +1341,11 @@ const polling = new Set();
  * caller can render partial results as the operation accumulates them rather than waiting
  * for it to finish. The job's context is on `job.result`.
  *
+ * A POLL THAT COMES BACK CARRYING `setup` IS THE INSTALLATION GOING AWAY MID-OPERATION, which
+ * for the teardown job is the intended ending. post() has already started the navigation to the
+ * installer; the loop returns rather than throwing, which is what keeps a card from painting
+ * "that was not a usable job state" over the page for the moment before it leaves.
+ *
  * @param {string} kind    Job kind the hosting view registered.
  * @param {string} mountId Element id to render the job panel into.
  * @param {Object} [opts]  {title, params, onStep, onDone}
@@ -1325,12 +1367,18 @@ export async function runJob(kind, mountId, opts) {
 
     try {
         let job = await post(Object.assign({ action: 'job_start', kind: kind }, options.params || {}));
+        if (job && typeof job.setup === 'string') {
+            return;
+        }
         requireJob(job);
         step(job);
 
         while (!job.done) {
             await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_MS));
             job = await post({ action: 'job_poll', id: job.id });
+            if (job && typeof job.setup === 'string') {
+                return;
+            }
             requireJob(job);
             step(job);
         }
@@ -1401,7 +1449,14 @@ function requireJob(job) {
     }
 }
 
-/** Draw a job's progress bar, step list and controls. */
+/**
+ * Draw a job's progress bar, step list and controls.
+ *
+ * A step's `report` is the copyable failure artefact — see src/Diagnostics.php — and is
+ * rendered through snippet(), the same pre plus copy button every command on the page uses,
+ * rather than as another sentence. It scrolls inside itself, so a long path or a long platform
+ * message cannot widen the page it is on.
+ */
 function renderJob(mount, job, kind, options) {
     if (!job) {
         return;
@@ -1432,6 +1487,9 @@ function renderJob(mount, job, kind, options) {
         ]);
         if (step.detail) {
             li.appendChild(el('span', { class: 'job-step-detail', text: step.detail }));
+        }
+        if (step.report) {
+            li.appendChild(snippet(String(step.report)));
         }
         steps.appendChild(li);
     }

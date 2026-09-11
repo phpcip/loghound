@@ -267,6 +267,7 @@ final class Jobs
                 'state'  => 'pending',
                 'note'   => null,
                 'detail' => null,
+                'report' => null,
             ],
             $plan
         );
@@ -395,6 +396,12 @@ final class Jobs
      * which step failed and why, and the job has to reach a terminal state so it stops
      * being polled.
      *
+     * `report` IS ITS OWN FIELD rather than folded into `detail`. A step that failed hands the
+     * operator one block to paste — see Loghound\Diagnostics — and `detail` is a sentence the
+     * card reads out; the front end renders them differently, so flattening one into the other
+     * would lose the copy control. It is redacted here like everything else on the way out,
+     * because this class is a boundary and a field that skipped it would be the one that leaked.
+     *
      * @param array{label:string,run:callable} $step
      * @param array<string,mixed>              $ctx
      * @return array{step:array<string,mixed>,context:array<string,mixed>,failed:bool,stop:bool}
@@ -410,6 +417,7 @@ final class Jobs
                     'state'  => $ok ? 'done' : 'failed',
                     'note'   => isset($result['note']) ? self::redact((string) $result['note']) : null,
                     'detail' => isset($result['detail']) ? self::redact((string) $result['detail']) : null,
+                    'report' => isset($result['report']) ? self::redact((string) $result['report']) : null,
                     'ms'     => (int) round((microtime(true) - $started) * 1000),
                 ],
                 'context' => isset($result['context']) && is_array($result['context']) ? $result['context'] : [],

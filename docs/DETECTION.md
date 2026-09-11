@@ -12,6 +12,12 @@
 - [False positives](#false-positives)
 - [Tuning](#tuning)
 
+> **This document is about deciding whether a visitor is a bot.** Deciding whether a *request*
+> was hostile is a separate question with a separate rule table, a separate field and a separate
+> view: see **[ATTACKS.md](ATTACKS.md)**. The two meet in one place — a session that declared a
+> named crawler and answered from a rented cloud VM is both an impersonation finding there and,
+> where the operator publishes verifiable reverse DNS, an `rdns_claim_failed` scoring signal here.
+
 ---
 
 ## The three-plane model

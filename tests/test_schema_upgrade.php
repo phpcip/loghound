@@ -80,10 +80,20 @@ function lh_sch_install(array $fields = []): array
     foreach (Schema::ROLES as $role) {
         @mkdir($root . '/solr/' . $role . '/conf', 0750, true);
         file_put_contents(
-            $root . '/solr/' . $role . '/conf/managed-schema.xml',
+            $root . '/solr/' . $role . '/conf/schema.xml',
             lh_sch_xml($fields[$role])
         );
-        file_put_contents($root . '/solr/' . $role . '/conf/solrconfig.xml', '<config/>');
+        file_put_contents(
+            $root . '/solr/' . $role . '/conf/solrconfig.xml',
+            '<config><schemaFactory class="ClassicIndexSchemaFactory"/></config>'
+        );
+        /* The configset ships THREE files now and pushConfigSet() refuses to start when one of
+           them is missing locally, so a fixture that stopped at two would exercise the refusal
+           path rather than the push. */
+        file_put_contents(
+            $root . '/solr/' . $role . '/conf/mapping-ISOLatin1Accent.txt',
+            '"\u00E9" => "e"' . "\n"
+        );
     }
 
     $cfg = Config::load($root . '/config/loghound.php');
@@ -100,14 +110,17 @@ function lh_sch_install(array $fields = []): array
 /**
  * A scripted control plane: it hands back a live schema per index and accepts uploads.
  *
- * @param array<string,string|null>  $live    index name => the managed schema it is running,
+ * @param array<string,string|null>  $live    index name => the schema it is running,
  *                                            or null for "the platform will not hand it back"
  * @param array<int,array<string,string>> $uploads Filled with one row per accepted upload.
  * @param callable|null $reject fn(string $core, string $file): ?string — a rejection message.
+ * @param array<int,string> $managed Index names still running Solr's MANAGED schema factory.
+ *                                   Everything else answers with the classic one, which is what
+ *                                   this release uploads.
  */
-function lh_sch_transport(array $live, array &$uploads, ?callable $reject = null): callable
+function lh_sch_transport(array $live, array &$uploads, ?callable $reject = null, array $managed = []): callable
 {
-    return static function (array $req) use ($live, &$uploads, $reject): array {
+    return static function (array $req) use ($live, &$uploads, $reject, $managed): array {
         $url = (string) ($req['url'] ?? '');
         $body = (string) ($req['body'] ?? '');
 
@@ -126,6 +139,19 @@ function lh_sch_transport(array $live, array &$uploads, ?callable $reject = null
             $q = [];
             parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
             $core = (string) ($q['index_name'] ?? '');
+            $name = (string) ($q['file_name'] ?? '');
+
+            /* THE FACTORY PROBE IS A DIFFERENT QUESTION FROM THE SCHEMA, so the fake plane has
+               to answer it as one. Returning the schema for every file name would make
+               Schema::check() read a document with no <schemaFactory> in it and conclude every
+               index is still on the managed factory — a state in which no push can fix
+               anything. */
+            if ($name === 'solrconfig') {
+                return in_array($core, $managed, true)
+                    ? $ok('<config><schemaFactory class="ManagedIndexSchemaFactory"/></config>')
+                    : $ok('<config><schemaFactory class="ClassicIndexSchemaFactory"/></config>');
+            }
+
             $xml = $live[$core] ?? null;
             return $xml === null ? $no('NOT_OWNER_ERROR') : $ok($xml);
         }
@@ -155,7 +181,7 @@ function lh_sch_transport(array $live, array &$uploads, ?callable $reject = null
 function lh_sch_shipped(string $role): array
 {
     return Storage::schemaFieldNames(
-        (string) file_get_contents(lh_sch_root() . '/solr/' . $role . '/conf/managed-schema.xml')
+        (string) file_get_contents(lh_sch_root() . '/solr/' . $role . '/conf/schema.xml')
     );
 }
 
@@ -236,7 +262,7 @@ return [
         => static function (): void {
             $root = lh_tmpdir('lh-fp');
             @mkdir($root . '/solr/hits/conf', 0750, true);
-            $path = $root . '/solr/hits/conf/managed-schema.xml';
+            $path = $root . '/solr/hits/conf/schema.xml';
 
             file_put_contents($path, lh_sch_xml(['id', 'ts', 'ip_s']));
             $first = Schema::releaseFor($root, 'hits');
@@ -264,7 +290,7 @@ return [
         => static function (): void {
             $root = lh_tmpdir('lh-fp2');
             @mkdir($root . '/solr/hits/conf', 0750, true);
-            file_put_contents($root . '/solr/hits/conf/managed-schema.xml', '<html>404 Not Found</html>');
+            file_put_contents($root . '/solr/hits/conf/schema.xml', '<html>404 Not Found</html>');
 
             lh_throws(
                 static fn () => Schema::releaseFor($root, 'hits'),
@@ -410,11 +436,14 @@ return [
             lh_same(1, $result['changed'], 'exactly one index was reconfigured');
             lh_same(
                 [
-                    ['core' => 'loghound_9f3c17ab_hits', 'file' => 'managed-schema.xml'],
+                    ['core' => 'loghound_9f3c17ab_hits', 'file' => 'mapping-ISOLatin1Accent.txt'],
+                    ['core' => 'loghound_9f3c17ab_hits', 'file' => 'schema.xml'],
                     ['core' => 'loghound_9f3c17ab_hits', 'file' => 'solrconfig.xml'],
                 ],
                 $uploads,
-                'schema first, then solrconfig, and nothing at all to the index that was current'
+                'dependencies before dependants: the file the schema names, then the schema, then '
+                . 'the solrconfig that makes it authoritative — and nothing at all to the index '
+                . 'that was already current'
             );
             lh_same('skipped', $result['indexes'][1]['state']);
 
@@ -456,19 +485,24 @@ return [
                 ],
                 $uploads,
                 static fn (string $core, string $file): ?string
-                    => $file === 'managed-schema.xml' ? 'ERROR_SCHEMA_REJECTED' : null
+                    => $file === 'schema.xml' ? 'ERROR_SCHEMA_REJECTED' : null
             );
 
             $report = Schema::inspect($cfg, $root, $transport);
             $result = Schema::apply($cfg, $root, $report, $transport);
 
             lh_same('failed', $result['state']);
-            lh_same([], $uploads, 'solrconfig.xml must NOT be uploaded after the schema was refused');
-            lh_contains($result['indexes'][0]['message'], 'managed-schema.xml was rejected');
+            lh_same(
+                [['core' => 'loghound_9f3c17ab_hits', 'file' => 'mapping-ISOLatin1Accent.txt']],
+                $uploads,
+                'the support file lands first and is inert; solrconfig.xml must NOT be uploaded '
+                . 'after the schema was refused, because it is what would switch the factory'
+            );
+            lh_contains($result['indexes'][0]['message'], 'schema.xml was rejected');
             lh_contains($result['indexes'][0]['message'], 'ERROR_SCHEMA_REJECTED', 'with the platform\'s reason');
             lh_contains(
                 $result['indexes'][0]['message'],
-                'nothing on this index changed',
+                'the schema in force on this index is unchanged',
                 'because an operator has to know whether a re-run is safe'
             );
 
@@ -493,12 +527,18 @@ return [
             $result = Schema::apply($cfg, $root, $report, $transport);
 
             lh_same('failed', $result['state']);
-            lh_same(1, count($uploads), 'the schema did land');
+            lh_same(2, count($uploads), 'the support file and the schema both landed');
             lh_contains($result['indexes'][0]['message'], 'solrconfig.xml was rejected');
             lh_contains(
                 $result['indexes'][0]['message'],
-                'previous solrconfig',
-                'the two half-applied states are not the same state and are not described the same way'
+                'still on the MANAGED factory',
+                'the three halting states are not the same state and are not described the same way'
+            );
+            lh_contains(
+                $result['indexes'][0]['message'],
+                'IGNORED',
+                'a schema that landed on a managed index changed nothing, and saying otherwise is '
+                . 'the misreading this message exists to prevent'
             );
 
             lh_rmtree($root);
@@ -539,7 +579,8 @@ return [
         => static function (): void {
             $dir = lh_tmpdir('lh-push');
             @mkdir($dir . '/conf', 0750, true);
-            file_put_contents($dir . '/conf/managed-schema.xml', lh_sch_xml(['id']));
+            file_put_contents($dir . '/conf/mapping-ISOLatin1Accent.txt', '"a" => "a"' . "\n");
+            file_put_contents($dir . '/conf/schema.xml', lh_sch_xml(['id']));
             file_put_contents($dir . '/conf/solrconfig.xml', '<config/>');
 
             $uploads = [];
@@ -549,19 +590,30 @@ return [
                     [],
                     $uploads,
                     static fn (string $core, string $file): ?string
-                        => $file === 'managed-schema.xml' ? 'ERROR_SCHEMA_REJECTED' : null
+                        => $file === 'schema.xml' ? 'ERROR_SCHEMA_REJECTED' : null
                 )
             );
 
             $rows = $client->pushConfigSet('loghound_9f3c17ab_hits', $dir . '/conf');
 
-            lh_same([], $uploads, 'the second file is never sent');
-            lh_same(2, count($rows), 'and it is still reported, rather than vanishing from the result');
-            lh_false($rows[1]['ok']);
+            lh_same(
+                [['core' => 'loghound_9f3c17ab_hits', 'file' => 'mapping-ISOLatin1Accent.txt']],
+                $uploads,
+                'the file the schema DEPENDS ON went first and was accepted; nothing after the '
+                . 'rejection is sent'
+            );
+            lh_same(
+                count(Opensolr::CONFIGSET_FILES),
+                count($rows),
+                'and every file is still reported, rather than vanishing from the result'
+            );
+            lh_false($rows[1]['ok'], 'the schema is the one that was rejected');
+            lh_false($rows[2]['ok'], 'and solrconfig.xml was therefore not attempted');
             lh_contains(
-                $rows[1]['msg'],
+                $rows[2]['msg'],
                 'not uploaded',
-                'every upload reloads the core, so carrying on would reload it against a mismatched pair'
+                'solrconfig.xml is what switches the schema factory, so sending it after a '
+                . 'rejected schema would make the index authoritative on a file that was refused'
             );
 
             lh_rmtree($dir);
@@ -607,7 +659,7 @@ return [
             Schema::writeCache($cfg, $report);
 
             file_put_contents(
-                $root . '/solr/hits/conf/managed-schema.xml',
+                $root . '/solr/hits/conf/schema.xml',
                 lh_sch_xml(['id', 'ts', 'ip_s', 'install_s', 'brand_new_field_s'])
             );
 
@@ -635,7 +687,7 @@ return [
             lh_same(Schema::PUSHED, Schema::notice($cfg, $root)['state'], 'matching markers are the quiet case');
 
             file_put_contents(
-                $root . '/solr/sessions/conf/managed-schema.xml',
+                $root . '/solr/sessions/conf/schema.xml',
                 lh_sch_xml(['id', 'ts_start', 'planes_s', 'search_terms_ss', 'added_by_this_release_s'])
             );
 

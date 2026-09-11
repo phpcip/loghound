@@ -35,6 +35,9 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Security;
+use Loghound\Setup\Steps;
+
 final class Hosts extends Controller
 {
     /** Hosts compared in the table. Beyond this the page stops being readable. */
@@ -377,11 +380,21 @@ final class Hosts extends Controller
             . 'Loghound works exactly as before; this page is the one thing that cannot.</p>';
         echo '<p>Apache logs it as <code>%v</code>, and it is the first field of the format Loghound '
             . 'recommends:</p>';
-        echo '<pre class="snippet mono" id="hosts-logformat">LogFormat "%v:%p %h %l %u %t \"%r\" %&gt;s %O %D '
-            . '\"%{Referer}i\" \"%{User-Agent}i\"" loghound</pre>';
-        echo '<p class="faint">nginx records the same thing as <code>$host</code>. After changing the format, '
-            . 're-confirm the log source under <a href="?v=settings">Settings</a> so the parser is rebuilt '
-            . 'against it — old documents keep no host, so the comparison covers traffic from that point on.</p>';
+
+        /* THE CANONICAL STRING, NOT AN ABBREVIATION OF IT. This card used to print a shortened
+           line — vhost, duration, referer, User-Agent — and publish it under the nickname
+           `loghound`, which is the name docs/INSTALL.md, SPEC §8 and LogDetect's format library
+           all give to the FULL recommended format. Two different formats under one nickname is
+           the same trap as reusing `combined`, one step further in: an operator who pastes this
+           card and then the documentation ends up with whichever definition Apache read last,
+           and no error anywhere. It comes from Setup\Steps now, so there is one string. */
+        echo '<pre class="snippet mono" id="hosts-logformat">'
+            . Security::esc(Steps::recommendedLogFormat()) . "\n"
+            . Security::esc(Steps::customLogLine(Steps::RECOMMENDED_NICKNAME)) . '</pre>';
+        echo '<p class="faint">nginx records the same thing as <code>$host</code>. '
+            . Security::esc(Steps::RESCAN_ADVICE)
+            . ' The log sources card is under <a href="?v=settings">Settings</a>. Old documents keep no '
+            . 'host either way, so the comparison covers traffic from that point on.</p>';
         echo '</div>';
         echo '</section>';
     }

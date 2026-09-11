@@ -145,10 +145,14 @@ const MARKS = {
      * magnifier over a machine for the forensics, a repeated print for the clusters, a stack
      * of racks for the networks, a trail for one visit, a gauge for latency, a set of windows
      * for the hosts, a database for the indexes, a search for the query shapes, an address for
-     * who is calling, a meter for the plan, and a control for the settings.
+     * who is calling, a meter for the plan, a breached shield for what was attempted, and a
+     * control for the settings.
      */
     view: {
         overview:     ['M2.6 12.4V7.2', 'M6.2 12.4V3.6', 'M9.8 12.4V6', 'M13.4 12.4V9'],
+        /* A shield with a breach in it: the subject is an attempt on the site, and the gap is
+           the honest half — this product reads the log afterwards and blocked nothing. */
+        attacks:      ['M8 2.4 3.2 4.2v3.5c0 3 2 5.1 4.8 5.9 2.8-.8 4.8-2.9 4.8-5.9V4.2Z', 'M8 5.6v2.6', 'M8 10.2h.1'],
         bots:         ['M4.5 6.5h7v6h-7z', 'M8 3.2v3.3', 'M6.6 9h.1', 'M9.3 9h.1', 'M2.6 8.6v2.4', 'M13.4 8.6v2.4'],
         fingerprints: ['M8 2.6c2.6 0 4.6 2 4.6 4.5', 'M3.4 7.1C3.4 4.6 5.4 2.6 8 2.6', 'M5.6 7.4a2.4 2.4 0 0 1 4.8 0v2.2', 'M8 7.6v4.2', 'M5.4 10.6v2', 'M10.6 10.2v2.4'],
         networks:     ['M3 3.4h10v3.2H3z', 'M3 9.4h10v3.2H3z', 'M5 5h.1', 'M5 11h.1'],

@@ -1435,6 +1435,19 @@ final class Pipeline
             }
         }
 
+        /* AFTER ENRICHMENT AND BEFORE THE SESSIONIZER, and both halves of that are load-bearing.
+           The crawler-impersonation rule reads `rdns_s`, which the ASN enricher has only just
+           set, so running this inside Parser::normalize() would make that rule permanently
+           silent. And Sessionizer::accumulate() folds `hit_flags_ss` up into the session, so it
+           has to exist by the time the hit reaches it or the session half of the Attacks view
+           would be empty on every document.
+
+           Guarded by class_exists for the same reason the enrichers are: a partial deployment
+           must degrade to "no attack flags" rather than to "no ingest at all". */
+        if (class_exists('\\Loghound\\Score\\Attacks')) {
+            $hit = \Loghound\Score\Attacks::apply($hit);
+        }
+
         if ($this->sessionizer !== null) {
             try {
                 if (!isset($hit['_ts_unix']) && isset($hit['ts'])) {

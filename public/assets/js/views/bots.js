@@ -183,17 +183,15 @@ function renderClasses(data) {
 }
 
 /**
- * Fill the declared crawler roll-call.
+ * One row of the crawler roll-call, named or unspecified.
+ *
+ * Both halves of the table go through this, so the unnamed group gets the same columns, the
+ * same sort keys and — the part that matters — the same `ua_bot_name_s` filter link as a named
+ * crawler. The row's href carries the value exactly as Solr stored it, `unspecified agent`
+ * included, which is why grouping the rows changes nothing about what clicking one does.
  */
-function renderCrawlers(data) {
-    if (!data.crawlers.length) {
-        tbody(byId('bf-crawlers-table'), []);
-        showNoCrawlers();
-        return;
-    }
-    hideEmpty('bf-crawlers-empty');
-
-    tbody(byId('bf-crawlers-table'), data.crawlers.map((row) => ({
+function crawlerRow(row) {
+    return {
         attrs: dimRow('ua_bot_name_s', row.name),
         cells: [
             {
@@ -221,7 +219,76 @@ function renderCrawlers(data) {
             },
             { text: when(row.last), mono: true, nowrap: true, sort: row.last || '' }
         ]
-    })));
+    };
+}
+
+/**
+ * The single line that introduces the unnamed group, spanning the width of the table.
+ *
+ * ONE SENTENCE FOR THE GROUP, NOT ONE PER ROW. There are at most four of these markers and
+ * they all mean the same thing; saying it beside each of them would be three repetitions of a
+ * sentence that is already longer than the row it annotates.
+ */
+function unspecifiedNote(columns) {
+    return el('tr', {}, [
+        el('td', {
+            colspan: String(columns),
+            class: 'muted wrap',
+            text: 'Below: sessions that declared themselves a crawler and named nothing recognisable — a ' +
+                'User-Agent carrying bot, crawler or spider, or nothing bot-like but a contact URL. They ' +
+                'are counted in every figure above, and each marker keeps its own row because two ' +
+                'different markers are not evidence of one crawler.'
+        })
+    ]);
+}
+
+/**
+ * Fill the declared crawler roll-call, named crawlers first.
+ */
+function renderCrawlers(data) {
+    const table = byId('bf-crawlers-table');
+    if (!table) {
+        return;
+    }
+
+    /* THE UNNAMED GROUP LIVES IN A SECOND <tbody>, AND THAT IS WHAT KEEPS IT AT THE BOTTOM.
+       sorttable.js reorders `table.tBodies[0]` and nothing else, so a group built as its own
+       body stays put through every click on every column header, and the sentence above it
+       stays directly above it. A separator row inside the sorted body would be dealt out into
+       the middle of the table by the first sort — a row reading "below:" with named crawlers
+       under it is worse than no grouping at all. Every re-render drops the old one first. */
+    for (const extra of Array.prototype.slice.call(table.tBodies, 1)) {
+        extra.remove();
+    }
+
+    if (!data.crawlers.length) {
+        tbody(table, []);
+        showNoCrawlers();
+        return;
+    }
+    hideEmpty('bf-crawlers-empty');
+
+    /* The server has already sorted the unspecified rows to the end (Panel\Bots::crawlers);
+       this splits on the flag rather than on the position, so the two agree even if one of
+       them is changed without the other. */
+    const named = data.crawlers.filter((row) => !row.unspecified);
+    const unspecified = data.crawlers.filter((row) => row.unspecified);
+
+    tbody(table, named.map(crawlerRow));
+
+    if (!unspecified.length) {
+        return;
+    }
+
+    /* core.js's tbody() fills a table's FIRST body, which is the one already spoken for. The
+       group is therefore built into a detached table and its body moved across, so both halves
+       are rendered by the same cell renderer instead of by a copy of it that drifts. */
+    const staging = el('table');
+    tbody(staging, unspecified.map(crawlerRow));
+    const group = staging.tBodies[0];
+    const columns = table.tHead ? table.tHead.rows[0].cells.length : 7;
+    group.insertBefore(unspecifiedNote(columns), group.firstChild);
+    table.appendChild(group);
 }
 
 /**

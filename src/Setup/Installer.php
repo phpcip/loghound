@@ -167,7 +167,11 @@ final class Installer
      */
     public function handle(): void
     {
-        Security::sendSecurityHeaders();
+        /* THE ROOT, because Setup\View emits the import map from `$this->root` and a hash taken
+           over any other tree's map admits nothing. The two are the same directory in a normal
+           installation, which is exactly why the mismatch would never be noticed until the day
+           they were not. */
+        Security::sendSecurityHeaders($this->root);
         header('Cache-Control: no-store, private');
         header('X-Robots-Tag: noindex, nofollow');
 

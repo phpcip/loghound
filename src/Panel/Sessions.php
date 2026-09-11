@@ -112,7 +112,11 @@ final class Sessions extends Controller
      */
     private static function browseFields(): array
     {
-        $out = Query::filterFields();
+        /* THE SESSIONS SUBSET, not the master list. A status is a property of a REQUEST and the
+           sessions core defines neither `status_i` nor `status_class_s`, so offering them here
+           would put two dimensions in the sidebar whose every value answers zero — which reads
+           as "no traffic" rather than as "wrong plane". Query::hitsOnlyFields() is the list. */
+        $out = Query::sessionFilterFields();
         unset($out['ip_s'], $out['session_id_s']);
         return $out;
     }

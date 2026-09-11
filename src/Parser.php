@@ -476,6 +476,17 @@ final class Parser
             self::put($doc, 'host_s', self::sanitizeText($host, 255));
         }
 
+        /* THE HOST THE REQUEST LINE ITSELF NAMED, kept only for the length of the pipeline.
+           A request line in absolute form — `GET http://elsewhere.example/ HTTP/1.1` — is how a
+           client asks a proxy to fetch somebody else's site, and it is indistinguishable from an
+           ordinary request once the target has been reduced to a path. Underscore-prefixed, so
+           bin/loghound-tail strips it before indexing: it is evidence for Score\Attacks, not a
+           field the schema defines. Absent whenever the target was in origin form, which is
+           every ordinary request. */
+        if (isset($req['host']) && is_string($req['host']) && $req['host'] !== '') {
+            $doc['_abs_host'] = strtolower((string) preg_replace('/:\d+$/', '', $req['host']));
+        }
+
         $ip = trim((string) ($raw['remote_addr'] ?? ''));
         if ($ip !== '' && filter_var($ip, FILTER_VALIDATE_IP) !== false) {
             $isV6 = str_contains($ip, ':');
@@ -503,6 +514,17 @@ final class Parser
             $code = (int) $status;
             if ($code >= 100 && $code <= 599) {
                 $doc['status_i'] = $code;
+
+                /* THE CLASS, AS A TERM, because the class is the question an operator asks and a
+                   range query is not a facet. "Was it answered" is 2xx-or-3xx against everything
+                   else, and asking that of `status_i` means either a range filter (which a facet
+                   cannot bucket) or a sixty-bucket terms facet the reader has to add up. One
+                   string per document, six possible values, and the exact code stays available
+                   beside it for the investigator who wants 403 apart from 401.
+
+                   WRITTEN ONLY WHERE `status_i` IS. A log line whose status did not parse gets
+                   neither field, so absence means "not recorded" on both and never "1xx". */
+                $doc['status_class_s'] = ((int) ($code / 100)) . 'xx';
             }
         }
 

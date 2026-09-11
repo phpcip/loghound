@@ -165,7 +165,35 @@ logfile() {
     fi
 }
 
-step()  { printf '\n%s==>%s %s%s%s\n' "$C_BOLD" "$C_RESET" "$C_BOLD" "$1" "$C_RESET"; logfile "== $1"; }
+# Where the run is, in steps.
+#
+# A heading on its own tells an operator what is happening and not how much of it is left, and
+# these scripts are watched over SSH on a box somebody is in the middle of changing. So every
+# step carries its position. PROGRESS_TOTAL is set by plan() where the number of steps is known
+# in advance — the teardown, whose list is shared with the panel — and left at zero where it
+# genuinely is not, because a run that skips two of its thirteen steps must not print a total it
+# is going to miss. An ordinal with no total still says where the run is; a wrong total does not.
+#
+# Readable with no colour and in a narrow terminal: the marker is ASCII, the position is four or
+# five characters, and nothing depends on a column count.
+PROGRESS_N=0
+PROGRESS_TOTAL=0
+
+# Begin a numbered sequence. `plan N` when the count is known, `plan` when it is not.
+plan() { PROGRESS_TOTAL="${1:-0}"; PROGRESS_N=0; }
+
+# A counted step heading.
+step() {
+    PROGRESS_N=$((PROGRESS_N + 1))
+    local tag="[$PROGRESS_N]"
+    (( PROGRESS_TOTAL > 0 )) && tag="[$PROGRESS_N/$PROGRESS_TOTAL]"
+    printf '\n%s==>%s %s %s%s%s\n' "$C_BOLD" "$C_RESET" "$tag" "$C_BOLD" "$1" "$C_RESET"
+    logfile "== $tag $1"
+}
+
+# An uncounted heading: the framing around a sequence rather than a step in it.
+phase() { printf '\n%s==>%s %s%s%s\n' "$C_BOLD" "$C_RESET" "$C_BOLD" "$1" "$C_RESET"; logfile "== $1"; }
+
 say()   { printf '    %s\n' "$1"; logfile "   $1"; }
 ok()    { printf '    %sPASS%s  %s\n' "$C_GREEN" "$C_RESET" "$1"; logfile "PASS $1"; }
 fail()  { printf '    %sFAIL%s  %s\n' "$C_RED" "$C_RESET" "$1" >&2; logfile "FAIL $1"; }
@@ -2334,6 +2362,21 @@ uninstall_units() {
     ok "reloaded the systemd manager configuration"
 }
 
+# Print the teardown headings a bailed-out step never reached, marked skipped.
+#
+# The run's step numbers are shared with the panel — see Loghound\Setup\Teardown::STEPS — so a
+# step that returns early must not leave the sequence jumping from [2/11] to [5/11]. It prints
+# what did not happen instead, which is also the more honest report: a step nobody saw is a step
+# the operator has to assume ran.
+teardown_skip_rest() {
+    local reason="$1"; shift
+    local label
+    for label in "$@"; do
+        step "$label"
+        skip "$reason"
+    done
+}
+
 # Delete the two Opensolr indexes this installation provisioned — and nothing else.
 #
 # Runs BEFORE the configuration is purged, because the API key that authorises it is in
@@ -2347,7 +2390,7 @@ uninstall_units() {
 # the data and burns the name permanently across the entire platform, so it takes either
 # the literal word DELETE at a prompt or LOGHOUND_UNINSTALL_DELETE_INDEXES=yes.
 uninstall_opensolr_indexes() {
-    step "Opensolr indexes"
+    step "Proving your account owns these indexes"
 
     local config="$PREFIX/config/loghound.php"
     local helper="" path name
@@ -2361,11 +2404,13 @@ uninstall_opensolr_indexes() {
         info "      holds two 'loghound_<id>_hits' / '_sessions' indexes, remove them in the"
         info "      Opensolr control panel at https://opensolr.com."
         leave_behind "any Opensolr indexes this install created — the config was gone, so ownership could not be checked"
+    teardown_skip_rest "ownership could not be checked" "Deleting the Loghound indexes" "Confirming they are gone from your account"
         return 0
     fi
     if [[ -z "$helper" ]] || [[ -z "$PHP_BIN" ]]; then
         warn "cannot run the index check (no PHP, or install/opensolr-teardown.php is missing)"
         leave_behind "the two Opensolr indexes — the ownership check could not be run"
+    teardown_skip_rest "the ownership check could not be run" "Deleting the Loghound indexes" "Confirming they are gone from your account"
         return 0
     fi
 
@@ -2389,6 +2434,7 @@ uninstall_opensolr_indexes() {
             info "      it cannot tell a dedicated node from one your other applications"
             info "      also write to. Remove the two cores yourself if you want them gone."
             leave_behind "the two Solr cores on your own Solr — Loghound never unloads a core it does not manage"
+            teardown_skip_rest "this installation uses its own Solr" "Deleting the Loghound indexes" "Confirming they are gone from your account"
             return 0
             ;;
         ok)
@@ -2396,6 +2442,7 @@ uninstall_opensolr_indexes() {
         refuse)
             warn "refusing to delete any index: ${reason:-the configuration does not describe a pair this install provisioned}"
             leave_behind "the Solr indexes named in $config — ownership could not be established, so nothing was deleted"
+            teardown_skip_rest "ownership could not be established" "Deleting the Loghound indexes" "Confirming they are gone from your account"
             return 0
             ;;
         *)
@@ -2409,6 +2456,7 @@ uninstall_opensolr_indexes() {
                 done
             fi
             leave_behind "the two Opensolr indexes — ownership could not be verified (${reason:-control plane unreachable})"
+            teardown_skip_rest "ownership could not be verified" "Deleting the Loghound indexes" "Confirming they are gone from your account"
             return 0
             ;;
     esac
@@ -2416,6 +2464,7 @@ uninstall_opensolr_indexes() {
     if (( rc != 0 )) || (( ${#names[@]} != 2 )); then
         warn "the ownership check did not return two verified index names"
         leave_behind "the two Opensolr indexes — the ownership check was inconclusive"
+    teardown_skip_rest "the ownership check was inconclusive" "Deleting the Loghound indexes" "Confirming they are gone from your account"
         return 0
     fi
 
@@ -2444,11 +2493,15 @@ uninstall_opensolr_indexes() {
         say "keeping the indexes"
         info "      Delete them later in the Opensolr control panel if you change your mind."
         leave_behind "the Opensolr indexes ${names[0]} and ${names[1]} — you chose to keep them"
+        teardown_skip_rest "you chose to keep them" "Deleting the Loghound indexes" "Confirming they are gone from your account"
         return 0
     fi
 
+    step "Deleting the Loghound indexes"
+
     if (( DRY_RUN )); then
         printf '    %sDRY-RUN%s would delete %s and %s\n' "$C_DIM" "$C_RESET" "${names[0]}" "${names[1]}"
+        teardown_skip_rest "nothing was deleted, so there is nothing to confirm" "Confirming they are gone from your account"
         return 0
     fi
 
@@ -2463,10 +2516,39 @@ uninstall_opensolr_indexes() {
         [[ -n "$name" ]] && info "$name was already gone from the account"
     done < <(awk '$1 == "ABSENT" { print $2 }' <<<"$out")
 
-    if (( rc != 0 )); then
+    if (( rc == 4 )); then
         warn "at least one index could not be deleted:"
         sed -n 's/^FAILED /      /p' <<<"$out" >&2 || true
         leave_behind "an Opensolr index the platform refused to delete — remove it at https://opensolr.com"
+    fi
+
+    # THE PROOF IS THE ACCOUNT LISTING, NOT THE DELETE RESPONSE. The helper re-reads
+    # GET /get_index_list after the deletes and reports GONE or PRESENT per name; exit 5 is
+    # "every delete was accepted and the account still holds one of them", which is the one
+    # outcome an operator must not be allowed to walk away from believing they are done.
+    step "Confirming they are gone from your account"
+
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && ok "$name is no longer in your account listing"
+    done < <(awk '$1 == "GONE" { print $2 }' <<<"$out")
+
+    if (( rc == 5 )) && grep -q '^PRESENT ' <<<"$out"; then
+        warn "the account listing STILL holds an index that was just deleted:"
+        sed -n 's/^PRESENT /      /p' <<<"$out" >&2 || true
+        info "      The platform accepted the delete and has not acted on it. Check your"
+        info "      account before you rely on this being finished: https://opensolr.com"
+        leave_behind "an Opensolr index the account still lists after being deleted — check https://opensolr.com"
+    elif (( rc == 5 )); then
+        # AN EMPTY LISTING IS NOT PROOF, and it is also exactly what an account holding nothing
+        # but these two indexes looks like the moment after they are deleted. Neither reading is
+        # available from here, so it is reported as unproven rather than claimed either way.
+        warn "absence could not be proven: the account listing came back empty afterwards"
+        info "      That is consistent with both indexes being gone and with a listing that"
+        info "      did not work. Check them at https://opensolr.com."
+        for name in "${names[@]}"; do
+            info "        $name"
+        done
+        leave_behind "proof that ${names[0]} and ${names[1]} are gone — check them at https://opensolr.com"
     fi
 }
 
@@ -2923,7 +3005,7 @@ uninstall_report() {
 # user, units copied in but never enabled, a prefix that was never created — uninstalls
 # cleanly instead of aborting on the first missing thing.
 do_uninstall() {
-    step "Uninstall"
+    phase "Uninstall"
 
     if (( EUID != 0 )) && (( ! DRY_RUN )); then
         die "The uninstaller must run as root. Re-run with sudo, or use --dry-run first."
@@ -2956,6 +3038,13 @@ do_uninstall() {
         exit 0
     fi
 
+    # THE CANONICAL TEARDOWN, and its length. Loghound\Setup\Teardown::STEPS is the one list
+    # of what removing Loghound means, in the one order that does not destroy what a later step
+    # needs; the panel renders it as a job and this prints it, so an operator watching a
+    # terminal and an operator watching the browser see the same run. A test asserts the two
+    # agree, name for name and position for position.
+    plan 11
+
     uninstall_units
     uninstall_opensolr_indexes
     uninstall_vhost
@@ -2966,7 +3055,7 @@ do_uninstall() {
     uninstall_user
     uninstall_report
 
-    step "Uninstalled"
+    phase "Uninstalled"
     if (( DRY_RUN )); then
         say "Dry run complete. Nothing was changed."
         exit 0
@@ -3003,7 +3092,7 @@ preflight
 ROLLBACK_ARMED=1
 
 if [[ "$MODE" == "upgrade" ]]; then
-    step "Upgrade"
+    phase "Upgrade"
     say "Prefix: $PREFIX"
     say "Refreshing code only. config/loghound.php and var/ are never touched."
 
@@ -3024,14 +3113,14 @@ if [[ "$MODE" == "upgrade" ]]; then
             { run systemctl restart loghound-tail.service; ok "restarted loghound-tail"; }
     fi
     ROLLBACK_ARMED=0
-    step "Upgrade complete"
+    phase "Upgrade complete"
 
     # The code is new; the schema on the live indexes is whatever was uploaded when they
     # were created. A release that adds a field therefore writes a field the live schema
     # does not declare, and the `*`-to-`ignored` dynamic field means Solr ACCEPTS that
     # document and discards the value with no error anywhere. This is the one manual step
     # an upgrade has, so it is printed as a step and not as a footnote.
-    step "One more thing — check the index schema"
+    phase "One more thing — check the index schema"
     say "New code can write a field your indexes do not declare yet. Solr accepts the"
     say "document and throws that value away, silently. Check it, and fix it if needed:"
     say ""
@@ -3111,7 +3200,7 @@ beacon_reference() {
     say "    $PREFIX/bin/loghound-setup --beacon-doc"
 }
 
-step "Done"
+phase "Done"
 
 if (( DRY_RUN )); then
     say "Dry run complete. Nothing was changed."

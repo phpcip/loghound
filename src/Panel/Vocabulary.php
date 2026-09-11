@@ -37,6 +37,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Score\Attacks;
 use Loghound\Score\Rules;
 
 final class Vocabulary
@@ -181,6 +182,25 @@ final class Vocabulary
     ];
 
     /**
+     * The four status classes, plus the two nobody thinks about.
+     *
+     * THE MOST IMPORTANT VOCABULARY IN THE PANEL, because Panel\Attacks is ordered by it and the
+     * whole product claim rests on the reader understanding the difference between two of these
+     * rows. `2xx` is spelled out as "the server answered" rather than "success", because a 200
+     * carrying a site's own error page is not a success and calling it one is precisely the
+     * false confidence this vocabulary exists to prevent.
+     *
+     * @var array<string,array{label:string,why:string}>
+     */
+    private const STATUS_CLASSES = [
+        '1xx' => ['label' => '1xx Informational', 'why' => 'A provisional response. Rare in an access log, and never the end of a request.'],
+        '2xx' => ['label' => '2xx Answered', 'why' => 'The server returned a body. It does NOT prove the body was what was asked for — a site whose error page is served with a 200 looks exactly like this — so a 2xx is where an operator starts looking, not where they stop.'],
+        '3xx' => ['label' => '3xx Redirected', 'why' => 'The client was sent elsewhere. A probe redirected to a login page got no content, but it did learn the page exists.'],
+        '4xx' => ['label' => '4xx Refused', 'why' => 'The server declined: not found, forbidden, unauthorised. This is what a webserver is supposed to do to a probe, and it is why most attack traffic is noise.'],
+        '5xx' => ['label' => '5xx Server error', 'why' => 'The server broke trying to answer. On a hostile request that is a finding in itself: something got far enough in to fail.'],
+    ];
+
+    /**
      * Every dimension that has a vocabulary at all.
      *
      * Checked before a lookup so a caller can ask "does this field need translating" without
@@ -197,6 +217,8 @@ final class Vocabulary
             'bot_reasons_ss',
             'signed_in_b',
             'planes_s',
+            'status_class_s',
+            'hit_flags_ss',
         ], true);
     }
 
@@ -220,6 +242,19 @@ final class Vocabulary
             ];
         }
 
+        /* READ FROM Score\Attacks, NEVER COPIED, exactly as the signal wording is read from
+           Score\Rules. The rule table is where a pattern, its label and the sentence describing
+           what it matches are decided together; a second copy here would be a second place for
+           them to disagree, and the one that reaches the operator would be this one. */
+        if ($field === 'hit_flags_ss') {
+            $rule = Attacks::describe($value);
+            return [
+                'label'    => $rule['label'],
+                'why'      => $rule['what'],
+                'severity' => $rule['severity'],
+            ];
+        }
+
         $table = match ($field) {
             'bot_verdict_s'  => self::VERDICTS,
             'bot_class_s'    => self::BOT_CLASSES,
@@ -228,6 +263,7 @@ final class Vocabulary
             'ua_bot_cat_s'   => self::BOT_CATEGORIES,
             'signed_in_b'    => self::SIGNED_IN,
             'planes_s'       => self::PLANES,
+            'status_class_s' => self::STATUS_CLASSES,
             default          => [],
         };
 
@@ -266,7 +302,7 @@ final class Vocabulary
     public static function all(): array
     {
         $out = [];
-        foreach (['bot_verdict_s', 'bot_class_s', 'as_type_s', 'referer_type_s', 'ua_bot_cat_s', 'signed_in_b', 'planes_s', 'bot_reasons_ss'] as $field) {
+        foreach (['bot_verdict_s', 'bot_class_s', 'as_type_s', 'referer_type_s', 'ua_bot_cat_s', 'signed_in_b', 'planes_s', 'bot_reasons_ss', 'status_class_s', 'hit_flags_ss'] as $field) {
             foreach (self::knownValues($field) as $value) {
                 $spoken = self::value($field, $value);
                 $out[$field][$value] = ['label' => $spoken['label'], 'why' => $spoken['why']];
@@ -299,6 +335,8 @@ final class Vocabulary
             'bot_reasons_ss' => Rules::reasonCodes(),
             'signed_in_b'    => array_keys(self::SIGNED_IN),
             'planes_s'       => array_keys(self::PLANES),
+            'status_class_s' => array_keys(self::STATUS_CLASSES),
+            'hit_flags_ss'   => Attacks::codes(),
             default          => [],
         };
     }

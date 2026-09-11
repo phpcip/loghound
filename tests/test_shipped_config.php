@@ -124,7 +124,7 @@ function lh_pool_value(string $body, string $name): ?string
 return [
     'the sessions schema declares every client-hint field the sessionizer writes'
         => static function (): void {
-        $fields = lh_schema_fields('solr/sessions/conf/managed-schema.xml');
+        $fields = lh_schema_fields('solr/sessions/conf/schema.xml');
 
         foreach (lh_client_hint_fields() as $name) {
             if (!isset($fields[$name])) {
@@ -137,7 +137,7 @@ return [
     },
 
     'those fields are indexed and faceted but never stored' => static function (): void {
-        $fields = lh_schema_fields('solr/sessions/conf/managed-schema.xml');
+        $fields = lh_schema_fields('solr/sessions/conf/schema.xml');
 
         foreach (lh_client_hint_fields() as $name) {
             $f = $fields[$name] ?? null;
@@ -157,8 +157,8 @@ return [
 
     'their flags match the hits schema, which is where the same header is already declared'
         => static function (): void {
-        $sessions = lh_schema_fields('solr/sessions/conf/managed-schema.xml');
-        $hits     = lh_schema_fields('solr/hits/conf/managed-schema.xml');
+        $sessions = lh_schema_fields('solr/sessions/conf/schema.xml');
+        $hits     = lh_schema_fields('solr/hits/conf/schema.xml');
 
         foreach (lh_client_hint_fields() as $name) {
             if (!isset($sessions[$name], $hits[$name])) {
@@ -176,7 +176,7 @@ return [
 
     'the sessions schema still discriminates the two document types it holds'
         => static function (): void {
-        $fields = lh_schema_fields('solr/sessions/conf/managed-schema.xml');
+        $fields = lh_schema_fields('solr/sessions/conf/schema.xml');
         lh_has_key($fields, 'doc_type_s', 'the sessions schema');
         lh_same('true', $fields['doc_type_s']['indexed'] ?? '', 'doc_type_s must be filterable');
     },

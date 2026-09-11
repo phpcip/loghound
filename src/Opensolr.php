@@ -698,30 +698,59 @@ final class Opensolr
     }
 
     /**
-     * Push a configset (managed-schema.xml + solrconfig.xml) to a managed index.
+     * The configset files, IN DEPENDENCY ORDER. Nothing else in a conf directory is uploaded.
+     *
+     * ====================================================================================
+     * THE ORDER IS THE SAFETY PROPERTY OF THIS METHOD, AND IT IS THE REVERSE OF WHAT IT WAS.
+     * ====================================================================================
+     * The platform accepts one file per call and RELOADS THE CORE after each one. So every
+     * intermediate state has to be a configset that loads, and a file must never land before
+     * the thing it depends on.
+     *
+     *   1. mapping-ISOLatin1Accent.txt   schema.xml's char filter names it. A schema that
+     *                                    arrived first would reload the core against a
+     *                                    missing file and THE CORE WOULD NOT LOAD AT ALL —
+     *                                    which is worse than being out of date, because the
+     *                                    index stops answering rather than answering with an
+     *                                    old shape.
+     *   2. schema.xml                    Inert while the index is still on Solr's managed
+     *                                    schema factory, which is exactly what makes this
+     *                                    step safe during the one-time switch to the classic
+     *                                    factory: the file is simply ignored until step 3.
+     *   3. solrconfig.xml                Declares ClassicIndexSchemaFactory, so ITS reload is
+     *                                    the one that makes schema.xml authoritative. By then
+     *                                    both files it needs are already on the index.
+     *
+     * This file used to upload the schema FIRST, on the reasoning that a solrconfig may refer
+     * to field types the old schema lacks. That reasoning was sound and is now served better
+     * by the same rule stated generally — DEPENDENCIES BEFORE DEPENDANTS — which the list
+     * above encodes once. Our solrconfig refers to no field type except `text_all` through
+     * `df`, and `text_all` exists in both the old schema and the new one, so step 3 is safe
+     * against either.
+     *
+     * A REJECTED FILE STOPS THE PUSH. Every remaining state then still loads:
+     *   mapping rejected     nothing changed.
+     *   schema rejected      the mapping file is on the index and unused. Nothing changed.
+     *   solrconfig rejected  the mapping file and schema.xml are on the index; the core is
+     *                        still on the managed factory and still running the schema it had.
+     *                        Setup\Schema::check() reports that state by name, because in it
+     *                        every future schema upload is a silent no-op.
+     * A re-run is always safe from any of the three.
+     *
+     * It is a list and not a glob: a stray .bak or an editor swap file in the directory would
+     * otherwise be uploaded to the Solr node.
+     *
+     * @var array<int,string>
+     */
+    public const CONFIGSET_FILES = ['mapping-ISOLatin1Accent.txt', 'schema.xml', 'solrconfig.xml'];
+
+    /**
+     * Push a configset to a managed index, in CONFIGSET_FILES order.
      *
      * Endpoint: POST /upload_config_file, multipart/form-data, file field `userfile`,
-     * plus core_name / email / api_key as POST fields.
-     *
-     * The platform accepts one file per call and reloads the core, so this walks the
-     * directory and uploads each file in a deliberate order: SCHEMA FIRST, then
-     * solrconfig. Reversed, the core reloads against a solrconfig that references field
-     * types the old schema does not define, and the reload fails — leaving the index in a
-     * state the operator has to fix from the Opensolr control panel.
-     *
-     * The order is explicit and so is the file allowlist. It is deliberately not a glob: a
-     * stray .bak or an editor swap file left in the directory would otherwise be uploaded to
-     * the Solr node. The platform answers {"status":true|false,"msg":...}, and anything
-     * without a truthy status is a failure the operator must see rather than a warning to
-     * hide.
-     *
-     * A REJECTED FILE STOPS THE PUSH, and that is the other half of the ordering rule. Every
-     * upload reloads the core, so carrying on to solrconfig.xml after the schema was refused
-     * would reload the core against a solrconfig referring to field types the schema on the
-     * index does not define — precisely the broken state the schema-first order exists to
-     * prevent, arrived at from the other direction. Stopping means a rejected schema leaves the
-     * index exactly as it was, so a re-run is always safe, and the caller can say which of the
-     * two states the operator is in rather than guessing.
+     * plus core_name / email / api_key as POST fields. The platform answers
+     * {"status":true|false,"msg":...}, and anything without a truthy status is a failure the
+     * operator must see rather than a warning to hide.
      *
      * @param string $confDir Local directory, e.g. solr/hits/conf
      * @return array<int,array{file:string,ok:bool,msg:string}> One row per file, for the
@@ -738,7 +767,7 @@ final class Opensolr
             throw new \InvalidArgumentException('Opensolr: configset directory not found: ' . $confDir);
         }
 
-        $order = ['managed-schema.xml', 'solrconfig.xml'];
+        $order = self::CONFIGSET_FILES;
         $results = [];
         $stoppedBy = '';
 

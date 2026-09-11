@@ -206,10 +206,17 @@ It offers, as a separate question defaulting to **no**, to delete the two Openso
 *this installation provisioned* — names derived from `solr.install_id`, matched against
 `^loghound_[a-f0-9]{8}_(hits|sessions)$`, and cross-checked against your account's own
 index list. If ownership cannot be proven it deletes nothing and prints the names instead;
-nothing else in your account is ever touched. `--dry-run` walks the whole teardown and
-changes nothing, and the run ends with a list of what it deliberately left behind —
-including the beacon `<script>` tag, which only you can remove. See
-[docs/INSTALL.md](docs/INSTALL.md#uninstalling).
+nothing else in your account is ever touched. Afterwards the account is listed **again** and
+each name is reported gone or still present, because a control plane that accepted a delete
+has made a weaker claim than the index being gone — and you are about to stop being billed
+for it. `--dry-run` walks the whole teardown and changes nothing, and the run ends with a
+list of what it deliberately left behind — including the beacon `<script>` tag, which only
+you can remove.
+
+The teardown is **eleven numbered steps**, printed as `==> [3/11] Deleting the Loghound
+indexes`, and the panel runs the same eleven under the same names: Settings → **Remove
+Loghound entirely** does the five that need no root and shows the other six with the reason
+and the command. See [docs/INSTALL.md](docs/INSTALL.md#uninstalling).
 
 **Your log files are opened read-only and are never written to, truncated, rotated,
 renamed or deleted.** Every source path is opened `'rb'` and no other mode string appears
@@ -356,6 +363,7 @@ beacon is independent of whatever other analytics you run.
 | [docs/INSTALL-WEB.md](docs/INSTALL-WEB.md) | Setting up from a browser: the system check, the setup token, the three screens, how the long operations run as jobs, and what each screen writes into the configuration |
 | [docs/INSTALL.md](docs/INSTALL.md) | Installation and the shell wizard: what `install.sh` does, the permission model, the recommended `LogFormat`, exactly which signals each extra header buys you, Solr and Opensolr setup, upgrading, troubleshooting |
 | [docs/DETECTION.md](docs/DETECTION.md) | The three planes, every rule with its weight and rationale, a worked example on real captured traffic, and a frank section on evasion and false positives |
+| [docs/ATTACKS.md](docs/ATTACKS.md) | Hostile requests: every pattern with what it matches, what it misses and what it over-reports; why the status code is the whole point and why a 2xx still proves nothing; crawler impersonation |
 | [docs/BEACON.md](docs/BEACON.md) | The beacon: the three clocks, every field it sends, every signal code, the wire protocol, and what it cannot detect |
 | [docs/PANEL.md](docs/PANEL.md) | The web panel: the async contract every card follows, stepped jobs, request flow, the notes a security reviewer wants, the design system, demo mode |
 | [docs/SCHEMA.md](docs/SCHEMA.md) | Both Solr cores field by field, why each is indexed/docValued/stored, index-size arithmetic, and what to turn off first |

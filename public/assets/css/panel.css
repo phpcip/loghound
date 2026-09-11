@@ -130,6 +130,29 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* THE `hidden` ATTRIBUTE ACTUALLY HIDES, AND THIS RULE IS WHY.
+
+   The whole panel hides things by setting the `hidden` property from JavaScript — the
+   skeletons, the card error, the empty note, the filter panel, the detail dialog. That works
+   only because the browser's own stylesheet carries `[hidden] { display: none }`, and a UA
+   rule is the WEAKEST origin there is: any author declaration of `display` on the same
+   element, however ordinary, silently wins and the element stays on screen with the attribute
+   set on it.
+
+   Two shipped elements were in exactly that state. `.lh-dialog` is `display: flex`, so
+   `closeDialog()` set `hidden`, the dialog stayed on screen, and Close, the scrim and Escape
+   all appeared to do nothing — and then latched, because the next press found `hidden` already
+   true and returned early. `.fpanel` is `display: grid`, so "Hide filters" hid nothing.
+   Neither had a stylesheet bug that was visible by reading the rule; each was correct on its
+   own, and wrong only in combination with an attribute set somewhere else entirely.
+
+   So the fix is the class, not the two instances: one author-origin rule, `!important` so that
+   the next `display` added to a hidable element cannot quietly defeat it again. An element
+   that must be visible while carrying `hidden` does not exist and would be a contradiction in
+   terms — `hidden` means "not relevant", and the attribute is the wrong tool for anything
+   else. */
+[hidden] { display: none !important; }
+
 html { color-scheme: light dark; }
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-theme="light"] { color-scheme: light; }
@@ -1785,6 +1808,69 @@ td .shape { white-space: nowrap; }
 .check-row .muted { overflow-wrap: anywhere; }
 
 /*
+ * Prose inside a card may always break a token that cannot otherwise break.
+ *
+ * MEASURED, AND IT IS THE PAGE THAT WAS WIDE, NOT A BOX. Settings laid out a 809px document in
+ * a 375px viewport with the accordion open. Nothing on the page was an ELEMENT wider than the
+ * viewport — every candidate measured 343px — because the overflow was an inline text run: the
+ * schema card's `<p class="muted">` carries an absolute path to `solr/hits/conf/schema.xml`,
+ * and a path is one word to a line breaker. It has no space, and `/` and `-` are not break
+ * opportunities by default, so it ran straight out of its block box and dragged the document's
+ * scroll area with it.
+ *
+ * THIS IS THE FIX, NOT AN OVERFLOW GUARD. `body { overflow-x: hidden }` was in this file once
+ * and was removed precisely because it CLIPPED this class of defect rather than fixing it, so
+ * the measurement that found it could not have found it again. Breaking the word makes the
+ * content fit; hiding the scrollbar makes the content unreachable.
+ *
+ * WHY THESE SELECTORS AND NOT A LIST OF THE ONES THAT BROKE. mobile.css already carries such a
+ * list — `code`, `.login-note code`, `.check-row .muted`, `.finish-text .muted`,
+ * `.job-step-label` — and this defect is the same list failing to include the sixth place a
+ * path appears. Every card on every page is capable of printing a path, an index name or a
+ * platform message, so the rule is about card prose rather than about the paragraph somebody
+ * noticed. A command block is deliberately NOT here: `.snippet` scrolls inside itself, which is
+ * right for something meant to be copied whole.
+ */
+.card p,
+.card li,
+.card dd,
+.card dt,
+.card summary,
+.card td,
+.card th { overflow-wrap: anywhere; }
+
+/*
+ * The teardown card: the ordered plan, and the two halves of it.
+ *
+ * The steps this panel cannot perform are shown in their place rather than omitted, because a
+ * run that silently left six of eleven out would be a run that told the operator the machine
+ * was clean when it is not. They are dimmed and chipped so the difference reads at a glance.
+ */
+.teardown-plan { margin: 0 0 14px; padding-left: 22px; }
+.teardown-plan li { padding: 3px 0; }
+.teardown-plan li.teardown-shell { color: var(--muted); }
+.teardown-plan .chip { margin-left: 6px; }
+
+button.danger { border-color: var(--bad); color: var(--bad); }
+button.danger:hover { background: var(--bad); border-color: var(--bad); color: var(--page); }
+
+/*
+ * One critical error, and the block that goes with it.
+ *
+ * The error sentence is what the card reads out; the block underneath is the artefact the
+ * operator copies and posts. Both are the same failure, and the reason they are two elements
+ * is that only one of them is meant to be pasted somewhere else.
+ */
+.incident {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--hairline);
+}
+.incident:last-of-type { border-bottom: 0; }
+.incident h4 { margin: 0 0 4px; }
+.incident-meta { margin: 0 0 6px; font-size: 14px; color: var(--muted); }
+.incident-error { margin: 0 0 10px; color: var(--bad); font-weight: 600; }
+
+/*
  * The section nav — the pinned bar of jump links every view builds from its own cards.
  *
  * WHERE IT IS. First child of <main>, a SIBLING of `.view`. It cannot be inside `.view`:
@@ -1921,10 +2007,24 @@ td .shape { white-space: nowrap; }
    of flow, `data-full` for its content, coordinates published by responsive.js.
    The one difference is that they always carry the marker, because their text
    is a hint for a glyph with no words rather than a label the layout cut.
+
+   A FACET VALUE JOINS THEM, and it is the case the component was worth
+   building for. `.facet-val` in the panel and `.fchip-val` on an applied filter
+   both truncate with an ellipsis, and until now there was no way to read the
+   rest: the `title` on the anchor is the vocabulary's sentence about the
+   DIMENSION, so the bubble explained the category while the value stayed
+   unreadable. The marker goes on the ancestor anchor — `.facet-opt` is the
+   whole row, `.fchip` is the whole chip — because the span that carries the
+   ellipsis cannot take focus and the component is keyboard-reachable
+   unconditionally; assets/js/responsive.js measures the span and marks the
+   anchor. An anchor whose value fits carries no marker and has no box at all.
+
    `.set-nav a[data-lh-tip]::after` stays last in the list so the rule keeps the
    name the suite looks it up by. */
 .card-refresh[data-lh-tip]::after,
 .rowopen[data-lh-tip]::after,
+.facet-opt[data-lh-tip]::after,
+.fchip[data-lh-tip]::after,
 .set-nav a[data-lh-tip]::after {
     content: attr(data-full);
     position: fixed;
@@ -1948,11 +2048,15 @@ td .shape { white-space: nowrap; }
 
 .card-refresh[data-lh-tip]:focus-visible::after,
 .rowopen[data-lh-tip]:focus-visible::after,
+.facet-opt[data-lh-tip]:focus-visible::after,
+.fchip[data-lh-tip]:focus-visible::after,
 .set-nav a[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
 
 @media (hover: hover) and (pointer: fine) {
     .card-refresh[data-lh-tip]:hover::after,
     .rowopen[data-lh-tip]:hover::after,
+    .facet-opt[data-lh-tip]:hover::after,
+    .fchip[data-lh-tip]:hover::after,
     .set-nav a[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
 }
 .set-nav a:hover .set-nav-num,
@@ -1967,15 +2071,140 @@ td .shape { white-space: nowrap; }
    and every jump landed its heading underneath the bar. The offset is a property of being a
    card, not of where the parser thinks the card ended up. */
 
-.card { scroll-margin-top: calc(var(--set-nav-h) + 20px); }
+/*
+ * THE PAGE TOOLBAR — the second pinned bar, under the section nav.
+ *
+ * WHAT IS IN IT. Everything that scopes the page rather than a card: the range picker, the host
+ * selector, Clear cache, the applied-filter chips with the control that opens the dimension
+ * groups, and the bandwidth readout. assets/js/responsive.js moves them here from the page
+ * head, once, rather than drawing a second copy of each — see setUpPageTools() for why a second
+ * copy of a control is a second thing to keep in step.
+ *
+ * WHY IT IS A SIBLING OF `.view`, AND WHY THAT ANSWERS THE FACET COLUMN. Same trap as
+ * `.set-nav`: sticky inside `.view` is sticky within one flex item or one grid area, and has no
+ * travel. As a sibling its containing block is <main>. It is also why it cannot overlap the
+ * facet column — the column lives inside `.view`, which starts below this bar.
+ *
+ * TWO STICKY BARS IS A LOT, SO THIS ONE CONDENSES. At rest it is a comfortable row. Stuck, it
+ * halves its padding, drops the readout to the same line and reveals `.pt-scope` — the one line
+ * saying what the numbers below are currently scoped to, which is the thing a reader four
+ * sections down actually needs and the thing the controls stop saying once they are tight.
+ *
+ * THE JUMP OFFSET IS NOW BOTH BARS. `--set-nav-h` is measured; `--page-tools-h` is the
+ * condensed height of this one, which is the height it has whenever a jump lands — a jump
+ * always scrolls, and this bar is always stuck by the time the target arrives. Cards clear the
+ * sum, so a heading can no longer land underneath.
+ */
+
+:root { --page-tools-h: 44px; }
+
+.page-tools {
+    --nav-gutter: 32px;
+
+    position: sticky;
+
+    /* UNDER THE SECTION NAV, WHEREVER THE SECTION NAV ACTUALLY IS. `var(--set-nav-h)` alone
+       assumes that bar is pinned to the top of the window, and on a phone it is not: a fixed
+       navigation bar sits above it and mobile.css pins the section nav below that instead.
+       Measured at 375, this bar landed 60px too high and covered the bar it is supposed to
+       hang from. `--lh-topbar-h` is 0px on a desk screen and removed entirely by
+       responsive.js there, so the same expression is correct at both widths. */
+    top: calc(var(--lh-topbar-h, 0px) + var(--set-nav-h));
+    z-index: 29;
+
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    margin: 0 calc(var(--nav-gutter) * -1) 28px;
+    padding: 12px var(--nav-gutter);
+    background: var(--page);
+    border-bottom: 1px solid var(--hairline);
+}
+
+/* The head's own rule and top margin belong to a block that ended above; inside the bar the
+   bar's own border is the rule, and a second one would draw two lines 12px apart. */
+.page-tools .head-tools { margin-top: 0; padding-top: 0; border-top: 0; }
+.page-tools .head-readout { margin-top: 0; }
+.page-tools .filterbar { gap: 10px; }
+
+/* At rest the scope line is what the controls already say, so it says nothing. */
+.pt-scope { display: none; }
+
+/* CONDENSED IS ONE ROW, AND IT HAS TO BE MEASURED TO BE BELIEVED.
+
+   The first version of this simply tightened the padding and revealed the scope line, and the
+   bar got TALLER: 106px at rest became 116px stuck at 1440, and 225px became 235px at 375,
+   where `.head-tools` wraps to four rows. A "condensed" state that costs more than the resting
+   one is not condensed, and two bars eating a third of a phone screen is exactly what this was
+   warned against.
+
+   So stuck is a single row that never wraps and scrolls sideways when it must — the same shape
+   `.set-nav` above it already proves at eleven entries on a narrow window, and for the same
+   reason: a bar that costs a second row of every screen is worse than the scrolling it saves.
+   Nothing is taken away, so every control is still reachable four sections down; they simply
+   queue instead of stacking.
+
+   THE SCOPE LINE COMES FIRST because it is the one thing that stops being said once the
+   controls are tight, and the one thing a reader deep in the page actually needs: which range,
+   which host, how many filters. It is a readout, not a control — see describeScope(). */
+
+.page-tools.is-stuck {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 16px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+}
+.page-tools.is-stuck::-webkit-scrollbar { display: none; }
+
+.page-tools.is-stuck > * { flex: 0 0 auto; }
+.page-tools.is-stuck .head-tools,
+.page-tools.is-stuck .filterbar,
+.page-tools.is-stuck .filterbar-active {
+    flex-wrap: nowrap;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+.page-tools.is-stuck .filterbar { flex-direction: row; align-items: center; }
+.page-tools.is-stuck .filterbar-active { background: none; }
+
+.page-tools.is-stuck .pt-scope {
+    order: -1;
+    display: block;
+    white-space: nowrap;
+    font: 600 14px/1.3 var(--font-ui);
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* Every card is a jump target, so every card clears the bar.
+
+   Deliberately NOT scoped as `.view .card`. A view whose markup leaves one <div> unbalanced
+   makes the parser close `.view` early, and every card after that point becomes a SIBLING of
+   it — measured on the Settings page, where the descendant form of this rule matched nothing
+   and every jump landed its heading underneath the bar. The offset is a property of being a
+   card, not of where the parser thinks the card ended up. */
+
+.card { scroll-margin-top: calc(var(--set-nav-h) + var(--page-tools-h) + 20px); }
 
 /* These two mirror <main>'s own padding at the same two breakpoints (1000px, 620px). */
 
 @media (max-width: 1000px) {
     .set-nav { --nav-gutter: 20px; --nav-pull: 32px; }
+    .page-tools { --nav-gutter: 20px; }
 }
 
 @media (max-width: 620px) {
+    .page-tools { --nav-gutter: 16px; margin-bottom: 22px; }
     .set-nav { --nav-gutter: 16px; --nav-pull: 28px; margin-bottom: 22px; }
 }
 
@@ -2021,11 +2250,49 @@ td .shape { white-space: nowrap; }
 .lf-outcomes a.on .lf-count,
 .lf-outcomes a:hover .lf-count { background: none; color: var(--accent-ink); }
 
+/* THE FOUR-COLUMN FILTER BLOCK — HANDLER / STATUS / NODE / CALLER.
+
+   FOUR THINGS WERE WRONG AND THEY HAD FOUR DIFFERENT CAUSES, which is why the block looked
+   merely untidy rather than broken and stayed that way:
+
+   1. THE FIRST COLUMN SAT HIGHER THAN THE OTHER THREE. `renderRail()` labels each column
+      `.facet`, a class that belongs to the sessions SIDEBAR, where groups are stacked
+      vertically and `.facet { padding: 16px 0; border-top: 1px solid }` is the separator
+      between them — suppressed on the first by `.facet:first-child`. Dropped into a GRID, that
+      "first" is the leftmost column, so HANDLER lost 17px of padding its neighbours kept and
+      its heading, its rule and its whole list rode up by that much. The same rule painted three
+      stray hairlines above columns two, three and four. Reset here rather than renamed, because
+      `.facet[data-field]` is how facetfilter.js finds these columns.
+
+   2. THE COLUMNS WERE NOT THE SAME WIDTH. A grid item's `min-width` is `auto`, so a column
+      holding one long handler path refused to shrink to its track and took width from the
+      others. `minmax(0, …)` and `min-width: 0` are what let a track actually be one fraction.
+
+   3. NO COLUMN READ AS A COLUMN. `.fm` — the tick, the minus, or the empty string — had no rule
+      at all, so an unselected row's marker was zero-wide and a selected one's was not, and the
+      values in a single column started at two different left edges. The counts were `flex:
+      none` with no alignment, so they lined up on neither edge and the digits did not line up
+      with each other. This is the sidebar's own answer, which had it right all along: a fixed
+      marker track, and a right-aligned tabular count.
+
+   4. ONE SENTENCE WAS PRINTED FOUR TIMES. That is fixed in the renderer, not here; the block
+      note lands in the grid and has to span it.
+
+   Kept beside the sidebar's `.facet-opt` rules in spirit but written out rather than shared,
+   because the two markets differ: the rail's values are identifiers in a monospace face and the
+   sidebar's are words. */
+
 .lf-rail {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 24px 32px;
     margin-bottom: 14px;
+    align-items: start;
+}
+.lf-rail > .facet {
+    min-width: 0;
+    padding: 0;
+    border-top: 0;
 }
 .lf-rail h3 {
     font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em;
@@ -2034,14 +2301,24 @@ td .shape { white-space: nowrap; }
 }
 .lf-rail ul { list-style: none; margin: 0; padding: 0; }
 .lf-rail li a {
-    display: flex; justify-content: space-between; gap: 10px;
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr) max-content;
+    align-items: baseline;
+    gap: 6px;
     padding: 3px 0; font-size: 14px; color: var(--muted); font-weight: 400;
     text-decoration: none;
 }
 .lf-rail li a:hover { background: var(--band); color: var(--accent-ink); }
 .lf-rail li a.on { background: none; color: var(--accent-ink); font-weight: 600; }
+.lf-rail .fm { color: var(--accent-ink); font-weight: 700; text-align: center; }
 .lf-rail .fv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
-.lf-rail .fc { font-family: var(--font-mono); color: var(--faint); flex: none; }
+.lf-rail .fc {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    color: var(--faint); text-align: right;
+}
+
+/* The sentence that belongs to the block rather than to a column, under all of it. */
+.lf-rail > .facet-basis-all { grid-column: 1 / -1; margin-bottom: 0; }
 
 /* A clickable table row that filters the page to its own value. Underlined on hover only, so
    a table of them does not read as a wall of links. */
@@ -2156,7 +2433,16 @@ a.dim:focus-visible { background: none; color: var(--accent-ink); border-bottom-
 }
 .fchip:hover, .fchip:focus-visible { background: var(--page); border-color: var(--accent); color: var(--accent-ink); }
 .fchip-dim { color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-size: 14px; }
-.fchip-val { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; max-width: 30ch; }
+/* `white-space: nowrap` is what makes the ellipsis real. Without it a value with
+   a space in it wrapped inside a box that clips at 30ch, so the reader got a
+   line and a half of a value with no mark saying anything had been cut — and
+   the overflow measurement responsive.js takes to decide whether to offer the
+   full text would have been measuring the wrong axis. */
+.fchip-val {
+    font-family: var(--font-mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 30ch;
+}
 .fchip-x { color: var(--faint); font-weight: 700; }
 
 /* Dimension lists: the distribution, and every value in it a filter. */
@@ -2778,41 +3064,57 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
 
     /* THE FACET COLUMN.
 
-       The expanded filter panel is markup at the top of the view and was drawn
-       as a block across the full width, which put the facets on top and every
-       card below them. Here the view becomes two columns while the panel is
-       open: the panel takes the first one and spans every row, the cards take
-       the second. No markup moves — assets/js/responsive.js only mirrors the
-       panel's own `hidden` attribute onto the view as a class — so the module
-       that owns the panel keeps owning it. */
+       The dimension lists are markup at the top of the view and were drawn as a
+       block across the full width, which put the facets on top and every card
+       below them. Here the view becomes two columns: the panel takes the first
+       one and spans every row, the cards take the second.
 
-    .view.has-facet-column {
+       WHAT IS IN THE COLUMN IS THE GROUPS, AND ONLY THE GROUPS. The applied
+       chips and the button that opens this panel are not here — they are page
+       controls and they live in the sticky toolbar, with the range picker and
+       the host selector. That split is what makes the shut state honest: with
+       the chips in the column, hiding the groups left them and the button with
+       nowhere to be except a band across the top of the content, which is the
+       full-width block that was reported. There is one presentation at this
+       width, it is a left column, and closing the groups simply hands the width
+       back to the results without rearranging anything.
+
+       `:not([hidden])` is what expresses that. A shut panel is genuinely hidden
+       now — see the `[hidden]` reset at the top of this file, without which it
+       was not — so the grid is asked for only while there is a column to put in
+       it, and the view is an ordinary single column the rest of the time. */
+
+    .view.has-facet-column:not(.lh-facets-shut) {
         display: grid;
         grid-template-columns: 292px minmax(0, 1fr);
         grid-auto-flow: dense;
         column-gap: 32px;
         align-items: start;
     }
-    .view.has-facet-column > * { grid-column: 2; }
-    .view.has-facet-column > .filterbar {
+    .view.has-facet-column:not(.lh-facets-shut) > * { grid-column: 2; }
+    .view.has-facet-column:not(.lh-facets-shut) > .fpanel {
         grid-column: 1;
         grid-row: 1 / 200;
         position: sticky;
-        top: calc(var(--set-nav-h) + 12px);
-        max-height: calc(100vh - var(--set-nav-h) - 32px);
+        top: calc(var(--set-nav-h) + var(--page-tools-h) + 12px);
+        max-height: calc(100vh - var(--set-nav-h) - var(--page-tools-h) - 32px);
         overflow-y: auto;
         overscroll-behavior: contain;
         border-right: 1px solid var(--hairline);
-        padding-right: 24px;
-    }
-    .view.has-facet-column > .filterbar .fpanel {
-        grid-template-columns: minmax(0, 1fr);
         border-top: 0;
         padding-top: 0;
-    }
-    .view.has-facet-column > .filterbar .fpanel .facet-groups {
+        padding-right: 24px;
         grid-template-columns: minmax(0, 1fr);
     }
+    .view.has-facet-column:not(.lh-facets-shut) > .fpanel .facet-groups {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* One chip per line in a bar that has to share its row, and the value inside
+       it may shrink: a flex item refuses to go below its content by default,
+       which is how one fingerprint hash pushes the whole toolbar wide. */
+    .page-tools .fchip { max-width: 100%; }
+    .page-tools .fchip-val { min-width: 0; }
 }
 
 /* Each of the two collapse controls belongs to exactly one layout. The rail exists because a
@@ -2972,6 +3274,21 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
 
 .facet-basis {
     margin: 0 0 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--hairline);
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--faint);
+}
+
+/* THE SAME SENTENCE, SAID ONCE FOR A WHOLE BLOCK. It sits under the group it describes rather
+   than inside one of them, so it takes the rule across the full width and no top margin of its
+   own: the groups above it already end in one. `.facet-note-all` is its sibling for the "these
+   are distributions only" statement, which was likewise printed once per unfilterable
+   dimension. */
+.facet-basis-all { margin-top: 4px; }
+.facet-note-all {
+    margin: 10px 0 0;
     padding-top: 8px;
     border-top: 1px solid var(--hairline);
     font-size: 14px;

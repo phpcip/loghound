@@ -21,6 +21,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Score\Attacks;
 use Loghound\Security;
 
 final class Query
@@ -74,6 +75,26 @@ final class Query
 
     /** Sessions where a beacon actually arrived — the only population with real timings. */
     public const POP_BEACON = 'beacon_b:true';
+
+    /**
+     * Requests (or sessions) that matched at least one named attack pattern.
+     *
+     * A method rather than a constant because the vocabulary lives in Score\Attacks and a
+     * constant cannot call it; it belongs HERE rather than in the view for the same reason the
+     * five POP_* constants do — a population that is re-derived slightly differently in each
+     * card is a set of numbers that quietly disagree.
+     *
+     * IT NAMES THE CODES EXPLICITLY rather than asking for "any value of hit_flags_ss", and that
+     * is deliberate: `hit_flags_ss` is a general per-hit signal field, so a future flag that is
+     * not an attack would otherwise join this population and inflate every count on the Attacks
+     * view. Built entirely from a closed table of constants and quoted anyway; nothing a caller
+     * can send reaches it.
+     */
+    public static function attackFq(): string
+    {
+        $quoted = array_map([self::class, 'quote'], Attacks::codes());
+        return 'hit_flags_ss:(' . implode(' OR ', $quoted) . ')';
+    }
 
     /**
      * The sessions core holds two kinds of document: one per session, and the daily rollups
@@ -291,7 +312,55 @@ final class Query
             'signed_in_b'      => 'Signed in',
             'planes_s'         => 'Planes',
             'search_terms_ss'  => 'Search term',
+
+            /* THE STATUS DIMENSIONS, AND WHY THERE ARE TWO OF THEM. `status_class_s` is what an
+               operator asks — was it answered, redirected, refused, or did it break — and it is
+               four buckets a reader can take in. `status_i` is what an investigator asks, and 403
+               apart from 401 is a real question that a class cannot answer. Offering only the
+               class would make the panel coarser than the data; offering only the code would put
+               a sixty-row facet in a sidebar.
+
+               BOTH ARE HITS-ONLY (see hitsOnlyFields), because a status belongs to a REQUEST. A
+               session that recorded one 2xx and one 4xx tells you nothing about which of its
+               requests was which, and a session-plane filter on a field the sessions core does
+               not define would match nothing while looking like it worked. */
+            'status_class_s'   => 'Status class',
+            'status_i'         => 'Status code',
+
+            /* Present on BOTH cores at different grains: on a hit it is what that request
+               matched, on a session it is the union across its requests. Same vocabulary, so one
+               name (Score\Attacks). */
+            'hit_flags_ss'     => 'Attack pattern',
         ];
+    }
+
+    /**
+     * Dimensions the HITS core defines and the sessions core does not.
+     *
+     * The mirror image of the `$sessionOnly` list in hitFilterFields(), and it exists for the
+     * same reason: an `fq` naming a field a core does not define matches NOTHING, so a status
+     * filter carried onto a sessions-core view would empty every card under a chip that says it
+     * is merely narrowing. Zero results that look like an answer is the one failure mode the
+     * whole facet layer is built to prevent.
+     *
+     * @return array<int,string>
+     */
+    public static function hitsOnlyFields(): array
+    {
+        return ['status_i', 'status_class_s'];
+    }
+
+    /**
+     * The subset of filterFields() the SESSIONS core can answer.
+     *
+     * Derived by subtraction, exactly as hitFilterFields() is, so a dimension added to the
+     * master list is available on both planes by default and has to be excluded on purpose.
+     *
+     * @return array<string,string>
+     */
+    public static function sessionFilterFields(): array
+    {
+        return array_diff_key(self::filterFields(), array_flip(self::hitsOnlyFields()));
     }
 
     /**
@@ -305,7 +374,7 @@ final class Query
      * returned 0 where OR returned 485; on a multi-valued one it returned 74 where OR returned
      * 163.
      *
-     * Both entries are `multiValued="true"` in solr/sessions/conf/managed-schema.xml:
+     * Both entries are `multiValued="true"` in solr/sessions/conf/schema.xml:
      *   `paths_ss`        every distinct path the session touched
      *   `bot_reasons_ss`  every scoring rule that fired on it
      *
@@ -317,7 +386,7 @@ final class Query
      */
     public static function multiValuedFilterFields(): array
     {
-        return ['paths_ss', 'bot_reasons_ss', 'search_terms_ss'];
+        return ['paths_ss', 'bot_reasons_ss', 'search_terms_ss', 'hit_flags_ss'];
     }
 
     /**
@@ -338,6 +407,7 @@ final class Query
     {
         return [
             'asn_i'       => 'int',
+            'status_i'    => 'int',
             'signed_in_b' => 'bool',
         ];
     }
@@ -364,10 +434,11 @@ final class Query
      *   Fingerprints   ALREADY answered, and better. The cluster table carries `unique(asn_i)` and
      *                  `unique(country_s)` PER FINGERPRINT, which is the actual spread question;
      *                  a pivot would answer it for the whole population instead.
-     *   Performance    The cross-tab an operator wants is status code by virtual host, and
-     *                  `status_i` is not in the filter allowlist and cannot be — it exists on the
-     *                  hits core and not on sessions, and the allowlist is derived by subtracting
-     *                  the session-only fields — so its cells could not be opened.
+     *   Performance    The cross-tab an operator wants is status code by virtual host. It is now
+     *                  POSSIBLE — `status_class_s` is a hits-plane dimension and its cells are
+     *                  openable — and it is still not here, because Performance's own status
+     *                  heatmap already crosses status against TIME, which is the question that
+     *                  view is for. Attacks takes the status pivot, where it is the whole point.
      *   Sessions       The dimension dialog already breaks any value down along every other
      *                  dimension, on demand, for the value the operator actually clicked.
      *   The four
@@ -388,6 +459,17 @@ final class Query
             'networks' => ['as_type_s', 'bot_verdict_s',
                 'Whether a network type is carrying people or automation — the question behind '
                 . '"should I rate-limit this address space".'],
+
+            /* THE ONE CROSS-TAB THIS PRODUCT EXISTS TO PRINT. Every other tool in this category
+               lists the scary-looking requests and stops. What an operator needs is that list
+               crossed with WHAT THE SERVER ANSWERED, because a traversal attempt answered 404 is
+               the background radiation of the internet and the same attempt answered 200 is an
+               incident. Both cells are openable, so "show me the ones that got a 200" is one
+               click from the grid. */
+            'attacks' => ['hit_flags_ss', 'status_class_s',
+                'What the server actually ANSWERED each kind of probe with. This is the question '
+                . 'the page exists for: the same pattern answered 404 and answered 200 are a '
+                . 'non-event and an incident, and only this grid puts them side by side.'],
         ];
     }
 
@@ -403,7 +485,7 @@ final class Query
      * Derived by subtraction rather than by listing what is shared, so a filter added to
      * filterFields() is available on both cores by default and has to be excluded on
      * purpose. Adding a session-only field without excluding it here is caught by the test
-     * that checks every name in this list against solr/hits/conf/managed-schema.xml.
+     * that checks every name in this list against solr/hits/conf/schema.xml.
      *
      * @return array<string,string>
      */
@@ -538,6 +620,7 @@ final class Query
             'planes_s', 'search_terms_ss',
             'js_b', 'headless_b', 'automation_ss', 'ua_claim_ok_b', 'tz_match_b', 'webgl_s',
             'bot_score_f', 'bot_verdict_s', 'bot_reasons_ss', 'bot_class_s', 'rule_version_i',
+            'hit_flags_ss', 'hit_rules_i',
         ]);
     }
 
@@ -546,7 +629,8 @@ final class Query
     {
         return implode(',', [
             'id', 'ts', 'host_s', 'method_s', 'path_s', 'query_s', 'status_i', 'bytes_l', 'dur_us_l',
-            'kind_s', 'asset_kind_s', 'proto_s', 'referer_s', 'session_seq_i', 'hit_flags_ss',
+            'kind_s', 'asset_kind_s', 'proto_s', 'referer_s', 'session_seq_i',
+            'hit_flags_ss', 'hit_rules_i', 'status_class_s',
         ]);
     }
 

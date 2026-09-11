@@ -43,7 +43,8 @@ function lh_retry_scaffold(): array
 
     foreach (['hits', 'sessions'] as $role) {
         @mkdir($root . '/solr/' . $role . '/conf', 0750, true);
-        file_put_contents($root . '/solr/' . $role . '/conf/managed-schema.xml', '<schema/>');
+        file_put_contents($root . '/solr/' . $role . '/conf/schema.xml', '<schema/>');
+        file_put_contents($root . '/solr/' . $role . '/conf/mapping-ISOLatin1Accent.txt', '"a" => "a"' . "\n");
         file_put_contents($root . '/solr/' . $role . '/conf/solrconfig.xml', '<config/>');
     }
 

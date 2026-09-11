@@ -469,7 +469,16 @@ textarea {
      */
 
     .lh-nav-js .set-nav { top: var(--lh-topbar-h); }
-    .lh-nav-js .card { scroll-margin-top: calc(var(--set-nav-h) + var(--lh-topbar-h) + 16px); }
+
+    /* THREE BARS DEEP ON A PHONE, so the jump offset is the sum of all three. The fixed
+       navigation bar, the section nav pinned under it, and the page toolbar pinned under
+       that — `--page-tools-h` is its CONDENSED height, measured by responsive.js while it is
+       stuck, which is the state it is in whenever a jump lands. Leaving it out put every
+       heading behind the toolbar on arrival, which is the same defect the `--set-nav-h` term
+       was added to fix one bar earlier. */
+    .lh-nav-js .card {
+        scroll-margin-top: calc(var(--set-nav-h) + var(--lh-topbar-h) + var(--page-tools-h) + 16px);
+    }
 
     /* The section nav's negative gutters mirror main's padding, which now has a safe-area
        term in it, so they have to as well or the bar stops being full bleed. */

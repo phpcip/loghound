@@ -27,6 +27,7 @@ declare(strict_types=1);
 namespace Loghound\Panel;
 
 use Loghound\Security;
+use Loghound\Setup\Steps;
 
 final class Performance extends Controller
 {
@@ -491,6 +492,24 @@ final class Performance extends Controller
             echo '<span class="stat-hint">' . Security::esc($hint) . '</span></div>';
         }
         echo '</div>';
+
+        /* THE FIX IS BUILT SERVER-SIDE AND CARRIED INTO THE PAGE, NOT RETYPED IN JAVASCRIPT.
+           The front end draws the "no durations are being logged" state, so the two lines it
+           offers used to be literals in views/performance.js — a second copy of a nickname and
+           a second copy of an instruction, in a file no PHP test reads. They come from
+           Setup\Steps now, which is the same source docs/INSTALL.md is checked against, so the
+           panel cannot end up recommending a format the documentation does not publish.
+
+           `combined_d` RATHER THAN `combined` IS THE WHOLE POINT OF THE NICKNAME. Debian and
+           Ubuntu already define `combined` in apache2.conf; an operator who takes this card's
+           advice literally and redefines it in a vhost gets a config that passes configtest,
+           a reload that succeeds, and log lines that do not change, with nothing in any error
+           log to say why. And the rescan line is here because following this advice is what
+           BREAKS the source: the stored format no longer describes the line. */
+        echo '<div id="pf-logformat" hidden'
+            . ' data-line="' . Security::esc(Steps::durationLogFormat()) . '"'
+            . ' data-custom="' . Security::esc(Steps::customLogLine(Steps::DURATION_NICKNAME)) . '"'
+            . ' data-rescan="' . Security::esc(Steps::RESCAN_ADVICE) . '"></div>';
 
         /* NO SECOND EMPTY SLOT. This card used to carry its own `pf-nodur` div inside the
            content wrapper, so the "no durations are being logged" explanation appeared BELOW

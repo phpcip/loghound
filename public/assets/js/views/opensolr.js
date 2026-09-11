@@ -27,7 +27,7 @@
 
 import { api, byId, dec, el, hideEmpty, num, pct, setPop, showEmpty } from '../core.js';
 import { dispose, lines, tokens } from '../charts.js';
-import { basisNote, operatorControl, toggleUrl } from '../facetfilter.js';
+import { basisNote, blockBasisNote, commonBasisNote, operatorControl, toggleUrl } from '../facetfilter.js';
 
 /** The in-flight or resolved index list, shared by every card on a page. */
 let listPromise = null;
@@ -374,6 +374,12 @@ function renderRail(id, data) {
     if (!mount) {
         return;
     }
+    /* THE SENTENCE UNDER EVERY COLUMN IS ONE SENTENCE. See commonBasisNote(): when all four
+       columns are counted the same way they say so once, beneath the block; when one of them
+       carries an exclusion and is therefore counted differently, that one keeps its own note
+       because the difference is the whole message. */
+    const common = commonBasisNote(data.groups || []);
+
     const groups = (data.groups || []).map((group) => el('div', { class: 'facet', dataset: { field: group.field, ns: LF } }, [
         el('h3', { text: group.label }),
         operatorControl(group),
@@ -399,10 +405,11 @@ function renderRail(id, data) {
                 ])
             ]);
         })),
-        basisNote(group)
+        basisNote(group, common)
     ]));
 
-    mount.replaceChildren(...groups);
+    const block = blockBasisNote(common);
+    mount.replaceChildren(...(block ? groups.concat([block]) : groups));
 }
 
 /**
@@ -425,10 +432,15 @@ export function renderFilters(id, data) {
     const note = byId(id + '-note');
     if (note) {
         const parts = [
+            /* "the sentence under it" used to be the per-column basis note, which is now said
+               once beneath the whole block — so the clause that pointed at it has to point
+               somewhere that still exists, or the card explains a sentence the reader cannot
+               find. A column counted differently still carries its own note, and that is the
+               case this clause is actually about. */
             'Each column lists the ' + num(data.limit) + ' most common values. Picking a value narrows ' +
                 'every OTHER column and leaves its own complete, so a second value can always be added ' +
-                'to the same column — each filtered column is counted again with its own filter lifted, ' +
-                'which is what the sentence under it says.'
+                'to the same column — a filtered column is counted again with its own filter lifted, ' +
+                'and says so under itself when it is.'
         ];
         if ((data.ignored || []).length) {
             parts.push('Not applied here: ' + data.ignored.join(', ') + '. Those filters describe web ' +

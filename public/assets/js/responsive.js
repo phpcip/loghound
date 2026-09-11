@@ -64,6 +64,7 @@ let lastFocus = null;
 let applyFolds = null;
 let recheckTrouble = null;
 let remeasureTips = null;
+let refreshPageTools = null;
 
 /**
  * Is the viewport in the range the phone layout is written for?
@@ -755,6 +756,24 @@ function setUpSectionTips() {
 const CONTROL_TIP_SELECTOR = '.card-refresh[data-lh-tip], .rowopen[data-lh-tip]';
 
 /**
+ * The same publisher serves a facet value the column had to cut — see markValueTips().
+ *
+ * Kept as its own list rather than appended to the one above, because those two controls are
+ * ALWAYS marked (their text is a hint for a wordless glyph) while these two are marked only
+ * when a measurement says the value is short of itself.
+ */
+const VALUE_TIP_SELECTOR = '.facet-opt[data-lh-tip], .fchip[data-lh-tip]';
+
+/**
+ * Everything one delegated listener has to recognise, composed rather than written out again.
+ *
+ * The two lists stay apart because they are MARKED under different rules; they are joined here
+ * because they are POSITIONED under the same one, and a second `closest()` call per event would
+ * be a second answer to a question with one.
+ */
+const CONTROL_TIP_REACH = CONTROL_TIP_SELECTOR + ', ' + VALUE_TIP_SELECTOR;
+
+/**
  * Put that tooltip under whichever of them has just been reached.
  *
  * DELEGATED FROM THE DOCUMENT, not from a container. core.js creates the refresh controls as
@@ -775,12 +794,105 @@ function setUpControlTips() {
     const publish = (event) => {
         const target = event.target;
         if (target && typeof target.closest === 'function') {
-            publishSectionTip(target.closest(CONTROL_TIP_SELECTOR));
+            publishSectionTip(target.closest(CONTROL_TIP_REACH));
         }
     };
 
     document.addEventListener('pointerover', publish);
     document.addEventListener('focusin', publish);
+}
+
+/* ===================================================================================
+ * 3b. A facet value the column had to cut
+ * ================================================================================ */
+
+/**
+ * The two places a facet value is shown, and the two elements each of them needs.
+ *
+ * A NEW SHAPE: the tooltip is MARKED on one element and MEASURED on another. Everywhere else
+ * in this module the two are the same node, but neither `.facet-val` nor `.fchip-val` can be
+ * one of them — both are non-focusable `<span>`s, the component requires `:focus-visible`
+ * unconditionally, and a span never takes focus. So the marker is the ancestor that is already
+ * the whole target — `a.facet-opt` for a row in the panel, `a.fchip` for an applied value — and
+ * the measurement is taken on the child span that actually carries the ellipsis. Declared as
+ * data rather than written twice, because a third place showing a value would otherwise be a
+ * third copy of the same logic.
+ */
+const VALUE_TIP_PARTS = [
+    { marker: '.facet-opt', value: '.facet-val' },
+    { marker: '.fchip', value: '.fchip-val' }
+];
+
+/**
+ * Park the native bubbles that fire under the same pointer as one value tooltip.
+ *
+ * TWO TOOLTIPS ON ONE ELEMENT IS WHAT parkTitle() EXISTS TO PREVENT, and both of these
+ * elements already own a `title`: `a.facet-opt` carries the dimension's "why" sentence, a
+ * static row carries the same sentence on its `<li>`, and `a.fchip` carries "Remove this
+ * filter". Every one of them explains something the reader can recover elsewhere — the why is
+ * the same sentence for every value of the dimension and is in the group's own basis note, and
+ * "Remove this filter" restates what pressing a chip marked with a × does — while the cut value
+ * is the one thing on the row that cannot be read at all. So the value wins, and the native
+ * title is parked for exactly as long as the value is cut; a value that fits keeps its title
+ * untouched and gets no tooltip of ours.
+ *
+ * @param {HTMLElement} marker The element the tooltip is attached to.
+ * @param {boolean}     cut    Whether the value inside it is truncated.
+ */
+function parkValueTitles(marker, cut) {
+    parkTitle(marker, cut);
+    const row = marker.parentElement;
+    if (row && row.classList && row.classList.contains('facet-li')) {
+        parkTitle(row, cut);
+    }
+}
+
+/**
+ * Give the panel's tooltip to every facet value the layout had to cut, and to no other.
+ *
+ * WHY IT IS NEEDED. `.facet-val` and `.fchip-val` both truncate with an ellipsis, and a path,
+ * an AS organisation or a User-Agent is routinely longer than the column — so the reader could
+ * see that something had been cut and had no way at all to read it. The native `title` on the
+ * anchor did not help: it says why the DIMENSION exists, which leaves the bubble explaining the
+ * category while the value stays unreadable.
+ *
+ * ONLY WHEN IT IS GENUINELY CUT, measured rather than assumed, because a tooltip repeating a
+ * value that is fully on screen is noise the reader has to dismiss. The measurement is the
+ * child span's own overflow, which is the only thing that knows whether the ellipsis is being
+ * drawn — the same test the section bar makes on its labels.
+ *
+ * READS FIRST, THEN WRITES. The panel re-renders on every filter, every sort and every arrival
+ * of data, and this runs on the same animation-frame pass everything else here uses, so the
+ * measurements are taken in one sweep and applied in a second rather than interleaved, which
+ * would cost one layout per row instead of one per pass.
+ */
+function markValueTips() {
+    const seen = [];
+    for (const part of VALUE_TIP_PARTS) {
+        for (const marker of document.querySelectorAll(part.marker)) {
+            const value = marker.querySelector(part.value);
+            if (!value) {
+                continue;
+            }
+            seen.push({
+                marker: marker,
+                full: (value.textContent || '').trim(),
+                cut: value.scrollWidth > value.clientWidth
+            });
+        }
+    }
+
+    for (const entry of seen) {
+        const cut = entry.cut && entry.full !== '';
+        if (cut) {
+            entry.marker.setAttribute('data-full', entry.full);
+            entry.marker.setAttribute('data-lh-tip', '1');
+        } else {
+            entry.marker.removeAttribute('data-lh-tip');
+            entry.marker.removeAttribute('data-full');
+        }
+        parkValueTitles(entry.marker, cut);
+    }
 }
 
 /**
@@ -888,26 +1000,217 @@ function applyRail(collapsed) {
  * 5. The facet panel as a left column
  * ================================================================================ */
 
+/* ===================================================================================
+ * 4b. The page toolbar, pinned under the section nav
+ * ================================================================================ */
+
 /**
- * Mirror the filter panel's open state onto the view, so the facets can be a COLUMN.
+ * The controls that scope the whole page, gathered into one bar that stays reachable.
  *
- * The expanded "Filter by" panel is markup inside the filter bar at the top of the page, and
- * as a block it pushed every card down the screen and spread the dimensions across the full
- * width — facets on top and the content below, which is the one arrangement this panel is not
- * allowed to have on a desk screen. The panel itself is another module's, so rather than
- * moving any markup this watches its `hidden` attribute and puts a class on `.view`; the
- * stylesheet then lays the view out as two columns with the panel in the first one, spanning
- * every row, and the cards in the second. On a phone it stays a disclosure above the content,
- * which is the right answer there.
+ * ## The defect
+ *
+ * The range picker, the host selector, Clear cache, the bandwidth readout and the applied
+ * filters all live at the TOP of the page, and every view on this panel is several screens
+ * long. An operator reading section 06 who wants the last hour instead of the last day has to
+ * scroll to the top, press, and find their place again — and worse, by the time they are that
+ * far down there is nothing on screen saying what the numbers they are reading are scoped TO.
+ * A figure with no visible scope is a figure that will be quoted wrongly.
+ *
+ * ## Why the controls MOVE rather than being drawn twice
+ *
+ * A second copy of a control is a second thing to keep in step with the first, and the pair
+ * disagree the first time one of them is re-rendered — the host selector is injected by a
+ * fetch, the chips are rebuilt on every filter change. There is one of each, and it is here.
+ * The page head keeps the H1 and the lead, which are not controls and must not be sticky.
+ *
+ * ## Why it is a sibling of `.view`
+ *
+ * The same reason `.set-nav` is, and it is the same trap: `.view` is a flex column, and at desk
+ * width with facets it is a GRID — a sticky element inside either is sticky within its own item
+ * box and has no travel at all. As a sibling of `.view` its containing block is `<main>`, so it
+ * holds all the way down. It is also why it cannot overlap the facet column: the column is
+ * inside `.view`, which begins below this bar, so the two occupy different bands of the page.
+ *
+ * ## Two sticky bars is a lot, so the second one condenses
+ *
+ * Stuck, it drops to a single tight row: the vertical padding halves, the bandwidth readout
+ * gives up its own line and the scope line appears. On a 1440-tall desk screen the pair costs
+ * about 88px; on a 375-wide phone the condensed form is what keeps that under control. The
+ * `.is-stuck` class is set from a measurement rather than assumed, because the bar is only
+ * stuck once the page has scrolled past it and a bar that condensed at rest would be a
+ * different design.
+ *
+ * @returns {(function(): void)|null} A re-measure for the frame loop, or null with no toolbar.
+ */
+function setUpPageTools() {
+    const main = document.getElementById('main') || document.querySelector('main');
+    const view = document.querySelector('.view');
+    if (!main || !view) {
+        return null;
+    }
+
+    let bar = document.getElementById('lh-page-tools');
+    if (!bar) {
+        bar = el('div', { class: 'page-tools', id: 'lh-page-tools' });
+        bar.appendChild(el('div', { class: 'pt-scope', id: 'lh-page-scope' }));
+        main.insertBefore(bar, view);
+    }
+
+    adoptPageTools(bar);
+    describeScope(bar);
+    publishStuck(bar);
+
+    /* STUCK IS A SCROLL FACT, so it is watched on scroll rather than on the frame loop this
+       module's other passes use — that one wakes on resize and on rows arriving, neither of
+       which happens while somebody is simply reading down the page. Passive, and it does one
+       `getBoundingClientRect()` against a value the section nav already measured. */
+    window.addEventListener('scroll', () => publishStuck(bar), { passive: true });
+
+    return () => {
+        adoptPageTools(bar);
+        describeScope(bar);
+        publishStuck(bar);
+    };
+}
+
+/**
+ * Take the page-level furniture into the bar, wherever it was rendered.
+ *
+ * IDEMPOTENT AND ORDER-INDEPENDENT, which is the whole reason it is a function and not three
+ * lines inside setUpPageTools(). Two of these arrive late and neither is this module's: the
+ * host selector is appended to `.head-tools` when its fetch lands, and the filter bar is
+ * created by assets/js/facets.js when the boot payload says the view honours facets. Running
+ * the adoption again on the frame loop costs a `parentElement` comparison per pass and removes
+ * every question about which module ran first.
+ *
+ * A view that declares no facets never creates `#lh-filters`, so nothing is adopted and the bar
+ * carries no "Filter by" — the declaration in Controller::toolbar() decides, here as everywhere
+ * else, and this function never invents a control that the page would ignore.
+ */
+function adoptPageTools(bar) {
+    const scope = bar.querySelector('.pt-scope');
+    for (const selector of ['.head-tools', '#lh-filters', '#lh-readout']) {
+        const node = document.querySelector(selector);
+        if (node && node.parentElement !== bar) {
+            bar.insertBefore(node, scope);
+        }
+    }
+
+    /* The bar is furniture with nothing in it until one of those exists. An empty band under
+       the section nav is two rules of chrome and no controls. */
+    bar.hidden = bar.querySelector('.head-tools, #lh-filters, #lh-readout') === null;
+}
+
+/**
+ * Say whether the bar has actually reached its perch, so the stylesheet can condense it.
+ *
+ * Measured against the section nav's published height rather than against zero, because that
+ * is what it is stuck UNDER — and that height is itself measured, so a browser that resolved a
+ * larger font does not leave the toolbar reporting stuck a few pixels early or late.
+ */
+function publishStuck(bar) {
+    const root = document.documentElement;
+    if (bar.hidden) {
+        root.style.setProperty('--page-tools-h', '0px');
+        bar.classList.remove('is-stuck');
+        return;
+    }
+    /* ASK THE STYLESHEET WHERE THE PERCH IS, rather than working it out again here. The bar
+       pins at `calc(var(--lh-topbar-h) + var(--set-nav-h))`, and a phone adds a fixed
+       navigation bar to that sum — a copy of the arithmetic in this module was wrong at 375
+       the moment the mobile layout put something above the section nav, and reported the bar
+       unstuck for the whole page. The computed `top` of a sticky element IS that offset,
+       already resolved by the engine, so there is one expression and it lives in the CSS. */
+    const offset = parseFloat(window.getComputedStyle(bar).top) || 0;
+    const stuck = bar.getBoundingClientRect().top <= offset + 1;
+    bar.classList.toggle('is-stuck', stuck);
+
+    /* THE JUMP OFFSET IS THE CONDENSED HEIGHT, and it is only measurable while the bar is in
+       that state — so it is taken whenever it is, and kept. Every jump scrolls, and anything
+       this bar has to be cleared of is below it, so by the time a target arrives the bar is
+       stuck and this is the height it has. Measuring the resting height instead would push
+       every heading 20-odd pixels too far down the screen on arrival. */
+    if (stuck) {
+        root.style.setProperty('--page-tools-h', Math.round(bar.getBoundingClientRect().height) + 'px');
+    }
+}
+
+/**
+ * What the numbers on this page are currently scoped to, in one line.
+ *
+ * THE ONE THING WORTH THE ROOM WHEN THE BAR IS CONDENSED. Scrolled into section 06, the
+ * question is not "where is the range picker" — it is "am I looking at an hour or a month, one
+ * host or all of them, filtered or not". The controls answer it while they are in view and
+ * stop answering it the moment they are condensed, so the sentence is assembled from the same
+ * controls and shown only in that state.
+ *
+ * Read off the DOM rather than off the boot payload, because the controls are the truth: the
+ * host selector arrives from a fetch and the chips are rebuilt on every filter change, and a
+ * summary derived from a payload captured at load would go stale against the very bar it sits
+ * in. Nothing here is a control; it is a readout, and it is `aria-hidden` because every fact in
+ * it is already announced by the control it was read from.
+ */
+function describeScope(bar) {
+    const scope = bar.querySelector('.pt-scope');
+    if (!scope) {
+        return;
+    }
+
+    const parts = [];
+    const range = bar.querySelector('.ranges a.on');
+    if (range) {
+        parts.push(range.textContent.trim());
+    }
+
+    const host = bar.querySelector('#lh-host');
+    if (host) {
+        parts.push(host.value === '' ? 'all hosts' : host.value);
+    }
+
+    const chips = bar.querySelectorAll('#lh-filters-active .fchip');
+    if (chips.length) {
+        parts.push(chips.length === 1 ? '1 filter' : chips.length + ' filters');
+    }
+
+    scope.textContent = parts.join(' · ');
+    scope.setAttribute('aria-hidden', 'true');
+}
+
+/**
+ * Mirror the filter panel onto the view, so the facets are a COLUMN whether or not they show.
+ *
+ * The "Filter by" panel is markup inside the filter bar at the top of the page, and as a block
+ * it pushed every card down the screen and spread the dimensions across the full width —
+ * facets on top and the content below, which is the one arrangement this panel is not allowed
+ * to have on a desk screen. The panel itself is another module's, so rather than moving any
+ * markup this puts classes on `.view`; the stylesheet then lays the view out as two columns
+ * with the filter bar in the first one, spanning every row, and the cards in the second.
+ *
+ * THE COLUMN IS NOT CONDITIONAL ON THE PANEL BEING OPEN, and that is the fix. It was, and the
+ * closed state therefore fell back to the full-width strip: `.filterbar` still holds the
+ * applied-value chips and the show/hide control, so a shut panel meant a band of filter
+ * furniture across the top with every card below it — the "horizontal block" the owner
+ * reported. `has-facet-column` now says only that this view HAS a filter column, which is true
+ * for exactly as long as the panel is in the document; `lh-facets-shut` says the groups are
+ * hidden, and the stylesheet shrinks the track to what the chips and the button need rather
+ * than moving them out of it.
+ *
+ * On a phone none of it applies: the two-column rules are inside `@media (min-width: 901px)`
+ * and the panel stays a disclosure above the content, which is the right answer there.
  */
 function watchFacetPanel() {
     const panel = document.getElementById('lh-facets-panel');
     const view = document.querySelector('.view');
-    if (!panel || !view || !('MutationObserver' in window)) {
+    if (!panel || !view) {
         return;
     }
-    const sync = () => view.classList.toggle('has-facet-column', panel.hidden !== true);
-    new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+    const sync = () => {
+        view.classList.toggle('has-facet-column', panel.isConnected);
+        view.classList.toggle('lh-facets-shut', panel.hidden === true);
+    };
+    if ('MutationObserver' in window) {
+        new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+    }
     sync();
 }
 
@@ -1487,6 +1790,9 @@ function refresh() {
         if (remeasureTips) {
             remeasureTips();
         }
+        if (refreshPageTools) {
+            refreshPageTools();
+        }
         restack();
     });
 }
@@ -1522,11 +1828,23 @@ function start() {
     setUpNav();
     setUpRail();
     setUpFacets();
+    refreshPageTools = setUpPageTools();
     watchFacetPanel();
     applyFolds = setUpFolds();
     recheckTrouble = setUpSections();
-    remeasureTips = setUpSectionTips();
+
+    /* ONE RE-MEASURE OWNER for both kinds of cut text, so the section bar's labels and the
+       facet values are re-checked on the same animation frame rather than through a second
+       mechanism invented beside this one. */
+    const remeasureSections = setUpSectionTips();
+    remeasureTips = () => {
+        if (remeasureSections) {
+            remeasureSections();
+        }
+        markValueTips();
+    };
     setUpControlTips();
+    markValueTips();
     restack();
     watch();
 

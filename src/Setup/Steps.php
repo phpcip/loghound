@@ -464,6 +464,143 @@ final class Steps
     public const TAIL_STALE_AFTER = 10;
 
     /**
+     * The nickname the duration-carrying Apache format is published under, on every surface.
+     *
+     * NEVER `combined`. Debian and Ubuntu already define that nickname in `apache2.conf`, and
+     * redefining it inside a `<VirtualHost>` does not reliably win: the configuration is
+     * accepted, `configtest` is happy, the reload succeeds, and the lines keep coming out in
+     * the old shape with nothing in any error log to say why. A format with its own name has
+     * none of that ambiguity, and `combined_d` says what it is — `combined` plus the duration.
+     */
+    public const DURATION_NICKNAME = 'combined_d';
+
+    /**
+     * How far back the parse-health window on a source reaches, in seconds.
+     *
+     * Five minutes. A format change takes a source from parsing everything to parsing nothing
+     * inside a couple of minutes — the incident this was built from went from 19 parse errors
+     * to 90 in three — so the window has to be long enough to hold the whole transition on a
+     * quiet site, and short enough that it has emptied again a few minutes after the fix.
+     */
+    public const DRIFT_WINDOW_SEC = 300;
+
+    /**
+     * How many lines a source must have offered in that window before the rate means anything.
+     *
+     * Below twenty, two scanner probes and one real request is a 67% failure rate. The floor
+     * is what separates "this file changed shape" from "somebody pointed a vulnerability
+     * scanner at the site", which is the distinction the whole check exists to make.
+     */
+    public const DRIFT_MIN_ATTEMPTS = 20;
+
+    /**
+     * The share of a window's lines that must fail before the format is called changed.
+     *
+     * Ninety per cent. A changed format fails essentially every line, because every line now
+     * carries a field the stored format has no column for; junk arrives as a trickle against a
+     * background of traffic that parses. The ten per cent of headroom covers the tail of
+     * old-shape lines still being read out of a rotated file while the new ones arrive.
+     */
+    public const DRIFT_FAIL_RATE = 0.9;
+
+    /* THE THREE DRIFT_ CONSTANTS ABOVE ARE A DESIGN, NOT A LIVE CHECK, AND THAT IS DELIBERATE.
+       Nothing reads them yet. The premise they were written against — "the tailer knows its
+       parse-error rate per source" — is not true of this code: `parse_errors` is a single
+       process-wide counter incremented in `bin/loghound-tail`, and the per-source entries in
+       the status document are Tail::status(), which carries a path, an offset, a lag and a
+       format name and no failure count at all. There is nothing per-source to divide by.
+
+       Shipping the check anyway would mean deciding "this source changed shape" from a number
+       that every other source, and every vulnerability scanner spraying junk at any one of
+       them, contributes to. DRIFT_MIN_ATTEMPTS and DRIFT_FAIL_RATE are per-source thresholds
+       precisely so that a scanner cannot trip them; applied to a global counter they lose the
+       one property they exist for, and a banner that names the wrong source — or names a
+       source on a day nothing changed — teaches the operator to dismiss the banner that is
+       right. Wrong beats silent only until the first false alarm.
+
+       So this pass fixes the cause instead of detecting it: every surface that tells an
+       operator to change their log format now also tells them to rescan the source, and
+       docs/INSTALL.md documents the failure in full under "Three ways this silently does
+       nothing". The detector needs a windowed per-source attempts/failures ledger in
+       Loghound\State plus the tailer writing to it, which is a change to `bin/loghound-tail`
+       and a state-schema migration — its own pass, with these constants already agreed. */
+
+    /**
+     * The nickname the full recommended Apache format is published under.
+     *
+     * Distinct from any distro-defined name for the same reason DURATION_NICKNAME is, and
+     * pinned here so that the panel, the installer, the detector library and docs/INSTALL.md
+     * cannot drift into publishing two different format strings under one nickname. An
+     * operator who pasted both would get whichever Apache read last, silently.
+     */
+    public const RECOMMENDED_NICKNAME = 'loghound';
+
+    /**
+     * Changing a log format is two thirds of the job; this is the third nobody expects.
+     *
+     * Loghound compiles and STORES the format per source. The moment a line gains a field the
+     * stored format has no column for, every new line becomes a parse error — the lines are
+     * still being written and still being read, the counter climbs, and the panel shows
+     * nothing. The incident this sentence was written from went from 19 parse errors to 90 in
+     * three minutes with no other symptom.
+     *
+     * Carried as one string so the Performance card, the Hosts card and the documentation say
+     * it identically. It is prose, never a copyable line: nothing here is pasteable into a
+     * shell, and tests/test_setup_instructions.php holds the panel to that.
+     */
+    public const RESCAN_ADVICE = 'Then tell Loghound the shape changed: rescan the source under '
+        . 'Settings, or re-run bin/loghound-setup. It stores the format per source, so until you '
+        . 'do, every newly written line is a parse error and nothing new reaches the panel. '
+        . 'Check bin/loghound-tail --status --human afterwards — parse errors should be back to '
+        . 'zero within a minute.';
+
+    /**
+     * The full recommended Apache LogFormat, exactly as docs/INSTALL.md publishes it.
+     *
+     * ONE definition, because the string is long enough that a second copy would be edited on
+     * its own and nobody would notice. The continuation backslashes are Apache's: the directive
+     * is one logical line, and a reader who retypes it without them gets a config error rather
+     * than a wrong format, which is the good failure.
+     */
+    public static function recommendedLogFormat(): string
+    {
+        return implode("\n", [
+            'LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\" \\',
+            '\"%{Accept}i\" \"%{Accept-Language}i\" \"%{Accept-Encoding}i\" \\',
+            '\"%{Sec-CH-UA}i\" \"%{Sec-CH-UA-Platform}i\" \"%{Sec-CH-UA-Mobile}i\" \\',
+            '\"%{Sec-Fetch-Site}i\" \"%{Sec-Fetch-Mode}i\" \"%{Sec-Fetch-Dest}i\" \"%{Sec-Fetch-User}i\" \\',
+            '\"%{X-Forwarded-For}i\" \"%H\" \"%{SSL_PROTOCOL}x\" \"%{SSL_CIPHER}x\"" '
+                . self::RECOMMENDED_NICKNAME,
+        ]);
+    }
+
+    /**
+     * `combined` plus the request duration, for an operator who only wants the Performance view.
+     *
+     * NOT published as `combined`. Debian and Ubuntu define that nickname in apache2.conf and
+     * redefining it inside a <VirtualHost> does not reliably win — configtest passes, the reload
+     * succeeds, the lines keep coming out in the old shape, and no error log says why. See
+     * DURATION_NICKNAME, which is where the name itself is decided.
+     */
+    public static function durationLogFormat(): string
+    {
+        return 'LogFormat "%h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\"" '
+            . self::DURATION_NICKNAME;
+    }
+
+    /**
+     * The `CustomLog` line that puts a nickname to work, which is the half people forget.
+     *
+     * Defining a format does nothing on its own. A format defined and never referenced is the
+     * quietest version of this whole failure: the config is valid, the reload is clean, and the
+     * log file is byte-for-byte what it was.
+     */
+    public static function customLogLine(string $nickname): string
+    {
+        return 'CustomLog ${APACHE_LOG_DIR}/example_com_access.log ' . $nickname;
+    }
+
+    /**
      * What to do once the configuration is written.
      *
      * Shared so the shell wizard, the browser installer and the panel print the same

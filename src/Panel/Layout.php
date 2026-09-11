@@ -46,6 +46,7 @@ final class Layout
         return [
             ['slug' => 'overview',     'label' => 'Overview',     'hint' => 'Who came, and how long they really stayed'],
             ['slug' => 'bots',         'label' => 'Bot forensics','hint' => 'Why each verdict was reached'],
+            ['slug' => 'attacks',      'label' => 'Attacks',      'hint' => 'What was attempted, and what the server answered'],
             ['slug' => 'fingerprints', 'label' => 'Fingerprints', 'hint' => 'One header signature, many IPs'],
             ['slug' => 'networks',     'label' => 'Networks',     'hint' => 'ASN, netname and geography'],
             ['slug' => 'sessions',     'label' => 'Sessions',     'hint' => 'Search and drill into one visit'],

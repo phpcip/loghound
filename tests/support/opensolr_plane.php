@@ -25,7 +25,7 @@ if (!function_exists('lh_plane_schema')) {
     /** The managed schema this checkout ships for a role, which a joinable index must have. */
     function lh_plane_schema(string $role): string
     {
-        return (string) file_get_contents(dirname(__DIR__, 2) . '/solr/' . $role . '/conf/managed-schema.xml');
+        return (string) file_get_contents(dirname(__DIR__, 2) . '/solr/' . $role . '/conf/schema.xml');
     }
 }
 

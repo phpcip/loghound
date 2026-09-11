@@ -26,10 +26,10 @@
  * ## How the graph is versioned
  *
  * With an IMPORT MAP, emitted by every page shell that loads a module. It lists every `.js`
- * file under `public/assets/` and maps its bare URL onto the same URL carrying that file's
+ * file under `public/assets/` and maps its own URL onto the same URL carrying that file's
  * modification time:
  *
- *     {"imports":{"assets/js/core.js":"assets/js/core.js?v=1757600000", …}}
+ *     {"imports":{"./assets/js/core.js":"./assets/js/core.js?v=1757600000", …}}
  *
  * A relative specifier is resolved to a URL first and then looked up in the map, so
  * `./core.js` from `app.js` and `../core.js` from `views/overview.js` both land on the same
@@ -37,8 +37,28 @@
  * the graph are covered by the one mechanism, and no file on disk has to be rewritten — which
  * matters, because this product has no build step and is not going to grow one.
  *
- * Map keys are relative, exactly like the `src` and `href` attributes beside them, so they
- * resolve against the same document base URL and keep working wherever the panel is mounted.
+ * ## BOTH SIDES MUST BE URL-LIKE, AND THIS IS WHERE IT FIRST WENT WRONG
+ *
+ * The `./` on every key and every value is load bearing and was missing. An import map entry
+ * is only a URL entry when it *looks* like one — absolute, or beginning with `/`, `./` or
+ * `../`. Anything else is a BARE specifier.
+ *
+ * A bare VALUE is invalid outright, and Chrome discarded all thirty-two entries with
+ * "Ignored an import map value of …: Bare specifier". A bare KEY is legal but means something
+ * else entirely: it matches an import of that literal string, the way `"lodash"` does. Our
+ * modules import `./core.js`, which is resolved to an absolute URL before the map is
+ * consulted, and a resolved URL is only ever matched against URL keys. So the keys would have
+ * matched nothing even had the values parsed.
+ *
+ * The result was a map the browser threw away in full, on a page that looked correct in every
+ * other respect — the entries were there, the CSP hash was right, and every module loaded
+ * unversioned exactly as before the fix. Generating a map and reading it back proves nothing;
+ * only a browser resolving through it does, which is what tests/test_asset_versioning.php's
+ * browser check now asserts.
+ *
+ * Keys and values are both relative, exactly like the `src` and `href` attributes beside them,
+ * so they resolve against the same document base URL and keep working wherever the panel is
+ * mounted — at a domain root or under a sub-path.
  *
  * ## Why this is allowed under a CSP with no 'unsafe-inline'
  *
@@ -132,7 +152,7 @@ final class Assets
 
         $imports = [];
         foreach (self::scripts($base) as $rel) {
-            $imports[$rel] = self::url($rel, $base);
+            $imports['./' . $rel] = './' . self::url($rel, $base);
         }
         ksort($imports);
 

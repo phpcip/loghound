@@ -193,7 +193,7 @@ loghound/
     b.js                   # the beacon (served with cache headers + version query)
     assets/
   solr/
-    hits/conf/             # managed-schema + solrconfig.xml
+    hits/conf/             # schema.xml + solrconfig.xml + mapping-ISOLatin1Accent.txt
     sessions/conf/
   install/
     install.sh
@@ -710,6 +710,20 @@ LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\"
 \"%{X-Forwarded-For}i\" \"%H\" \"%{SSL_PROTOCOL}x\" \"%{SSL_CIPHER}x\"" loghound
 ```
 
+**The nickname is part of the spec, and it is never `combined`.** Debian and Ubuntu define
+that name in `apache2.conf`; redefining it inside a `<VirtualHost>` does not reliably win,
+and the failure is total silence — `configtest` passes, the reload succeeds, the lines are
+unchanged, nothing is logged. `Setup\Steps::RECOMMENDED_NICKNAME` and
+`Setup\Steps::DURATION_NICKNAME` are the two names this product publishes, and every
+surface that prints a `LogFormat` builds it from there rather than retyping it.
+
+**Anywhere the product suggests changing a log format, it must also say to rescan the
+source.** Loghound stores the compiled format per source, so taking the advice is what
+breaks ingest: from the first line of the new shape, every line is a parse error, the
+counter climbs, and nothing new reaches the panel. `docs/INSTALL.md` documents all three
+failure modes — reused nickname, reload that never happened, stored format now wrong — in
+the order operators hit them.
+
 ---
 
 ## 9. Opensolr integration
@@ -739,7 +753,7 @@ words; `LOGHOUND_OPENSOLR_REUSE` drives it unattended and defaults to `new`.
 
 **Reuse joins; it never overwrites.** The reuse path (`Job::KIND_REUSE`,
 `Storage::reuseSteps()`) contains no create, no delete, no reset and no unconditional configset
-push. Before writing, it fetches the index's live `managed-schema.xml` through
+push. Before writing, it fetches the index's live `schema.xml` through
 `.../api/get_file` and compares its declared field names against this release's — a comparison
 rather than a version marker, because a marker has to be remembered and bumped by hand and the
 day somebody forgets is the day the check says yes to an index it should have refused. Fields
@@ -863,15 +877,20 @@ Views for v1:
    with a visible toggle); the four timing numbers side by side.
 2. **Bot forensics** — `bot_reasons_ss` facet bars; verdict distribution; bot class breakdown;
    declared crawlers listed separately from evasive ones.
-3. **Fingerprint clusters** — THE view. Table of `fp_hash_s` with `unique(ip_s)`, session count,
+3. **Attacks** — what was attempted against the site and, first and above everything else,
+   what the server ANSWERED. Patterns grouped by shape rather than by request string; the
+   answered 2xx/3xx requests listed individually; crawler impersonation as its own card. NOT a
+   WAF: it reads the log after the fact and blocked nothing, and a 2xx is never worded as a
+   disclosure. See docs/ATTACKS.md.
+4. **Fingerprint clusters** — THE view. Table of `fp_hash_s` with `unique(ip_s)`, session count,
    timespan sparkline, expand to member IPs and their ASNs. This is the README hero image.
-4. **Networks** — ASN treemap coloured by `as_type_s`; netname table; geo map from `geo_p`.
+5. **Networks** — ASN treemap coloured by `as_type_s`; netname table; geo map from `geo_p`.
    Country facets are wider than the map, because `country_s` is populated for addresses that
    have no point at all.
-5. **Session explorer** — searchable (edismax over the catchall), filterable by every facet,
+6. **Session explorer** — searchable (edismax over the catchall), filterable by every facet,
    drill into a single session's hit timeline with the beacon overlay.
-6. **Performance** — p50/p95/p99 latency by path from `dur_us_l`, status heatmap by hour.
-7. **Settings/Setup** — log sources + detected mapping review, Solr connection, privacy mode,
+7. **Performance** — p50/p95/p99 latency by path from `dur_us_l`, status heatmap by hour.
+8. **Settings/Setup** — log sources + detected mapping review, Solr connection, privacy mode,
    retention, scoring weights, beacon snippet to copy.
 
 Charts: ECharts. Dark/light aware. Every chart must state the population it covers

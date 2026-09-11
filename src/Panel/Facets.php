@@ -202,18 +202,57 @@ final class Facets
     /**
      * The facet layer for Loghound's own sessions core.
      *
-     * The full filter allowlist, session aliases applied (`session_id_s` is the session
-     * document's `id` on this core), and tagged exclusion because this is our own Solr.
+     * The filter allowlist MINUS the hits-only dimensions, session aliases applied
+     * (`session_id_s` is the session document's `id` on this core), and tagged exclusion because
+     * this is our own Solr.
+     *
+     * The subtraction is not cosmetic. A status is a property of a REQUEST and the sessions core
+     * does not define `status_i` or `status_class_s` at all, so a status filter carried here
+     * would produce an `fq` naming a field that does not exist — which matches nothing and
+     * empties every card on every sessions-plane view, under a chip saying it merely narrowed.
+     * Query::hitsOnlyFields() is the list, and it is derived by subtraction for the same reason
+     * hitFilterFields() is: a new dimension reaches both planes by default and has to be
+     * excluded on purpose.
      */
     public static function sessions(array $get): self
+    {
+        $f = new self(
+            'f',
+            Query::sessionFilterFields(),
+            Query::filterFieldKinds(),
+            Query::multiValuedFilterFields(),
+            self::EXCLUDE_TAGGED,
+            Query::sessionFilterAliases()
+        );
+        return $f->read($get);
+    }
+
+    /**
+     * A DISPLAY-ONLY layer over every dimension, whichever plane defines it.
+     *
+     * WHAT THIS IS FOR, AND WHAT IT MUST NEVER BE USED FOR. The filter bar at the top of every
+     * page shows which filters are in force and offers a way to remove them, and it is rendered
+     * from ONE payload whatever view is underneath. The sessions layer cannot be that payload
+     * any more: it deliberately does not carry the hits-only dimensions, so a status filter set
+     * from the Attacks view would narrow that page correctly and then be invisible in the bar —
+     * in force, doing its job, and impossible to see or remove. An affordance that is missing
+     * for a filter that IS applied is its own kind of wrong.
+     *
+     * So the bar is rendered from the union and the QUERIES are not. This instance builds no
+     * `fq` for anybody: `Controller::sessionFqs()` goes through the sessions layer and
+     * `hitFqs()` through the hits one, and each of those drops what its core cannot answer and
+     * reports it (`filters_ignored`). Calling fqs() on this one would put a clause naming a
+     * field the target core does not define into a query, which matches nothing while looking
+     * like it narrowed — the exact defect the two narrower layers exist to prevent.
+     */
+    public static function all(array $get): self
     {
         $f = new self(
             'f',
             Query::filterFields(),
             Query::filterFieldKinds(),
             Query::multiValuedFilterFields(),
-            self::EXCLUDE_TAGGED,
-            Query::sessionFilterAliases()
+            self::EXCLUDE_TAGGED
         );
         return $f->read($get);
     }

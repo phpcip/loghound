@@ -76,10 +76,21 @@ abstract class Controller
         $this->filters = $this->facets->flat();
     }
 
-    /** The facet layer, for a view that needs the operator or a filter URL. */
+    /**
+     * The facet layer the page FURNITURE is rendered from — the union of both planes.
+     *
+     * Display only, and deliberately not `$this->facets`. The filter bar is one control at the
+     * top of every page, so it has to be able to show a filter set on either plane: a status
+     * filter chosen on a hits-plane view is real, it is narrowing that page, and rendering the
+     * bar from the sessions layer would make it invisible and unremovable.
+     *
+     * NO QUERY IS BUILT FROM THIS. `sessionFqs()` goes through the sessions layer and `hitFqs()`
+     * through the hits one; each drops what its own core cannot answer and says so through
+     * `filters_ignored`, which the hits-plane views print. See Facets::all().
+     */
     public function facetLayer(): Facets
     {
-        return $this->facets;
+        return Facets::all($_GET);
     }
 
     /** The time-range picker scopes this view's queries. */
@@ -252,7 +263,7 @@ abstract class Controller
      *
      * The sessions core holds two document types discriminated by `doc_type_s`: one per
      * closed session, and one per UTC day written by bin/loghound-score. The schema at
-     * solr/sessions/conf/managed-schema.xml states the contract — every dashboard query must
+     * solr/sessions/conf/schema.xml states the contract — every dashboard query must
      * say which type it wants — and this constant is the panel's half of it.
      */
     protected const FQ_SESSION_DOCS = 'doc_type_s:session';

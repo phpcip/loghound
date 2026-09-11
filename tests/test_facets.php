@@ -165,7 +165,12 @@ return [
 
     'the whole sidebar is one Solr request, however many dimensions it has' =>
         function (): void {
-            $fields = array_keys(Query::filterFields());
+            /* THE SESSIONS SUBSET, because lh_f() builds a sessions-plane layer. The master list
+               now carries two hits-only dimensions (`status_i`, `status_class_s`) that the
+               sessions core does not define, and a layer that accepted them would emit an `fq`
+               naming a field that is not there — which matches nothing while looking like it
+               narrowed. Query::hitsOnlyFields() is the subtraction. */
+            $fields = array_keys(Query::sessionFilterFields());
             $defs = lh_f(['country_s' => ['DE']])->termsFacets($fields, 12);
 
             lh_eq(count($fields), count($defs), 'one definition per dimension, in one json.facet');
@@ -254,7 +259,7 @@ return [
 
     'the multi-valued list matches the schema, so the control appears where AND can match' =>
         function (): void {
-            $schema = (string) file_get_contents(dirname(__DIR__) . '/solr/sessions/conf/managed-schema.xml');
+            $schema = (string) file_get_contents(dirname(__DIR__) . '/solr/sessions/conf/schema.xml');
 
             foreach (Query::multiValuedFilterFields() as $field) {
                 lh_true(
@@ -1241,7 +1246,7 @@ return [
                 lh_no_key(Query::filterFieldKinds(), $field, $field . ' is a string and needs no type entry');
             }
 
-            $hits = (string) file_get_contents(dirname(__DIR__) . '/solr/hits/conf/managed-schema.xml');
+            $hits = (string) file_get_contents(dirname(__DIR__) . '/solr/hits/conf/schema.xml');
             lh_contains($hits, 'name="search_terms_ss"', 'and the hits schema really does define it');
         },
 
@@ -1354,7 +1359,7 @@ return [
 
     'beacon_orphan_b is gone from the schema, the signals and the shipped docs' =>
         function (): void {
-            $schema = (string) file_get_contents(dirname(__DIR__) . '/solr/sessions/conf/managed-schema.xml');
+            $schema = (string) file_get_contents(dirname(__DIR__) . '/solr/sessions/conf/schema.xml');
             lh_false(str_contains($schema, 'beacon_orphan_b'), 'nothing ever wrote it, so it is not a field');
 
             $signals = (string) file_get_contents(dirname(__DIR__) . '/src/Score/Signals.php');

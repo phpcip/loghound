@@ -43,7 +43,10 @@ use Loghound\Auth\TwoFactor;
 use Loghound\Beacon\Doc;
 use Loghound\Cache;
 use Loghound\Config;
+use Loghound\Diagnostics;
+use Loghound\Install\OpensolrTeardown;
 use Loghound\LogDetect;
+use Loghound\Opensolr;
 use Loghound\Quota;
 use Loghound\Security;
 use Loghound\Setup\Detector;
@@ -54,6 +57,7 @@ use Loghound\Setup\Reset;
 use Loghound\Setup\Schema;
 use Loghound\Setup\Steps;
 use Loghound\Setup\Storage;
+use Loghound\Setup\Teardown;
 use Loghound\Setup\Token;
 
 final class Settings extends Controller implements JobHost, Sections
@@ -90,6 +94,39 @@ final class Settings extends Controller implements JobHost, Sections
      * opensolr.com is slow. The card shows the saved verdict and this is what refreshes it.
      */
     private const KIND_SCHEMA = 'schema_check';
+
+    /**
+     * The job kind that removes this installation, indexes and all.
+     *
+     * A job for a reason that is not about execution time, although that applies too: this is
+     * the operation the owner most wants to WATCH. It deletes two indexes on a remote platform,
+     * empties a directory and removes a configuration, and an operator who pressed a button and
+     * got a blank page afterwards has no idea which of those happened. A stepped job names each
+     * one as it happens, says what the outcome was, and leaves a record that survives a reload.
+     *
+     * Registering the kind is not permission to run it. See uninstall() and the `job_start`
+     * arm of post(): a run needs a typed word, a current second factor, and a one-time grant
+     * that the start consumes.
+     */
+    private const KIND_UNINSTALL = 'destructive_uninstall';
+
+    /**
+     * Files under `var/` the panel-driven teardown leaves until its closing step.
+     *
+     * The job's own progress lives in `panel-jobs.db`, and the run is being driven through it
+     * one poll at a time. Removing it mid-run would destroy the record of the run's own
+     * progress, and the operator would be told their operation no longer exists on a machine
+     * that had just deleted its indexes.
+     *
+     * `sessions/` IS NOT ON THIS LIST, deliberately. Every session file in it goes with the
+     * rest, including the operator's own: the data lives in memory for the length of this
+     * request and PHP writes it back at shutdown, so the one that comes back is written AFTER
+     * the wipe and carries only the one-time setup grant. What is kept is the empty directory,
+     * because without somewhere to write it that grant is lost — see Teardown::ensureSessionDir.
+     *
+     * @var array<int,string>
+     */
+    private const TEARDOWN_KEEP = ['panel-jobs.db', 'panel-jobs.db-wal', 'panel-jobs.db-shm'];
 
     public function slug(): string
     {
@@ -166,8 +203,9 @@ final class Settings extends Controller implements JobHost, Sections
             return [];
         }
         return [
-            self::KIND_RESCAN => static fn (array $ctx): array => self::rescanPlan(),
-            self::KIND_SCHEMA => static fn (array $ctx): array => Schema::checkPlan(self::root()),
+            self::KIND_RESCAN    => static fn (array $ctx): array => self::rescanPlan(),
+            self::KIND_SCHEMA    => static fn (array $ctx): array => Schema::checkPlan(self::root()),
+            self::KIND_UNINSTALL => static fn (array $ctx): array => self::uninstallPlan(),
         ];
     }
 
@@ -249,6 +287,393 @@ final class Settings extends Controller implements JobHost, Sections
                     ];
                 },
             ],
+        ];
+    }
+
+    /**
+     * The teardown, as the same ordered steps `install/uninstall.sh` prints.
+     *
+     * ONE LIST OF STEPS, TWO FRONT ENDS. Setup\Teardown::STEPS is the canonical order and the
+     * canonical wording; the shell uninstaller prints it and so does this, so an operator
+     * watching a terminal and an operator watching the panel see the same run. Every step this
+     * panel cannot perform is still SHOWN, in its place, saying why it needs a shell and naming
+     * the command — because a run that silently omitted six of eleven steps would be a run that
+     * left the operator believing the machine was clean.
+     *
+     * @return array<int,array{label:string,run:callable}>
+     */
+    private static function uninstallPlan(): array
+    {
+        $steps = [];
+        foreach (Teardown::STEPS as $id => $label) {
+            $steps[] = [
+                'label' => $label,
+                'run'   => static function (array $ctx, Config $cfg, Gateway $gw) use ($id): array {
+                    return self::uninstallStep($id, $ctx, $cfg);
+                },
+            ];
+        }
+
+        return $steps;
+    }
+
+    /**
+     * Execute one teardown step.
+     *
+     * DESIGNED TO COMPLETE, NOT TO BE REFUSED. The refusals live earlier — in the typed word,
+     * the second factor, the one-time arm, and the five ownership gates in
+     * install/opensolr-teardown.php. By the time a step runs, the question of whether this
+     * should happen has been settled, and the job's business is to do it and say what happened.
+     * The two things that DO stop it are the two an operator has to know about: ownership that
+     * cannot be proved, and an index that is still on the account after being deleted.
+     *
+     * @param array<string,mixed> $ctx
+     * @return array<string,mixed>
+     */
+    private static function uninstallStep(string $id, array $ctx, Config $cfg): array
+    {
+        if (!Teardown::isPanelStep($id)) {
+            return [
+                'ok'     => true,
+                'note'   => 'needs a shell',
+                'detail' => (Teardown::shellOnlyReasons()[$id] ?? 'This step needs root.')
+                    . ' Run ' . Teardown::shellCommand(self::root()) . ' when this has finished.',
+            ];
+        }
+
+        try {
+            return match ($id) {
+                'ownership' => self::teardownOwnership($cfg),
+                'delete'    => self::teardownDelete($ctx, $cfg),
+                'absence'   => self::teardownAbsence($ctx, $cfg),
+                'data'      => self::teardownData($cfg),
+                default     => self::teardownReport($ctx, $cfg),
+            };
+        } catch (\Throwable $e) {
+            $report = Diagnostics::capture(
+                'Removing Loghound from this machine',
+                Teardown::label($id),
+                $e,
+                ['Step' => $id],
+                $cfg,
+                self::root()
+            );
+            Incidents::record($cfg->varDir(), $report);
+
+            return [
+                'ok'     => false,
+                'note'   => 'failed',
+                'detail' => $report['error'],
+                'report' => Diagnostics::block($report),
+            ];
+        }
+    }
+
+    /**
+     * Step: prove the account owns the two names, using the uninstaller's own implementation.
+     *
+     * install/opensolr-teardown.php is where every ownership decision in this product is made,
+     * and it is required here rather than reimplemented: the names are DERIVED from
+     * solr.install_id by the same function that created them, required to equal what is stored,
+     * required to match the platform's own name shape, and then cross-checked against the
+     * account's index list. A check that could not be performed is a failed check.
+     *
+     * @return array<string,mixed>
+     */
+    private static function teardownOwnership(Config $cfg): array
+    {
+        require_once self::root() . '/install/opensolr-teardown.php';
+
+        $plan = OpensolrTeardown::plan($cfg);
+
+        if ($plan['status'] === OpensolrTeardown::CUSTOM) {
+            return [
+                'ok'      => true,
+                'note'    => 'custom Solr',
+                'detail'  => $plan['reason'] . '. Loghound will not unload a core from a Solr it does '
+                    . 'not manage: it cannot tell a dedicated node from one your other applications '
+                    . 'also write to. Remove the two cores yourself if you want them gone.',
+                'context' => ['names' => [], 'custom' => true],
+            ];
+        }
+
+        if ($plan['status'] !== OpensolrTeardown::OK) {
+            return self::teardownRefusal($cfg, 'No index was touched: ' . $plan['reason'] . '.');
+        }
+
+        $account = (self::control($cfg))->listIndexes();
+        $owned   = OpensolrTeardown::confirmOwned($plan['names'], $account);
+
+        return [
+            'ok'      => true,
+            'note'    => count($owned['present']) . ' of ' . count($plan['names']) . ' held',
+            'detail'  => 'Your account holds ' . (implode(' and ', $owned['present']) ?: 'neither name')
+                . '.' . ($owned['absent'] === []
+                    ? ''
+                    : ' Already gone: ' . implode(', ', $owned['absent']) . '.'),
+            'context' => ['names' => $owned['present'], 'absent' => $owned['absent'], 'custom' => false],
+        ];
+    }
+
+    /**
+     * Step: delete each index the account was proven to hold.
+     *
+     * @param array<string,mixed> $ctx
+     * @return array<string,mixed>
+     */
+    private static function teardownDelete(array $ctx, Config $cfg): array
+    {
+        $names = array_values(array_filter((array) ($ctx['names'] ?? []), 'is_string'));
+        if ($names === []) {
+            return [
+                'ok'     => true,
+                'note'   => 'nothing to delete',
+                'detail' => ($ctx['custom'] ?? false) === true
+                    ? 'This installation uses its own Solr, so the platform holds nothing for this to remove.'
+                    : 'Your account already held neither of the two names.',
+            ];
+        }
+
+        require_once self::root() . '/install/opensolr-teardown.php';
+
+        $api     = self::control($cfg);
+        $outcome = OpensolrTeardown::deleteAll($api, $names);
+
+        $lines = [];
+        foreach ($outcome['deleted'] as $name) {
+            $lines[] = $name . ' deleted';
+        }
+        foreach ($outcome['failed'] as $name => $why) {
+            $lines[] = $name . ' NOT deleted — ' . $why;
+        }
+
+        if ($outcome['failed'] !== []) {
+            return self::teardownRefusal(
+                $cfg,
+                'The platform refused to delete ' . implode(', ', array_keys($outcome['failed']))
+                . '. ' . implode(' ', $outcome['failed'])
+                . ' Nothing local has been removed, so this can be run again once the platform is '
+                . 'answering. Delete them at https://opensolr.com if it will not.'
+            );
+        }
+
+        return [
+            'ok'      => true,
+            'note'    => count($outcome['deleted']) . ' deleted',
+            'detail'  => implode(' · ', $lines),
+            'context' => ['deleted' => $outcome['deleted']],
+        ];
+    }
+
+    /**
+     * Step: read the account listing again, and confirm the names are not in it.
+     *
+     * THE PROOF IS THE ACCOUNT LISTING, NOT THE DELETE RESPONSE. A control plane that accepted
+     * a delete has told you it accepted the request, which is a weaker claim than "the index is
+     * gone" — and an operator who is about to stop being billed for an index needs the stronger
+     * one. An index still present here FAILS the run, because the whole point of this step is
+     * that the operator ends up knowing what state the account is in.
+     *
+     * A LISTING THAT COULD NOT BE READ IS NOT THE SAME THING AS AN EMPTY ONE, and the difference
+     * decides whether this run may continue. A throw from listIndexes() is the control plane
+     * being unreachable MID-RUN: the configuration is still on disk, this box can still name its
+     * own indexes, and stopping is the only answer that leaves the operator able to try again —
+     * so it is left to bubble into the step's failure. An empty listing is different: it is what
+     * an account that held nothing but Loghound's two indexes looks like the moment after they
+     * are deleted, and refusing there would mean a small account could never finish a teardown
+     * at all. It is reported as consistent-but-unproven and the run goes on, with both names
+     * carried into the closing report so the operator still has them after the configuration is
+     * gone.
+     *
+     * @param array<string,mixed> $ctx
+     * @return array<string,mixed>
+     */
+    private static function teardownAbsence(array $ctx, Config $cfg): array
+    {
+        $deleted = array_values(array_filter((array) ($ctx['deleted'] ?? []), 'is_string'));
+        if ($deleted === []) {
+            return [
+                'ok'     => true,
+                'note'   => 'nothing to confirm',
+                'detail' => 'No index was deleted, so there is nothing to prove absent.',
+            ];
+        }
+
+        require_once self::root() . '/install/opensolr-teardown.php';
+
+        $api     = self::control($cfg);
+        $account = $api->listIndexes();
+
+        try {
+            $check = OpensolrTeardown::verifyAbsent($deleted, $account);
+        } catch (\Throwable $e) {
+            return [
+                'ok'      => true,
+                'note'    => 'unproven',
+                'detail'  => 'Your account now lists nothing at all. That is what an account holding '
+                    . 'only these two indexes looks like once they are deleted, and it is also what a '
+                    . 'listing that did not work looks like, so it is not proof. The platform accepted '
+                    . 'both deletes. Check ' . implode(' and ', $deleted) . ' at https://opensolr.com.',
+                'context' => ['unproven' => $deleted],
+            ];
+        }
+
+        if ($check['present'] !== []) {
+            return self::teardownRefusal(
+                $cfg,
+                'Your Opensolr account still lists ' . implode(' and ', $check['present'])
+                . ' after the delete was accepted. Nothing local has been removed. Check the '
+                . 'account at https://opensolr.com before going any further — this machine is '
+                . 'still able to name those indexes, and once the configuration is gone it is not.'
+            );
+        }
+
+        return [
+            'ok'     => true,
+            'note'   => 'confirmed gone',
+            'detail' => 'The account listing no longer holds ' . implode(' or ', $check['gone'])
+                . '. They are off your plan\'s index allowance and off its disk.',
+        ];
+    }
+
+    /**
+     * Step: empty `var/`.
+     *
+     * THE READER'S CURSORS ARE THE POINT. `var/state.db` holds `(dev, inode, offset)` per
+     * source. Deleting the indexes and leaving those behind would leave the daemon believing it
+     * had already read those bytes, so a rebuilt index would hold only traffic from the moment
+     * of the rebuild onwards — the operator would rebuild, watch it fill with nothing, and have
+     * no way to tell why.
+     *
+     * The setup grant is issued BEFORE the wipe and again in the closing step, so an operator
+     * whose run stops here is still able to reach the installer.
+     *
+     * @return array<string,mixed>
+     */
+    private static function teardownData(Config $cfg): array
+    {
+        Token::grant();
+
+        $wipe = Teardown::wipeState($cfg, self::TEARDOWN_KEEP);
+        Teardown::ensureSessionDir($cfg);
+
+        $detail = $wipe['removed'] . ' item' . ($wipe['removed'] === 1 ? '' : 's')
+            . ' removed from ' . $cfg->varDir() . ', including the state database with the reader\'s '
+            . 'position in every log file, the setup token, signed-in sessions, remembered '
+            . 'browsers, recovery code hashes, the rate-limit ledgers and the saved schema check.';
+
+        if ($wipe['failed'] !== []) {
+            $detail .= ' Could not remove: ' . implode(', ', $wipe['failed'])
+                . ' — check the ownership of that directory.';
+        }
+
+        return [
+            'ok'      => true,
+            'note'    => $wipe['removed'] . ' removed',
+            'detail'  => $detail . ' The configuration is removed in the closing step, because this '
+                . 'panel reads it on every request and the run has to be able to finish.',
+            'context' => ['wiped' => $wipe['removed']],
+        ];
+    }
+
+    /**
+     * Step: remove the configuration, then say what was deliberately left.
+     *
+     * THE LAST THING THAT HAPPENS IS THE ONE THAT MAKES THE PANEL DISAPPEAR. Once
+     * config/loghound.php is gone, Setup\Installer::isNeeded() is true and the very next
+     * request — this browser's or anybody's — is the installer. So it happens in the closing
+     * step, after the report has been built, and the response carrying `done` is the last one
+     * this installation will ever serve.
+     *
+     * THE NAMES TRAVEL IN THE REPORT WHEN ABSENCE COULD NOT BE PROVEN, because that is the one
+     * fact the operator cannot recover afterwards: in a minute this box will no longer be able
+     * to name its own indexes.
+     *
+     * @param array<string,mixed> $ctx
+     * @return array<string,mixed>
+     */
+    private static function teardownReport(array $ctx, Config $cfg): array
+    {
+        Token::grant();
+
+        $left = Teardown::leftBehind(self::root());
+
+        $unproven = array_values(array_filter((array) ($ctx['unproven'] ?? []), 'is_string'));
+        if ($unproven !== []) {
+            array_unshift(
+                $left,
+                'PROOF that ' . implode(' and ', $unproven) . ' are gone — the account listing came '
+                . 'back empty afterwards, which is consistent with both being deleted and is not '
+                . 'evidence of it. Check those two names at https://opensolr.com.'
+            );
+        }
+
+        $config = Teardown::wipeConfig($cfg);
+        $rest   = Teardown::wipeRemaining($cfg, ['panel-jobs.db', 'panel-jobs.db-wal', 'panel-jobs.db-shm']);
+
+        $done = 'Removed: ' . (implode(', ', $config['removed']) ?: 'nothing — the configuration was '
+            . 'already gone') . '.';
+        if ($config['failed'] !== []) {
+            $done .= ' COULD NOT REMOVE ' . implode(', ', $config['failed'])
+                . ' — that file still holds your Opensolr API key, so delete it by hand and rotate '
+                . 'the key.';
+        }
+        if ($rest['failed'] !== []) {
+            $done .= ' Left under var/: ' . implode(', ', $rest['failed']) . '.';
+        }
+
+        return [
+            'ok'      => true,
+            'note'    => 'finished',
+            'detail'  => $done . ' Everything Loghound created on the platform and in this tree\'s '
+                . 'own state is gone. What is left is listed below, and none of it was ever ours.',
+            'report'  => "What was NOT removed, and why\n\n  - " . implode("\n  - ", $left)
+                . "\n\n  One session file is written after the wipe: your own, carrying the one-time\n"
+                . "  grant that lets you reach the installer without reading var/install-token over\n"
+                . "  a shell. " . Teardown::shellCommand(self::root()) . " removes the tree and it.",
+            'context' => ['finished' => true],
+        ];
+    }
+
+    /**
+     * A control-plane client for the teardown, built in one place.
+     *
+     * Through Setup\Storage's existing test seam rather than a second one of this view's own:
+     * the steps that delete indexes have to be exercisable without a network for the same
+     * reason provisioning does, and the seam is inert outside tests/run.php, so this is the
+     * real curl transport on every installation.
+     */
+    private static function control(Config $cfg): Opensolr
+    {
+        return new Opensolr((array) $cfg->get('opensolr', []), Storage::testTransport());
+    }
+
+    /**
+     * A teardown step that stops, with a diagnostic block the operator can post.
+     *
+     * Stopping here is always the safe direction: nothing local has been removed at the point
+     * any of these fire, so the installation is still whole, still able to name its own indexes
+     * and still able to try again.
+     *
+     * @return array<string,mixed>
+     */
+    private static function teardownRefusal(Config $cfg, string $why): array
+    {
+        $report = Diagnostics::capture(
+            'Removing Loghound from this machine',
+            'Deleting the Opensolr indexes',
+            $why,
+            ['Solr mode' => (string) $cfg->get('solr.mode', 'unset')],
+            $cfg,
+            self::root()
+        );
+        Incidents::record($cfg->varDir(), $report);
+
+        return [
+            'ok'     => false,
+            'note'   => 'stopped',
+            'detail' => $why,
+            'report' => Diagnostics::block($report),
         ];
     }
 
@@ -349,6 +774,12 @@ final class Settings extends Controller implements JobHost, Sections
      * `remove_source` is destructive and is reachable only from here, which is only reachable
      * on POST: the front controller routes GET to api() and body(), neither of which writes.
      *
+     * THE TEARDOWN'S ARM IS SPENT IN `job_start`, at the one place a run can begin. Registering
+     * KIND_UNINSTALL is what makes a run pollable and cancellable after the arm is gone; it is
+     * not permission to start one. A start with no current, unspent arm is refused in the same
+     * words as an unknown operation, so an endpoint somebody found cannot be probed for whether
+     * a confirmation is pending.
+     *
      * @return string The redirect query string to send the browser to.
      */
     public function post(): string
@@ -393,6 +824,12 @@ final class Settings extends Controller implements JobHost, Sections
             case 'reinstall':
                 return $this->reinstall();
 
+            case 'uninstall':
+                return $this->uninstall();
+
+            case 'incidents_clear':
+                return $this->clearIncidents();
+
             case 'panel_password':
                 return $this->savePanelPassword();
 
@@ -427,9 +864,18 @@ final class Settings extends Controller implements JobHost, Sections
             case 'job_start':
                 return $this->jobJson(function (Jobs $jobs): array {
                     $kind = self::postParam('kind', $this->jobKinds());
-                    return $kind === ''
-                        ? ['error' => 'Unknown operation.']
-                        : $jobs->start($kind);
+                    if ($kind === '') {
+                        return ['error' => 'Unknown operation.'];
+                    }
+
+                    if ($kind === self::KIND_UNINSTALL) {
+                        if (!Teardown::spendArm()) {
+                            return ['error' => 'That operation is no longer available. Start it again.'];
+                        }
+                        Teardown::markRunning();
+                    }
+
+                    return $jobs->start($kind);
                 });
 
             case 'job_poll':
@@ -821,6 +1267,64 @@ final class Settings extends Controller implements JobHost, Sections
         Token::grant();
 
         return './';
+    }
+
+    /**
+     * Confirm a destructive uninstall. This does not perform it; it arms it.
+     *
+     * WHY THE CONFIRMATION AND THE WORK ARE SEPARATE. The work is a stepped job driven by a
+     * poll loop, and a confirmation attached to a poll is a confirmation that has to be
+     * re-presented — or, worse, re-checked from something the browser keeps sending — on every
+     * one of them. So this endpoint establishes, once, that the person pressing the button is
+     * the operator and understands what it costs, and records that as a one-time grant in this
+     * session. The job's `job_start` spends it.
+     *
+     * IT COSTS A CURRENT SECOND FACTOR, where one is configured, exactly like turning two-factor
+     * off and like changing the Opensolr account. This is the most destructive action in the
+     * product — it deletes indexes whose names can never be created again by anyone — and a
+     * stolen session cookie must not be enough to reach it.
+     *
+     * THE WORD IS TYPED, not clicked. The consequences above it are long, the first of them is
+     * that the data is unrecoverable without an Opensolr backup nobody buys by accident, and
+     * the point of the word is that the list gets read.
+     */
+    private function uninstall(): string
+    {
+        $anchor = '#set-uninstall';
+
+        if ($this->gw->isDemo()) {
+            return '?v=settings&err=uninstall_demo' . $anchor;
+        }
+
+        $refused = $this->requireSecondFactor();
+        if ($refused !== '') {
+            Teardown::disarm();
+            return '?v=settings&err=' . $refused . $anchor;
+        }
+
+        $typed = is_string($_POST['confirm'] ?? null) ? strtoupper(trim($_POST['confirm'])) : '';
+        if ($typed !== Teardown::CONFIRM_WORD) {
+            Teardown::disarm();
+            return '?v=settings&err=uninstall_unconfirmed' . $anchor;
+        }
+
+        Teardown::arm();
+
+        return '?v=settings&ok=uninstall_armed' . $anchor;
+    }
+
+    /**
+     * Empty the critical errors ledger.
+     *
+     * Only the ledger. Nothing derived is cleared by this, and nothing can be: a condition that
+     * is still true is reported again on the next render, which is the behaviour that stops
+     * this card from being a place where a real problem can be dismissed.
+     */
+    private function clearIncidents(): string
+    {
+        Incidents::clear($this->cfg->varDir());
+
+        return '?v=settings&ok=incidents_cleared#set-errors';
     }
 
     /**
@@ -2383,6 +2887,11 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'from now on. Anything it was using before is still on your account, untouched.',
             'source_added'     => 'Log file added. The reader picks it up on its next reload, and starts '
                 . 'from the end of the file rather than replaying its history.',
+            'uninstall_armed'  => 'Confirmed. The removal is running below — watch it, and do not close '
+                . 'this tab until it finishes. When it does, this panel no longer exists and you land '
+                . 'on the installer.',
+            'incidents_cleared' => 'The recorded failures were cleared. Anything still broken is '
+                . 'reported again below, because that is measured rather than remembered.',
         ];
         $err = [
             'solr_down'       => 'Solr did not answer. Check the base URL, credentials and firewall.',
@@ -2429,6 +2938,11 @@ final class Settings extends Controller implements JobHost, Sections
             'pair_failed'      => 'This installation is still using the indexes it was using before, '
                 . 'and nothing was left behind at Opensolr. The reason is on the Solr card below.',
             'source_refused'   => 'That log file was not added. The reason is on the log sources card below.',
+            'uninstall_unconfirmed' => 'Nothing was removed. Type ' . Teardown::CONFIRM_WORD . ' in the '
+                . 'box to confirm — the words are asked for because the list above them is the one '
+                . 'thing worth reading twice.',
+            'uninstall_demo'   => 'Nothing was removed. The panel is showing demo data, so it will not '
+                . 'act on a real Opensolr account.',
         ];
 
         $k = is_string($_GET['ok'] ?? null) ? $_GET['ok'] : '';
@@ -2491,6 +3005,7 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private const SECTIONS = [
         ['set-finish', 'Finish setup', 'finishSection'],
+        ['set-errors', 'Critical errors', 'errorsSection'],
         ['set-ops', 'Running it', 'operationsSection'],
         ['set-check', 'System check', 'systemCheckSection'],
         ['set-sources', 'Log sources', 'sourcesSection'],
@@ -2504,6 +3019,7 @@ final class Settings extends Controller implements JobHost, Sections
         ['set-2fa', 'Two-factor', 'twoFactorSection'],
         ['set-display', 'Display', 'displaySection'],
         ['set-reinstall', 'Reinstall', 'reinstallSection'],
+        ['set-uninstall', 'Remove Loghound', 'uninstallSection'],
     ];
 
     /**
@@ -3899,7 +4415,7 @@ final class Settings extends Controller implements JobHost, Sections
            themselves rather than against this sentence, so a view that changes its mind about
            Controller::SCOPE_CACHE breaks the build instead of quietly making this prose wrong. */
         echo '<p class="muted">Clear cache is in the page head of every page that reads cached data '
-            . '&mdash; Overview, Bot forensics, Fingerprints, Networks, Session explorer, Performance, '
+            . '&mdash; Overview, Bot forensics, Attacks, Fingerprints, Networks, Session explorer, Performance, '
             . 'Virtual hosts, Who is querying and Storage &amp; bandwidth &mdash; and deliberately not on '
             . 'Index analytics, Query analysis or this page: the first two read the Opensolr request '
             . 'log, which is not cached, and Settings makes no cached read at all.</p>';
@@ -4067,6 +4583,237 @@ final class Settings extends Controller implements JobHost, Sections
         echo '</form>';
 
         self::cardEnd();
+    }
+
+    /**
+     * The destructive uninstall: the confirmation, and the run.
+     *
+     * TWO STATES, AND ONLY TWO. Unarmed, the card is the consequences and the confirmation.
+     * Armed — which only happens immediately after a POST that carried the typed words and a
+     * current second factor — it is the run: assets/js/views/settings.js sees the marker and
+     * starts the job, and the operator watches each step happen. There is no third state where
+     * a button sits waiting to be pressed by accident, and no state where the run starts from
+     * a page load that did not follow a confirmation, because the arm is one-time and is spent
+     * the moment the job starts.
+     *
+     * THE PANEL DOES NOT PRETEND TO DO THE SYSTEM HALF. Every step it cannot perform is listed
+     * in the run with the reason and the command, because there is no exec, shell_exec,
+     * proc_open or SSH anywhere in src/, bin/ or public/ — a published property of this product
+     * that is not being traded for a button that stops a systemd unit.
+     */
+    private function uninstallSection(): void
+    {
+        self::cardOpen('set-uninstall', self::sectionNum('set-uninstall'), 'Remove Loghound entirely');
+
+        echo '<p class="pop">This deletes the Loghound indexes and everything in them, permanently, '
+            . 'and then removes this installation\'s configuration and state. It is not the '
+            . 'reinstall above: that keeps your data, and this destroys it.</p>';
+
+        if ($this->gw->isDemo()) {
+            echo '<p class="muted">The panel is showing demo data, so this is switched off. It will '
+                . 'not act on a real Opensolr account from a fabricated one.</p>';
+            self::cardEnd();
+            return;
+        }
+
+        echo '<dl class="kv">';
+        foreach (Teardown::consequences() as $row) {
+            echo '<dt>' . Security::esc($row['what']) . '</dt>';
+            echo '<dd>' . Security::esc($row['happens']) . '</dd>';
+        }
+        echo '</dl>';
+
+        echo '<h4>Stop ingestion first</h4>';
+        echo '<p class="muted">Recommended, not required. The reader holds the configuration it '
+            . 'started with, so while this runs it carries on trying to write to indexes that are '
+            . 'being deleted. Nothing is corrupted by that; it simply fills your log with errors.</p>';
+        self::commandBlock('set-uninstall-stop', [
+            'key'     => 'stop',
+            'title'   => 'Stop ingestion',
+            'lines'   => [Teardown::stopCommand()],
+            'problem' => '',
+        ]);
+
+        echo '<h4>The part that needs root</h4>';
+        echo '<p class="muted">The units, the timers, the vhost, the PHP-FPM pool, the command '
+            . 'links, the service user and this install tree are removed by the uninstaller, which '
+            . 'proves it wrote a file before it deletes one. Run it after this finishes — or instead '
+            . 'of this, since it does all of the above as well.</p>';
+        self::commandBlock('set-uninstall-shell', [
+            'key'     => 'uninstall',
+            'title'   => 'Finish the removal from a shell',
+            'lines'   => [Teardown::shellCommand(self::root())],
+            'problem' => '',
+        ]);
+
+        $armed   = Teardown::isArmed();
+        $running = Teardown::isRunning();
+
+        if ($armed || $running) {
+            $this->uninstallRun($armed);
+        }
+
+        if ($armed) {
+            self::cardEnd();
+            return;
+        }
+
+        echo '<h4>' . ($running ? 'If it stopped, confirm again' : 'Confirm') . '</h4>';
+        echo '<form method="post" action="?v=settings" class="setup-form confirm-form">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="uninstall">';
+
+        if (TwoFactor::isEnabled((array) $this->cfg->get('auth', []))) {
+            echo '<label for="uninstall_code">Code from your authenticator</label>';
+            echo '<input type="text" id="uninstall_code" name="code" inputmode="numeric" '
+                . 'autocomplete="one-time-code" size="12" spellcheck="false" required>';
+        }
+
+        echo '<label for="uninstall_confirm">Type <span class="mono">'
+            . Security::esc(Teardown::CONFIRM_WORD) . '</span> to confirm</label>';
+        echo '<input type="text" id="uninstall_confirm" name="confirm" size="24" autocomplete="off" '
+            . 'spellcheck="false" required>';
+
+        echo '<button type="submit" class="danger">Delete the indexes and remove Loghound</button>';
+        echo '</form>';
+
+        self::cardEnd();
+    }
+
+    /**
+     * The armed state: the ordered run, and the mount the job renders into.
+     *
+     * The marker attribute is what assets/js/views/settings.js starts on. It is emitted only
+     * when the session holds a current, unspent arm, so a page reload after the run has begun
+     * does not start a second one — and `Jobs::start()` hands back the running job for a kind
+     * rather than launching another, which is the second lock on the same door.
+     */
+    private function uninstallRun(bool $armed): void
+    {
+        echo '<h4>Removing Loghound</h4>';
+        echo '<p class="pop">' . ($armed
+            ? 'This is running now. Leave the tab open until it finishes; when it does, this panel '
+                . 'no longer exists and you land on the installer.'
+            : 'A removal was started from this browser. Its progress is below. If it stopped, read '
+                . 'the block it left, then confirm again to run it from the beginning — nothing '
+                . 'local is removed until every index is proven gone, so starting over is safe.')
+            . '</p>';
+
+        echo '<ol class="teardown-plan">';
+        foreach (Teardown::STEPS as $id => $label) {
+            echo '<li' . (Teardown::isPanelStep($id) ? '' : ' class="teardown-shell"') . '>'
+                . Security::esc($label)
+                . (Teardown::isPanelStep($id)
+                    ? ''
+                    : ' <span class="chip">needs a shell</span>')
+                . '</li>';
+        }
+        echo '</ol>';
+
+        echo '<div id="job-uninstall" data-uninstall-'
+            . ($armed ? 'armed' : 'running') . '="1"></div>';
+    }
+
+    /**
+     * Critical errors: the things that mean something is not working.
+     *
+     * CRITICAL ONLY. No levels, no severities, no filters — every one of those turns the
+     * question into "which level should I be looking at", and the answer to that is always "all
+     * of them", which is how a list of errors becomes a list nobody reads. The admission test
+     * is not "was this an error" but "is something not working because of this", and it is
+     * applied in Panel\Incidents, which is also where the one real edge is decided: a single
+     * parse error is nothing, an entire source failing to parse is the product silently
+     * ingesting nothing and belongs here.
+     *
+     * AN EMPTY CARD IS THE NORMAL STATE and reads as one. It used to be that an operator whose
+     * panel was empty had no way to find out why, because the tailer's parse errors, a rejected
+     * configset, a failed schema push and an unreachable control plane were each a separate
+     * counter somebody had to know to look at. This is the one place that gathers them.
+     */
+    private function errorsSection(): void
+    {
+        $live   = Incidents::current($this->cfg, self::root());
+        $logged = Incidents::all($this->cfg->varDir(), $this->cfg);
+        $all    = array_merge($live, $logged);
+
+        self::cardOpen('set-errors', self::sectionNum('set-errors'), 'Critical errors');
+
+        if ($all === []) {
+            echo '<p class="muted">Nothing is broken. This card lists only the things that stop '
+                . 'Loghound working — the reader stopped or unable to read a log, a configset '
+                . 'rejected, a schema push that failed, the control plane unreachable, Solr '
+                . 'refusing writes, a job that died, nowhere to write. Warnings, one slow query and '
+                . 'a request that was retried and then worked do not appear here, and an empty card '
+                . 'is what a working installation looks like.</p>';
+            self::cardEnd();
+            return;
+        }
+
+        if ($live !== []) {
+            self::problemBanner(count($live) . ' thing' . (count($live) === 1 ? ' is' : 's are')
+                . ' not working right now.');
+        }
+
+        echo '<p class="muted">Each entry carries the whole failure. Copy the block and post it — '
+            . 'it names what was being attempted, where it died, what the platform or the system '
+            . 'actually returned, and the release, PHP, operating system and web server it happened '
+            . 'on. Every secret this installation holds is removed from it before it is shown.</p>';
+
+        $seq = 0;
+        foreach ($all as $entry) {
+            $seq++;
+            self::incidentRow($entry, 'incident-' . $seq, $seq > count($live));
+        }
+
+        if ($logged !== []) {
+            echo '<form method="post" action="?v=settings" class="setup-form">';
+            self::csrfField();
+            echo '<input type="hidden" name="action" value="incidents_clear">';
+            echo '<button type="submit" class="ghost small">Clear the recorded failures</button>';
+            echo '</form>';
+            echo '<p class="muted">That empties '
+                . '<span class="filepath-value">' . Security::esc(Incidents::path($this->cfg->varDir()))
+                . '</span>, which is mode 0600 and outside the document root. Anything still broken '
+                . 'is reported again immediately, because it is measured rather than remembered.</p>';
+        }
+
+        self::cardEnd();
+    }
+
+    /**
+     * One critical error, with its copyable block.
+     *
+     * The block is a `<pre>` for the same reason every command on this page is: it scrolls
+     * inside itself when a path or a platform message is longer than the column, and never
+     * widens the page it is on.
+     *
+     * @param array<string,mixed> $entry
+     */
+    private static function incidentRow(array $entry, string $id, bool $recorded): void
+    {
+        $at   = (int) ($entry['at'] ?? 0);
+        $seen = max(1, (int) ($entry['seen'] ?? 1));
+
+        echo '<div class="incident">';
+        echo '<h4>' . Security::esc((string) ($entry['step'] ?? 'Something failed')) . '</h4>';
+        echo '<p class="incident-meta">';
+        echo '<span class="mono">' . Security::esc(gmdate('m/d/Y H:i:s', $at)) . ' UTC</span>';
+        echo ' · ' . Security::esc((string) ($entry['doing'] ?? ''));
+        if ($seen > 1) {
+            echo ' · seen ' . $seen . ' times';
+        }
+        echo ' · ' . ($recorded ? 'recorded' : 'happening now');
+        echo '</p>';
+        echo '<p class="incident-error">' . Security::esc((string) ($entry['error'] ?? '')) . '</p>';
+
+        self::commandBlock($id, [
+            'key'     => 'incident',
+            'title'   => 'Everything about this failure',
+            'lines'   => explode("\n", Diagnostics::block($entry)),
+            'problem' => '',
+        ]);
+
+        echo '</div>';
     }
 
     /**

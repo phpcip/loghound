@@ -36,8 +36,37 @@ import { byId, el, fill } from './core.js';
 /** Subject kind → opener. A view registers what it knows how to open. */
 const openers = new Map();
 
-/** The element that opened the dialog, so focus can go back where it came from. */
-let opener = null;
+/**
+ * The dialogs that are conceptually open, outermost first. One SHELL, a stack of SUBJECTS.
+ *
+ * WHAT NESTING MEANS HERE, decided rather than left ambiguous: **a dialog opened from inside a
+ * dialog replaces it on screen, and closing returns to the one underneath.** There is still
+ * exactly one shell and never two modals stacked visually — that part of the original design
+ * was right and is unchanged. What was missing is that the drill-down had no way back: a row
+ * inside the "Recent visitors" table of a bot-class dialog opens a session, and the operator
+ * who wanted a glance at that visitor had no route back to the class they were reading.
+ *
+ * The alternative — Close always exits to the page — was considered and rejected. It is one
+ * gesture rather than two, but it silently discards a step the operator took deliberately, and
+ * "the way out is also the way back" is the behaviour every drill-down in this panel already
+ * has in the URL. Returning to the parent costs one refetch, of a query the server caches.
+ *
+ * Each frame carries the element that opened it, so focus goes back to a real node in BOTH
+ * directions, and the thunk that re-opens it, so the parent can be rebuilt when its child is
+ * closed. A frame whose `reopen` is null is an outermost dialog opened straight from code.
+ *
+ * @type {Array<{opener: (HTMLElement|null), reopen: (function(): (void|Promise<void>)|null)}>}
+ */
+const stack = [];
+
+/**
+ * How deep the drill-down may go before a new subject replaces the top instead of pushing.
+ *
+ * A person drills two levels, occasionally three. An unbounded stack is not a feature anybody
+ * asked for; it is a way for a loop in the data — a value whose dialog lists a row that opens
+ * the same value — to build a chain nobody can close.
+ */
+const MAX_DEPTH = 4;
 
 /** Incremented on every open, so a slow fetch for a dismissed dialog renders nothing. */
 let generation = 0;
@@ -188,9 +217,11 @@ function onDocumentKey(event) {
 /**
  * Open the dialog with a heading and a caption, and return its body element.
  *
- * The caller renders into the returned node. A second open replaces the first rather than
- * stacking: two modals over each other is never the right answer, and the generation
- * counter means the abandoned one's fetch cannot paint over the new one.
+ * The caller renders into the returned node. A second open replaces the first ON SCREEN rather
+ * than stacking: two modals over each other is never the right answer, and the generation
+ * counter means the abandoned one's fetch cannot paint over the new one. What the second open
+ * does NOT do any more is forget the first — see the stack at the top of this file, and
+ * closeDialog(), which steps back to it.
  *
  * @param {string} title
  * @param {string} subtitle
@@ -208,14 +239,20 @@ export function openDialog(title, subtitle) {
     const body = byId('lh-dialog-body');
     fill(body, [el('p', { class: 'muted', text: 'Loading…' })]);
 
-    /* WHOEVER OPENED IT GETS FOCUS BACK, however it was opened. `opener` used to be set only
-       by the delegated row handler, so every dialog opened straight from code — the value
-       browser, reached by pressing "Show all" in a facet list — restored focus to nothing. The
-       operator was returned to the top of the document and lost their place in the sidebar.
-       Set here only when the row handler has not already named the opener, so a row click
-       still restores the row and not whatever the click left focused. */
-    if (!opener && document.activeElement && document.activeElement !== document.body) {
-        opener = document.activeElement;
+    /* WHOEVER OPENED IT GETS FOCUS BACK, however it was opened. A dialog opened straight from
+       code — the value browser, reached by pressing "Show all" in a facet list — has no row
+       handler to name its opener, and used to restore focus to nothing: the operator was
+       returned to the top of the document and lost their place in the sidebar.
+       A frame is minted here ONLY when the stack is empty, because onActivate has already
+       pushed one for anything opened from a row, and because every opener calls this twice —
+       once for "Loading…" and once with the real heading — and the second call is the same
+       dialog, not a new one. */
+    if (!stack.length) {
+        const active = document.activeElement;
+        stack.push({
+            opener: active && active !== document.body ? active : null,
+            reopen: null
+        });
     }
 
     root.hidden = false;
@@ -231,20 +268,102 @@ export function isCurrent(token) {
     return token === generation;
 }
 
-/** Close the dialog and give focus back to whatever opened it. */
+/**
+ * Put focus on a node, if it is still a node that can take it.
+ *
+ * Every restore path goes through here, because every one of them can be handed something
+ * that has since been replaced by a re-render — and a silent `document.contains()` failure is
+ * how a keyboard operator ends up at the top of the document with no idea why.
+ *
+ * @returns {boolean} Whether focus actually moved.
+ */
+function focusIfPossible(node) {
+    if (!node || typeof node.focus !== 'function' || !document.contains(node)) {
+        return false;
+    }
+    node.focus();
+
+    return document.activeElement === node;
+}
+
+/**
+ * Find the row in the REBUILT parent dialog that corresponds to the one that was pressed.
+ *
+ * THE NODE ITSELF IS GONE. Returning to a parent re-runs its opener, which refetches and
+ * rebuilds the body from scratch, so the `<tr>` the operator pressed to drill in does not
+ * survive — it is the same row logically and a different element entirely. Matching on the
+ * `data-` attributes finds its replacement, which is what "put me back where I was" means to
+ * the person doing it. When there is no match the dialog body takes focus, which is where a
+ * freshly opened dialog puts it anyway.
+ */
+function restoreInsideDialog(previous) {
+    const body = byId('lh-dialog-body');
+    if (previous && previous.dataset && previous.dataset.lhOpen && body) {
+        for (const node of body.querySelectorAll('[data-lh-open="' + previous.dataset.lhOpen + '"]')) {
+            let same = true;
+            for (const key of Object.keys(previous.dataset)) {
+                if (node.dataset[key] !== previous.dataset[key]) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same && focusIfPossible(node)) {
+                return;
+            }
+        }
+    }
+    focusIfPossible(body);
+}
+
+/** Shut the shell completely, whatever is on the stack, and hand the page back. */
+function dismiss(frame) {
+    const root = byId('lh-dialog');
+    stack.length = 0;
+    if (root) {
+        root.hidden = true;
+    }
+    document.documentElement.classList.remove('lh-dialog-open');
+    setBackgroundInert(false);
+    focusIfPossible(frame ? frame.opener : null);
+}
+
+/**
+ * Close the top dialog: back to the one underneath it, or off the screen if there is none.
+ *
+ * ALL THREE GESTURES DO THE SAME THING — the Close button, the scrim and Escape. A scrim press
+ * that exited the whole stack while Close stepped back one would be two meanings for "dismiss"
+ * on the same surface, and the operator would have to remember which. One rule: closing undoes
+ * the last thing you opened.
+ *
+ * A parent that cannot rebuild itself does not trap anybody. Its `reopen` may be absent, and it
+ * may reject; either way the whole stack is dismissed rather than left showing a dialog whose
+ * controls belong to a subject that is no longer loading.
+ */
 export function closeDialog() {
     const root = byId('lh-dialog');
     if (!root || root.hidden) {
+        stack.length = 0;
         return;
     }
+
     generation += 1;
-    root.hidden = true;
-    document.documentElement.classList.remove('lh-dialog-open');
-    setBackgroundInert(false);
-    if (opener && typeof opener.focus === 'function' && document.contains(opener)) {
-        opener.focus();
+    const frame = stack.pop() || null;
+    const parent = stack.length ? stack[stack.length - 1] : null;
+
+    if (!parent || typeof parent.reopen !== 'function') {
+        dismiss(frame);
+        return;
     }
-    opener = null;
+
+    try {
+        Promise.resolve(parent.reopen()).then(
+            () => restoreInsideDialog(frame ? frame.opener : null),
+            () => dismiss(frame)
+        );
+    } catch (e) {
+        void e;
+        dismiss(frame);
+    }
 }
 
 /**
@@ -326,7 +445,6 @@ function onActivate(event) {
         return;
     }
     event.preventDefault();
-    opener = node;
 
     /* A rejected opener must never leave the row looking inert. If the opener got as far as
        putting a dialog on screen, the failure is rendered into it; if it threw before that —
@@ -344,6 +462,21 @@ function onActivate(event) {
         }
         console.error('loghound: opening a ' + node.dataset.lhOpen + ' failed', err);
     });
+
+    /* THE FRAME IS PUSHED HERE, NOT IN openDialog(), and that is what makes the drill-down
+       reversible. This is the one place that knows both halves of a frame at once: the element
+       pressed, and the exact call that would produce this dialog again. openDialog() is called
+       twice by every opener — once for the loading state and once with the real heading — so a
+       push there would count one dialog as two and Close would step back through phantoms.
+
+       A row INSIDE the open dialog lands here exactly like a row on the page, which is the
+       whole nesting case: the frame beneath it keeps the page row it came from, so the chain
+       of openers is intact rather than overwritten by the innermost one and then orphaned
+       microseconds later when the body it lives in is replaced. */
+    if (stack.length >= MAX_DEPTH) {
+        stack.pop();
+    }
+    stack.push({ opener: node, reopen: run });
     run();
 }
 

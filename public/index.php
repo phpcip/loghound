@@ -38,6 +38,20 @@
  * SETUP. Once the configuration exists, has credentials and passes validation,
  * Installer::isNeeded() is false and every installer route is dead.
  *
+ * AN INSTALLATION THAT IS GONE ANSWERS A PANEL REQUEST IN THE PANEL'S OWN LANGUAGE. A full
+ * page load has always landed on the installer; a card's `?api=` fetch and a job's POST did
+ * not — they got the installer's HTML, and the front end reported "the panel returned a
+ * response that was not JSON" and offered to try again, against an installation whose
+ * configuration no longer exists. A browser left open on any view while
+ * `install/uninstall.sh` ran on the server therefore sat there retrying for ever, and the
+ * operator who had just wiped the machine had a panel that looked broken rather than one that
+ * was gone. Those two request shapes now get `{"setup": "./"}` and a 409, which
+ * assets/js/core.js follows. 409 rather than 404 because the request was addressed to
+ * something that no longer exists in this state, and a 404 would be indistinguishable from a
+ * mistyped action. The installer's OWN requests are excluded by shape rather than by
+ * guessing: every one of them names a step, in `$_POST['step']` or `?setup=`, which is
+ * exactly what Setup\Installer::requestedRoute() reads.
+ *
  * SIGN-IN. In Basic mode the browser's own prompt is the sign-in, so Login::handles() is
  * false and `?login` is simply an unrecognised parameter on the dashboard. In session mode
  * the two routes are handled by Panel\Login, which enforces CSRF and the per-address
@@ -83,6 +97,7 @@ require __DIR__ . '/../src/autoload.php';
 use Loghound\Auth\Persistence;
 use Loghound\Config;
 use Loghound\Geo\Countries;
+use Loghound\Panel\Attacks;
 use Loghound\Panel\Bots;
 use Loghound\Panel\Callers;
 use Loghound\Panel\Controller;
@@ -131,6 +146,20 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 }
 
 if (Installer::isNeeded($cfg)) {
+    $panelApi = is_string($_GET['api'] ?? null) && ($_GET['api'] ?? '') !== '';
+    $panelPost = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST'
+        && isset($_POST['action'])
+        && !isset($_POST['step'])
+        && !isset($_GET['setup']);
+
+    if ($panelApi || $panelPost) {
+        json_out([
+            'error' => 'This Loghound installation has been removed, so there is nothing left to '
+                . 'ask. Setup is where this address goes now.',
+            'setup' => './',
+        ], 409);
+    }
+
     (new Installer($cfg, dirname(__DIR__)))->handle();
 }
 
@@ -156,6 +185,7 @@ $gw = Gateway::fromConfig($cfg);
 $routes = [
     'overview'     => Overview::class,
     'bots'         => Bots::class,
+    'attacks'      => Attacks::class,
     'fingerprints' => Fingerprints::class,
     'networks'     => Networks::class,
     'sessions'     => Sessions::class,
