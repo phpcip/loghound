@@ -1373,8 +1373,9 @@ td .shape { white-space: nowrap; }
     z-index: 20;
     margin: 0 0 24px;
     padding: 10px 0;
-    background: var(--bg);
-    border-bottom: 1px solid var(--rule);
+    background: var(--page);
+    border-bottom: 1px solid var(--hairline);
+    box-shadow: 0 6px 12px -12px rgba(17, 17, 17, 0.55);
 }
 .set-nav ul {
     display: flex;
@@ -1389,8 +1390,9 @@ td .shape { white-space: nowrap; }
     align-items: baseline;
     gap: 6px;
     padding: 5px 10px;
-    border: 1px solid var(--rule);
+    border: 1px solid var(--hairline);
     border-radius: 2px;
+    background: var(--band);
     font-size: 14px;
     line-height: 1.2;
     color: var(--ink);
@@ -1398,17 +1400,16 @@ td .shape { white-space: nowrap; }
     white-space: nowrap;
 }
 .set-nav a:hover,
-.set-nav a:focus-visible { border-color: var(--accent); color: var(--accent); }
+.set-nav a:focus-visible { border-color: var(--accent); color: var(--accent-ink); background: var(--chip); }
 .set-nav-num {
     font-family: var(--mono, monospace);
     font-size: 14px;
-    color: var(--muted);
+    color: var(--faint);
 }
 .set-nav a:hover .set-nav-num,
-.set-nav a:focus-visible .set-nav-num { color: var(--accent); }
+.set-nav a:focus-visible .set-nav-num { color: var(--accent-ink); }
 
-.setup .card[id$="-card"],
-.card[id^="set-"] { scroll-margin-top: 76px; }
+.card[id^="set-"] { scroll-margin-top: 96px; }
 
 @media (max-width: 640px) {
     .set-nav { position: static; }

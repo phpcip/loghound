@@ -951,13 +951,6 @@ final class Settings extends Controller implements JobHost
             $key = (string) $group['key'];
             echo '<div class="finish-group" id="finish-g-' . Security::esc($key) . '">';
             echo '<h3>' . Security::esc((string) $group['title']) . '</h3>';
-            if ($key === 'beacon') {
-                echo '<p class="muted"><strong>If your site sends a Content-Security-Policy, the browser '
-                    . 'will refuse this script until you allow it.</strong> Add the panel\'s origin to '
-                    . '<code>script-src</code> and to <code>connect-src</code> — the tag loads from there '
-                    . 'and the beacon posts back to the same place. Without both, the console says the '
-                    . 'load was blocked and nothing else is wrong.</p>';
-            }
             if ($key === 'ingest') {
                 echo '<p class="muted">One command. <code>enable --now</code> starts the service and both '
                     . 'timers immediately and brings them back after a reboot; this panel reports whether '
