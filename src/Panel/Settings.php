@@ -4011,7 +4011,11 @@ final class Settings extends Controller implements JobHost, Sections
                 foreach ($samples as $s) {
                     echo '<div class="sample">';
                     echo '<pre class="sample-raw mono">' . Security::esc((string) ($s['raw'] ?? '')) . '</pre>';
-                    echo '<div class="table-wrap"><table class="tight sample-parsed"><tbody>';
+                    /* Field name against value, and the value is the half that runs long: a
+                       user agent or a request line dwarfs every field name beside it. Declared
+                       so the names column cannot be stretched by one long value. */
+                    echo '<div class="table-wrap"><table class="tight sample-parsed table-fixed">'
+                        . '<colgroup><col style="width:26%"><col style="width:74%"></colgroup><tbody>';
                     foreach ((array) ($s['parsed'] ?? []) as $field => $value) {
                         echo '<tr><th scope="row" class="mono">' . Security::esc((string) $field) . '</th>';
                         echo '<td class="mono clip" title="' . Security::esc((string) $value) . '">'

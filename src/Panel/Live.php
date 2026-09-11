@@ -539,7 +539,10 @@ final class Live extends Controller
             return;
         }
 
-        echo '<table class="tight"><thead><tr>'
+        echo '<table class="tight table-fixed"><colgroup>'
+            . '<col style="width:34%"><col style="width:24%">'
+            . '<col style="width:24%"><col style="width:18%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">File</th><th scope="col">Pinned host</th>'
             . '<th scope="col">Format</th><th scope="col">Readable</th>'
             . '</tr></thead><tbody>';
