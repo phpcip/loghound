@@ -1626,13 +1626,32 @@ function foldCard(cards, card, first) {
     setCard(card, hasTrouble(card) || chosen);
 }
 
-/** Is anything inside this card telling the operator something is wrong? */
+/**
+ * Is anything inside this card telling the operator something is wrong?
+ *
+ * THE DEFECT THIS ANSWERS, and why the operator's choice never survived a reload. A section
+ * held open by trouble is deliberately not recorded as a choice, so that it can go back to
+ * what they last pressed once the trouble clears. That is correct — but the selectors that
+ * decide what trouble IS matched data as well as diagnostics. `chip-bad` is the chip Bot
+ * forensics puts on an undeclared crawler, Index analytics on a 4xx, and Who is querying on a
+ * bot; `state-bad` is a value in a definition list. So on any view whose data contained one
+ * bad row, every card reopened itself on every load, and Collapse all could never stick.
+ *
+ * A diagnostic never lives inside a table: it is a banner, a check row, a source head, or a
+ * value in a card's own summary. Data is what lives in tables. Excluding table content is what
+ * separates the two without having to enumerate every chip the views will ever render, which
+ * is the enumeration that has now failed twice.
+ */
 function hasTrouble(card) {
     const region = card.querySelector(':scope > .card-region') || card;
     for (const node of region.querySelectorAll(TROUBLE)) {
-        if (!node.hidden && node.offsetParent !== null) {
-            return true;
+        if (node.hidden || node.offsetParent === null) {
+            continue;
         }
+        if (node.closest('table, .lh-dialog')) {
+            continue;
+        }
+        return true;
     }
     return false;
 }
