@@ -275,6 +275,56 @@ final class Gateway
     }
 
     /**
+     * Search one dimension's VALUES for a substring.
+     *
+     * The value browser's search box. It is the only aggregate in the panel that does not go
+     * through facet(), because the JSON Facet API has no substring filter and silently ignores
+     * one — see \Loghound\Solr::facetContains(), which has the measurements.
+     *
+     * Returns the same `{buckets: [{val, count}]}` shape a terms facet does, so the panel's
+     * shaping code cannot tell the two apart and there is no second payload format to keep in
+     * step. A failure is an empty bucket list plus the banner, like every other read here.
+     *
+     * @param array<string,mixed> $params      q/fq for the scope being searched.
+     * @param array<int,string>   $excludeTags Tags this facet ignores, normally its own.
+     * @return array{buckets:array<int,array<string,mixed>>}
+     */
+    public function facetSearch(
+        string $tag,
+        string $core,
+        string $field,
+        string $contains,
+        array $params,
+        array $excludeTags = [],
+        int $limit = 200
+    ): array {
+        $started = microtime(true);
+
+        if ($this->demo) {
+            $out = Fixtures::facetContains($tag, $field, $contains, $params, $limit);
+            $this->note($tag, $core, $started);
+            return $out;
+        }
+        if ($this->solr === null) {
+            $this->error ??= 'Solr client is not available.';
+            return ['buckets' => []];
+        }
+        if (!method_exists($this->solr, 'facetContains')) {
+            $this->error = 'This Solr client is too old to search facet values.';
+            return ['buckets' => []];
+        }
+
+        try {
+            $out = $this->solr->facetContains($core, $field, $contains, $params, $excludeTags, $limit);
+            $this->note($tag, $core, $started);
+            return ['buckets' => (array) ($out['buckets'] ?? [])];
+        } catch (\Throwable $e) {
+            $this->error = self::explain($tag, $e);
+            return ['buckets' => []];
+        }
+    }
+
+    /**
      * Run a document query and return `['docs' => [...], 'numFound' => int]`.
      *
      * Only three places use it: the session explorer list, the session drill-down, and

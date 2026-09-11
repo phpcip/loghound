@@ -103,6 +103,23 @@ final class Query
     public const SETTLED_SESSIONS = '-provisional_b:true';
 
     /**
+     * Sessions that were seen on a transport plane — i.e. everything except beacon-only.
+     *
+     * A NEGATION, for exactly the reason SETTLED_SESSIONS is one, and the mistake it prevents is
+     * the same mistake wearing a different field name. `planes_s` has no schema default, so every
+     * session indexed before the field existed carries no value for it at all. `planes_s:log_only`
+     * would match none of them and would silently drop a site's whole history from any figure
+     * built on it — a number that looks like a measurement and is an artefact of when a field was
+     * added. This spelling keeps that history, because absence is not `beacon_only`.
+     *
+     * The panel offers the same thing through the facet control rather than this constant: the
+     * "None of" operator over `beacon_only` produces `-planes_s:("beacon_only")`, which is this
+     * clause. The constant is here for code that needs the population without going through a
+     * request.
+     */
+    public const HAS_LOG_PLANE = '-planes_s:beacon_only';
+
+    /**
      * Sessions that are still open — partial counts, provisional verdicts (SPEC §4.2).
      *
      * Offered so a view can single them out deliberately, which is the point of the field: the
@@ -272,6 +289,105 @@ final class Query
             'asn_i'            => 'ASN',
             'paths_ss'         => 'Path',
             'signed_in_b'      => 'Signed in',
+            'planes_s'         => 'Planes',
+            'search_terms_ss'  => 'Search term',
+        ];
+    }
+
+    /**
+     * The filterable fields that hold a LIST per document rather than one value.
+     *
+     * This is the list that decides where the "All of" operator appears, and it is a schema
+     * fact rather than a preference: on a single-valued field `a AND b` is empty by
+     * construction, so offering the control there would give an operator a button whose only
+     * possible answer is zero results. Measured against a real Solr node to be sure of the
+     * claim rather than reasoning about it — on a single-valued string field the AND form
+     * returned 0 where OR returned 485; on a multi-valued one it returned 74 where OR returned
+     * 163.
+     *
+     * Both entries are `multiValued="true"` in solr/sessions/conf/managed-schema.xml:
+     *   `paths_ss`        every distinct path the session touched
+     *   `bot_reasons_ss`  every scoring rule that fired on it
+     *
+     * A field added to the schema as multi-valued and left out of here loses the operator
+     * rather than breaking, which is the safe direction; the reverse would produce an empty
+     * view. tests/test_facets.php reads the schema and fails if the two disagree.
+     *
+     * @return array<int,string>
+     */
+    public static function multiValuedFilterFields(): array
+    {
+        return ['paths_ss', 'bot_reasons_ss', 'search_terms_ss'];
+    }
+
+    /**
+     * The type of each filterable field, for fields where a quoted literal is the wrong shape.
+     *
+     * Everything absent from this map is a string and is quoted into a Solr literal, which is
+     * what makes an AS organisation full of Lucene operators match as text. The two exceptions
+     * are declared because a value that cannot BE that type has to be refused at the request
+     * boundary rather than sent:
+     *
+     *   `asn_i`       a point int. `asn_i:("nonsense")` is a Solr 400, and a 400 reaches the
+     *                 operator as an error banner across a page whose cards are all fine.
+     *   `signed_in_b` a boolean, whose only two values are the words Solr writes.
+     *
+     * @return array<string,string> field => 'string'|'int'|'bool'
+     */
+    public static function filterFieldKinds(): array
+    {
+        return [
+            'asn_i'       => 'int',
+            'signed_in_b' => 'bool',
+        ];
+    }
+
+    /**
+     * The cross-tabulations worth asking, per view, as `[outer, inner, question]`.
+     *
+     * A pivot is added where a cross-tab is the ACTUAL question an operator has on that view,
+     * and nowhere else. A nested facet costs buckets × buckets, and a pivot that repeats what
+     * the view's ordinary facets already answer is a second round trip bought for nothing —
+     * so there is no pivot on the session explorer, where the dimension dialog already breaks
+     * a value down along every other dimension, and none on the Opensolr analytics views,
+     * where the platform's classic faceting cannot nest at all.
+     *
+     * Each one is clickable through to the filtered view like every other facet value, because
+     * a cell that names a population and cannot be opened is a dead end.
+     *
+     * THREE ENTRIES, AND THE OMISSIONS ARE THE POINT. Every other view was considered and left
+     * out for a stated reason:
+     *
+     *   Virtual hosts  ALREADY a cross-tab. Panel\Hosts nests the five population queries inside
+     *                  its host facet, so host × verdict is on screen. A pivot would be a second
+     *                  round trip for a number already there.
+     *   Fingerprints   ALREADY answered, and better. The cluster table carries `unique(asn_i)` and
+     *                  `unique(country_s)` PER FINGERPRINT, which is the actual spread question;
+     *                  a pivot would answer it for the whole population instead.
+     *   Performance    The cross-tab an operator wants is status code by virtual host, and
+     *                  `status_i` is not in the filter allowlist and cannot be — it exists on the
+     *                  hits core and not on sessions, and the allowlist is derived by subtracting
+     *                  the session-only fields — so its cells could not be opened.
+     *   Sessions       The dimension dialog already breaks any value down along every other
+     *                  dimension, on demand, for the value the operator actually clicked.
+     *   The four
+     *   Opensolr views The platform's endpoint offers classic faceting only and cannot nest at all
+     *                  (\Loghound\OpensolrLog, "what reaches the platform").
+     *
+     * @return array<string,array{0:string,1:string,2:string}>
+     */
+    public static function pivots(): array
+    {
+        return [
+            'overview' => ['country_s', 'bot_verdict_s',
+                'Which countries send humans and which send automation — the same total, split two ways, '
+                . 'so a country that is 90% bot traffic is visible next to one that is not.'],
+            'bots' => ['bot_class_s', 'as_type_s',
+                'Where each kind of bot comes from: a declared crawler on hosting address space is '
+                . 'ordinary, a headless browser on consumer broadband is not.'],
+            'networks' => ['as_type_s', 'bot_verdict_s',
+                'Whether a network type is carrying people or automation — the question behind '
+                . '"should I rate-limit this address space".'],
         ];
     }
 
@@ -299,6 +415,7 @@ final class Query
             'bot_reasons_ss',
             'paths_ss',
             'signed_in_b',
+            'planes_s',
         ];
 
         return array_diff_key(self::filterFields(), array_flip($sessionOnly));
@@ -418,6 +535,7 @@ final class Query
             'fp_hash_s', 'fp_ips_24h_i',
             'provisional_b',
             'ident_s', 'signed_in_b',
+            'planes_s', 'search_terms_ss',
             'js_b', 'headless_b', 'automation_ss', 'ua_claim_ok_b', 'tz_match_b', 'webgl_s',
             'bot_score_f', 'bot_verdict_s', 'bot_reasons_ss', 'bot_class_s', 'rule_version_i',
         ]);

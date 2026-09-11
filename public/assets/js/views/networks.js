@@ -14,9 +14,10 @@
 import {
     api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody
 } from '../core.js';
-import { donut, geoScatter, tokens, treemap } from '../charts.js';
+import { donut, geoScatter, loadWorld, tokens, treemap } from '../charts.js';
 import { countryName, locate } from '../geo.js';
-import { countryNode, dimRow, dimValue } from '../identity.js';
+import { countryNode, dimRow, dimValue, valueText } from '../identity.js';
+import { renderPivot } from '../facetfilter.js';
 
 /**
  * The colour for a network type.
@@ -53,6 +54,60 @@ function mixBar(row) {
         segment(row.declared, 'bar-declared'),
         segment(row.evasive, 'bar-evasive'),
         segment(other, 'bar-unknown')
+    ]);
+}
+
+/**
+ * One network as one cell: what it is called, then what qualifies it.
+ *
+ * THE DEFECT THIS FIXES. The organisation, the AS number and the network type were three
+ * columns, and at the widths this table is read at none of them had room: nine columns under
+ * `table-layout: fixed` with a mixed `ch`/`%`/`px` colgroup starve the prose ones first, so
+ * `Deutsche Telekom AG` arrived as `Deutsche Telek` with no ellipsis and no gap before the
+ * word in the next column. They are one subject — this network — and belong in one cell with
+ * a primary line and a quieter second one. Each part is still its own filter control.
+ *
+ * @param {Object} row
+ * @param {Node} lead   The name this row is known by.
+ * @param {Array<Node>} extra Anything that qualifies it, before the type.
+ */
+function networkCell(row, lead, extra) {
+    const lower = (extra || []).slice();
+    if (row.as_type) {
+        if (lower.length) {
+            lower.push(el('span', { text: ' · ' }));
+        }
+        lower.push(dimValue('as_type_s', row.as_type));
+    }
+    return el('div', { class: 'client' }, [
+        el('div', { class: 'clip-line' }, [lead]),
+        el('div', { class: 'sub clip-line' }, lower.length ? lower : [el('span', { text: '—' })])
+    ]);
+}
+
+/**
+ * The mix bar with the two counts that were columns of their own underneath it.
+ *
+ * Human and evasive were a numeric column each, next to a bar that already encodes both as
+ * area. Two representations of one fact, costing sixteen per cent of the table between them.
+ * The bar keeps the comparison and the figures sit under it as a caption, which is where a
+ * reader looks once the bar has told them which row to look at.
+ */
+function mixCell(row) {
+    const other = Math.max(0, row.sessions - row.human - row.declared - row.evasive);
+    const parts = [num(row.human) + ' human'];
+    if (row.declared) {
+        parts.push(num(row.declared) + ' declared');
+    }
+    if (row.evasive) {
+        parts.push(num(row.evasive) + ' evasive');
+    }
+    if (other) {
+        parts.push(num(other) + ' unknown');
+    }
+    return el('div', {}, [
+        mixBar(row),
+        el('div', { class: 'sub clip-line', text: parts.join(' · ') })
     ]);
 }
 
@@ -100,25 +155,17 @@ function renderAsns(data) {
     tbody(byId('net-asns-table'), data.asns.map((row) => ({
         attrs: dimRow('asn_i', row.asn),
         cells: [
-            { text: 'AS' + row.asn, mono: true, nowrap: true, sort: row.asn },
             {
-                node: row.org ? dimValue('as_org_s', row.org) : el('span', { class: 'muted', text: '—' }),
+                node: networkCell(row, row.org ? dimValue('as_org_s', row.org) : el('span', { text: 'AS' + row.asn }),
+                    [el('span', { class: 'mono', text: 'AS' + row.asn })]),
                 clip: true,
-                title: row.org || 'Organisation not resolved',
-                sort: row.org || ''
-            },
-            {
-                node: row.as_type
-                    ? dimValue('as_type_s', row.as_type)
-                    : el('span', { class: 'chip chip-word', text: 'unknown' }),
-                sort: row.as_type || ''
+                title: [row.org, 'AS' + row.asn, row.as_type].filter(Boolean).join(' · '),
+                sort: row.org || String(row.asn)
             },
             { text: num(row.sessions), num: true, sort: row.sessions },
             { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
             { text: num(row.hits), num: true, sort: row.hits },
-            { text: num(row.human), num: true, sort: row.human },
-            { text: num(row.evasive), num: true, sort: row.evasive },
-            { node: mixBar(row), sort: row.sessions ? row.evasive / row.sessions : 0 }
+            { node: mixCell(row), sort: row.sessions ? row.evasive / row.sessions : 0 }
         ]
     })));
 }
@@ -151,16 +198,22 @@ function renderTypes(data) {
     cardChart('net-types', 300);
     const t = tokens();
     donut('net-types', data.astypes.map((row) => ({
-        label: row.as_type || 'unknown',
+        label: valueText('as_type_s', row.as_type || 'unknown'),
         value: row.sessions,
         color: typeColour(t, row.as_type)
     })), 'sessions', num(data.total));
 }
 
 /**
- * Draw the country scatter, reporting how many sessions could not be placed.
+ * Draw the country bubbles on the world outline, reporting what could not be placed.
+ *
+ * THE BASEMAP IS LOADED HERE AND NOWHERE ELSE. It is 155 KB of coordinates for one card on one
+ * view, so it is fetched by the card that needs it rather than bundled into every page, and it
+ * is a file in this repository rather than a request to a tile server — the panel must work
+ * air-gapped behind a CSP with no outside origin. If the fetch fails the chart falls back to
+ * the bare longitude/latitude grid it used to be, which is worse but still true.
  */
-function renderMap(data) {
+async function renderMap(data) {
     const points = [];
     let unplaced = 0;
     const largest = data.countries.reduce((max, row) => Math.max(max, row.sessions), 1);
@@ -172,7 +225,7 @@ function renderMap(data) {
             continue;
         }
         points.push({
-            name: at.name,
+            name: countryName(row.country) || at.name,
             value: [at.lon, at.lat],
             sessions: row.sessions,
             ips: row.uniq_ips,
@@ -188,12 +241,13 @@ function renderMap(data) {
         return;
     }
     hideEmpty('net-map-empty');
-    cardChart('net-map', 300);
+    cardChart('net-map', 340);
+    await loadWorld('');
     geoScatter('net-map', points);
 
-    setPop('net-map', 'All sessions in range, plotted at country centroids on a plain lon/lat grid — country ' +
-        'resolution only, and no basemap because the panel must work air-gapped. Dot area is sessions; a dot is ' +
-        'drawn in the accent when more than half its sessions were scored as evasive automation.' +
+    setPop('net-map', 'All sessions in range, placed at their country. Bubble area is sessions, and a bubble is ' +
+        'drawn in the accent when more than half of its sessions were scored as evasive automation. Country ' +
+        'resolution only: a session is placed at its country, never at a street.' +
         (unplaced ? ' ' + num(unplaced) + ' sessions had a country value this build cannot place.' : ''));
 }
 
@@ -212,22 +266,11 @@ function renderNetnames(data) {
         attrs: dimRow('netname_s', row.netname),
         cells: [
             {
-                node: dimValue('netname_s', row.netname, { mono: true }),
+                node: networkCell(row, dimValue('netname_s', row.netname, { mono: true }),
+                    row.org ? [dimValue('as_org_s', row.org)] : []),
                 clip: true,
-                title: row.netname || '',
+                title: [row.netname, row.org, row.as_type].filter(Boolean).join(' · '),
                 sort: row.netname || ''
-            },
-            {
-                node: row.org ? dimValue('as_org_s', row.org) : el('span', { class: 'muted', text: '—' }),
-                clip: true,
-                title: row.org || 'Organisation not resolved',
-                sort: row.org || ''
-            },
-            {
-                node: row.as_type
-                    ? dimValue('as_type_s', row.as_type)
-                    : el('span', { class: 'chip chip-word', text: 'unknown' }),
-                sort: row.as_type || ''
             },
             { text: num(row.sessions), num: true, sort: row.sessions },
             { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
@@ -238,9 +281,7 @@ function renderNetnames(data) {
                 title: 'Distinct header fingerprints from this netblock. Many addresses sharing very few ' +
                     'fingerprints is the rotating-proxy pattern.'
             },
-            { text: num(row.human), num: true, sort: row.human },
-            { text: num(row.evasive), num: true, sort: row.evasive },
-            { node: mixBar(row), sort: row.sessions ? row.evasive / row.sessions : 0 }
+            { node: mixCell(row), sort: row.sessions ? row.evasive / row.sessions : 0 }
         ]
     })));
 }
@@ -285,9 +326,21 @@ function renderCountries(data) {
  * both cards — they are two views of the same facet, not two questions.
  */
 export default function init() {
+    /* ONE request, TWO cards. The cross-tab rides on this payload rather than fetching again,
+       so the pivot costs no extra round trip — but it is its own card, so it keeps its own
+       progress line and its own failure state. Both await the same promise. */
+    const totals = api('networks', 'totals');
     loadCard('net-stats', 'Counting distinct addresses and networks', async () => {
-        renderTotals(await api('networks', 'totals'));
+        renderTotals(await totals);
     });
+    if (byId('net-pivot-table')) {
+        loadCard('net-pivot', 'Cross-tabulating the filtered population', async () => {
+            const data = await totals;
+            if (!renderPivot('net-pivot', data.pivot)) {
+                noDataYet('net-pivot', 'No session in this range has both a network type and a verdict.');
+            }
+        });
+    }
     loadCard('net-asns', 'Faceting autonomous systems', async () => {
         renderAsns(await api('networks', 'asns'));
     });

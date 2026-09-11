@@ -16,7 +16,8 @@ import {
     api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, tbody, when
 } from '../core.js';
 import { barsHStacked, donut, histogram, tokens } from '../charts.js';
-import { dimRow, dimValue } from '../identity.js';
+import { dimRow, dimValue, valueText } from '../identity.js';
+import { renderPivot } from '../facetfilter.js';
 
 /**
  * The chart colour a verdict keeps everywhere in the panel.
@@ -69,7 +70,7 @@ function renderReasons(data) {
         return;
     }
     hideEmpty('bf-reasons-empty');
-    setPop('bf-reasons', num(data.botlike) + ' sessions with verdict bot or likely_bot. A session fires several ' +
+    setPop('bf-reasons', num(data.botlike) + ' sessions judged Bot or Likely bot. A session fires several ' +
         'rules, so the bars sum to more than the session count.');
 
     const t = tokens();
@@ -85,12 +86,13 @@ function renderReasons(data) {
         attrs: dimRow('bot_reasons_ss', row.code),
         cells: [
             {
-                node: el('div', {}, [
-                    dimValue('bot_reasons_ss', row.code, { mono: true }),
-                    el('div', { class: 'muted', text: row.label })
-                ]),
+                /* THE LABEL IS THE TEXT. This cell used to lead with the rule slug in monospace
+                   and put the words underneath in grey, which is backwards: `fp_cluster_proxy_fleet`
+                   is what the URL carries, not what a person reads. The slug is not displayed at
+                   all now — not here, not as a tooltip — and the row still filters on it. */
+                node: dimValue('bot_reasons_ss', row.code),
                 clip: true,
-                title: row.code,
+                title: row.why || '',
                 sort: row.label || row.code
             },
             { text: row.why, class: 'muted wrap', sort: row.severity || '' },
@@ -117,7 +119,7 @@ function renderVerdicts(data) {
     cardChart('bf-verdicts', 300);
     const t = tokens();
     donut('bf-verdicts', data.verdicts.map((row) => ({
-        label: row.verdict,
+        label: valueText('bot_verdict_s', row.verdict),
         value: row.count,
         color: verdictColour(t, row.verdict)
     })), 'sessions', num(data.total));
@@ -160,10 +162,10 @@ function renderClasses(data) {
     tbody(byId('bf-classes-table'), data.classes.map((row) => ({
         attrs: dimRow('bot_class_s', row.class),
         cells: [
-            { node: dimValue('bot_class_s', row.class, { mono: true }), clip: true, title: row.class, sort: row.class },
+            { node: dimValue('bot_class_s', row.class), clip: true, sort: row.class },
             {
                 node: el('span', {
-                    class: 'chip chip-word ' + (row.declared ? 'chip-good' : 'chip-bad'),
+                    class: 'chip ' + (row.declared ? 'chip-good' : 'chip-bad'),
                     text: row.declared ? 'declared' : 'evasive'
                 }),
                 sort: row.declared ? 'declared' : 'evasive'
@@ -209,7 +211,7 @@ function renderCrawlers(data) {
             { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
             {
                 node: el('span', {
-                    class: 'chip chip-word ' + (row.verified >= row.sessions ? 'chip-good' : 'chip-bad'),
+                    class: 'chip ' + (row.verified >= row.sessions ? 'chip-good' : 'chip-bad'),
                     text: num(row.verified) + '/' + num(row.sessions),
                     title: row.verified >= row.sessions
                         ? 'Every session passed forward-confirmed reverse DNS.'
@@ -249,9 +251,21 @@ function showNoCrawlers() {
  * Entry point. Six cards, six requests, all independent.
  */
 export default function init() {
+    /* ONE request, TWO cards. The cross-tab rides on this payload rather than fetching again,
+       so the pivot costs no extra round trip — but it is its own card, so it keeps its own
+       progress line and its own failure state. Both await the same promise. */
+    const split = api('bots', 'split');
     loadCard('bf-split', 'Separating declared crawlers from evasive automation', async () => {
-        renderSplit(await api('bots', 'split'));
+        renderSplit(await split);
     });
+    if (byId('bf-pivot-table')) {
+        loadCard('bf-pivot', 'Cross-tabulating the filtered population', async () => {
+            const data = await split;
+            if (!renderPivot('bf-pivot', data.pivot)) {
+                noDataYet('bf-pivot', 'No session in this range has both a bot class and a network type.');
+            }
+        });
+    }
     loadCard('bf-reasons', 'Faceting signal codes', async () => {
         renderReasons(await api('bots', 'reasons'));
     });

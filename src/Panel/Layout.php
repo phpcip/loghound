@@ -80,7 +80,10 @@ final class Layout
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\n";
         echo '<meta name="robots" content="noindex, nofollow">' . "\n";
         echo '<title>' . Security::esc($view->title() . ' — ' . $siteName) . '</title>' . "\n";
+        echo '<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">' . "\n";
+        echo '<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">' . "\n";
         echo '<link rel="stylesheet" href="' . Security::esc($v('assets/css/panel.css')) . '">' . "\n";
+        echo '<link rel="stylesheet" href="' . Security::esc($v('assets/css/mobile.css')) . '">' . "\n";
         echo '<link rel="icon" href="' . Security::esc($v('favicon.svg')) . '" type="image/svg+xml">' . "\n";
         echo '<link rel="icon" href="' . Security::esc($v('favicon.ico')) . '" sizes="any">' . "\n";
         echo '<link rel="apple-touch-icon" href="' . Security::esc($v('apple-touch-icon.png')) . '">' . "\n";
@@ -118,6 +121,7 @@ final class Layout
         echo '<script src="' . Security::esc($v('assets/vendor/echarts.min.js')) . '" defer></script>' . "\n";
         echo '<script type="module" src="' . Security::esc($v('assets/js/sectionnav.js')) . '"></script>' . "\n";
         echo '<script type="module" src="' . Security::esc($v('assets/js/app.js')) . '"></script>' . "\n";
+        echo '<script type="module" src="' . Security::esc($v('assets/js/responsive.js')) . '"></script>' . "\n";
         echo "</body>\n</html>\n";
     }
 
@@ -251,6 +255,11 @@ final class Layout
     /**
      * The left-hand navigation (a horizontal bar under ~900px, see the stylesheet).
      *
+     * THE LABEL IS WRAPPED. It was a bare text node inside the link, and a text node cannot be
+     * addressed by a selector — so the collapsed icon rail, which hides everything in a link
+     * except its mark, could not hide the words and rendered twelve clipped fragments down a
+     * 60px column. One span is the whole fix.
+     *
      * The sign-out control is a real form with a CSRF token rather than a link, because
      * ending a session changes state: a GET route would let any page on the internet sign
      * the operator out with an <img> tag. It appears only in session mode — HTTP Basic has
@@ -267,7 +276,7 @@ final class Layout
             echo '<li><a href="?v=' . Security::esc($item['slug']) . '"'
                 . ($is ? ' class="on" aria-current="page"' : '')
                 . ' title="' . Security::esc($item['hint']) . '">'
-                . Security::esc($item['label']) . '</a></li>';
+                . '<span class="navlabel">' . Security::esc($item['label']) . '</span></a></li>';
         }
         echo "</ul>\n";
         echo '<button type="button" id="theme-toggle" class="theme-toggle" aria-live="polite">Theme: auto</button>' . "\n";

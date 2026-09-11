@@ -294,8 +294,8 @@ final class Fingerprints extends Controller
     {
         self::cardOpen('fp-explain', '01', 'What this table is');
         echo '<div class="explain">';
-        echo '<p><code>fp_hash_s</code> is a hash of the request headers <strong>with the IP address deliberately '
-            . 'left out</strong>: User-Agent, Accept, Accept-Language, Accept-Encoding, the Sec-CH-UA set, the '
+        echo '<p>A <strong>fingerprint</strong> is a hash of the request headers <strong>with the IP address '
+            . 'deliberately left out</strong>: User-Agent, Accept, Accept-Language, Accept-Encoding, the Sec-CH-UA set, the '
             . 'Sec-Fetch set, and the HTTP version. Two requests share a fingerprint when they were made by the '
             . 'same client software configured the same way — regardless of where they came from.</p>';
         echo '<p>A person browsing produces a fingerprint seen from one, two, maybe three addresses. A scraper '
@@ -341,19 +341,17 @@ final class Fingerprints extends Controller
         self::skeleton('fp-table', 'rows', 0, 'Building fingerprint clusters');
 
         echo '<div class="table-wrap"><table id="fp-table-el" class="table-fixed"><colgroup>'
-            . '<col style="width:30px"><col style="width:21ch"><col style="width:7ch">'
-            . '<col style="width:8ch"><col style="width:6ch"><col style="width:8ch">'
-            . '<col style="width:140px"><col><col style="width:6ch"><col style="width:11ch">'
+            . '<col style="width:5%"><col style="width:21%"><col style="width:11%">'
+            . '<col style="width:9%"><col style="width:16%"><col style="width:21%">'
+            . '<col style="width:17%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col" class="w-expand"><span class="sr-only">Expand</span></th>'
             . '<th scope="col">Fingerprint</th>'
-            . '<th scope="col" class="num">IPs</th>'
-            . '<th scope="col" class="num">Blocks</th>'
-            . '<th scope="col" class="num">ASNs</th>'
+            . '<th scope="col" class="num" title="Distinct addresses, and under it the netblocks '
+            . 'and networks they are spread across">IPs</th>'
             . '<th scope="col" class="num">Sess.</th>'
             . '<th scope="col">Activity</th>'
             . '<th scope="col">Client</th>'
-            . '<th scope="col" class="num">Score</th>'
             . '<th scope="col">Verdict</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 

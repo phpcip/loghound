@@ -45,12 +45,12 @@ const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
 /**
  * The verdict chip, coloured the same way it is everywhere else.
  *
- * `chip-word` puts it in the body face: a verdict is a word, not an identifier whose characters
+ * A verdict is a word, not an identifier whose characters
  * have to line up, and monospace on everything was making prose read as code.
  */
 function verdictChip(verdict) {
     return el('span', {
-        class: 'chip chip-word v-' + String(verdict || 'unknown'),
+        class: 'chip v-' + String(verdict || 'unknown'),
         text: verdict || 'unknown'
     });
 }
@@ -129,7 +129,7 @@ function firedRules(s, catalogue) {
     for (const code of (s.reasons || [])) {
         const meta = (catalogue || {})[code];
         list.appendChild(el('li', {}, [
-            dimValue('bot_reasons_ss', code, { mono: true }),
+            dimValue('bot_reasons_ss', code),
             meta
                 ? el('span', { text: ' — ' + meta.why })
                 : el('span', { class: 'muted', text: ' — no description for this rule code in this panel version' })
@@ -330,7 +330,7 @@ function renderSession(body, data) {
         kv([
             ['Verdict', verdictChip(s.verdict)],
             ['Score', s.score === null ? null : dec(s.score, 0) + ' / 100', true],
-            ['Class', s.class ? dimValue('bot_class_s', s.class, { mono: true }) : null],
+            ['Class', s.class ? dimValue('bot_class_s', s.class) : null],
             ['Ruleset version', s.rule_version === null ? null : String(s.rule_version), true]
         ]),
         el('h4', { text: 'Rules that fired' }),

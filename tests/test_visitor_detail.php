@@ -278,8 +278,14 @@ return [
                 in_array('ts_start:[NOW-7DAY/HOUR TO NOW]', $fqs, true),
                 'the selected range must bound the drill-down'
             );
-            lh_true(in_array('country_s:("DE")', $fqs, true), 'the active country filter must still apply');
-            lh_true(in_array('as_type_s:("hosting")', $fqs, true), 'every active filter must still apply');
+            lh_true(
+                in_array('{!tag=f_country_s}country_s:("DE")', $fqs, true),
+                'the active country filter must still apply, and must be tagged so its own facet can ignore it'
+            );
+            lh_true(
+                in_array('{!tag=f_as_type_s}as_type_s:("hosting")', $fqs, true),
+                'every active filter must still apply, each under its own tag'
+            );
             lh_same(['DE'], $result['active']['country_s'], 'the dialog must be told which filters produced it');
         },
 
@@ -358,7 +364,10 @@ return [
             $fqs = lh_vd_repeated($captured, 'fq');
             lh_true(in_array('doc_type_s:session', $fqs, true), 'rollups must be excluded from a browse count');
             lh_true(in_array('ts_start:[NOW-30DAY/DAY TO NOW]', $fqs, true), 'the range must bound the counts');
-            lh_true(in_array('browser_s:("Chrome")', $fqs, true), 'an already-active filter must narrow the counts');
+            lh_true(
+                in_array('{!tag=f_browser_s}browser_s:("Chrome")', $fqs, true),
+                'an already-active filter must narrow the counts, tagged so the browser facet still lists every browser'
+            );
             lh_same(['Chrome'], $result['active']['browser_s'], 'the active set must travel to the client');
         },
 
@@ -366,15 +375,18 @@ return [
      * Signed-in: three states, and the third is not a rounding error
      * -------------------------------------------------------------------- */
 
-    'dimensions: the signed-in split is asked for as two explicit queries' =>
+    'dimensions: the signed-in state is a real filterable dimension, not a read-only split' =>
         function (): void {
             [, $captured] = lh_vd_run('dimensions', []);
             $bodies = lh_vd_bodies($captured);
-            lh_contains($bodies, 'signed_in_b:true', 'the signed-in population must be counted');
-            lh_contains($bodies, 'signed_in_b:false', 'the anonymous population must be counted separately');
+            lh_contains(
+                $bodies,
+                '"field":"signed_in_b"',
+                'it is a terms facet on the field now, not two hand-written query facets'
+            );
         },
 
-    'dimensions: an unreported signed-in state is its own bucket, never folded into anonymous' =>
+    'dimensions: an unreported signed-in state is its own row, never folded into anonymous' =>
         function (): void {
             $saved = $_GET;
             $_GET = [];
@@ -388,9 +400,11 @@ return [
                             'responseHeader' => ['status' => 0],
                             'response' => ['numFound' => 0, 'docs' => []],
                             'facets'   => [
-                                'count'     => 100,
-                                'signed_in' => ['count' => 10],
-                                'anonymous' => ['count' => 15],
+                                'count'       => 100,
+                                'signed_in_b' => ['buckets' => [
+                                    ['val' => true, 'count' => 10],
+                                    ['val' => false, 'count' => 15],
+                                ]],
                             ],
                         ]),
                         'error'  => '',
@@ -410,28 +424,42 @@ return [
                 }
             }
             lh_true($group !== null, 'the signed-in split must be offered as a dimension');
-            lh_false($group['filterable'], 'signed_in_b is not in the filter allowlist, so it must not claim to be');
+            lh_true($group['filterable'], 'it is in the filter allowlist now, so it must be pressable');
 
             $buckets = [];
             foreach ($group['buckets'] as $bucket) {
-                $buckets[$bucket['value']] = $bucket['count'];
+                $buckets[$bucket['value']] = $bucket;
             }
-            lh_same(10, $buckets['signed in'] ?? null, 'the signed-in count must be reported as given');
-            lh_same(15, $buckets['anonymous'] ?? null, 'the anonymous count must be reported as given');
+            lh_same(10, $buckets['true']['count'], 'the signed-in count must be reported as given');
+            lh_same(15, $buckets['false']['count'], 'the anonymous count must be reported as given');
+            lh_same('Signed in', $buckets['true']['label'], 'a boolean facet must not print the word "true"');
+            lh_same('Anonymous', $buckets['false']['label']);
+
+            lh_has_key($group, 'absent', 'the sessions in neither bucket must be accounted for');
             lh_same(
                 75,
-                $buckets['not reported'] ?? null,
-                'the remaining 75 sessions were never classified and must be their own bucket, not anonymous'
+                $group['absent']['count'],
+                'the remaining 75 were never classified and must be their own row, not anonymous'
             );
+            lh_same(
+                'none',
+                $group['absent']['op'],
+                'and it is a real filter now: neither true nor false is the "None of" operator over both'
+            );
+            lh_same(['true', 'false'], $group['absent']['values']);
         },
 
-    'dimensions: nothing reported means no signed-in group at all' =>
+    'dimensions: a remainder is only offered when the arithmetic is sound' =>
         function (): void {
             [$result] = lh_vd_run('dimensions', []);
             foreach ($result['dimensions'] as $group) {
-                lh_false(
-                    $group['field'] === 'signed_in_b',
-                    'a group whose only bucket would be "not reported: everything" must not be drawn'
+                if ($group['field'] !== 'signed_in_b') {
+                    continue;
+                }
+                lh_no_key(
+                    $group,
+                    'absent',
+                    'with no buckets for the two known values the remainder would be the whole population'
                 );
             }
         },
@@ -649,23 +677,71 @@ return [
             $js = lh_vd_file('public/assets/js/dialog.js');
             lh_contains(
                 $js,
-                "target.closest('a[href], button, input, select, textarea')",
-                'the filter link and the expander button must win over the row they sit in'
+                "target.closest('a[href], input, select, textarea')",
+                'the filter link must win over the row it sits in'
             );
+
+            // A button wins too — the expander, a copy control — EXCEPT the one whose whole
+            // job is to open this dialog. Without that exception the explicit row opener was
+            // swallowed by the guard protecting the links beside it, and since every identity
+            // cell now carries two lines of links, a row with no opener reads as dead.
+            lh_contains($js, "const button = target.closest('button');", 'a button still wins by default');
+            lh_contains(
+                $js,
+                "!button.hasAttribute('data-lh-open')",
+                'the row opener is the one button that must not be swallowed'
+            );
+            lh_contains(
+                lh_vd_file('public/assets/js/identity.js'),
+                'export function openButton(',
+                'every drillable row needs one surface that is unambiguously "open this"'
+            );
+        },
+
+    'a failed open is never a row that silently does nothing' =>
+        function (): void {
+            $js = lh_vd_file('public/assets/js/dialog.js');
+            lh_contains($js, "openDialog('That could not be opened'", 'an opener that threw before opening still reports');
+            lh_contains($js, 'console.error(', 'the rejection must reach somewhere an operator can copy from');
+        },
+
+    'the demo world mints a session id that does not move between requests' =>
+        function (): void {
+            // The id was sha1 of the address, the start instant and a seeded draw. The draw is
+            // reproducible and the instant is not, so every request minted a different id for
+            // the same synthetic visit and the session dialog could never find one.
+            $php = lh_vd_file('src/Panel/Fixtures.php');
+            lh_false(
+                str_contains($php, "sha1('lh' . \$ip . \$start"),
+                'a demo id derived from the clock cannot be looked up on the next request'
+            );
+
+            $first = \Loghound\Panel\Fixtures::select('sessions.list', ['q' => '*:*', 'rows' => 1, 'fl' => 'id']);
+            $id = (string) ($first['docs'][0]['id'] ?? '');
+            lh_true($id !== '', 'the demo world must produce a session');
+
+            $again = \Loghound\Panel\Fixtures::select('sessions.one', [
+                'q' => '*:*',
+                'fq' => ['id:"' . $id . '"'],
+                'rows' => 1,
+            ]);
+            lh_same(1, count($again['docs']), 'the id the list handed out must still resolve');
         },
 
     'a value is only rendered as a filter link when the server would honour the field' =>
         function (): void {
             $js = lh_vd_file('public/assets/js/identity.js');
-            lh_contains($js, 'if (!isFilterable(field))', 'a link that cannot filter is a lie about what it does');
-            foreach (['city_s', 'region_s', 'asn_i', 'paths_ss', 'ua_bot_name_s'] as $missing) {
+            lh_contains($js, 'if (!isFilterable(field)', 'a link that cannot filter is a lie about what it does');
+            lh_contains(
+                $js,
+                'boot.dimensions',
+                'the filterable set comes from the server, not from a table retyped in the client'
+            );
+            foreach (array_keys(\Loghound\Panel\Query::filterFields()) as $field) {
                 lh_false(
-                    (bool) preg_match('/^\s*' . preg_quote($missing, '/') . ':/m', $js),
-                    $missing . ' is not in Query::filterFields(), so identity.js must not claim it is filterable'
+                    (bool) preg_match('/^\s*' . preg_quote($field, '/') . ':\s*\x27/m', $js),
+                    $field . ': a second copy of the allowlist is what drifted last time'
                 );
-            }
-            foreach (['as_org_s', 'netname_s', 'browser_s', 'os_s', 'device_s', 'country_s', 'as_type_s'] as $field) {
-                lh_contains($js, $field . ':', $field . ' must be labelled so its values can be offered as filters');
             }
         },
 
@@ -710,7 +786,7 @@ return [
                         $tables = substr_count($html, '<table id=');
                         lh_same(
                             $tables,
-                            substr_count($html, 'class="table-fixed"'),
+                            preg_match_all('/<table id=[^>]*class="(?:[^"]*\s)?table-fixed(?:\s[^"]*)?"/', $html),
                             $class . ': every ' . $what . ' must be fixed-layout so no column is pushed off screen'
                         );
                         lh_same(
@@ -882,32 +958,44 @@ return [
         function (): void {
             $js = lh_vd_file('public/assets/js/facets.js');
             lh_contains($js, "class: 'facet-opt'", 'the row itself is the control');
-            lh_contains($js, 'on ? urlRemoveFilter(', 'pressing a selected value must remove it');
-            lh_contains($js, ": urlAddFilter(", 'pressing an unselected value must add it');
-            lh_contains($js, "(on ? ' is-on' : '')", 'the selected state must be on the row');
+            lh_contains(
+                $js,
+                'toggleUrl(group.field, bucket.value',
+                'one gesture selects and deselects, and it keeps the operator in force'
+            );
+            lh_contains($js, "state === 'on' ? ' is-on' : ''", 'the selected state must be on the row');
+            lh_contains(
+                $js,
+                "state === 'excluded' ? ' is-excluded' : ''",
+                'and so must the third state, because a tick beside an excluded value is a lie'
+            );
             lh_contains($js, "'aria-label'", 'a screen reader gets neither the bar nor the tick');
             lh_contains($js, "class: 'facet-fill'", 'the distribution must be readable without reading a number');
             lh_contains($js, "class: 'facet-n'", 'the count needs its own aligned column');
         },
 
-    'the panel says how filters combine, in the words the query builder uses' =>
+    'the panel does not assert fixed boolean semantics in prose' =>
         function (): void {
-            $js = lh_vd_file('public/assets/js/facets.js');
-            lh_contains($js, 'data.multi', 'the sentence must come from the server, not be retyped in the client');
+            // The paragraph that explained OR-within / AND-across is gone: it was a third of
+            // the expanded panel's width, and the behaviour it asserted is becoming per
+            // dimension and explicit in the controls, which would have made it wrong as well
+            // as noisy. Whatever states it now, it is not a sentence in a constant.
+            $php = lh_vd_file('src/Panel/Sessions.php');
+            lh_false(str_contains($php, 'MULTI_SELECT_NOTE'), 'the constant and its uses are retired');
+            lh_false(str_contains($php, 'Picking several values'), 'and so is the sentence');
 
             [$result] = lh_vd_run('facets', []);
-            lh_has_key($result, 'multi', 'the facets payload must carry it');
-            lh_contains($result['multi'], 'any of them', 'OR within one dimension must be stated');
-            lh_contains($result['multi'], 'all of them', 'AND across dimensions must be stated');
+            lh_no_key($result, 'multi', 'the payload must stop carrying it too');
         },
 
     'a long value list has a way in: show all, and a box that filters the values' =>
         function (): void {
-            $js = lh_vd_file('public/assets/js/facets.js');
+            $js = lh_vd_file('public/assets/js/facetfilter.js');
             lh_contains($js, "class: 'facet-more'", 'the top N needs a way to the rest');
             lh_contains($js, "api('sessions', 'values'", 'show all must fetch the full list');
             lh_contains($js, "class: 'facet-q'", 'a long list needs its own search box');
-            lh_contains($js, 'indexOf(needle)', 'the box filters what is already fetched');
+            lh_contains($js, 'indexOf(needle)', 'the box filters over every value, not only the rows on screen');
+            lh_contains(lh_vd_file('public/assets/js/facets.js'), 'showAllButton(', 'and the list uses the shared control');
         },
 
     'values: one dimension, bounded, and only a dimension the allowlist carries' =>
@@ -969,7 +1057,13 @@ return [
 
             $sessions = lh_vd_file('public/assets/js/views/sessions.js');
             lh_contains($sessions, "'data-sort': doc.ts_start", 'a rendered timestamp sorts wrongly as a string');
-            lh_contains($sessions, "String(doc.log_span_ms)", 'a rendered duration sorts wrongly as a string');
+            lh_contains($sessions, "String(doc.hits)", 'a rendered count sorts wrongly as a string');
+            lh_contains($sessions, "String(doc.score)", 'a verdict cell sorts by its score, not by the word');
+
+            // Log span and engaged time are no longer columns in this table — seven columns fit
+            // where ten did not — so the pin moved to the dialog that still shows both.
+            $detail = lh_vd_file('public/assets/js/detail.js');
+            lh_contains($detail, 'log_span', 'the dialog is where a session\'s two clocks are read now');
 
             $networks = lh_vd_file('public/assets/js/views/networks.js');
             lh_contains($networks, 'sort: row.sessions', 'a formatted count sorts wrongly as a string');
@@ -977,18 +1071,26 @@ return [
 
     'prose is set in the body face and only identifiers are monospace' =>
         function (): void {
+            // `.chip` IS the body face now, so the `chip-word` opt-in that used to correct it is
+            // gone from the stylesheet and from every call site. The rule it encoded is stronger
+            // for being the default: a chip carries a word, and a chip that really holds an
+            // identifier asks for `.mono` like every other identifier in the panel.
             foreach ([
                 'public/assets/js/views/sessions.js',
                 'public/assets/js/views/fingerprints.js',
                 'public/assets/js/detail.js',
+                'public/assets/js/views/bots.js',
             ] as $file) {
-                lh_contains(lh_vd_file($file), 'chip-word', $file . ': a verdict is a word, not code');
+                lh_false(
+                    str_contains(lh_vd_file($file), 'chip-word'),
+                    $file . ': the chip is the body face by default; the opt-in is retired'
+                );
             }
 
             $css = lh_vd_file('public/assets/css/panel.css');
-            lh_contains($css, '.chip-word { font-family: var(--font-ui)', 'the variant has to exist');
+            lh_false(str_contains($css, '.chip-word {'), 'the retired variant must not come back');
+            lh_contains($css, 'font: 600 14px/1.4 var(--font-ui)', 'a chip is set in the body face');
             lh_contains($css, '.explorer .facets { border-right', 'the sidebar needs a boundary, not just a heading');
-            lh_contains($css, 'thead tr { background: var(--band); }', 'the header row must read as one thing');
 
             $networks = lh_vd_file('public/assets/js/views/networks.js');
             lh_false(

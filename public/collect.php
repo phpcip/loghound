@@ -9,8 +9,13 @@
  * rules this file lives by:
  *
  *   - It NEVER trusts a value in the payload for anything that has a
- *     server-side source. IP, User-Agent, host and referer are read off the
- *     connection; a payload that supplies them is ignored.
+ *     server-side source. IP, User-Agent and referer are read off the
+ *     connection; a payload that supplies them is ignored. The one value with
+ *     no server-side source is the hostname of the page the beacon is running
+ *     on — the page is on a different machine, so `HTTP_HOST` here names the
+ *     Loghound host and not the measured site — and it is cross-checked against
+ *     the Origin header the browser sets and required to be on a configured
+ *     allowlist before it counts for anything. See lh_site().
  *   - It NEVER trusts client-supplied timings. Every number is bounded against
  *     the HMAC token we minted, and an impossible claim is recorded as evidence
  *     rather than believed (see Beacon::checkTimings).
@@ -77,7 +82,19 @@
  * 6. RATE LIMITING. The bucket key is a keyed hash of the address, never the
  *    address itself: the rate-limit table would otherwise hold raw IPs of every
  *    visitor regardless of the configured privacy mode, quietly undoing that
- *    setting.
+ *    setting. THREE buckets, catching three different abuses: per address, per
+ *    session, and per measured HOSTNAME. The third exists because a listed
+ *    hostname is the only kind of beacon that can cause a session to be written,
+ *    so a registered site must not be a way around the limiter — it is the one
+ *    place where a flood costs index writes rather than a discarded row. It is
+ *    hashed for the same reason the address is, and it is applied before the
+ *    token exchange so it bounds hellos too.
+ *
+ * 6b. WHICH SITE IS THIS, IF ANY (lh_site()). The hostname the page reported, the
+ *    Origin the browser set and the operator's allowlist all have to agree before
+ *    the hostname or the search terms are recorded at all. Everything that does
+ *    not agree keeps today's behaviour exactly, which is what makes this change
+ *    additive rather than a loosening.
  *
  * 7. THE TOKEN EXCHANGE. On the FIRST call the beacon has no session id, so it
  *    cannot present a token and there is nothing to verify: that branch mints,
@@ -114,8 +131,10 @@
  * 9. STAGE THE ROW. SQLite only, never Solr, for the reasons above. The session
  *    id and the client key are columns and everything else is the JSON payload
  *    blob; the client key is stored so loghound-score can re-attach a beacon
- *    that arrived before the matching log line was tailed (SPEC.md §6.4,
- *    beacon_orphan_b). The path the beacon reports is informational only: the
+ *    that arrived before the matching log line was tailed (SPEC.md §6.4).
+ *    Until it does, that session is `planes_s: beacon_only` — an observation about
+ *    which planes have seen it, never a suspicion. The path the beacon reports is
+ *    informational only: the
  *    access log is the authority on what was actually served (SPEC.md §6.4 —
  *    "the log wins on facts, the beacon wins on time"). The address is stored
  *    under the configured privacy mode, exactly like a log hit.
@@ -127,6 +146,15 @@
  *    in configuration, in which case normalise() empties the field and nothing
  *    is staged at all. The signed-in state is three-state: `null` means the site
  *    said nothing, and it must never be stored as "anonymous".
+ *    Three more come from the site's IDENTITY rather than from the browser, and
+ *    all three are written only when lh_site() returned a hostname: the hostname
+ *    itself, the whitelisted URL parameters kept as search terms, and the
+ *    User-Agent. The User-Agent is read off the connection like always — what
+ *    the gate decides is whether it is STORED, and it is stored only for a site
+ *    that may produce a standalone session, because that session has no log line
+ *    to take a User-Agent from and would otherwise have no browser, OS or device
+ *    at all. For every other beacon nothing but the hash is staged, exactly as
+ *    before.
  *
  * ----------------------------------------------------------------------------
  * STATE ACCESS
@@ -248,12 +276,21 @@ if ($state !== null && !lh_allow($state, $ipKey, $perMin)) {
     lh_end();
 }
 
+$origin = lh_origin();
+
+$site = lh_site($beacon, $payload, $origin);
+
+if ($site !== '' && $state !== null) {
+    $hostKey = 'host:' . substr(hash_hmac('sha256', $site, (string) $config->get('beacon.secret', '')), 0, 24);
+    if (!lh_allow($state, $hostKey, $beacon->ratePerMinHost())) {
+        lh_end();
+    }
+}
+
 $sessionId = (string) $payload['session_id'];
 $token     = (string) $payload['token'];
 $isHello   = ($sessionId === '' || $token === '');
 $respond   = [];
-
-$origin = lh_origin();
 
 if ($isHello) {
     $sessionId = 'b' . bin2hex(random_bytes(20));
@@ -299,11 +336,14 @@ if ($state !== null) {
         'path'        => $payload['path'],
         'ident'       => $payload['ident'],
         'signed_in'   => $payload['signed_in'],
+        'host'        => $site,
+        'terms'       => $site === '' ? [] : $payload['terms'],
         'ip'          => Security::applyIpPrivacy(
             $ip,
             (string) $config->get('privacy.ip_mode', 'full'),
             (string) $config->get('privacy.ip_salt', '')
         ),
+        'ua'          => $site === '' ? '' : $ua,
         'ua_hash'     => sha1($ua),
     ]);
 }
@@ -369,6 +409,64 @@ function lh_origin(): string
         return '';
     }
     return strtolower(substr($origin, 0, 255));
+}
+
+/**
+ * Which of the operator's sites is this beacon running on, if any.
+ *
+ * Returns the hostname when the beacon may speak for a site the operator listed, and the
+ * EMPTY STRING for everything else — which is not an error and is by far the commonest
+ * answer. An empty result means the request keeps precisely the behaviour this endpoint has
+ * always had: a provisional id, a staged row, merge-only, no session created, no hostname and
+ * no search term recorded anywhere.
+ *
+ * THREE FACTS, AND ALL THREE HAVE TO AGREE.
+ *
+ * 1. What the PAGE says it is. `location.hostname`, carried in the payload. It is the only
+ *    party that knows, because the page is on a different machine from this collector and
+ *    `$_SERVER['HTTP_HOST']` here names the Loghound host. It is also entirely
+ *    attacker-chosen, so on its own it is worth nothing.
+ *
+ * 2. What the BROWSER says it is. The Origin header, set by the user agent on every
+ *    cross-origin request and NOT settable by page script: a page on evil.example cannot
+ *    make a browser send `Origin: search.opensolr.com`. This is the fact that makes the
+ *    first one worth reading. The two are required to agree, and a disagreement is
+ *    interesting rather than merely wrong — it means the request was not built by a browser
+ *    running on the page it claims — so it is refused rather than reconciled.
+ *
+ *    A request with no Origin at all is refused for this purpose too. The beacon is
+ *    cross-origin by construction, so a browser running it always sends one; a request
+ *    without one is either a same-origin call (the Loghound host measuring itself, which has
+ *    a log source and does not need this path) or something that is not a browser.
+ *
+ * 3. What the OPERATOR says. The hostname has to be on `beacon.allowed_hosts`. This is the
+ *    permission, and it is the only one: see Beacon::allowedHosts() for what being on it does
+ *    and does not buy, and docs/BEACON.md for the same thing in the words an operator reads.
+ *
+ * WHAT THIS DOES NOT STOP, stated here because the code is where it matters. Nothing that is
+ * not a browser is bound by rule 2 — curl sends whatever headers it is told to — so somebody
+ * who knows a hostname is on the list can forge beacons attributed to it. The allowlist is a
+ * permission, not an authentication, and the product's answer to that is not to pretend
+ * otherwise: it is that a session with no transport plane behind it is published MARKED as
+ * having none (`planes_s:beacon_only`), so no number that includes it can be read as though
+ * three planes agreed.
+ *
+ * @param array<string,mixed> $payload A normalised payload.
+ * @param string              $origin  The Origin header, already normalised by lh_origin().
+ */
+function lh_site(Beacon $beacon, array $payload, string $origin): string
+{
+    $claimed = (string) ($payload['hostname'] ?? '');
+    if ($claimed === '') {
+        return '';
+    }
+
+    $fromOrigin = Beacon::originHost($origin);
+    if ($fromOrigin === '' || $fromOrigin !== $claimed) {
+        return '';
+    }
+
+    return $beacon->hostAllowed($claimed) ? $claimed : '';
 }
 
 /**

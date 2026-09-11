@@ -38,6 +38,7 @@ declare(strict_types=1);
 namespace Loghound\Panel;
 
 use Loghound\Config;
+use Loghound\Security;
 
 final class Jobs
 {
@@ -167,11 +168,22 @@ final class Jobs
      * have gone out. Where no session can be established the secret is minted per process
      * instead, so jobs become unreachable across requests rather than collapsing into one
      * shared identity every caller would inherit. Denying is the safe direction.
+     *
+     * THE CLI TEST IS THIS CALLER'S POLICY AND STAYS HERE; everything else about starting a
+     * session belongs to Security::startSession() and is delegated to it. The two are not the
+     * same rule: that wrapper will happily start a session under CLI if nothing has been
+     * written yet, which is right for the places that want one, and wrong here — a scorer run
+     * from cron has no browser, and writing `lh_job_owner` into a session file for it would
+     * either leak a per-process identity to disk or, worse, let two runs inherit one.
+     *
+     * What is delegated is the part that was copied and got wrong elsewhere: the active-session
+     * check, the headers_sent guard, and the empty cache limiter that stops session_start()
+     * overwriting the Cache-Control the application already sent.
      */
     private static function owner(): string
     {
-        if (session_status() !== PHP_SESSION_ACTIVE && PHP_SAPI !== 'cli' && !headers_sent()) {
-            session_start();
+        if (PHP_SAPI !== 'cli') {
+            Security::startSession();
         }
         if (empty($_SESSION['lh_job_owner']) || !is_string($_SESSION['lh_job_owner'])) {
             $_SESSION['lh_job_owner'] = bin2hex(random_bytes(16));
@@ -979,7 +991,11 @@ final class Jobs
     ): array {
         $days = (int) ($ctx['days'] ?? 0);
         if ($days <= 0) {
-            return ['ok' => true, 'note' => 'skipped', 'detail' => 'Retention is disabled.'];
+            return [
+                'ok'     => true,
+                'note'   => 'skipped',
+                'detail' => 'No age limit is set, so nothing is deleted for being old.',
+            ];
         }
         $gw->resetError();
         $res = $gw->select('job.retention.' . $key, $core, [

@@ -231,6 +231,7 @@ return [
                 'bot_reasons_ss',
                 'paths_ss',
                 'signed_in_b',
+                'planes_s',
             ];
 
             if (array_keys($missing) !== $expected) {
@@ -240,7 +241,9 @@ return [
                     . 'excluded here on purpose. The three verdict fields are the scorer\'s conclusions '
                     . 'about a whole session; paths_ss is the set of paths a session touched, and a hit '
                     . 'has one path, not a set; signed_in_b is what the site told the beacon, which '
-                    . 'arrives once per session and never per log line.'
+                    . 'arrives once per session and never per log line; planes_s records which '
+                    . 'transport planes have seen a SESSION, and a hit is one line on one of them. '
+                    . 'search_terms_ss is deliberately NOT here: it is on both schemas.'
                 );
             }
         },

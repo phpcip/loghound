@@ -86,9 +86,105 @@ final class Fixtures
      */
     public static function facet(string $tag, array $query, array $facet): array
     {
-        $docs = (str_starts_with($tag, 'perf.') || str_contains($tag, 'hits')) ? self::hits() : self::sessions();
-        $docs = self::applyQuery($docs, $query);
-        return self::compute($docs, $facet);
+        $all = (str_starts_with($tag, 'perf.') || str_contains($tag, 'hits')) ? self::hits() : self::sessions();
+        $docs = self::applyQuery($all, $query);
+
+        return self::compute($docs, $facet, static function (array $tags) use ($all, $query): array {
+            return self::applyQueryExcept($all, $query, $tags);
+        });
+    }
+
+    /**
+     * Re-apply a query with the filters carrying any of these tags left out.
+     *
+     * The demo half of `domain.excludeTags`, and it is not decoration. Demo mode exists so the
+     * panel can be looked at where Solr has never been reachable, and the defect the facet layer
+     * was built to fix — a filtered dimension collapsing to the one value you picked — is a
+     * FACETING defect. A demo world that ignored the exclusion would reproduce the bug on the
+     * page a screenshot is taken from and hide the fix, which is the exact failure mode the
+     * Gateway docblock warns about: demo responses must go through the same shaping as real ones
+     * so a bug shows up here instead of hiding here.
+     *
+     * A filter is matched to its tag by the `{!tag=…}` prefix Panel\Facets writes, which is the
+     * same string Solr matches on.
+     *
+     * @param array<int,array<string,mixed>> $all
+     * @param array<string,mixed>            $params
+     * @param array<int,string>              $tags
+     * @return array<int,array<string,mixed>>
+     */
+    private static function applyQueryExcept(array $all, array $params, array $tags): array
+    {
+        if ($tags === []) {
+            return self::applyQuery($all, $params);
+        }
+
+        $kept = [];
+        foreach ((array) ($params['fq'] ?? []) as $fq) {
+            $fq = (string) $fq;
+            $drop = false;
+            foreach ($tags as $tag) {
+                if (str_starts_with($fq, '{!tag=' . $tag . '}')) {
+                    $drop = true;
+                    break;
+                }
+            }
+            if (!$drop) {
+                $kept[] = $fq;
+            }
+        }
+
+        return self::applyQuery($all, ['fq' => $kept] + $params);
+    }
+
+    /**
+     * Answer a value-substring search against the synthetic world.
+     *
+     * Demo mode has to answer this the same way Solr does or the value browser looks broken on
+     * the page a screenshot is taken from. The match is a case-insensitive substring over each
+     * distinct value of the field, counted, most common first — which is what
+     * `facet.contains` + `facet.contains.ignoreCase` does.
+     *
+     * The exclusion the real path applies has no analogue here and needs none: the fixtures are
+     * a fixed world, so a search over them is already over the whole world.
+     *
+     * @param array<string,mixed> $params
+     * @return array{buckets:array<int,array<string,mixed>>}
+     */
+    public static function facetContains(
+        string $tag,
+        string $field,
+        string $contains,
+        array $params,
+        int $limit = 200
+    ): array {
+        $docs = str_contains($tag, 'hits') ? self::hits() : self::sessions();
+        $docs = self::applyQuery($docs, $params);
+
+        $needle = mb_strtolower(trim($contains));
+        if ($needle === '') {
+            return ['buckets' => []];
+        }
+
+        $counts = [];
+        foreach ($docs as $doc) {
+            foreach ((array) ($doc[$field] ?? []) as $value) {
+                if (!is_scalar($value)) {
+                    continue;
+                }
+                $value = is_bool($value) ? ($value ? 'true' : 'false') : (string) $value;
+                if ($value !== '' && str_contains(mb_strtolower($value), $needle)) {
+                    $counts[$value] = ($counts[$value] ?? 0) + 1;
+                }
+            }
+        }
+        arsort($counts);
+
+        $buckets = [];
+        foreach (array_slice($counts, 0, max(1, $limit), true) as $value => $count) {
+            $buckets[] = ['val' => (string) $value, 'count' => (int) $count];
+        }
+        return ['buckets' => $buckets];
     }
 
     /**
@@ -481,8 +577,22 @@ final class Fixtures
         ];
         $ref = $referers[mt_rand(0, count($referers) - 1)];
 
+        /*
+         * THE ID MUST NOT DEPEND ON THE CLOCK.
+         *
+         * It was sha1 of the address, the start instant and a draw from the seeded generator.
+         * The draw is reproducible; `$start` is derived from time() and is not, so every
+         * request minted a different id for the same synthetic visit — and the session detail
+         * dialog, which looks a session up by the id the list handed the browser, could never
+         * find one. Every other dialog in the panel keys on a stable value (a fingerprint
+         * hash, an ASN, a hostname) and worked, which is why only this one looked broken.
+         *
+         * The file's own contract is "generated from a fixed seed, byte-identical on every
+         * load". Two draws from the seeded generator honour it; the timestamps stay relative
+         * to now so the range picker still selects something.
+         */
         $doc = [
-            'id'         => sha1('lh' . $ip . $start . mt_rand()),
+            'id'         => sha1('lh' . $ip . mt_rand() . mt_rand()),
             'doc_type_s' => 'session',
             'ts_start'   => self::iso($start),
             'hits_i'     => 1,
@@ -863,7 +973,7 @@ final class Fixtures
      * @param array<string,mixed>            $facet
      * @return array<string,mixed>
      */
-    private static function compute(array $docs, array $facet): array
+    private static function compute(array $docs, array $facet, ?callable $lift = null): array
     {
         $out = ['count' => count($docs)];
 
@@ -877,19 +987,49 @@ final class Fixtures
             }
             $type = (string) ($def['type'] ?? '');
 
-            $scope = $docs;
+            /* A facet that excludes a tag is computed over the domain WITHOUT that filter, which
+               is the whole mechanism that keeps a filtered dimension listing every value it has.
+               Only the top level can do it here, exactly as in Solr: a sub-facet inherits its
+               parent's domain. */
+            $tags = (array) ($def['domain']['excludeTags'] ?? []);
+            $scope = ($tags !== [] && $lift !== null) ? $lift($tags) : $docs;
 
             if ($type === 'query') {
                 $sub = self::filter($scope, (string) ($def['q'] ?? '*:*'));
-                $out[$key] = self::compute($sub, (array) ($def['facet'] ?? []));
+                $out[$key] = self::compute($sub, (array) ($def['facet'] ?? []), $lift);
             } elseif ($type === 'terms') {
                 $out[$key] = ['buckets' => self::terms($scope, $def)];
+                if (!empty($def['numBuckets'])) {
+                    $out[$key]['numBuckets'] = self::distinct($scope, (string) ($def['field'] ?? ''));
+                }
             } elseif ($type === 'range') {
                 $out[$key] = ['buckets' => self::rangeBuckets($scope, $def)];
             }
         }
 
         return $out;
+    }
+
+    /**
+     * How many DISTINCT values a field holds across these documents.
+     *
+     * Solr's `numBuckets`, which the value browser needs to say "the 2,000 most common of 48,391"
+     * rather than presenting a truncated list as a complete one. Counted over the whole domain
+     * rather than over the returned page, which is the point of it.
+     *
+     * @param array<int,array<string,mixed>> $docs
+     */
+    private static function distinct(array $docs, string $field): int
+    {
+        $seen = [];
+        foreach ($docs as $d) {
+            foreach ((array) ($d[$field] ?? []) as $value) {
+                if (is_scalar($value) && $value !== '') {
+                    $seen[is_bool($value) ? ($value ? 'true' : 'false') : (string) $value] = true;
+                }
+            }
+        }
+        return count($seen);
     }
 
     /**

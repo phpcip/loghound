@@ -51,51 +51,48 @@ final class Sessions extends Controller
      * Values returned for one dimension when the operator asks to see all of them.
      *
      * Bounded rather than unbounded: `limit: -1` on a terms facet asks Solr to enumerate every
-     * distinct value a field has ever held, which on an AS organisation field is tens of
-     * thousands of buckets built to populate a list nobody will read past the first screen of.
-     * Two hundred covers every long tail worth browsing and the browser filters within it.
+     * distinct value a field has ever held, which on a fingerprint or a path is tens of thousands
+     * of buckets built to populate a list nobody will read past the first screen of.
+     *
+     * Two thousand rather than the two hundred this was, because the value browser groups the
+     * list under an A–Z index and two hundred values sorted by COUNT covers only the head of the
+     * alphabet on a long tail. The request also asks for `numBuckets`, so a dimension with more
+     * distinct values than this says "the 2,000 most common of 48,391" and says that the search
+     * box searches those two thousand — a truncation the reader cannot see is the one thing worse
+     * than a truncation.
      */
-    private const ALL_BUCKETS = 200;
+    private const ALL_BUCKETS = 2000;
 
     /**
-     * Fields the detail dialog may open, on top of the filterable set.
+     * Values returned for one value-SEARCH.
      *
-     * THESE ARE READ-ONLY DRILL-DOWNS, NOT FILTERS, and the difference is deliberate rather
-     * than a workaround. Query::filterFields() is the server's filter allowlist and it is the
-     * only thing Controller::readFilters() honours, so a value in one of the fields below can
-     * be INSPECTED but cannot be turned into a `?f[…]` chip — and identity.js renders it as
-     * plain text rather than as a link that would silently do nothing.
-     *
-     * Every one of them ought to be filterable and none of them is: `paths_ss` is what makes a
-     * top-pages row openable at all, `asn_i` is the number every network table prints, `city_s`
-     * and `region_s` are on the document and shown, and `ua_bot_name_s` is the crawler's own
-     * name. They belong in Query::filterFields(), which is owned elsewhere; until they are
-     * there this list is what lets the dialog answer for them honestly.
-     *
-     * @return array<string,string> field => label
+     * Smaller than the listing on purpose, and the two are not the same question. The listing is
+     * "the most common values of this dimension" and wants enough to fill an A–Z index; a search
+     * is "the values containing what I typed" and is read from the top down — nobody scrolls to
+     * the two hundredth match, they type another character. Bounding it also bounds the response
+     * of a search that matches most of a term dictionary, which is the one a single letter would
+     * produce if Facets::MIN_SEARCH let it through.
      */
-    private static function detailOnlyFields(): array
-    {
-        return [
-            'paths_ss'       => 'Path',
-            'asn_i'          => 'ASN',
-            'city_s'         => 'City',
-            'region_s'       => 'Region',
-            'ua_bot_name_s'  => 'Declared crawler',
-        ];
-    }
+    private const SEARCH_BUCKETS = 200;
 
     /**
      * Every dimension whose detail dialog can be opened.
      *
-     * The filterable set plus the read-only additions above. `session_id_s` is excluded
-     * because a session is not a dimension — it has its own dialog, reached with `detail`.
+     * The filterable set, minus `session_id_s`: a session is not a dimension, it has its own
+     * dialog reached with `detail`.
+     *
+     * There used to be a second list here — `detailOnlyFields()` — naming `paths_ss`, `asn_i`,
+     * `city_s`, `region_s` and `ua_bot_name_s` as inspectable-but-not-filterable, with a docblock
+     * saying every one of them ought to be filterable and none of them was. All five are in
+     * Query::filterFields() now, so the list described a state of affairs that had stopped being
+     * true and made the dialog report `filterable: false` for five dimensions that filter
+     * perfectly well.
      *
      * @return array<string,string> field => label
      */
     private static function dimensionFields(): array
     {
-        $out = array_merge(Query::filterFields(), self::detailOnlyFields());
+        $out = Query::filterFields();
         unset($out['session_id_s']);
         return $out;
     }
@@ -216,29 +213,27 @@ final class Sessions extends Controller
             'active'       => $this->filters,
             'matched'      => (int) ($f['count'] ?? 0),
             'beacon_count' => self::qcount($f, 'beacon'),
-            'multi'        => self::MULTI_SELECT_NOTE,
         ]);
     }
 
     /**
-     * How the filters combine, stated in the UI because a reader cannot tell OR from AND.
-     *
-     * Controller::filterFqs() ORs the values within one field and ANDs the fields together,
-     * which is the right behaviour and completely invisible: two countries selected widens the
-     * result, a country plus a browser narrows it, and nothing on screen said so. The sentence
-     * travels with the payload so the renderer cannot drift from the query builder.
-     */
-    private const MULTI_SELECT_NOTE = 'Picking several values in one dimension widens the result — '
-        . 'any of them match. Picking values in different dimensions narrows it — all of them must match.';
-
-    /**
-     * The full value list for ONE dimension, for the "show all" control.
+     * The full value list for ONE dimension, for the value browser.
      *
      * The sidebar shows the top twelve, which is the right default and useless for a long tail:
-     * country and AS organisation both have one. This answers the same question without a
-     * limit small enough to hide the answer, and the browser filters the returned list as the
-     * operator types — Solr's JSON facet `contains` is not on the client's allowlist and adding
-     * it would be a new sanitiser surface for a search box that works perfectly well locally.
+     * country, AS organisation, path and fingerprint all have one. This answers the same question
+     * with a much larger bound, fetched only when the browser is opened rather than shipped with
+     * every page, and it asks Solr how many distinct values there really are so the dialog can say
+     * what it is NOT showing.
+     *
+     * The whole vocabulary is offered for a closed dimension, so "show me the sessions with a
+     * forged beacon" is answerable on a small site where the honest answer is none — with
+     * `mincount: 1` the option is simply absent, which reads as though the question cannot be
+     * asked.
+     *
+     * `vq` turns it into a SEARCH over every value the dimension has rather than a listing of the
+     * most common ones, which is a different question and is answered by a different mechanism —
+     * see valueSearch() and \Loghound\Solr::facetContains(). The two populations are not the same
+     * and the dialog says so: the LISTING is capped, the SEARCH is not.
      *
      * @return array<string,mixed>
      */
@@ -250,30 +245,119 @@ final class Sessions extends Controller
             return $this->envelope(['error' => 'That is not a dimension this panel can list.']);
         }
 
+        $search = Facets::searchTerm($_GET['vq'] ?? null);
+        if ($search !== '') {
+            return $this->valueSearch($field, $fields[$field], $search);
+        }
+
         [$groups, $f] = $this->dimensionGroups(
             'sessions.values',
             self::ALL_BUCKETS,
             [],
             self::text('q', 200),
-            [$field]
+            [$field],
+            true
         );
+
+        $group = $groups[0] ?? null;
 
         return $this->envelope([
             'field'   => $field,
-            'group'   => $groups[0] ?? null,
+            'group'   => $group === null ? null : $this->facets->withKnownValues($group),
             'matched' => (int) ($f['count'] ?? 0),
             'active'  => $this->filters,
         ]);
     }
 
     /**
-     * Build the dimension groups in one faceted request.
+     * Every value of one dimension whose text contains what the operator typed.
      *
-     * Shared by the sidebar, the panel-wide filter bar and the "show all" list, so the three
-     * cannot disagree about which dimensions exist, what they are called or how many values
-     * each shows. `$only` restricts it to one dimension for the expanded list.
+     * COMPLETE, and that is the point of it. The listing above is the two thousand most common
+     * values; this searches the whole term dictionary, so a fingerprint or a path that is nowhere
+     * near the top of its dimension is still findable by typing part of it. Case-insensitive,
+     * because the things people search here are hashes, paths and organisation names.
      *
-     * @param array<string,mixed> $extra Additional facet definitions to fold into the request.
+     * It is a CLASSIC facet rather than a JSON one, and that is not a style choice: the JSON Facet
+     * API has no substring filter and silently drops `contains` instead of refusing it, so the
+     * obvious spelling would have returned the dimension's most common values whatever was typed.
+     * The measurements are on \Loghound\Solr::facetContains().
+     *
+     * The dimension's own filter is excluded, exactly as it is in the listing: searching inside a
+     * filtered dimension would only ever return what is already selected, which is the same defect
+     * this whole component exists to fix, wearing a search box.
+     *
+     * @return array<string,mixed>
+     */
+    private function valueSearch(string $field, string $label, string $search): array
+    {
+        $res = $this->gw->facetSearch(
+            'sessions.values.search',
+            $this->gw->sessionsCore(),
+            $field,
+            $search,
+            ['q' => '*:*', 'fq' => $this->sessionFqs()],
+            $this->facets->ownTags($field),
+            self::SEARCH_BUCKETS
+        );
+
+        $group = $this->facets->group(
+            [$field => $res],
+            $field,
+            self::SEARCH_BUCKETS,
+            in_array($field, self::MONO_FIELDS, true)
+        );
+
+        /* A search that matched nothing is an ANSWER, not an absent one. group() returns null for
+           an empty bucket list because a dimension with no values at all should not be drawn in a
+           sidebar — but "no value contains this" is exactly what the operator asked, and the
+           dialog has to be able to say it rather than fall back to a listing that would look like
+           the search never happened. */
+        if ($group === null) {
+            $group = [
+                'field'      => $field,
+                'label'      => $label,
+                'ns'         => $this->facets->namespaceKey(),
+                'mono'       => in_array($field, self::MONO_FIELDS, true),
+                'filterable' => true,
+                'arity'      => $this->facets->arity($field),
+                'op'         => $this->facets->op($field),
+                'operators'  => $this->facets->operators($field),
+                'chosen'     => $this->facets->values($field),
+                'buckets'    => [],
+                'distinct'   => null,
+                'basis'      => $this->facets->ownTags($field) === [] ? 'filtered' : 'excluded',
+                'basis_note' => '',
+                'overlaps'   => $this->facets->arity($field) === Facets::ARITY_MULTI,
+                'vocabulary' => Vocabulary::has($field),
+            ];
+        }
+
+        $group['search'] = $search;
+        $group['searched'] = true;
+        $group['truncated'] = count($res['buckets']) >= self::SEARCH_BUCKETS;
+
+        return $this->envelope([
+            'field'  => $field,
+            'label'  => $label,
+            'search' => $search,
+            'group'  => $group,
+            'active' => $this->filters,
+        ]);
+    }
+
+    /**
+     * Build the dimension groups in ONE faceted request, through the shared facet layer.
+     *
+     * This used to write its own terms facets, which is where the defect lived: an untagged filter
+     * is inside its own facet, so choosing `host_s=opensolr.com` left the VIRTUAL HOST list with
+     * exactly one entry in it and no way to add a second. Panel\Facets attaches the tag to the
+     * filter and the matching `domain.excludeTags` to that dimension's facet, so a filtered
+     * dimension keeps listing every value it has while every other one still narrows — in the
+     * same single round trip.
+     *
+     * `$only` restricts it to one dimension, for the value browser.
+     *
+     * @param array<string,mixed>    $extra Additional facet definitions to fold into the request.
      * @param array<int,string>|null $only
      * @return array{0:array<int,array<string,mixed>>,1:array<string,mixed>}
      */
@@ -282,26 +366,12 @@ final class Sessions extends Controller
         int $limit,
         array $extra = [],
         string $text = '',
-        ?array $only = null
+        ?array $only = null,
+        bool $numBuckets = false
     ): array {
-        $fields = self::browseFields();
+        $fields = array_keys(self::browseFields());
         if ($only !== null) {
-            $fields = array_intersect_key($fields, array_flip($only));
-        }
-
-        $definitions = $extra;
-        foreach (array_keys($fields) as $field) {
-            $definitions[$field] = [
-                'type'     => 'terms',
-                'field'    => $field,
-                'limit'    => $limit,
-                'mincount' => 1,
-                'sort'     => 'count desc',
-            ];
-        }
-        if ($only === null) {
-            $definitions['signed_in'] = ['type' => 'query', 'q' => 'signed_in_b:true'];
-            $definitions['anonymous'] = ['type' => 'query', 'q' => 'signed_in_b:false'];
+            $fields = array_values(array_intersect($fields, $only));
         }
 
         $f = $this->gw->searchFacet(
@@ -309,36 +379,13 @@ final class Sessions extends Controller
             $this->gw->sessionsCore(),
             $text,
             ['fq' => $this->sessionFqs()],
-            $definitions
+            array_merge($extra, $this->facetDefs($fields, $limit, $numBuckets))
         );
 
+        $matched = (int) ($f['count'] ?? 0);
         $groups = [];
-        foreach ($fields as $field => $name) {
-            $buckets = [];
-            foreach (self::buckets($f, $field) as $bucket) {
-                $buckets[] = [
-                    'value' => (string) ($bucket['val'] ?? ''),
-                    'count' => (int) ($bucket['count'] ?? 0),
-                ];
-            }
-            if ($buckets === []) {
-                continue;
-            }
-            $groups[] = [
-                'field'      => $field,
-                'label'      => $name,
-                'mono'       => in_array($field, self::MONO_FIELDS, true),
-                'filterable' => true,
-                'buckets'    => $buckets,
-                'truncated'  => count($buckets) >= $limit,
-            ];
-        }
-
-        if ($only === null) {
-            $group = $this->signedInGroup($f);
-            if ($group !== null) {
-                $groups[] = $group;
-            }
+        foreach ($this->facetGroups($f, $fields, $limit, self::MONO_FIELDS) as $group) {
+            $groups[] = $this->facets->withAbsentValue($group, $matched);
         }
 
         return [$groups, $f];
@@ -368,57 +415,7 @@ final class Sessions extends Controller
             'dimensions' => $groups,
             'matched'    => (int) ($f['count'] ?? 0),
             'active'     => $this->filters,
-            'multi'      => self::MULTI_SELECT_NOTE,
         ]);
-    }
-
-    /**
-     * The signed-in / anonymous / not-reported split, as a dimension group.
-     *
-     * THREE STATES, AND THE THIRD IS NOT A ROUNDING ERROR. `signed_in_b` is written only when
-     * the measured site actually said one or the other, so "not reported" is every session on a
-     * site that has not adopted the beacon attribute — which on most installations is all of
-     * them. Presenting two buckets and letting the reader assume the rest were anonymous is
-     * exactly the fabrication the absent field exists to prevent, so the third bucket is
-     * computed here as the remainder and labelled.
-     *
-     * `filterable` is false because the panel's filter allowlist does not carry `signed_in_b`
-     * yet, and because "not reported" is a NEGATIVE filter (`-signed_in_b:[* TO *]`) that the
-     * `?f[field][]=value` mechanism cannot express at all. Both gaps are named in the handover
-     * rather than worked around: the values render as a read-only distribution until then.
-     *
-     * Returns null when nothing in range reported it, so a group of one bucket reading
-     * "not reported: everything" is never drawn.
-     *
-     * @param array<string,mixed> $f
-     * @return array<string,mixed>|null
-     */
-    private function signedInGroup(array $f): ?array
-    {
-        $signedIn = self::qcount($f, 'signed_in');
-        $anonymous = self::qcount($f, 'anonymous');
-        if ($signedIn === 0 && $anonymous === 0) {
-            return null;
-        }
-
-        $matched = (int) ($f['count'] ?? 0);
-        $buckets = [
-            ['value' => 'signed in', 'count' => $signedIn],
-            ['value' => 'anonymous', 'count' => $anonymous],
-        ];
-        $silent = max(0, $matched - $signedIn - $anonymous);
-        if ($silent > 0) {
-            $buckets[] = ['value' => 'not reported', 'count' => $silent];
-        }
-
-        return [
-            'field'      => 'signed_in_b',
-            'label'      => 'Signed in',
-            'mono'       => false,
-            'filterable' => false,
-            'buckets'    => $buckets,
-            'truncated'  => false,
-        ];
     }
 
     /**
@@ -937,13 +934,30 @@ final class Sessions extends Controller
     /**
      * The recent-visitors table.
      *
-     * Every column carries identity at a glance — the flag and city, the network the address
-     * belongs to by name, the parsed client rather than the raw User-Agent, the time and the
-     * page they came in on. All of it was already on the document and none of it was shown.
+     * SEVEN COLUMNS, AND THE COUNT IS THE POINT. It carried ten, and ten columns do not fit:
+     * measured at a 1440px window the table resolved to 900px — its own minimum, inside an
+     * 836px wrapper — and the `<colgroup>` was over-constrained, 737px of fixed `ch` widths
+     * plus two percentage columns asking for another 35%. The browser resolves that by
+     * starving the percentages, so the two columns carrying the longest prose got 93px and
+     * 70px, and the last column, whose `<col>` had no width at all, resolved to ZERO and was
+     * invisible on every desktop. `Amazon Technolo…` sat 16px from `Chrome 139` and the two
+     * read as one run of text.
      *
-     * The widths are explicit and the table is fixed-layout (see `table-fixed` in the
-     * stylesheet), because nine columns of content-driven width push the last one off the right
-     * edge of the viewport — which is how a Verdict column ends up reading "VERD".
+     * A fixed layout cannot invent width that is not there, so the answer is fewer columns,
+     * each holding one subject rather than one field:
+     *
+     *   - the address is the visitor, so what qualifies it — the city, the identity the
+     *     measured site declared, whether they were signed in — is a second line inside the
+     *     same cell rather than three more columns;
+     *   - the verdict and its score are one judgement and share a cell;
+     *   - log span, engaged time and the entry page left the table entirely. They are in the
+     *     detail dialog, per session, with the definitions beside them — which is the only
+     *     place the difference between a log span and an engaged second can actually be read.
+     *
+     * EVERY WIDTH IS A PERCENTAGE AND THEY SUM TO 100. Mixing `ch` and `%` in one colgroup is
+     * what produced the starvation: percentages are of the table, `ch` is of the font, and the
+     * two cannot be reconciled when the total exceeds the width. Percentages alone are exact
+     * under `table-layout: fixed` and there is nothing left to over-constrain.
      */
     private function resultsCard(): void
     {
@@ -952,20 +966,18 @@ final class Sessions extends Controller
         self::skeleton('se-results', 'rows', 0, 'Searching sessions');
 
         echo '<div class="table-wrap"><table id="se-table" class="table-fixed"><colgroup>'
-            . '<col style="width:13ch"><col style="width:11ch"><col style="width:13ch">'
-            . '<col style="width:16ch"><col style="width:20%"><col style="width:15%">'
-            . '<col style="width:7ch"><col style="width:9ch"><col style="width:9ch"><col>'
+            . '<col style="width:11%"><col style="width:14%"><col style="width:18%">'
+            . '<col style="width:16%"><col style="width:13%"><col style="width:9%">'
+            . '<col style="width:14%"><col style="width:5%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Started</th>'
-            . '<th scope="col">Verdict</th>'
             . '<th scope="col">Where</th>'
-            . '<th scope="col">Address</th>'
+            . '<th scope="col">Visitor</th>'
             . '<th scope="col">Network</th>'
             . '<th scope="col">Client</th>'
             . '<th scope="col" class="num">Reqs</th>'
-            . '<th scope="col" class="num">Log span</th>'
-            . '<th scope="col" class="num">Engaged</th>'
-            . '<th scope="col">Page</th>'
+            . '<th scope="col">Verdict</th>'
+            . '<th scope="col" class="rowopen-cell"><span class="sr-only">Open</span></th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div class="pager" id="se-pager"></div>';
 

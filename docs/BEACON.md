@@ -33,22 +33,148 @@ The `?v=` query string is the cache buster: `b.js` is served with a long
 actually fetch. The Settings page fills it in from the file's own modification
 time.
 
-Optional attributes:
+### 1.1 The complete option reference
 
-| Attribute | Default | Meaning |
-|---|---|---|
-| `data-endpoint` | `<script src>` with `b.js` → `collect.php` | Collector URL, if it is not a sibling of `b.js` |
-| `data-hb` | `15000` | Heartbeat interval, ms. Clamped to 2 000–300 000 |
-| `data-idle` | `30000` | How long after an interaction a visitor still counts as engaged, ms. Clamped to 1 000–600 000 |
-| `data-ident` | — | An identity **your site** attaches to this session. See section 3.1 |
-| `data-signed-in` | — | `1` signed in, `0` anonymous. Omit it entirely to say nothing. See section 3.1 |
+**Every option `b.js` reads.** Nine of them: six attributes on the script tag, two
+globals, one function. Nothing else is looked at.
 
-The first three correspond to `beacon.heartbeat_ms` and `beacon.idle_timeout_ms` in
-`config/loghound.php`. The panel's Settings page renders the snippet with your
-configured values already filled in. The last two have no configuration
-counterpart on the page — your template supplies them per request — but whether
-Loghound *stores* what they carry is controlled by `beacon.store_identity` and
-`beacon.store_signed_in`, and section 3.1 is about exactly that.
+The **Stored** column is the one to read first. An option can be set perfectly and
+still have its value discarded server-side, because storing a *declaration* is a
+policy decision the operator makes and storing a *measurement* is not. The panel's
+Settings → Beacon card renders this same table with that column filled in from
+**your** configuration, which is the only place it can be answered concretely.
+
+| Option | Kind | What it does | Default | Accepted | Stored |
+|---|---|---|---|---|---|
+| `data-endpoint` | attribute | Collector URL, when it is not a sibling of `b.js` | the script's own `src` with `b.js` → `collect.php` | Any URL. Set it only for a CDN or a different path | always — the script uses it itself |
+| `data-hb` | attribute | Heartbeat interval, ms. A beat is sent only when engaged time actually advanced, so an idle tab produces one, not hundreds | `15000` | Integer, clamped to 2 000–300 000. Anything else is ignored and the default used | always |
+| `data-idle` | attribute | How long after a real interaction a visitor still counts as engaged, ms. This is the definition of the **Engaged** clock | `30000` | Integer, clamped to 1 000–600 000 | always |
+| `data-ident` | attribute | An identity **your site** attaches — an email, a customer number, whatever you call the person. Never guessed | absent, and absent is not empty | Free text, truncated to 128 bytes. Control characters stripped, invalid UTF-8 repaired | **`beacon.store_identity`** — `false` by default, so this is discarded until you turn it on |
+| `data-signed-in` | attribute | Whether the visitor was signed in. Splits every number in the panel into signed-in and anonymous | absent — meaning **not reported**, never "no" | `1`/`0` or `true`/`false`. Anything else, including an attribute a template rendered blank, is read as not reported | **`beacon.store_signed_in`** — `true` by default |
+| `data-params` | attribute | URL query parameter **names** whose values are kept as search terms. Nothing else in the query string is read | absent — no parameter is collected | Comma separated. At most 8 names, each ≤ 40 chars of `a-z 0-9 _ - . [ ]`. Each value capped at 96 characters, dropped not truncated if longer | **`beacon.query_params`** — empty by default, and the server's list is authoritative |
+| `window.LoghoundIdent` | global | The same value as `data-ident`, for a template where adding an attribute to the tag is awkward but setting a variable above it is not | unset | A string. Must be set **before** `b.js` executes — with `defer`, anywhere in the document. The attribute wins if both are present | **`beacon.store_identity`** |
+| `window.LoghoundSignedIn` | global | The same value as `data-signed-in` | unset — not reported | A real boolean, or the same strings the attribute accepts. Must be set before `b.js` executes | **`beacon.store_signed_in`** |
+| `window.loghound.identify(ident, signedIn)` | function | Attach either value **after** the page has loaded — a single-page application that signs somebody in without a navigation, which no attribute can express | never called | Both arguments optional and independent. **Makes no request of its own:** the values ride the heartbeat that is already scheduled. Safe to call with anything; it cannot throw into your code | **`beacon.store_identity`** / **`beacon.store_signed_in`** |
+
+`data-hb` and `data-idle` mirror `beacon.heartbeat_ms` and `beacon.idle_timeout_ms`
+in `config/loghound.php`, and the Settings page renders the snippet with your
+configured values already in it. The rest have no configuration counterpart *on the
+page* — your template supplies them per request — but whether Loghound **stores**
+what they carry is decided entirely on the server, which is what the last column is
+about.
+
+### 1.2 Attaching an identity — three routes, three situations
+
+These are not alternatives to choose on taste. Each is the only one that works in
+its situation.
+
+**1. Attributes on the script tag — when your server knows who it is at render
+time.** The normal case. The template that renders the page renders the tag, in the
+same response: no second request, no extra script, no ordering problem.
+
+```html
+<script src="https://loghound.example.com/b.js?v=1"
+        data-ident="ada@example.com" data-signed-in="1" defer></script>
+```
+
+You would not write the address literally, of course — it comes out of whatever
+object your framework already has. **WordPress:**
+
+```php
+// wp-content/mu-plugins/loghound.php — a must-use plugin, so it survives a theme change.
+add_action('wp_head', static function (): void {
+    $attrs = ' data-signed-in="0"';
+    if (is_user_logged_in()) {
+        $attrs = ' data-ident="' . esc_attr(wp_get_current_user()->user_email) . '"'
+            . ' data-signed-in="1"';
+    }
+    echo '<script src="https://loghound.example.com/b.js?v=1"' . $attrs . ' defer></script>' . "\n";
+}, 99);
+```
+
+A signed-out visitor gets `data-signed-in="0"` and **no** `data-ident` at all —
+which is right: they are anonymous, and that is a different statement from "we were
+not told". `esc_attr()` is what stops an address containing a quote from breaking
+the tag.
+
+> **If you run a page cache** (WP Rocket, W3 Total Cache, LiteSpeed, Cloudflare
+> APO), the rendered tag is cached with the page, so the first visitor's identity
+> would be served to everyone else. Exclude logged-in users from the cache — every
+> one of those plugins does so by default — or use route 3 below from an uncached
+> request.
+
+**Drupal:**
+
+```php
+# your_theme.theme  (or a small custom module)
+function your_theme_page_attachments(array &$attachments): void {
+  $account = \Drupal::currentUser();
+
+  $tag = [
+    '#type' => 'html_tag',
+    '#tag' => 'script',
+    '#attributes' => [
+      'src' => 'https://loghound.example.com/b.js?v=1',
+      'defer' => TRUE,
+      'data-signed-in' => $account->isAuthenticated() ? '1' : '0',
+    ],
+  ];
+  if ($account->isAuthenticated()) {
+    $tag['#attributes']['data-ident'] = $account->getEmail();
+  }
+
+  $attachments['#attached']['html_head'][] = [$tag, 'loghound'];
+  $attachments['#cache']['contexts'][] = 'user';
+}
+```
+
+`html_head` rather than a library, because a library is declared once in YAML and
+cannot carry a value that changes per request. **The `user` cache context is not
+optional**: without it Drupal's render cache serves the first authenticated
+visitor's address to every other one. Use `getAccountName()` instead of
+`getEmail()` if a username is the identifier you want. Run `drush cr` afterwards.
+
+**2. Globals — when adding an attribute to the tag is awkward but setting a
+variable above it is not.** A tag manager, a templating system that owns the
+`<script>` element, a CMS block you cannot edit. They must be set *before* `b.js`
+executes, which with `defer` means anywhere in the document.
+
+```html
+<script>window.LoghoundIdent = "ada@example.com"; window.LoghoundSignedIn = true;</script>
+<script src="https://loghound.example.com/b.js?v=1" defer></script>
+```
+
+In **Google Tag Manager**, that is a Custom HTML tag with Data Layer variables,
+because a tag manager runs in the browser and cannot know who is signed in — the
+value has to reach it from your own page:
+
+```html
+<script>
+  window.LoghoundIdent = "{{Loghound Ident}}";
+  window.LoghoundSignedIn = "{{Loghound Signed In}}";
+</script>
+<script src="https://loghound.example.com/b.js?v=1" defer></script>
+```
+
+**3. `window.loghound.identify()` — when the identity arrives after the page
+loaded.** A single-page application that signs somebody in without a navigation,
+which no attribute can express.
+
+```js
+window.loghound.identify('ada@example.com', true);
+```
+
+It **makes no request of its own**: the values ride the heartbeat that is already
+scheduled, so attaching an identity costs your site nothing extra. Both arguments
+are optional and independent — pass only an identity, only a signed-in state, or
+both.
+
+**Loghound never guesses either value.** No cookie is read, no form is scraped, no
+meta tag is looked for, no `window` variable is hunted through. If your site does
+not say, the field does not exist on the session. And a site that says nothing is
+**not reported**, not anonymous: `signed_in_b` is written only when a page actually
+said one or the other, so a site that has not adopted the attribute cannot be read
+as a site full of anonymous visitors.
 
 **Serving `b.js`.** Serve it from the Loghound vhost with a long `Cache-Control`
 and a version query string (`b.js?v=3`) so an upgrade actually reaches visitors.
@@ -68,6 +194,15 @@ https://loghound.example.com`. The beacon uses no `eval`, no `new Function`, no
 inline handlers and no `innerHTML`, so nothing else has to be relaxed. (This is
 also why the UA-claim probes test for *functions* rather than for syntax
 features — detecting optional chaining or class fields would require `eval`.)
+Section 3.3 says what goes wrong when `connect-src` is missed, which is the
+commonest way a beacon install silently reports nothing.
+
+**The measured site does not have to be on this machine.** The snippet above is
+the whole installation on a host with no Loghound and no shared access log — a
+search page, a marketing site, anything on another server. The page reports its
+own hostname and the session is created from the beacon alone, provided that
+hostname is on `beacon.allowed_hosts`. That is **section 3.3**, and it includes an
+honest account of what the allowlist does and does not protect against.
 
 ---
 
@@ -164,18 +299,33 @@ One JSON object per POST. Every field, with nothing omitted:
 | `ow` `oh` | Browser window outer size |
 | `xi` | Identity your site declared, if any. Absent otherwise. Section 3.1 |
 | `xs` | `1` signed in, `0` anonymous. **Absent** when your site said nothing. Section 3.1 |
+| `hn` | `location.hostname` — the **host only**, never the URL. Section 3.3 |
+| `qp` | Values of the query parameters named in `data-params`, as a name → value map. **Absent** when none was named or none was present. Section 3.2 |
 
 **What is deliberately NOT collected:** no cookies, no `localStorage`, no canvas
 or audio fingerprint, no font enumeration, no battery/gamepad/WebRTC probing, no
 page content, no form values, no keystrokes (we count `keydown` events; we never
-look at which key), no query string, no hash fragment, no clipboard, no mouse
-coordinates in the payload (they are analysed on the client and discarded), and
-no third-party requests of any kind.
+look at which key), no hash fragment, no clipboard, no mouse coordinates in the
+payload (they are analysed on the client and discarded), and no third-party
+requests of any kind.
 
-`xi` and `xs` are the only two fields in the table above that Loghound does not
+**The query string is not collected either, with one narrow exception you switch
+on yourself.** `qp` carries the values of parameters you have *named*, and the
+rest of the URL is never read. That is section 3.2, and it is the one place
+Loghound stores something a person typed.
+
+`xi`, `xs` and `qp` are the only fields in the table above that Loghound does not
 measure. **Nothing guesses them.** No cookie is read, no form is scraped, no meta
 tag is looked for, no `window` variable is hunted through. They exist only when
-your own template declares them, and section 3.1 says what happens to them.
+your own template declares them, and sections 3.1 and 3.2 say what happens to
+them.
+
+`hn` is the one field with no server-side source. The collector reads the IP,
+User-Agent and referer off the connection and ignores whatever the payload claims
+about them — but the page is frequently on a *different machine* from the
+collector, so `HTTP_HOST` there names the Loghound host and says nothing about
+the measured site. Section 3.3 is about how that value is made trustworthy enough
+to act on, and about exactly how far that goes.
 
 ---
 
@@ -280,17 +430,344 @@ sink, like every other value that came off the wire — it is caller-supplied
 input on a public endpoint, and it is treated as hostile regardless of how
 trustworthy the site that sent it is.
 
-**Where the query string goes.** It is dropped before the payload is built. Real
-sites routinely carry session tokens, email addresses and password-reset codes in
-query strings, and an analytics tool that collects them has created a breach that
-its customer did not agree to.
+**Where the query string goes.** It is dropped before the payload is built, except
+for the parameters you name in `data-params` — see section 3.2. Real sites
+routinely carry session tokens, email addresses and password-reset codes in query
+strings, and an analytics tool that collects them wholesale has created a breach
+that its customer did not agree to. That is why the exception is a whitelist of
+names rather than a switch.
 
-**What the server ignores.** The collector reads the IP, User-Agent, host and
-referer **off the connection**, never from the payload. A client that sends them
-is wasting its bytes.
+**What the server ignores.** The collector reads the IP, User-Agent and referer
+**off the connection**, never from the payload. A client that sends them is
+wasting its bytes. The hostname is the exception, for the reason in section 3.3.
 
 **IP handling** follows `privacy.ip_mode`: `full`, `truncate` (v4 /24, v6 /48), or
 `hash` (keyed, rotated daily). See `docs/PRIVACY.md`.
+
+---
+
+## 3.2 Search terms — the one thing Loghound stores that somebody typed
+
+**Off unless you configure it. This is a named decision with a consequence, not a
+feature toggle, and it is the only place in the product where a literal string a
+visitor typed is stored and indexed.** Everything else Loghound keeps is a
+measurement, a status code, a hashed identifier or a path. A search term is
+content.
+
+### What you get
+
+`search_terms_ss` on both the hit and the session document: a **facetable,
+indexed, multi-valued** field. So "what did people search for" becomes a real
+dimension — countable, filterable, drillable, reachable from the value browser —
+exactly like Country or Browser. The Overview page has a *What they searched for*
+card, and any value in it scopes the whole dashboard when you click it.
+
+This is a deliberate contrast with `query_s`, which has always been on the hits
+core as **stored-only, not indexed, no docValues**. `query_s` is the whole query
+string; you can see it on one document and you can facet on none of it, because a
+query string is unbounded attacker-controlled text with a near-unique value per
+request and indexing it would build a term dictionary the size of the corpus.
+`search_terms_ss` is its opposite by construction: a handful of values, pulled out
+**by name**, from a list you wrote.
+
+### How you switch it on
+
+```php
+'beacon' => [
+    'query_params' => ['q'],
+],
+```
+
+and, on the measured page, the matching attribute — which the Settings page
+already fills in for you once the configuration is set:
+
+```html
+<script src="https://loghound.example.com/b.js?v=1" data-params="q" defer></script>
+```
+
+Both sides matter and they do different jobs:
+
+- **`data-params` is a privacy measure.** It keeps the rest of the URL — the
+  session token, the reset code — from leaving the visitor's browser at all.
+- **`beacon.query_params` is the decision about what is stored.** The payload is
+  attacker-chosen, so the server applies its own whitelist on arrival regardless
+  of what the page sent. A parameter you have not named is discarded before
+  anything is written anywhere.
+
+`beacon.query_params` also feeds the **log parser**, which is the half that needs
+no beacon at all: for a host whose access log this installation reads,
+`Parser::normalize()` pulls the same named parameters out of the request line. So
+a search page on this machine and a search page on another one both fill the same
+field, and a mixed install compares like with like.
+
+### What a term looks like by the time it is stored
+
+| Rule | Why |
+|---|---|
+| Control characters stripped, invalid UTF-8 repaired | It travels into a Solr document, a JSON response and an HTML table |
+| Internal whitespace collapsed | `solr   hosting` and `solr hosting` are one value, not two that look identical on screen |
+| **Lower-cased** | The field exists to be *counted*. A dimension listing `Solr`, `solr` and `SOLR` as three rows answers the question worse than one that lists it once. The original casing is not kept anywhere |
+| Longer than 96 characters → **dropped, not truncated** | Truncating would coin a facet value nobody ever searched for, and the value browser would then show it as though somebody had |
+| At most 8 per payload or log line, 20 distinct per session | A visitor who runs four hundred searches must not make one session document four hundred values wide |
+| Always a **bound value**, never spliced into a Solr parameter | Same rule as every other untrusted string in the product |
+
+Counted **per session**, not per search: a visitor who ran the same search six
+times contributes one. That is the number worth having ("how many people looked
+for this") rather than the one that flatters ("how many times was this typed"),
+and the card says which it is showing.
+
+### The consequence, stated plainly
+
+Turning this on widens what Loghound keeps from *metadata about requests* to
+*content from requests*. A search term can be a person's own name, a medical
+question or a competitor's name typed into your site by their employee. It lands
+on the session document, appears in the panel, lives in the search index and sits
+in every backup of it until retention deletes the session — the same lifecycle as
+`ident_s`, and for the same reason it is off by default. Name only the parameters
+your search box actually uses, and never a parameter that could carry anything
+else.
+
+---
+
+## 3.3 Standalone mode — a site on another server
+
+**The beacon works on a host this Loghound has no access log for.** Paste the same
+snippet. Nothing else is installed there: no agent, no log shipping, no second
+Loghound. This is how a hosted search page at `search.example.com`, running on a
+different machine from the one Loghound is on, appears in the same panel as
+everything else.
+
+### Two modes, and the server decides which
+
+| Mode | When | Behaviour |
+|---|---|---|
+| **Merge** | An access log source in *this* installation covers the hostname | Unchanged from every earlier version: the log is the authority on facts, the beacon on time, and the beacon's rows merge onto the session the scorer built from log lines |
+| **Standalone** | No log source here covers the hostname | The beacon is the only plane. It creates the session itself, carrying the hostname, the search terms and everything it measured |
+
+You do not declare the mode. `beacon.allowed_hosts` says which hosts may report
+at all; whether a host is *already covered* is **derived from evidence** — has
+this installation actually ingested log lines for that hostname in the last seven
+days. Configuration says what somebody intended; evidence says what is true, and
+only the second is safe to act on. Asking you to state the mode in a second place
+would guarantee the two drifted the first time a site moved.
+
+### The hostname becomes the virtual host
+
+A standalone session's `host_s` is the hostname the page reported, so it sits in
+the **Virtual host** dimension beside hosts that came from `%v` in a log line, and
+filters identically. On the Virtual hosts page the two kinds are in one table,
+each row marked with which it is.
+
+### Permission: `beacon.allowed_hosts`
+
+```php
+'beacon' => [
+    'allowed_hosts' => ['search.example.com', 'shop.example.com'],
+],
+```
+
+**Empty by default**, so an installation that says nothing behaves exactly as it
+did before this existed. A beacon from a hostname that is not on the list keeps
+today's behaviour precisely: a fresh provisional session id, a staged row,
+merge-only, **no session created**, and no hostname and no search term recorded
+anywhere.
+
+Being on the list buys three things and nothing else:
+
+1. its beacons may **create** a session when no log source covers the host;
+2. its reported hostname is recorded as `host_s`;
+3. the parameters from section 3.2 are kept as `search_terms_ss`.
+
+### How a listed host is told apart from the open internet
+
+Three facts have to agree, and the collector checks all three (`lh_site()` in
+`public/collect.php`):
+
+1. **What the page says it is** — `location.hostname`, in `hn`. Entirely
+   attacker-chosen, so on its own it is worth nothing.
+2. **What the browser says it is** — the `Origin` header. A user agent sets this
+   on every cross-origin request and **page script cannot change it**: a page on
+   `evil.example` cannot make a browser send `Origin: search.example.com`. This is
+   the fact that makes the first one worth reading. They are required to agree,
+   and a disagreement is refused rather than reconciled — it means the request was
+   not built by a browser running on the page it claims. A request with **no**
+   `Origin` is refused for this purpose too, because the beacon is cross-origin by
+   construction and a browser running it always sends one.
+3. **What you said** — the hostname is on `beacon.allowed_hosts`.
+
+### What this does NOT stop — read this part
+
+**The allowlist is a permission, not an authentication, and this documentation is
+not going to imply otherwise.**
+
+`Origin` binds *browsers*. Anything that is not a browser — `curl`, a script, a
+load generator — sends whatever headers it is told to. So **somebody who knows a
+hostname is on your list can fabricate sessions attributed to it.** They can make
+up dwell times, invent visitors, and report a human as headless automation.
+
+What bounds that:
+
+- It reaches only the hostnames **you listed**. It cannot touch another host's
+  data and it cannot invent a hostname you did not name.
+- It **reads nothing**. The collector answers `204` with an empty body to every
+  request, success or failure, so it is not an oracle for anything.
+- It cannot reach the **log-backed planes**. A forged beacon cannot create a log
+  line, a status code, a byte count or a reverse DNS result, and it cannot alter a
+  session that has those — the beacon merge never overwrites a fact the log
+  supplied.
+- Rate limits apply per address, per session **and per hostname**, so a listed
+  host is not a way around the limiter.
+
+This is the same exposure every client-side analytics product carries — Clicky,
+Plausible, GA and the rest all accept a beacon whose only claim to authenticity is
+a site identifier visible in the page source. Loghound's answer is not to pretend
+the problem is solved. It is to **mark what the evidence actually is**, which is
+the next section.
+
+### A beacon-only session is marked, and never claims a log fact
+
+A standalone session has **no transport plane**. No status code, no bytes, no
+server timing, no conditional-request behaviour, no inter-request rhythm, no
+reverse DNS from a log line. Two guarantees, and both are needed:
+
+**On the document.** None of those fields is written. Not zero — **absent**. A
+zero in any of them is a measurement, and `asset_ratio_f: 0.0` reads as "this
+client fetched only markup", which is a bot signal, about a visitor whose asset
+fetching was never observable from here.
+
+**In the ruleset.** Five rules are silenced (`Rules::TRANSPORT_CODES`):
+`no_js_on_html`, `no_assets`, `no_304_on_repeat`, `single_page_10s`,
+`periodic_timing`. Without that, `assets == 0` would be read back as evidence and
+`no_assets` alone — 55 points — would fire on **every single visitor** of a
+standalone site. `no_interaction` is deliberately *not* silenced: it reads the
+beacon's own interaction count, which a beacon-only session has.
+
+The session carries:
+
+- **`planes_s`** — `log_only`, `log_beacon` or `beacon_only`. A facetable
+  dimension, so every count that mixes populations can be split on it.
+- **`beacon_only_session`** in `bot_reasons_ss` — worth no points, present so that
+  the verdict explains itself in the session dialog and in the *Signal fired*
+  facet.
+
+And in the panel: the Virtual hosts table marks each row, and the Overview timing
+card reveals a note about the mixture whenever the selected range actually
+contains beacon-only sessions.
+
+**Asking for sessions that have a transport plane is `-planes_s:beacon_only`, not
+`planes_s:log_only`.** The field is newer than the product, so every session
+indexed before it existed has no value for it — and every one of those came from a
+log. The negation includes that history; the positive form would silently exclude
+all of it. This is the same three-state discipline as `provisional_b` and
+`signed_in_b`: true, false, and **absent means not reported**, with no schema
+default that makes an old document assert something it never said.
+
+### Content-Security-Policy on the measured site
+
+Two directives, and the second is the one people forget:
+
+```
+script-src  https://loghound.example.com;
+connect-src https://loghound.example.com;
+```
+
+Without `connect-src` the script loads, runs, measures — and the browser blocks
+the POST. There is no error anywhere you would look: the page is fine, the console
+shows a CSP violation nobody is watching, and the panel simply shows nothing for
+that host. Both are needed even though the beacon prefers
+`navigator.sendBeacon`, because a browser that lacks it or refuses the call falls
+back to `fetch` and `connect-src` governs both.
+
+Nothing else has to be relaxed: the beacon uses no `eval`, no `new Function`, no
+inline handlers and no `innerHTML`.
+
+### The cross-origin path, end to end
+
+There is no preflight, and that is by design rather than by luck. The beacon sends
+`Content-Type: text/plain;charset=UTF-8` with no custom headers, which makes the
+POST a **CORS-simple request** — byte-identical to what `navigator.sendBeacon`
+sends. An `OPTIONS` should therefore never happen; the collector answers one
+anyway, because a proxy or a CSP on the measured site can turn a simple request
+into a preflight and answering costs nothing.
+
+Response headers on every reply:
+
+```
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type
+Access-Control-Expose-Headers: X-LH-S, X-LH-T
+Access-Control-Max-Age: 86400
+```
+
+`Access-Control-Expose-Headers` is the load-bearing one: a `204` has no body, so
+the session id and token can only come back in headers, and without that header
+the page's JavaScript cannot read them — the hello succeeds, the beacon gets no
+credentials, and every later payload is silently dropped. Section 5 has the
+exchange in full.
+
+`credentials: 'omit'` is set explicitly, so the wildcard origin is safe: the
+endpoint takes no credentials, has no cookies to send in the first place, returns
+no body, and performs no action on behalf of a signed-in user. There is nothing a
+hostile origin gains by making this request that it could not get from `curl`.
+
+### When a standalone host later gains a log source
+
+You add the vhost, or move the site onto the Loghound machine. From that moment
+both planes describe the same visit, and this produces **one** session, not two:
+
+1. The coverage check flips as soon as hits appear for that hostname, so nothing
+   new is promoted to standalone.
+2. Beacons for a visit already in flight are claimed by the log-backed session
+   through the **client key** (`ip_net + ua_hash`) — the mechanism that has always
+   existed for a beacon arriving before its log line.
+3. Any *provisional* standalone document already published for those rows is
+   **deleted by id before** the run indexes anything. Deleting first means a
+   failure leaves a gap, never a double count.
+
+History is untouched. A session that really was beacon-only when it happened stays
+beacon-only, because a reconfiguration today is not evidence about last week.
+
+### Several installations, one pair of indexes
+
+A pair of Solr indexes may be shared by more than one Loghound installation on
+more than one machine, some contributing a log plane and some only a beacon, told
+apart by `host_s`. Three things make that safe:
+
+- **Session ids cannot collide.** A log-backed id is
+  `sha1(client_key | first_ts | 16 random bytes)` and a beacon-minted one is
+  `b` + 20 random bytes. Both carry enough entropy that independent installations
+  will not produce the same value.
+- **Hit ids cannot collide either, but only because the installation id is in
+  them.** It is `sha1(install_id \0 src:offset)`. Two machines both tailing
+  `/var/log/apache2/access.log` produce identical `src:offset` pairs, and a Solr
+  update with a duplicate `uniqueKey` is a delete-and-add — so without the
+  installation id each machine would silently have overwritten the other's
+  traffic, one request at a time, with no error anywhere.
+- **`install_s`** on both cores names the installation that wrote each document.
+  It is not how the panel separates sites (that is `host_s` — a shared pair is
+  meant to read as one dashboard). It exists so a **destructive** operation can be
+  scoped: `bin/loghound-retention` detects a shared pair from this field and, when
+  it finds one, deletes only its own documents. An installation with a 90-day
+  policy must not be able to delete a neighbour's 365 days, and if it cannot name
+  its own documents it refuses to run rather than guessing.
+
+Two consequences worth stating:
+
+- **Fingerprint clustering spans the whole pair.** `fp_ips_24h_i` counts distinct
+  addresses per fingerprint across every site in the index, deliberately: a
+  rotating proxy fleet working through your sites in turn is exactly the pattern
+  that is invisible from inside any one of them. It does mean
+  `fp_cluster_proxy_fleet` fires more readily on a shared pair, which is why it is
+  worth 45 points and designed to be corroborated rather than decisive alone.
+- **The daily rollup converges rather than forking.** Every installation
+  recomputes a whole day from every session document in the index and writes it at
+  the same deterministic id, so they all compute the same numbers and the last
+  writer wins with a value identical to the one it replaced. An atomic increment —
+  the design deliberately rejected — would have each installation add its own
+  sessions to a shared counter and inflate the day by the number of writers. The
+  rollup carries no `install_s`, because it describes the index rather than an
+  installation.
 
 ---
 

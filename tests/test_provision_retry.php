@@ -284,9 +284,24 @@ return [
 
             $before = $held;
             $calls = [];
-            $blind = static fn (string $url, int $n): ?array => str_contains($url, '/get_index_list')
-                ? ['__raw' => ['status' => 0, 'body' => '', 'error' => 'Connection timed out']]
-                : null;
+
+            $seen = 0;
+            /**
+             * Fail every index-list read but the first.
+             *
+             * The capacity check reads the list before anything is created, so the OWNERSHIP
+             * read this test is about is the second one. Letting the first through is what
+             * keeps the job walking as far as createOne(), where the fail-closed branch lives.
+             */
+            $blind = static function (string $url, int $n) use (&$seen): ?array {
+                if (!str_contains($url, '/get_index_list')) {
+                    return null;
+                }
+                $seen++;
+                return $seen === 1
+                    ? null
+                    : ['__raw' => ['status' => 0, 'body' => '', 'error' => 'Connection timed out']];
+            };
 
             Storage::useTestTransport(lh_retry_transport($calls, $held, $blind));
             try {
@@ -302,6 +317,37 @@ return [
                     'without ever quoting the API key'
                 );
                 lh_same($before, $held, 'and nothing may be created or deleted while it cannot tell');
+            } finally {
+                Storage::useTestTransport(null);
+                lh_rmtree($root);
+            }
+        },
+
+    'a control plane that cannot be counted stops before the first index is created'
+        => static function (): void {
+            [$root, $cfg] = lh_retry_scaffold();
+            $held = [];
+            $calls = [];
+
+            $blind = static fn (string $url, int $n): ?array => str_contains($url, '/get_index_list')
+                ? ['__raw' => ['status' => 0, 'body' => '', 'error' => 'Connection timed out']]
+                : null;
+
+            Storage::useTestTransport(lh_retry_transport($calls, $held, $blind));
+            try {
+                $job = Job::create($root . '/var/setup', Job::KIND_OPENSOLR, ['region' => 'FINLAND9']);
+                lh_false($job->runAll($cfg, $root), 'a capacity check that cannot be made must stop the job');
+                lh_same([], lh_retry_created($calls), 'and it must stop BEFORE anything is created');
+                lh_same([], $held, 'so the account is left exactly as it was');
+                lh_contains(
+                    $job->error(),
+                    'could not be reached',
+                    'the operator is told what could not be done, not given a transport error'
+                );
+                lh_false(
+                    str_contains($job->error(), 'SENTINEL-APIKEY-1234'),
+                    'without ever quoting the API key'
+                );
             } finally {
                 Storage::useTestTransport(null);
                 lh_rmtree($root);

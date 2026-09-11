@@ -104,12 +104,12 @@ final class Bots extends Controller
         $f = $this->gw->facet('bots.split', $this->gw->sessionsCore(), [
             'q'  => '*:*',
             'fq' => $this->sessionFqs(),
-        ], [
+        ], array_merge([
             'declared' => ['type' => 'query', 'q' => Query::POP_DECLARED, 'facet' => $counts],
             'ai'       => ['type' => 'query', 'q' => Query::POP_AI, 'facet' => $counts],
             'evasive'  => ['type' => 'query', 'q' => Query::POP_EVASIVE, 'facet' => $counts],
             'human'    => ['type' => 'query', 'q' => Query::POP_HUMAN],
-        ]);
+        ], $this->pivotDef(8, 5)));
 
         $half = function (string $key) use ($f): array {
             $node = is_array($f[$key] ?? null) ? $f[$key] : [];
@@ -126,6 +126,11 @@ final class Bots extends Controller
             'ai'       => $half('ai'),
             'evasive'  => $half('evasive'),
             'human'    => ['sessions' => self::qcount($f, 'human')],
+
+            /* Bot class crossed with network type, on this request rather than one of its own. It
+               answers the question the two separate facets cannot: a declared crawler on hosting
+               address space is ordinary, and a headless browser on consumer broadband is not. */
+            'pivot'    => $this->pivotRows($f),
         ]);
     }
 
@@ -360,6 +365,7 @@ final class Bots extends Controller
 
         $this->classesCard();
         $this->crawlersCard();
+        $this->pivotCard('bf-pivot', '07');
     }
 
     /** The two halves, stated before anything else on the page. */
@@ -407,15 +413,15 @@ final class Bots extends Controller
             'bf-reasons',
             '02',
             'Why each session was scored',
-            'Sessions with verdict bot or likely_bot. A session fires several rules, so the bars sum to more than '
+            'Sessions judged Bot or Likely bot. A session fires several rules, so the bars sum to more than '
             . 'the session count.'
         );
         self::skeleton('bf-reasons', 'chart', 420, 'Faceting signal codes');
 
         echo '<div class="chart" id="bf-reasons-chart" style="height:460px"></div>';
         echo '<div class="table-wrap"><table id="bf-reason-table" class="table-fixed"><colgroup>'
-            . '<col style="width:26ch"><col><col style="width:9ch"><col style="width:9ch">'
-            . '<col style="width:9ch">'
+            . '<col style="width:24%"><col style="width:40%"><col style="width:12%">'
+            . '<col style="width:12%"><col style="width:12%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Signal</th>'
             . '<th scope="col">What it means</th>'
@@ -434,13 +440,14 @@ final class Bots extends Controller
             'bf-classes',
             '05',
             'Bot classes',
-            'Sessions with verdict bot or likely_bot, grouped by bot_class_s. Declared classes are marked.'
+            'Sessions judged Bot or Likely bot, grouped by what kind of automation they are. '
+            . 'Declared classes are marked.'
         );
         self::skeleton('bf-classes', 'rows', 0, 'Faceting bot classes');
 
         echo '<div class="table-wrap"><table id="bf-classes-table" class="table-fixed"><colgroup>'
-            . '<col><col style="width:11ch"><col style="width:9ch"><col style="width:11ch">'
-            . '<col style="width:10ch"><col style="width:10ch">'
+            . '<col style="width:26%"><col style="width:16%"><col style="width:14%">'
+            . '<col style="width:16%"><col style="width:14%"><col style="width:14%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Class</th>'
             . '<th scope="col">Kind</th>'
@@ -466,8 +473,9 @@ final class Bots extends Controller
         self::skeleton('bf-crawlers', 'rows', 0, 'Faceting crawler names');
 
         echo '<div class="table-wrap"><table id="bf-crawlers-table" class="table-fixed"><colgroup>'
-            . '<col><col style="width:18ch"><col style="width:9ch"><col style="width:10ch">'
-            . '<col style="width:7ch"><col style="width:10ch"><col style="width:19ch">'
+            . '<col style="width:20%"><col style="width:16%"><col style="width:11%">'
+            . '<col style="width:12%"><col style="width:9%"><col style="width:12%">'
+            . '<col style="width:20%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Crawler</th>'
             . '<th scope="col">Category</th>'

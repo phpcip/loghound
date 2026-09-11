@@ -654,7 +654,13 @@ return [
 
             $window = $quota->retentionWindow('loghound_test_hits', 3.0);
             lh_same('time', $window['limited_by'], 'the shorter of the two');
-            lh_contains($window['sentence'], 'retention setting', 'names the limit that bites');
+            lh_contains(
+                $window['sentence'],
+                'age limit',
+                'names the limit that bites, in the operator\'s direction: "retention" was being '
+                . 'used as the name of the DELETION rule, which reads backwards to anyone who has '
+                . 'not seen the code'
+            );
         } finally {
             lh_rmtree($dir);
         }

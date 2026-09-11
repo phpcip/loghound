@@ -184,13 +184,29 @@ final class Installer
      *
      * The unlock lives in the session and nowhere else: there is no cookie, header or
      * query parameter that carries it, so it cannot be replayed from a link.
+     *
+     * A SESSION THAT PRESSED REINSTALL IN THE SIGNED-IN PANEL is accepted too, and that is not a
+     * weakening of the token. It has already proved more than the token asks for — it held the
+     * panel password, and a second factor where one is configured — and carrying that forward is
+     * what stops the button from locking a browser-only operator out of both the panel and the
+     * installer in one click. It is checked AFTER the ordinary unlock, spent once, and belongs
+     * to that session alone; a visitor who did not press the button still has to read
+     * var/install-token. See Setup\Token::grant().
      */
     private function unlocked(): bool
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
+        Security::startSession();
+
+        if (!empty($_SESSION['lh_setup_unlocked'])) {
+            return true;
         }
-        return !empty($_SESSION['lh_setup_unlocked']);
+
+        if (Token::spendGrant()) {
+            $_SESSION['lh_setup_unlocked'] = true;
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -246,6 +262,12 @@ final class Installer
             case self::STEP_STORAGE . ':provision':
                 $this->doProvision();
                 break;
+            case self::STEP_STORAGE . ':reuse':
+                $this->doReuse();
+                break;
+            case self::STEP_STORAGE . ':refresh':
+                $this->doRefreshAccount();
+                break;
             case self::STEP_STORAGE . ':test':
                 $this->startJob(Job::KIND_SOLRTEST, []);
                 break;
@@ -277,9 +299,7 @@ final class Installer
             $this->redirect(self::STEP_STATUS);
         }
 
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        Security::startSession();
         session_regenerate_id(true);
         $_SESSION['lh_setup_unlocked'] = true;
 
@@ -471,8 +491,82 @@ final class Installer
         }
 
         $this->rememberRegions($regions);
-        $this->flash('ok', 'Opensolr accepted your credentials. Choose where the indexes should live.');
+        $account = $this->rememberAccount();
+
+        $this->flash(
+            'ok',
+            'Opensolr accepted your credentials. ' . (
+                $account['pairs'] !== []
+                    ? 'This account already has Loghound indexes — you can join them or create a new pair.'
+                    : 'Choose where the indexes should live.'
+            )
+        );
         $this->redirect(self::STEP_STORAGE);
+    }
+
+    /**
+     * Re-read what the account holds, on the operator's explicit request.
+     *
+     * The list is cached per session so that opening the storage step does not make a network
+     * call on every render. That cache is the reason this control exists: an operator who has
+     * just deleted an index in another tab, or who has had a second machine provision a pair
+     * while this page sat open, needs a way to see the account as it is now without retyping
+     * their API key.
+     *
+     * Nothing here decides anything — the list is only ever an offer, and every choice made
+     * from it is re-checked against the platform before it is acted on.
+     *
+     * @return never
+     */
+    private function doRefreshAccount(): void
+    {
+        $account = $this->rememberAccount();
+
+        if (!$account['ok']) {
+            $this->flash('error', $account['error']);
+            $this->redirect(self::STEP_STORAGE);
+        }
+
+        $this->flash('ok', $account['capacity']['sentence']);
+        $this->redirect(self::STEP_STORAGE);
+    }
+
+    /**
+     * Join a pair of Loghound indexes this account already holds.
+     *
+     * The installation id is checked for shape here and checked for EXISTENCE by the job,
+     * against the account, before a single configuration key is written. A form field is not
+     * evidence that an index exists, and two index names built from one are two names this
+     * installation would start writing documents into.
+     *
+     * Reuse is a job for the same reason provisioning is: it makes several control-plane
+     * calls, one of which reads a whole schema back, and the operator has to be able to watch
+     * it and to be told which step refused.
+     *
+     * @return never
+     */
+    private function doReuse(): void
+    {
+        $installId = is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : '';
+
+        if (!preg_match('/^[a-f0-9]{4,32}$/', $installId)) {
+            $this->flash('error', 'Choose which pair of indexes to use.');
+            $this->redirect(self::STEP_STORAGE);
+        }
+
+        $account = $this->account();
+        if (Pairs::find($account['pairs'], $installId) === null) {
+            $this->flash(
+                'error',
+                'That pair is not in the list this account returned. Refresh the list and choose again.'
+            );
+            $this->redirect(self::STEP_STORAGE);
+        }
+
+        $this->startJob(Job::KIND_REUSE, [
+            'install_id'     => $installId,
+            'upgrade_schema' => ($_POST['upgrade_schema'] ?? '') === '1',
+        ]);
     }
 
     /**
@@ -541,7 +635,12 @@ final class Installer
 
         $this->token->destroy();
         if (session_status() === PHP_SESSION_ACTIVE) {
-            unset($_SESSION['lh_setup_unlocked'], $_SESSION['lh_setup_jobs'], $_SESSION['lh_setup_regions']);
+            unset(
+                $_SESSION['lh_setup_unlocked'],
+                $_SESSION['lh_setup_jobs'],
+                $_SESSION['lh_setup_regions'],
+                $_SESSION['lh_setup_account']
+            );
         }
 
         header('Location: ./', true, 303);
@@ -647,6 +746,7 @@ final class Installer
                 'flash'     => $this->takeFlash(),
                 'jobs'      => $this->jobIds(),
                 'regions'   => $this->regions(),
+                'account'   => $this->account(),
                 'progress'  => Steps::progress($this->cfg),
             ]
         );
@@ -685,9 +785,7 @@ final class Installer
      */
     private function rememberJob(string $kind, string $id): void
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        Security::startSession();
         $_SESSION['lh_setup_jobs'][$kind] = $id;
     }
 
@@ -698,9 +796,7 @@ final class Installer
      */
     private function jobIds(): array
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        Security::startSession();
         $out = [];
         foreach ((array) ($_SESSION['lh_setup_jobs'] ?? []) as $kind => $id) {
             if (!is_string($kind) || !is_string($id)) {
@@ -720,9 +816,7 @@ final class Installer
      */
     private function rememberRegions(array $regions): void
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        Security::startSession();
         $_SESSION['lh_setup_regions'] = array_values(array_filter(
             $regions,
             static fn($r): bool => is_string($r) && preg_match('/^[A-Z0-9_]{2,32}$/', $r) === 1
@@ -732,10 +826,66 @@ final class Installer
     /** @return string[] */
     private function regions(): array
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        Security::startSession();
         return (array) ($_SESSION['lh_setup_regions'] ?? []);
+    }
+
+    /**
+     * Read what the account holds and cache it for this session.
+     *
+     * ONE control-plane call answers both questions the storage step asks — which Loghound
+     * pairs exist, and how many indexes are in use — so it is made where the operator is
+     * already waiting for a network round trip, and cached rather than repeated on every
+     * render of a page they may sit on for a while.
+     *
+     * A failure is cached too, deliberately: the reason the list is empty has to stay on the
+     * screen next to the credentials that might explain it, rather than being replaced by an
+     * empty list on the next render.
+     *
+     * @return array<string,mixed>
+     */
+    private function rememberAccount(): array
+    {
+        $account = Storage::account($this->cfg);
+
+        Security::startSession();
+        $_SESSION['lh_setup_account'] = $account;
+
+        return $account;
+    }
+
+    /**
+     * The cached account snapshot, or a fresh read when there is none and there could be one.
+     *
+     * Reads through on a first visit that already has credentials — an operator returning to a
+     * part-finished install has a stored API key and no session, and showing them an empty
+     * storage step because of that would hide the pair they came back to adopt.
+     *
+     * @return array<string,mixed>
+     */
+    private function account(): array
+    {
+        Security::startSession();
+
+        $cached = $_SESSION['lh_setup_account'] ?? null;
+        if (is_array($cached)) {
+            return $cached;
+        }
+
+        if ((string) $this->cfg->get('opensolr.email', '') === ''
+            || (string) $this->cfg->get('opensolr.api_key', '') === '') {
+            return [
+                'ok'       => false,
+                'error'    => '',
+                'pairs'    => [],
+                'halves'   => [],
+                'total'    => 0,
+                'counted'  => 0,
+                'capacity' => Pairs::capacity(0),
+            ];
+        }
+
+        return $this->rememberAccount();
     }
 
     /**
@@ -752,9 +902,7 @@ final class Installer
      */
     private function flash(string $kind, string $text): void
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        Security::startSession();
         $_SESSION['lh_setup_flash'] = [
             'kind' => in_array($kind, ['ok', 'warn'], true) ? $kind : 'error',
             'text' => $text,
@@ -768,9 +916,7 @@ final class Installer
      */
     private function takeFlash(): ?array
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        Security::startSession();
         $flash = $_SESSION['lh_setup_flash'] ?? null;
         unset($_SESSION['lh_setup_flash']);
         return is_array($flash) ? ['kind' => (string) $flash['kind'], 'text' => (string) $flash['text']] : null;

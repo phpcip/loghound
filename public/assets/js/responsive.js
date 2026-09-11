@@ -37,14 +37,21 @@
  * @module responsive
  */
 
+import { icon } from './icons.js';
+
 const NARROW = 900;
 const STACK_ATTR = 'data-lh-col';
+const RAIL_KEY = 'lh.rail';
+const FOLD_KEY = 'lh.fold.';
+const CARD_KEY = 'lh.card.';
 
 let stamping = false;
 let observer = null;
 let navBtn = null;
 let scrim = null;
 let lastFocus = null;
+let applyFolds = null;
+let recheckTrouble = null;
 
 /**
  * Is the viewport in the range the phone layout is written for?
@@ -476,6 +483,457 @@ function setUpFacets() {
 }
 
 /* ===================================================================================
+ * 4. The view navigation as an icon rail
+ * ================================================================================ */
+
+/**
+ * Turn the left navigation into a rail that is collapsed to icons by default.
+ *
+ * WHY COLLAPSED IS THE DEFAULT. The rail listed twelve views at their full heading length and
+ * took 216px of every desk screen to do it — width that the reader's own data wants, and that
+ * the facet column beside the results wants more. An operator learns twelve marks in a day and
+ * then never reads the words again; somebody who has not is one press from having them back,
+ * and every mark carries the view's name as a title and as its accessible name in the
+ * meantime, so nothing is ever unnamed.
+ *
+ * WHERE THE WIDTH GOES. `--side-w` is the one number the shell is built on: the rail's width
+ * and <main>'s left margin both read it. Overriding it on the root element therefore moves
+ * both, and the space lands in the content rather than in a gutter.
+ *
+ * THE CHOICE IS REMEMBERED. In localStorage, per browser, like the theme. A first visit has no
+ * stored value and gets the collapsed rail, which is the state the panel is designed around.
+ *
+ * GATED ON SCRIPT, because the toggle is created here: without it the rail would be collapsed
+ * with no way to expand it, so with scripting off the navigation stays the full list it is.
+ */
+function setUpRail() {
+    const side = document.querySelector('nav.side');
+    if (!side || side.querySelector('.lh-railbtn')) {
+        return;
+    }
+
+    for (const link of side.querySelectorAll('ul li a')) {
+        if (link.querySelector('.vicon')) {
+            continue;
+        }
+        const slug = slugOf(link);
+        const mark = icon('view', slug);
+        if (mark) {
+            link.insertBefore(mark, link.firstChild);
+        }
+        if (!link.getAttribute('aria-label')) {
+            link.setAttribute('aria-label', (link.textContent || '').trim());
+        }
+    }
+
+    const toggle = side.querySelector('.theme-toggle');
+    if (toggle && !toggle.querySelector('.lh-themelabel')) {
+        const label = el('span', { class: 'lh-themelabel' }, toggle.textContent || 'Theme');
+        toggle.textContent = '';
+        const mark = icon('theme', 'theme');
+        if (mark) {
+            toggle.appendChild(mark);
+        }
+        toggle.appendChild(label);
+        mirrorThemeTitle(toggle, label);
+    }
+
+    const button = el('button', {
+        type: 'button',
+        class: 'lh-railbtn',
+        'aria-expanded': 'false',
+        'aria-controls': (side.querySelector('ul') || {}).id || 'lh-view-list'
+    });
+    button.appendChild(el('span', { class: 'lh-railbtn-mark', 'aria-hidden': 'true' }));
+    button.appendChild(el('span', { class: 'lh-railbtn-label' }, 'Collapse'));
+
+    const brand = side.querySelector('.brand');
+    if (brand && brand.parentNode === side) {
+        brand.insertAdjacentElement('afterend', button);
+    } else {
+        side.insertBefore(button, side.firstChild);
+    }
+
+    button.addEventListener('click', () => setRail(!isRailCollapsed()));
+
+    document.documentElement.classList.add('lh-rail');
+    applyRail(isRailCollapsed());
+}
+
+/**
+ * Keep the theme control's tooltip saying what its label says.
+ *
+ * The rail hides the words when it is collapsed, and a control whose only text is hidden needs
+ * the same text somewhere a pointer and a screen reader can still reach. theme.js rewrites the
+ * label whenever the mode changes and knows nothing about the rail, so the title follows the
+ * label rather than being set once.
+ */
+function mirrorThemeTitle(toggle, label) {
+    const sync = () => {
+        const text = (label.textContent || 'Theme').trim();
+        toggle.setAttribute('title', text);
+        toggle.setAttribute('aria-label', text);
+    };
+    sync();
+    if ('MutationObserver' in window) {
+        new MutationObserver(sync).observe(label, { childList: true, characterData: true, subtree: true });
+    }
+}
+
+/**
+ * The view a navigation link points at, taken from its own href.
+ *
+ * Read from the link rather than stamped on it by PHP, so the rail needs no markup change and
+ * a view added to Panel\Layout::nav() gets its mark with no second list to update.
+ */
+function slugOf(link) {
+    const href = link.getAttribute('href') || '';
+    const match = href.match(/[?&]v=([a-z_]+)/);
+    return match ? match[1] : '';
+}
+
+/** Has the operator asked for the labels? Absent means collapsed, which is the default. */
+function isRailCollapsed() {
+    try {
+        return window.localStorage.getItem(RAIL_KEY) !== 'open';
+    } catch (e) {
+        return true;
+    }
+}
+
+/** Record the choice and apply it. A storage that refuses still leaves the rail working. */
+function setRail(collapsed) {
+    try {
+        window.localStorage.setItem(RAIL_KEY, collapsed ? 'rail' : 'open');
+    } catch (e) {
+        void e;
+    }
+    applyRail(collapsed);
+}
+
+/** Put the state on the root element, where the stylesheet and --side-w can both see it. */
+function applyRail(collapsed) {
+    const button = document.querySelector('.lh-railbtn');
+    document.documentElement.classList.toggle('lh-rail-collapsed', collapsed);
+    if (button) {
+        button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        button.setAttribute('title', collapsed ? 'Show the view names' : 'Collapse to icons');
+        const label = button.querySelector('.lh-railbtn-label');
+        if (label) {
+            label.textContent = collapsed ? 'Expand' : 'Collapse';
+        }
+    }
+    refresh();
+}
+
+/* ===================================================================================
+ * 5. The facet panel as a left column
+ * ================================================================================ */
+
+/**
+ * Mirror the filter panel's open state onto the view, so the facets can be a COLUMN.
+ *
+ * The expanded "Filter by" panel is markup inside the filter bar at the top of the page, and
+ * as a block it pushed every card down the screen and spread the dimensions across the full
+ * width — facets on top and the content below, which is the one arrangement this panel is not
+ * allowed to have on a desk screen. The panel itself is another module's, so rather than
+ * moving any markup this watches its `hidden` attribute and puts a class on `.view`; the
+ * stylesheet then lays the view out as two columns with the panel in the first one, spanning
+ * every row, and the cards in the second. On a phone it stays a disclosure above the content,
+ * which is the right answer there.
+ */
+function watchFacetPanel() {
+    const panel = document.getElementById('lh-facets-panel');
+    const view = document.querySelector('.view');
+    if (!panel || !view || !('MutationObserver' in window)) {
+        return;
+    }
+    const sync = () => view.classList.toggle('has-facet-column', panel.hidden !== true);
+    new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+    sync();
+}
+
+/* ===================================================================================
+ * 6. Blocks that stay closed until somebody asks
+ * ================================================================================ */
+
+/**
+ * Remember whether a folded block is open, per block, per browser.
+ *
+ * A <details> forgets on every navigation, and the panel's long technical blocks — a parsed
+ * sample, a field-mapping table, the list of what a log format does not record — are things an
+ * operator either always wants or never does. Re-opening them on every page load is the same
+ * work every time, and closing them again is worse.
+ *
+ * The key is the BLOCK, not the instance: somebody who opened the field mapping for one log
+ * source wanted field mappings, not that file's in particular, so all of them open together.
+ * Closed is what a browser with nothing stored gets, which is the state the cards are designed
+ * around.
+ *
+ * Delegated from the document, because a card can be re-rendered by a fetch and a listener
+ * bound to the element would go with it.
+ */
+function setUpFolds() {
+    const apply = () => {
+        for (const fold of document.querySelectorAll('details.lh-keep[data-keep]')) {
+            if (fold.dataset.keepWired === '1') {
+                continue;
+            }
+            fold.dataset.keepWired = '1';
+            if (foldIsOpen(fold.dataset.keep)) {
+                fold.open = true;
+            }
+        }
+    };
+
+    document.addEventListener('toggle', (event) => {
+        const fold = event.target;
+        if (!fold || !fold.matches || !fold.matches('details.lh-keep[data-keep]')) {
+            return;
+        }
+        rememberFold(fold.dataset.keep, fold.open);
+        for (const other of document.querySelectorAll('details.lh-keep[data-keep="' + CSS.escape(fold.dataset.keep) + '"]')) {
+            other.open = fold.open;
+        }
+    }, true);
+
+    apply();
+    return apply;
+}
+
+/** Has this block been opened before? Absent means closed, which is the default. */
+function foldIsOpen(key) {
+    try {
+        return window.localStorage.getItem(FOLD_KEY + key) === 'open';
+    } catch (e) {
+        return false;
+    }
+}
+
+/** Record the choice. A storage that refuses still leaves the block working. */
+function rememberFold(key, open) {
+    try {
+        window.localStorage.setItem(FOLD_KEY + key, open ? 'open' : 'shut');
+    } catch (e) {
+        void e;
+    }
+}
+
+/* ===================================================================================
+ * 7. Sections: the first one open, the rest a press away
+ * ================================================================================ */
+
+/**
+ * Selectors that mean "there is a problem inside this section".
+ *
+ * A HIDDEN PROBLEM IS THE WORST OUTCOME OF THIS WHOLE CHANGE, so a section holding any of
+ * these opens regardless of the default and regardless of what the operator last chose. The
+ * system check with a failing row in it must never start collapsed, and neither must a card
+ * whose fetch failed, or one holding a form still waiting for a decision.
+ *
+ * A bare `.chip-warn` is deliberately NOT in the list, and the distinction is the point: it is
+ * also the chip on the word "Note" in a sentence, and a section held open by an annotation
+ * would make the whole feature useless within a week. Where a warning chip means a state
+ * rather than an aside — a row of the system check, a log source awaiting review — it is
+ * listed with the context that makes it one, and a form still waiting for a decision is listed
+ * outright.
+ */
+const TROUBLE = '.banner-warn, .banner-bad, .card-error, .finish-bad, .beacon-stale,'
+    + ' .chip-bad, .state-bad, .callout-bad, .confirm-form, [aria-invalid="true"], .is-error,'
+    + ' .check-row .chip-warn, .source-head .chip-warn';
+
+/**
+ * Turn every card on the page into a section that can be collapsed, with the first one open.
+ *
+ * WHY THIS IS HERE AND NOT IN THE MARKUP. `Panel\Controller::cardOpen()` emits a card as a
+ * heading followed by its content, and that is the right shape — it works with no script, it
+ * prints, and it is what the section nav's anchors point at. An accordion needs a region to
+ * toggle and a control to toggle it with, and both are built here from that same markup, so
+ * the server keeps emitting one thing and nothing about a card has to know it can fold.
+ *
+ * THE HEADING STAYS THE HEADING. The h2 keeps its level, its number and its accent; what goes
+ * inside it is a button, which is the pattern that gets an accordion keyboard support and
+ * `aria-expanded` without inventing either. The card's tools — a live count, a range control —
+ * stay in the head and stay visible while the section is shut, because a collapsed section
+ * should still be able to tell you whether it is worth opening.
+ *
+ * WHAT IS OPEN ON ARRIVAL. The first section, and any section with trouble in it. After that
+ * it is whatever the operator last chose on this page, because a default is for somebody who
+ * has never touched it, not a reset applied to somebody who has.
+ */
+function setUpSections() {
+    const cards = Array.from(document.querySelectorAll('main .view > .card[id]'))
+        .filter((card) => card.querySelector(':scope > .card-head > h2'));
+    if (cards.length < 2) {
+        return null;
+    }
+
+    cards.forEach((card, index) => foldCard(card, index === 0));
+    document.documentElement.classList.add('lh-sections');
+    addExpandAll(cards);
+    openFromHash();
+
+    window.addEventListener('hashchange', openFromHash);
+
+    /* The section nav must OPEN what it jumps to. A nav that scrolls to a collapsed heading
+       has moved the reader somewhere and shown them nothing. The listener is on the document
+       so it survives the bar being re-rendered, and it does not preventDefault: the anchor
+       still does the scrolling, this only makes sure there is something to scroll to. */
+    document.addEventListener('click', (event) => {
+        const link = event.target.closest ? event.target.closest('.set-nav a[href^="#"]') : null;
+        if (link) {
+            setCard(document.getElementById(link.getAttribute('href').slice(1)), true);
+        }
+    });
+
+    return () => cards.forEach((card) => { if (hasTrouble(card)) { setCard(card, true); } });
+}
+
+/**
+ * Give one card a toggle and a region.
+ *
+ * Everything after the head becomes the region, so the pop line, the loading state, the
+ * content and the empty state all travel together and a view that appends to the card later
+ * still finds its own ids — nothing is cloned or rewritten, only moved one level down.
+ */
+function foldCard(card, first) {
+    if (card.dataset.foldWired === '1') {
+        return;
+    }
+    card.dataset.foldWired = '1';
+
+    const head = card.querySelector(':scope > .card-head');
+    const heading = head.querySelector('h2');
+    const region = el('div', { class: 'card-region', id: card.id + '-region' });
+
+    let node = head.nextSibling;
+    while (node) {
+        const next = node.nextSibling;
+        region.appendChild(node);
+        node = next;
+    }
+    card.appendChild(region);
+
+    const button = el('button', {
+        type: 'button',
+        class: 'card-toggle',
+        'aria-expanded': 'true',
+        'aria-controls': region.id
+    });
+    while (heading.firstChild) {
+        button.appendChild(heading.firstChild);
+    }
+    heading.appendChild(button);
+
+    button.addEventListener('click', () => setCard(card, !isCardOpen(card), true));
+
+    const remembered = rememberedCard(card.id);
+    const open = hasTrouble(card) || (remembered === null ? first : remembered);
+    setCard(card, open);
+}
+
+/** Is anything inside this card telling the operator something is wrong? */
+function hasTrouble(card) {
+    const region = card.querySelector(':scope > .card-region') || card;
+    for (const node of region.querySelectorAll(TROUBLE)) {
+        if (!node.hidden && node.offsetParent !== null) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Is this section currently open? */
+function isCardOpen(card) {
+    return !card.classList.contains('is-shut');
+}
+
+/**
+ * Open or close one section.
+ *
+ * `remember` is only true for a press: opening a section because the nav jumped to it, or
+ * because a failure appeared inside it, is not the operator expressing a preference about it.
+ * Toggling re-runs the layout pass, because a table or a chart inside a section that was shut
+ * measured zero and has to be measured again now that it has a width.
+ */
+function setCard(card, open, remember) {
+    if (!card || card.dataset.foldWired !== '1') {
+        return;
+    }
+    card.classList.toggle('is-shut', !open);
+    const button = card.querySelector(':scope > .card-head .card-toggle');
+    if (button) {
+        button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (remember) {
+        rememberCard(card.id, open);
+    }
+    refresh();
+}
+
+/** What the operator last chose for this section on this page, or null. */
+function rememberedCard(id) {
+    try {
+        const value = window.localStorage.getItem(CARD_KEY + id);
+        return value === null ? null : value === 'open';
+    } catch (e) {
+        return null;
+    }
+}
+
+/** Record a press. */
+function rememberCard(id, open) {
+    try {
+        window.localStorage.setItem(CARD_KEY + id, open ? 'open' : 'shut');
+    } catch (e) {
+        void e;
+    }
+}
+
+/**
+ * Open whatever the URL's fragment points at.
+ *
+ * Deep links into a section exist in the product and in the documentation, and a link that
+ * lands on a collapsed heading has taken the reader somewhere and shown them nothing. Runs on
+ * load and on every hash change.
+ */
+function openFromHash() {
+    const id = window.location.hash.slice(1);
+    if (!id) {
+        return;
+    }
+    const target = document.getElementById(id);
+    const card = target ? target.closest('.card[id]') : null;
+    if (card) {
+        setCard(card, true);
+        window.requestAnimationFrame(() => card.scrollIntoView({ block: 'start' }));
+    }
+}
+
+/**
+ * The control that opens everything.
+ *
+ * BROWSER FIND DOES NOT SEE COLLAPSED CONTENT, and Settings is a page people search for the
+ * name of a setting. That makes this control part of the feature rather than a convenience:
+ * without it, collapsing sections would have quietly removed Ctrl-F from the longest page in
+ * the panel. It sits in the section nav, which is the one piece of chrome every page with
+ * more than one section already has, and it says which way it will go.
+ */
+function addExpandAll(cards) {
+    const nav = document.getElementById('lh-section-nav');
+    if (!nav || nav.querySelector('.lh-expandall')) {
+        return;
+    }
+    const button = el('button', { type: 'button', class: 'lh-expandall' }, 'Expand all');
+    button.addEventListener('click', () => {
+        const open = cards.some((card) => !isCardOpen(card));
+        cards.forEach((card) => setCard(card, open, true));
+        button.textContent = open ? 'Collapse all' : 'Expand all';
+    });
+    nav.appendChild(button);
+}
+
+/* ===================================================================================
  * Wiring
  * ================================================================================ */
 
@@ -494,6 +952,12 @@ function refresh() {
     window.requestAnimationFrame(() => {
         pending = false;
         publishBarHeight(document.querySelector('nav.side'));
+        if (applyFolds) {
+            applyFolds();
+        }
+        if (recheckTrouble) {
+            recheckTrouble();
+        }
         restack();
     });
 }
@@ -527,7 +991,11 @@ function watch() {
  */
 function start() {
     setUpNav();
+    setUpRail();
     setUpFacets();
+    watchFacetPanel();
+    applyFolds = setUpFolds();
+    recheckTrouble = setUpSections();
     restack();
     watch();
 

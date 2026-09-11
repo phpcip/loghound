@@ -1,10 +1,10 @@
 /*
  * Loghound — Overview view.
  *
- * Four independent cards: the headline counters, the four timing numbers, the stacked
- * traffic band and the top-pages table. Each one is its own request with its own progress
- * line and its own retry, so the timing block appears the moment it is ready instead of
- * waiting on the hourly series, and one slow facet cannot hold up the page.
+ * Independent cards: the headline counters, the four timing numbers, the stacked traffic
+ * band, the top-pages table and the search terms. Each one is its own request with its own
+ * progress line and its own retry, so the timing block appears the moment it is ready
+ * instead of waiting on the hourly series, and one slow facet cannot hold up the page.
  */
 
 'use strict';
@@ -12,6 +12,7 @@
 import { api, byId, cardChart, dur, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody } from '../core.js';
 import { barsH, stackedTraffic, tokens } from '../charts.js';
 import { dimRow } from '../identity.js';
+import { renderPivot } from '../facetfilter.js';
 
 /** Stacking order, bottom to top: most human at the bottom. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -70,6 +71,13 @@ function renderTiming(data) {
           num(t.without_beacon) + ' had no beacon and are excluded entirely; they are not counted as zero.'
         : 'No human session in this range produced beacon data, so wall, visible and engaged time are unknown. ' +
           'They are shown as em-dashes rather than zeroes.');
+
+    /* The mixed-planes caveat is revealed only when the range actually holds sessions with no
+       transport plane. On a single-machine install it describes nothing. */
+    const planes = byId('ov-timing-planes');
+    if (planes) {
+        planes.hidden = !t.beacon_only;
+    }
 
     renderTimingComparison(t);
     renderTimingBars(t);
@@ -169,6 +177,57 @@ function loadPages(population) {
 }
 
 /**
+ * Load the search-terms table.
+ *
+ * Two empty states, and telling them apart is the whole value of the card. "Nothing is
+ * configured" sends the operator to Settings; "nothing was searched for" is a fact about the
+ * range. Rendering the generic one for both would send somebody hunting for a bug in their own
+ * search page when the feature had simply never been switched on.
+ */
+function loadSearches() {
+    return loadCard('ov-searches', 'Faceting search terms', async () => {
+        const data = await api('overview', 'searches');
+
+        if (!data.configured.length) {
+            setPop('ov-searches', 'Not collecting any search terms.');
+            tbody(byId('ov-searches-table'), []);
+            noDataYet(
+                'ov-searches-empty',
+                'search terms — name the query parameters your search box uses in ' +
+                'beacon.query_params (Settings → Beacon) and they start appearing here'
+            );
+            return;
+        }
+
+        setPop('ov-searches', num(data.searched) + ' of ' + num(data.total) + ' sessions in range ran a ' +
+            'search. Counted as sessions that searched for a term at least once, not as the number of ' +
+            'searches: a visitor who ran the same search six times counts once.');
+
+        if (!data.rows.length) {
+            tbody(byId('ov-searches-table'), []);
+            noDataYet('ov-searches-empty', 'search terms');
+            return;
+        }
+        hideEmpty('ov-searches-empty');
+
+        const top = data.rows[0].sessions || 1;
+        tbody(byId('ov-searches-table'), data.rows.map((row) => ({
+            attrs: dimRow('search_terms_ss', row.term),
+            cells: [
+                { text: row.term, clip: true, sort: row.term },
+                { text: num(row.sessions), num: true, sort: row.sessions },
+                {
+                    node: el('span', { class: 'bar' }, [
+                        el('span', { style: 'width:' + Math.round((row.sessions / top) * 100) + '%' })
+                    ]),
+                    sort: row.sessions
+                }
+            ]
+        })));
+    });
+}
+
+/**
  * Wire the humans/all/bots toggle.
  */
 function initPageToggle() {
@@ -195,9 +254,21 @@ function initPageToggle() {
 export default function init() {
     initPageToggle();
 
+    /* ONE request, TWO cards. The cross-tab rides on this payload rather than fetching again,
+       so the pivot costs no extra round trip — but it is its own card, so it keeps its own
+       progress line and its own failure state. Both await the same promise. */
+    const totals = api('overview', 'totals');
     loadCard('ov-stats', 'Counting sessions by verdict', async () => {
-        renderTotals(await api('overview', 'totals'));
+        renderTotals(await totals);
     });
+    if (byId('ov-pivot-table')) {
+        loadCard('ov-pivot', 'Cross-tabulating the filtered population', async () => {
+            const data = await totals;
+            if (!renderPivot('ov-pivot', data.pivot)) {
+                noDataYet('ov-pivot', 'Nothing in this range has both dimensions set.');
+            }
+        });
+    }
     loadCard('ov-timing', 'Measuring dwell time across four clocks', async () => {
         renderTiming(await api('overview', 'timing'));
     });
@@ -205,4 +276,5 @@ export default function init() {
         renderSeries(await api('overview', 'series'));
     });
     loadPages('humans');
+    loadSearches();
 }

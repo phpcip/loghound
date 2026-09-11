@@ -73,6 +73,209 @@ final class Storage
      */
     public const NET_TIMEOUT = 25;
 
+    /**
+     * The Opensolr pages setup links to, in one place because two front ends link to them.
+     *
+     * A link, never a description of where to click: only the operator's own account page
+     * knows what their plan looks like, and a sentence explaining which menu to open is
+     * wrong the moment the platform moves a menu.
+     */
+    public const URL_REGISTER = 'https://opensolr.com/register';
+
+    public const URL_LOGIN = 'https://opensolr.com/users/login';
+
+    public const URL_PLANS = 'https://opensolr.com/solr-hosting';
+
+    public const URL_INDEXES = 'https://opensolr.com/solr_manager/admin';
+
+    /**
+     * Turn a control-plane failure into a sentence with a next action in it.
+     *
+     * EVERY PATH OUT OF THE CONTROL PLANE COMES THROUGH HERE. It used to be applied to the
+     * create_index refusal alone, so the very first thing an operator with a mistyped key
+     * saw was `Opensolr: HTTP 403 from regions: ERROR_AUTHENTICATION_FAILED` — a sentence
+     * that names a transport, an endpoint and a platform constant, and tells them nothing
+     * they can do. The platform's codes are stable, few, and worth translating once.
+     *
+     * The raw text is NOT appended to a translated sentence. A message that has been
+     * recognised is complete; pasting the constant after it only invites the operator to
+     * search for a string that means nothing outside the platform's own source.
+     *
+     * An unrecognised failure keeps its text, because a message nobody has translated yet is
+     * still the only evidence there is — but it is passed through the same credential
+     * scrubbing as everything else on its way out.
+     *
+     * Classification runs on a copy with the credential parameters DELETED, not merely
+     * redacted. The platform echoes the request back in some error bodies, and a body carrying
+     * `api_key=…` would otherwise match the authentication branch on the parameter name alone,
+     * turning any echoed request into "your key is wrong" — a confident wrong diagnosis, which
+     * is the most expensive kind.
+     */
+    public static function explainApi(string $raw): string
+    {
+        $raw = self::scrub($raw);
+
+        $probe = (string) preg_replace(
+            '/\b(api_key|apikey|password|passwd|token|secret)=\S*/i',
+            '',
+            $raw
+        );
+        $upper = strtoupper($probe);
+
+        if (preg_match('/CANNOT_ADD_MORE_THAN_(\d{1,6})_CORES/', $upper, $m) === 1) {
+            return 'Your Opensolr plan allows ' . (int) $m[1] . ' '
+                . ((int) $m[1] === 1 ? 'index' : 'indexes') . ', and they are all in use, so no '
+                . 'more can be created. Reuse a pair of Loghound indexes this account already '
+                . 'has, delete an index you no longer need, or move to a larger plan.';
+        }
+        if (str_contains($upper, 'AUTHENTICATION_FAILED')
+            || str_contains($upper, 'INVALID_API_KEY')
+            || str_contains($upper, 'INVALID_USER')) {
+            return 'Opensolr did not accept this email address and API key. Check both in your '
+                . 'Opensolr control panel under Account — the key is a single line of letters and '
+                . 'digits, and it is bound to the account the email belongs to.';
+        }
+        if (str_contains($upper, 'INVALID_SIGNATURE')) {
+            return 'Opensolr rejected the signature on the request. That is an API key which no '
+                . 'longer matches the account; issue a new one under Account and enter it again.';
+        }
+        if (str_contains($upper, 'CORE_NAME_TAKEN')) {
+            return 'That index name is already taken somewhere on the platform. Loghound picks '
+                . 'another and tries again by itself; if you are seeing this, it ran out of attempts.';
+        }
+        if (str_contains($upper, 'NOT_OWNER') || str_contains($upper, 'INVALID_CORE_NAME')) {
+            return 'This Opensolr account does not own that index, so the platform will not act on '
+                . 'it. Check the account email and API key, and that the index has not been deleted '
+                . 'in the Opensolr control panel.';
+        }
+        if (str_contains($upper, 'WRONG_API_HOST')) {
+            return 'That request went to the wrong Opensolr host. Leave opensolr.api_base at its '
+                . 'default unless Opensolr has told you otherwise.';
+        }
+        if (str_contains($upper, 'INVALID_SERVER_COUNTRY')
+            || str_contains($upper, 'SERVER_COUNTRY_DOES_NOT_EXIST')) {
+            return 'Opensolr does not offer that region to this account. Choose one of the regions '
+                . 'in the list, which is the list the platform returned for these credentials.';
+        }
+        if (str_contains($probe, 'cannot reach the control plane')) {
+            return 'opensolr.com could not be reached from this server. Check that outbound HTTPS is '
+                . 'allowed here, then try again — nothing has been created or changed.';
+        }
+        if (str_contains($probe, 'unparseable body')) {
+            return 'Opensolr answered with something that is not a response Loghound understands. '
+                . 'Nothing has been created; try again, and if it persists say so in your Opensolr '
+                . 'control panel.';
+        }
+
+        return $raw;
+    }
+
+    /**
+     * Everything the storage step needs to know about the account.
+     *
+     * `get_index_list` answers two of the three questions at once — which Loghound pairs exist,
+     * and how many indexes are in use — and `get_account_summary` answers the third, the plan's
+     * allowance. Both are asked on every visit to the step, which is what keeps the screen
+     * honest when a second machine created a pair, or the operator changed plan, a minute ago.
+     * Nothing about the allowance is cached: a remembered number goes stale silently, and this
+     * is the number that decides whether indexes get created.
+     *
+     * The allowance costs an index to ask, because get_account_summary is scoped to one core
+     * the account owns. An account holding NOTHING has nothing to name, so its allowance comes
+     * back unknown — and unknown is reported as unknown, never as room.
+     *
+     * Failure is a STATE, not an exception. "The control plane is unreachable" has to be
+     * shown on the storage step next to the credentials that might be wrong, and a screen
+     * that cannot render because a network call failed is a screen the operator cannot use to
+     * fix the network call.
+     *
+     * @return array{ok:bool,error:string,pairs:array<int,array{install_id:string,hits:string,sessions:string}>,
+     *               halves:array<int,array{install_id:string,role:string,name:string,missing:string}>,
+     *               total:int,counted:int,
+     *               capacity:array{counted:int,limit:?int,needed:int,room:?int,blocked:bool,sentence:string}}
+     */
+    public static function account(Config $cfg, ?callable $transport = null): array
+    {
+        $blank = [
+            'pairs'   => [],
+            'halves'  => [],
+            'total'   => 0,
+            'counted' => 0,
+        ];
+
+        $client = self::client($cfg, $transport);
+
+        try {
+            $entries = $client->listIndexEntries();
+        } catch (\Throwable $e) {
+            return [
+                'ok'       => false,
+                'error'    => self::explainApi($e->getMessage()),
+                'capacity' => Pairs::capacity(0),
+            ] + $blank;
+        }
+
+        $grouped = Pairs::group($entries);
+        $summary = self::allowance($client, $cfg, $entries);
+
+        return [
+            'ok'       => true,
+            'error'    => '',
+            'capacity' => Pairs::capacity(
+                $grouped['counted'],
+                $summary['index_limit'],
+                $summary['indexes_used'],
+                $summary['indexes_available']
+            ),
+        ] + $grouped;
+    }
+
+    /**
+     * Ask the platform what this account's plan allows, naming an index it owns.
+     *
+     * get_account_summary is scoped to a single core: it wants a core name and a signature over
+     * it, and it refuses one the account does not hold. So a probe has to be chosen, and the
+     * order is deliberate — this installation's own hits index first, because if the account
+     * holds it then it is certainly valid and certainly still there, and otherwise whatever the
+     * account listed first.
+     *
+     * A FAILURE HERE IS NOT A FAILURE OF THE STEP. The allowance is one of three things the
+     * storage screen reports and the other two came back fine; an account that cannot answer
+     * this one still has pairs worth offering. Every field comes back null, which reads as
+     * unknown all the way up and never blocks.
+     *
+     * @param array<int,array{name:string,type:string}> $entries
+     * @return array{index_limit:?int,indexes_used:?int,indexes_available:?int}
+     */
+    private static function allowance(Opensolr $client, Config $cfg, array $entries): array
+    {
+        $unknown = ['index_limit' => null, 'indexes_used' => null, 'indexes_available' => null];
+
+        $names = array_column($entries, 'name');
+        if ($names === []) {
+            return $unknown;
+        }
+
+        $hits  = (string) $cfg->get('solr.hits_core', '');
+        $probe = in_array($hits, $names, true) ? $hits : (string) $names[0];
+
+        try {
+            $summary = $client->accountSummary($probe);
+        } catch (\Throwable $e) {
+            return $unknown;
+        }
+
+        if (!$summary['ok']) {
+            return $unknown;
+        }
+
+        return [
+            'index_limit'       => $summary['index_limit'],
+            'indexes_used'      => $summary['indexes_used'],
+            'indexes_available' => $summary['indexes_available'],
+        ];
+    }
+
     /** How many times a colliding index-name pair is retried with a fresh id. */
     private const MAX_NAME_ATTEMPTS = 5;
 
@@ -187,7 +390,11 @@ final class Storage
      */
     public static function listRegions(Config $cfg, ?callable $transport = null): array
     {
-        $regions = self::client($cfg, $transport)->listRegions();
+        try {
+            $regions = self::client($cfg, $transport)->listRegions();
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(self::explainApi($e->getMessage()));
+        }
         if ($regions === []) {
             throw new \RuntimeException(
                 'Opensolr accepted the request but returned no regions for this account. '
@@ -222,6 +429,12 @@ final class Storage
                 'key'   => 'verify',
                 'label' => 'Checking your Opensolr credentials',
                 'run'   => static fn(Job $j, Config $c): string => self::checkCredentials($j, $c, $region),
+            ],
+
+            [
+                'key'   => 'capacity',
+                'label' => 'Checking your plan has room for two indexes',
+                'run'   => static fn(Job $j, Config $c): string => self::checkCapacity($j, $c),
             ],
 
             [
@@ -281,12 +494,278 @@ final class Storage
     }
 
     /**
+     * Adopt a pair of indexes this account already holds.
+     *
+     * REUSE IS JOINING, NOT TAKING OVER. Every step here either reads or writes the local
+     * configuration; not one of them creates, clears, reshapes or reloads an index. That is
+     * the whole contract: the pair may hold another site's traffic, and this installation is
+     * about to add its own alongside it, told apart by the hostname on every document.
+     *
+     * The schema steps are the exception that proves it. They compare what the index HAS
+     * against what this version WRITES, and on a mismatch they stop — unless the operator has
+     * explicitly agreed to the upgrade, in which case the configset is pushed and that is
+     * said plainly. Writing into a shape that does not match is the one way reuse could
+     * silently lose data, so it is the one thing that cannot happen by default.
+     *
+     * The steps mirror opensolrSteps() in name and order wherever they do the same work, so
+     * an operator who has seen one recognises the other, and both front ends render them from
+     * the same list.
+     *
+     * @return array<int,array{key:string,label:string,run:callable}>
+     */
+    public static function reuseSteps(Job $job, Config $cfg, string $root): array
+    {
+        $params    = $job->params();
+        $installId = (string) ($params['install_id'] ?? '');
+        $upgrade   = !empty($params['upgrade_schema']);
+
+        return [
+            [
+                'key'   => 'verify',
+                'label' => 'Checking your Opensolr credentials',
+                'run'   => static fn(Job $j, Config $c): string => self::checkCredentials($j, $c, ''),
+            ],
+
+            [
+                'key'   => 'adopt',
+                'label' => 'Confirming the indexes are still on your account',
+                'run'   => static function (Job $j, Config $c) use ($installId): string {
+                    return self::adoptPair($j, $c, $installId);
+                },
+            ],
+
+            [
+                'key'   => 'connect',
+                'label' => 'Fetching the connection details',
+                'run'   => static fn(Job $j, Config $c): string => self::fetchConnection($j, $c),
+            ],
+
+            [
+                'key'   => 'schema_hits',
+                'label' => 'Checking the hits index has the shape this version writes',
+                'run'   => static function (Job $j, Config $c) use ($root, $upgrade): string {
+                    return self::reconcileSchema($j, $c, 'hits', $root, $upgrade);
+                },
+            ],
+
+            [
+                'key'   => 'schema_sessions',
+                'label' => 'Checking the sessions index has the shape this version writes',
+                'run'   => static function (Job $j, Config $c) use ($root, $upgrade): string {
+                    return self::reconcileSchema($j, $c, 'sessions', $root, $upgrade);
+                },
+            ],
+
+            [
+                'key'   => 'verify_hits',
+                'label' => 'Verifying the hits index answers',
+                'run'   => static function (Job $j, Config $c): string {
+                    return self::verifyCore($j, $c, (string) $c->get('solr.hits_core'));
+                },
+            ],
+
+            [
+                'key'   => 'verify_sessions',
+                'label' => 'Verifying the sessions index answers',
+                'run'   => static function (Job $j, Config $c): string {
+                    return self::verifyCore($j, $c, (string) $c->get('solr.sessions_core'));
+                },
+            ],
+        ];
+    }
+
+    /**
+     * Point this installation at an existing pair, after proving the pair is really there.
+     *
+     * The installation id arrives from a form field or a shell argument, and a pair of index
+     * names built from an unchecked id is a pair of names this installation would then write
+     * documents into. So the account is asked what it holds and the id is matched against
+     * that answer — nothing is adoptable that the platform did not just confirm.
+     *
+     * ADOPTING TAKES THE PAIR'S CORE NAMES AND NOTHING ELSE. `solr.install_id` stays this
+     * machine's own, and a machine that has none gets a fresh one here — it is NOT set to the id
+     * embedded in the pair's names, and that distinction is load-bearing rather than tidy.
+     *
+     * The id is the per-installation salt in a hit's document id: `sha1(install_id \0 src:offset)`.
+     * Two machines both tailing /var/log/apache2/access.log produce identical `src:offset` pairs,
+     * so with a shared pair of indexes and a shared id every document one wrote would silently
+     * overwrite the other's — the same byte offset in the same filename is the same id. Copying
+     * the pair's id in here would reintroduce exactly that, and reuse is the feature that makes
+     * it reachable. The id also scopes `install_s` and retention, so two installations sharing
+     * one pair have to stay distinguishable by it.
+     *
+     * Which pair an installation is using is not lost by this: it is written in the core names,
+     * and Pairs::parse() reads it back out of them.
+     *
+     * @throws \RuntimeException When the pair is not on the account.
+     */
+    private static function adoptPair(Job $job, Config $cfg, string $installId): string
+    {
+        $job->note('Asking Opensolr which Loghound indexes this account holds …');
+
+        $account = self::account($cfg);
+        if (!$account['ok']) {
+            throw new \RuntimeException($account['error']);
+        }
+
+        $pair = Pairs::find($account['pairs'], $installId);
+        if ($pair === null) {
+            throw new \RuntimeException(
+                'That pair of indexes is no longer on this Opensolr account. It may have been '
+                . 'deleted, or these credentials may belong to a different account. Go back a step '
+                . 'and choose from the list again.'
+            );
+        }
+
+        if ((string) $cfg->get('solr.install_id', '') === '') {
+            $cfg->set('solr.install_id', Config::newInstallId());
+        }
+        $cfg->set('solr.hits_core', $pair['hits']);
+        $cfg->set('solr.sessions_core', $pair['sessions']);
+        self::persist($cfg);
+
+        return 'Using ' . $pair['hits'] . ' and ' . $pair['sessions'] . '.';
+    }
+
+    /**
+     * Does this index have the shape this version of Loghound writes, and what if not?
+     *
+     * HOW THE COMPARISON IS MADE, and why it is not a version number. The control plane will
+     * hand back a managed index's own configset file, so the schema the index is actually
+     * running is compared against the schema in this checkout, field by field. That is exact
+     * and it needs nothing kept in step by hand: a version marker has to be remembered and
+     * bumped by whoever edits the schema, and the day somebody forgets is the day this check
+     * says yes to an index it should have refused.
+     *
+     * What counts as a mismatch is one-directional on purpose. A field this version writes
+     * and the index does not have is a mismatch — the value would be dropped or refused, and
+     * either way the data is lost. A field the index has and this version does not write is
+     * NOT a mismatch: that is a newer schema, or another product's, and it costs nothing.
+     *
+     * A schema that cannot be read at all is reported as exactly that and stops the step. It
+     * is not treated as "probably fine": the entire point of the check is the case where
+     * assuming fine is expensive.
+     *
+     * @param string $role     'hits' or 'sessions'
+     * @param bool   $upgrade  Whether the operator agreed to push this version's configset.
+     * @throws \RuntimeException On a mismatch the operator has not agreed to fix.
+     */
+    private static function reconcileSchema(Job $job, Config $cfg, string $role, string $root, bool $upgrade): string
+    {
+        $core = (string) $cfg->get($role === 'hits' ? 'solr.hits_core' : 'solr.sessions_core', '');
+        if ($core === '') {
+            throw new \RuntimeException('The index name is missing — the previous step did not finish.');
+        }
+
+        $localPath = rtrim($root, '/') . '/solr/' . $role . '/conf/managed-schema.xml';
+        $localXml  = @file_get_contents($localPath);
+        if (!is_string($localXml) || $localXml === '') {
+            throw new \RuntimeException('The schema is missing from this checkout: ' . $localPath);
+        }
+
+        $job->note('Reading the schema ' . $core . ' is running …');
+        $liveXml = self::client($cfg)->fetchConfigFile($core, 'managed-schema', 'xml');
+
+        if ($liveXml === null || self::schemaFieldNames($liveXml) === []) {
+            throw new \RuntimeException(
+                'Opensolr would not hand back a readable schema for ' . $core . ', so Loghound '
+                . 'cannot tell whether it has the shape this version writes — and it will not write '
+                . 'into an index it has not checked. Try again; if it keeps happening, create a new '
+                . 'pair of indexes instead of reusing this one.'
+            );
+        }
+
+        $missing = self::schemaShortfall($localXml, $liveXml);
+
+        if ($missing === []) {
+            return $core . ' already has every field this version writes.';
+        }
+
+        $named = implode(', ', array_slice($missing, 0, 8))
+            . (count($missing) > 8 ? ' and ' . (count($missing) - 8) . ' more' : '');
+
+        if (!$upgrade) {
+            throw new \RuntimeException(
+                $core . ' was created by an older version of Loghound: it is missing '
+                . count($missing) . ' of the fields this version writes (' . $named . '). Nothing '
+                . 'has been changed. Go back a step and tick "update the schema on these indexes" '
+                . 'to add the missing fields — that is additive and it does not touch a single '
+                . 'document already in there — or choose a different pair, or create a new one.'
+            );
+        }
+
+        $job->note('Adding the missing fields to ' . $core . ' …');
+        $pushed = self::pushConfigset($job, $cfg, $core, rtrim($root, '/') . '/solr/' . $role . '/conf');
+
+        return 'Added ' . count($missing) . ' missing field'
+            . (count($missing) === 1 ? '' : 's') . ' to ' . $core . '. ' . $pushed;
+    }
+
+    /**
+     * The fields this version writes that an index does not have.
+     *
+     * Both schemas are read with a regular expression rather than an XML parser, deliberately.
+     * The live document is bytes from a remote service, and handing those to an XML parser is
+     * how a setup step acquires an entity-expansion bug; matching two attribute shapes needs
+     * none of that power. Names outside the platform's own field-name alphabet are ignored on
+     * both sides, so nothing that could not be a real field reaches a comparison or a message.
+     *
+     * Dynamic fields are compared alongside static ones and by their pattern, because a
+     * dynamic field is exactly what makes a missing static field silent: with `*_s` present,
+     * an index accepts a field it was never told about and the mismatch surfaces as a value
+     * nobody can search rather than as an error.
+     *
+     * @return string[] Field names, in the order the local schema declares them.
+     */
+    public static function schemaShortfall(string $localXml, string $liveXml): array
+    {
+        $live = self::schemaFieldNames($liveXml);
+
+        $missing = [];
+        foreach (self::schemaFieldNames($localXml) as $name) {
+            if (!in_array($name, $live, true)) {
+                $missing[] = $name;
+            }
+        }
+        return $missing;
+    }
+
+    /**
+     * Every field and dynamic-field name a managed schema declares.
+     *
+     * A schema that yields NONE is not an empty schema — there is no such thing — it is a
+     * document that is not a managed schema: an error page, a truncated transfer, a file the
+     * node handed back from somewhere else. Callers check for the empty array and treat it as
+     * "could not be read", which is the only safe reading and the opposite of the one a naive
+     * comparison would reach, since an empty live schema makes every local field look missing
+     * and an empty local one makes every index look fine.
+     *
+     * @return string[] In declaration order, without duplicates.
+     */
+    public static function schemaFieldNames(string $xml): array
+    {
+        if (preg_match_all(
+            '/<(?:field|dynamicField)\s[^>]*\bname\s*=\s*"([A-Za-z0-9_*.\-]{1,128})"/i',
+            $xml,
+            $m
+        ) < 1) {
+            return [];
+        }
+        return array_values(array_unique($m[1]));
+    }
+
+    /**
      * Prove the stored credentials work, and that the chosen region exists on this account.
      *
      * Listing regions is the cheapest and most harmless authenticated call the control
      * plane offers: it creates nothing, changes nothing, and fails loudly on a bad email
      * or API key. Doing it as the first provisioning step is what stops a mistyped key
      * from surfacing three screens later, halfway through creating billable indexes.
+     *
+     * AN EMPTY REGION IS WHAT THE REUSE PATH PASSES: adopting indexes that already exist asks
+     * no region question, because they are already wherever they were created. Writing that
+     * empty value through would erase the region a previous provisioning run stored, so
+     * `opensolr.region` is only ever moved by a step that actually chose one.
      *
      * @throws \RuntimeException When the credentials are refused or the region is not offered.
      */
@@ -303,10 +782,85 @@ final class Storage
             );
         }
 
-        $cfg->set('opensolr.region', $region);
-        self::persist($cfg);
+        if ($region !== '') {
+            $cfg->set('opensolr.region', $region);
+            self::persist($cfg);
 
-        return 'Credentials accepted; region ' . $region . ' is available.';
+            return 'Credentials accepted; region ' . $region . ' is available.';
+        }
+
+        return 'Credentials accepted.';
+    }
+
+    /**
+     * Refuse to start creating indexes the account has no room for.
+     *
+     * THIS IS THE STEP THE WHOLE ORDERING EXISTS FOR. Provisioning creates two indexes, and
+     * discovering the plan is full between the first and the second leaves one index in the
+     * account, unreferenced by any configuration and billed for, with an error message that
+     * explains none of it. So the count is read from the platform BEFORE the first create,
+     * and when the limit is known the step refuses outright and nothing is touched.
+     *
+     * When the limit is NOT known — the platform publishes an account's index allowance
+     * nowhere, and it has not yet refused a create on this installation, so no number exists
+     * to check against — this step still does real work: it states the usage it did read,
+     * and it leaves the guarantee to createOne(), which rolls the first index back if the
+     * second is the one refused. A check that cannot be made is said out loud rather than
+     * skipped silently.
+     *
+     * The check is not a promise either way, and that is deliberate rather than a gap:
+     * another machine or another browser tab can take the last slot between this step and
+     * the create two steps later. The rollback is what makes that safe; this step is what
+     * makes it rare and what makes it explainable.
+     *
+     * @throws \RuntimeException When the plan is known to be too small.
+     */
+    private static function checkCapacity(Job $job, Config $cfg): string
+    {
+        $job->note('Asking Opensolr what this account already holds …');
+
+        $account = self::account($cfg);
+        if (!$account['ok']) {
+            throw new \RuntimeException($account['error']);
+        }
+
+        $capacity = $account['capacity'];
+
+        if ($capacity['blocked']) {
+            throw new \RuntimeException(
+                $capacity['sentence'] . ' ' . self::waysForwardSentence($account['pairs'] !== [])
+            );
+        }
+
+        if ($account['halves'] !== []) {
+            foreach ($account['halves'] as $half) {
+                $job->note(
+                    'Note: ' . $half['name'] . ' is on this account without its matching '
+                    . $half['missing'] . ', which is what a setup run that stopped half way leaves '
+                    . 'behind. It still counts against the plan.'
+                );
+            }
+        }
+
+        return $capacity['sentence'];
+    }
+
+    /**
+     * The ways out of a full plan, as one sentence for a place that has only a sentence.
+     *
+     * The same three routes Pairs::waysForward() lists for a screen that can render links,
+     * flattened for the shell and for a job note. The URLs are spelled out rather than
+     * described, so the line stays useful when it is read out of a log file.
+     */
+    public static function waysForwardSentence(bool $haveReusable): string
+    {
+        $text = $haveReusable
+            ? 'This account already holds a pair of Loghound indexes, and reusing it creates '
+                . 'nothing — go back a step and choose it. '
+            : '';
+
+        return $text . 'Otherwise delete an index you no longer need at ' . self::URL_INDEXES
+            . ', or move to a plan that allows more at ' . self::URL_PLANS . '.';
     }
 
     /**
@@ -384,7 +938,11 @@ final class Storage
         }
 
         if (!Opensolr::isNameTaken($res)) {
-            throw new \RuntimeException(self::readableApiError($res));
+            $atLimit = Opensolr::isAtIndexLimit($res);
+            self::abandonAttempt($job, $cfg, $role);
+            throw new \RuntimeException(
+                $atLimit ? self::limitRefusal($cfg) : self::readableApiError($res)
+            );
         }
 
         if (($job->result()[$role] ?? null) === $name || self::accountOwns($cfg, $name)) {
@@ -403,17 +961,7 @@ final class Storage
 
         $job->note('The name ' . $name . ' is already taken on the platform; choosing another.');
 
-        if ($role === 'sessions') {
-            $hits = (string) $cfg->get('solr.hits_core', '');
-            if ($hits !== '') {
-                $job->note('Removing the partially created index ' . $hits . ' …');
-                try {
-                    self::client($cfg)->deleteIndex($hits);
-                } catch (\Throwable $e) {
-                    $job->note('Could not remove ' . $hits . ' — delete it from your Opensolr control panel.');
-                }
-            }
-        }
+        self::abandonAttempt($job, $cfg, $role);
 
         $cfg->set('solr.install_id', Config::newInstallId());
         $cfg->set('solr.hits_core', '');
@@ -421,6 +969,79 @@ final class Storage
         self::persist($cfg);
 
         return ['goto' => 'create_hits', 'detail' => 'Name taken; retrying with a new id.'];
+    }
+
+    /**
+     * The plan-is-full refusal, when it arrives DESPITE the check meant to prevent it.
+     *
+     * Reaching here means the capacity step read the allowance, found room, and the platform
+     * refused anyway — the race a check cannot win, because another session or another machine
+     * can take the last slot in between. It is rare, it is not the operator's mistake, and
+     * saying so is better than a message implying they were told wrong.
+     *
+     * The account is re-read so the numbers quoted are true NOW, after the rollback has given
+     * the orphan back — which is what the operator will see if they go and look. That read also
+     * says whether there is actually a Loghound pair to reuse, which is what stops the message
+     * offering a way out that does not apply. A read that fails does not replace the message;
+     * the generic routes are a reasonable fallback.
+     */
+    private static function limitRefusal(Config $cfg): string
+    {
+        $account = self::account($cfg);
+
+        $text = 'Opensolr refused the second index because the plan is full. Loghound checked before '
+            . 'it started and there was room then, so something else on this account took the last '
+            . 'slot in between. Nothing has been left behind. ';
+
+        if ($account['ok']) {
+            $text .= $account['capacity']['sentence'] . ' ';
+        }
+
+        return $text . self::waysForwardSentence($account['ok'] && $account['pairs'] !== []);
+    }
+
+    /**
+     * Give back whatever this attempt created before it failed.
+     *
+     * THE HALF-WAY FAILURE, HANDLED WHATEVER CAUSED IT. Creating the sessions index is the
+     * second of two creates, and everything that can refuse it — a plan that filled up
+     * between the two calls, a region that went down, a key revoked mid-install, a name
+     * collision — leaves the hits index sitting in the account with nothing pointing at it.
+     * It used to be deleted on exactly one of those, the name collision, and left behind on
+     * all the others: the rollback lived inside the collision branch, while every other
+     * refusal threw straight past it. That is the orphan an operator gets billed for and
+     * never hears about.
+     *
+     * So the rollback is here, is called from both exits, and cares only about what was
+     * created — not about why the attempt is being abandoned.
+     *
+     * Best effort, and loudly so. If the delete itself fails the operator is told the name
+     * and where to remove it, because the alternative is a silent charge. A failure here
+     * never replaces the error that caused the rollback; that one is what they came for.
+     *
+     * @param string $role The half that has just failed. Nothing to give back on the first.
+     */
+    private static function abandonAttempt(Job $job, Config $cfg, string $role): void
+    {
+        if ($role !== 'sessions') {
+            return;
+        }
+
+        $hits = (string) $cfg->get('solr.hits_core', '');
+        if ($hits === '') {
+            return;
+        }
+
+        $job->note('Removing ' . $hits . ', which this attempt created and will not be using …');
+        try {
+            self::client($cfg)->deleteIndex($hits);
+            $job->note('Removed ' . $hits . '. Nothing has been left behind on your account.');
+        } catch (\Throwable $e) {
+            $job->note(
+                'Could not remove ' . $hits . '. It is still on your Opensolr account and still '
+                . 'counts against your plan — delete it at ' . self::URL_INDEXES . '.'
+            );
+        }
     }
 
     /**
@@ -686,15 +1307,28 @@ final class Storage
         $msg = $res['msg'] ?? '';
         $msg = is_string($msg) ? $msg : (string) json_encode($msg, JSON_UNESCAPED_SLASHES);
 
-        if (stripos($msg, 'API_KEY') !== false || stripos($msg, 'AUTH') !== false) {
-            return 'Opensolr did not accept the email address and API key. Check them in your '
-                . 'Opensolr control panel under Account.';
+        $explained = self::explainApi($msg);
+        if ($explained !== self::scrub($msg)) {
+            return $explained;
         }
-        if (stripos($msg, 'LIMIT') !== false || stripos($msg, 'QUOTA') !== false) {
-            return 'Your Opensolr plan has no room for another index. Remove one, or upgrade, '
-                . 'then press Try again.';
-        }
-        return 'Opensolr refused to create the index: ' . $msg;
+
+        return 'Opensolr refused the request: ' . $explained;
+    }
+
+    /**
+     * Remove anything credential-shaped from text that is about to be shown.
+     *
+     * Opensolr::redact() already strips the API key from its own messages, and Job::redact()
+     * strips it again at the boundary. This is the third pass and it is not redundant: the
+     * sentences this class builds are also printed by the shell wizard, which never goes
+     * through a job at all, and a boundary that is only applied on one of two paths is not a
+     * boundary.
+     */
+    private static function scrub(string $text): string
+    {
+        $text = (string) preg_replace('~([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/\s@]*@~', '$1', $text);
+        $text = (string) preg_replace('/\b(api_key|apikey|password|passwd|token|secret)=[^&\s"\']+/i', '$1=[redacted]', $text);
+        return trim($text);
     }
 
     /**

@@ -125,6 +125,14 @@ final class Hosts extends Controller
             $nested[$key] = ['type' => 'query', 'q' => $filter];
         }
 
+        /* How many of this host's sessions were measured by the beacon ALONE. This is the view
+           where the mixture is most visible — a host on another server sits in the same table
+           as one whose access log this machine reads — and a row whose numbers came from one
+           plane has to say so rather than looking identical to a row backed by three. Counted
+           per host rather than stated once for the page, because on a multi-site install it is
+           true of some rows and false of others. */
+        $nested['beacon_only'] = ['type' => 'query', 'q' => 'planes_s:beacon_only'];
+
         $f = $this->gw->facet('hosts.compare', $this->gw->sessionsCore(), [
             'q'  => '*:*',
             'fq' => array_merge([Query::SESSION_DOCS], $this->fqsWithoutHost()),
@@ -152,10 +160,15 @@ final class Hosts extends Controller
             }
             $botlike = $counts['evasive'] + $counts['ai'] + $counts['declared'];
 
+            $beaconOnly = self::qcount($bucket, 'beacon_only');
+
             $rows[] = [
                 'host'       => $host,
                 'sessions'   => $sessions,
                 'counts'     => $counts,
+                'beacon_only'   => $beaconOnly,
+                'single_plane'  => $sessions > 0 && $beaconOnly >= $sessions,
+                'mixed_planes'  => $beaconOnly > 0 && $beaconOnly < $sessions,
                 'bot_share'  => $sessions > 0 ? round(($botlike / $sessions) * 100, 1) : null,
                 'evasive_share' => $sessions > 0 ? round(($counts['evasive'] / $sessions) * 100, 1) : null,
                 'bytes'      => self::num($bucket, 'bytes'),
@@ -175,26 +188,25 @@ final class Hosts extends Controller
     /**
      * The active filters with the host filter taken out.
      *
-     * Both actions here describe the set of hosts, so scoping them to the host already
-     * chosen would answer a question nobody asked. Every OTHER active filter is kept: "of
-     * the traffic I am currently looking at, which host does it come from" is exactly right.
+     * Both actions here describe the SET OF HOSTS, so scoping them to the host already chosen
+     * would answer a question nobody asked — the selector would collapse to the host you picked
+     * and there would be no way back. Every OTHER active filter is kept: "of the traffic I am
+     * currently looking at, which host does it come from" is exactly right.
+     *
+     * This is the facet layer's own lift-one-dimension mechanism, not a third hand-rolled copy of
+     * the clause builder. It was one: it OR-ed every value, knew nothing about the boolean
+     * operator, and quoted a numeric field — so on this view an excluded network type silently
+     * became an included one and the host table answered a different question from every other
+     * card on the page.
      *
      * @return array<int,string>
      */
     private function fqsWithoutHost(): array
     {
-        $out = [Query::rangeFq('ts_start', $this->range)];
-        foreach ($this->filters as $field => $values) {
-            if ($field === Query::HOST_FIELD) {
-                continue;
-            }
-            $parts = [];
-            foreach ($values as $v) {
-                $parts[] = Query::quote($v);
-            }
-            $out[] = $field . ':(' . implode(' OR ', $parts) . ')';
-        }
-        return $out;
+        return array_merge(
+            [Query::rangeFq('ts_start', $this->range)],
+            $this->facets->fqs(null, Query::HOST_FIELD)
+        );
     }
 
     /**
@@ -240,9 +252,9 @@ final class Hosts extends Controller
         self::skeleton('hosts-table', 'rows', 0, 'Grouping sessions by virtual host');
 
         echo '<div class="table-wrap"><table id="hosts-table-table" class="table-fixed"><colgroup>'
-            . '<col><col style="width:10ch"><col style="width:9ch"><col style="width:9ch">'
-            . '<col style="width:11ch"><col style="width:10ch"><col style="width:11ch">'
-            . '<col style="width:130px">'
+            . '<col style="width:22%"><col style="width:11%"><col style="width:11%">'
+            . '<col style="width:11%"><col style="width:11%"><col style="width:11%">'
+            . '<col style="width:11%"><col style="width:12%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Host</th>'
             . '<th scope="col" class="num">Sessions</th>'
@@ -270,8 +282,8 @@ final class Hosts extends Controller
         echo '<div class="card-head"><h2><span class="card-num">03</span>'
             . '<span>No virtual host is being recorded</span></h2></div>';
         echo '<div class="explain">';
-        echo '<p>None of the sessions in this range carry a <code>host_s</code> value, which means the log '
-            . 'format in use does not record which virtual host served the request. Everything else in '
+        echo '<p>None of the sessions in this range records which virtual host served the request, which '
+            . 'means the log format in use does not carry it. Everything else in '
             . 'Loghound works exactly as before; this page is the one thing that cannot.</p>';
         echo '<p>Apache logs it as <code>%v</code>, and it is the first field of the format Loghound '
             . 'recommends:</p>';

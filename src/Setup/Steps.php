@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 namespace Loghound\Setup;
 
+use Loghound\Auth\Persistence;
 use Loghound\Config;
 use Loghound\Security;
 
@@ -179,6 +180,45 @@ final class Steps
     }
 
     /**
+     * Add one directory to the list of places Loghound may read log files from.
+     *
+     * `allowed_log_roots` is a security control: it is what stops the log-path setting from
+     * being an arbitrary-file-read primitive, which is why no web form widens it and why
+     * applySourcesReport() only widens it for directories an operator explicitly ticked.
+     *
+     * This exists for the one remaining case that had no working answer at all: a log file
+     * typed in by hand that sits outside the list. The browser installer refuses it, correctly,
+     * and told the operator to use the shell wizard — which called the same refusal and printed
+     * the same sentence, so the instruction was a loop with no exit. Granting it needs an
+     * explicit yes from somebody at a terminal on the machine, which is a different and
+     * stronger proof than a form post, and this is the one place that records it.
+     *
+     * Widens to the exact directory and nothing above it. A path that does not resolve is
+     * refused rather than stored hopefully, because a root that does not exist is a root that
+     * will match something else the day it does.
+     *
+     * @return string|null A problem to show, or null when the directory is now allowed.
+     */
+    public static function allowLogRoot(Config $cfg, string $dir): ?string
+    {
+        $real = realpath($dir);
+        if ($real === false || !is_dir($real)) {
+            return 'Cannot allow ' . $dir . ': there is no such directory.';
+        }
+        if ($real === '/') {
+            return 'Refusing to allow / — that would let any file on this server be read as a log.';
+        }
+
+        $roots = (array) $cfg->get('allowed_log_roots', []);
+        if (!in_array($real, $roots, true)) {
+            $roots[] = $real;
+            $cfg->set('allowed_log_roots', array_values(array_unique($roots)));
+        }
+
+        return null;
+    }
+
+    /**
      * The three ways a visitor's address may be stored.
      *
      * The list itself, and nothing else. Setup does not ask which one to use — the default
@@ -241,6 +281,10 @@ final class Steps
      * the panel unreachable — a mode that signs people in with a password needs one to
      * have been set first.
      *
+     * Changing the mode revokes every persistent-login token. Those are session-mode
+     * credentials; carrying them across a switch to Basic and back would mean a cookie issued
+     * under one set of rules still opening the door under another.
+     *
      * @return string[] Problems; empty means stored.
      */
     public static function applyAuthMode(Config $cfg, string $mode): array
@@ -254,6 +298,8 @@ final class Steps
         }
 
         $cfg->set('auth.mode', $mode);
+        Persistence::revokeAll($cfg->varDir());
+
         return [];
     }
 
@@ -262,6 +308,15 @@ final class Steps
      *
      * The password is hashed immediately with password_hash(PASSWORD_DEFAULT) and the
      * plaintext is not kept anywhere — not in the config, not in a session, not in a log.
+     *
+     * SETTING A NEW PASSWORD REVOKES EVERY OTHER PROOF OF IDENTITY. Every persistent-login
+     * token is destroyed, and two-factor is switched off. Both follow from what this operation
+     * means: a new password is a statement that the old credentials no longer stand, and a
+     * "stay signed in" cookie that survived one would make the change cosmetic. Turning
+     * two-factor off is also the documented way back in for an operator who has lost both the
+     * phone and the recovery codes — it is only reachable from the installer and from
+     * bin/loghound-setup, so performing it already requires shell access to the box, which is
+     * proof enough of who they are. Settings deliberately has no password form.
      *
      * The mode defaults to 'basic' because that is what every installation made before the
      * sign-in page existed uses, and because it is the answer that cannot strand anyone:
@@ -307,6 +362,9 @@ final class Steps
         $cfg->set('auth.user', $user);
         $cfg->set('auth.password_hash', password_hash($password, PASSWORD_DEFAULT));
         $cfg->set('auth.mode', $mode);
+
+        $cfg->set('auth.totp', ['enabled' => false, 'secret' => '', 'recovery' => []]);
+        Persistence::revokeAll($cfg->varDir());
 
         return [];
     }

@@ -120,6 +120,9 @@ try {
     exit(1);
 }
 
+$installId = (string) $cfg->get('solr.install_id', '');
+$installId = preg_match('/^[a-f0-9]{4,32}$/', $installId) === 1 ? $installId : '';
+
 $failed = false;
 
 /* ---------------------------------------------------------------------------------------
@@ -127,17 +130,58 @@ $failed = false;
  * ------------------------------------------------------------------------------------ */
 
 if ($days <= 0) {
-    fwrite(STDOUT, "Time-based retention is disabled (privacy.retention_days = 0).\n");
+    fwrite(STDOUT, "Nothing is deleted for being old: no age limit is set, so hits are kept "
+        . "indefinitely as far as age is concerned. Whether they survive is then decided by the "
+        . "size rule below, which deletes the oldest data when an index approaches its plan's "
+        . "disk quota.\n");
 } else {
     $cutoffIso = gmdate('Y-m-d\TH:i:s\Z', time() - ($days * 86400));
 
-    $hitsQuery = Solr::rangeFilter('ts', null, $cutoffIso);
+    /*
+     * The clause that keeps this pass inside the documents THIS installation wrote, when the
+     * pair of indexes is shared with another one.
+     *
+     * Asked only when something is actually about to be DELETED. A dry run and a disabled pass
+     * touch nothing, and making them consult Solr would turn "report what would happen" into a
+     * pass that can fail for a reason unrelated to what it was asked to report.
+     *
+     * Empty means no scoping at all, which is exactly the behaviour this script has always had
+     * and is right for the overwhelmingly common single-installation case: documents written
+     * before `install_s` existed carry no value for it, so a run that always scoped would stop
+     * deleting an installation's own history the day it upgraded and the retention promise in
+     * docs/PRIVACY.md would quietly stop being kept.
+     *
+     * FALSE means the pair is shared and this installation cannot name its own documents, so
+     * there is no safe delete to make. The pass is skipped and the run fails loudly — a cron
+     * that exits 0 having silently not applied a retention policy is the failure this project
+     * exists to stop shipping.
+     */
+    $installScope = $dryRun ? '' : installScope($solr, $sessionCore, $hitsCore, $installId);
+
+    $hitsQuery = $installScope === '' || $installScope === false
+        ? Solr::rangeFilter('ts', null, $cutoffIso)
+        : $installScope . ' +' . Solr::rangeFilter('ts', null, $cutoffIso);
 
     $sessionQuery = $rollupForever
         ? '+' . Solr::termFilter('doc_type_s', 'session') . ' +' . Solr::rangeFilter('ts_start', null, $cutoffIso)
         : Solr::rangeFilter('ts_start', null, $cutoffIso);
 
-    if ($dryRun) {
+    if (is_string($installScope) && $installScope !== '') {
+        $sessionQuery = $rollupForever
+            ? $installScope . ' ' . $sessionQuery
+            : $installScope . ' +' . Solr::rangeFilter('ts_start', null, $cutoffIso);
+    }
+
+    if ($installScope === false) {
+        fwrite(
+            STDERR,
+            "Loghound: this pair of indexes is shared with another installation and this one has no\n"
+            . "usable solr.install_id, so its documents cannot be told apart. Time-based retention did\n"
+            . "NOT run: deleting by age here would delete another installation's data. Set\n"
+            . "solr.install_id in config/loghound.php and run again.\n"
+        );
+        $failed = true;
+    } elseif ($dryRun) {
         try {
             $hitsCount = (int) ($solr->query($hitsCore, [
                 'q' => '*:*', 'fq' => [$hitsQuery], 'rows' => 0,
@@ -181,7 +225,7 @@ if ($days <= 0) {
  * Pass 2 — size-based rolling retention
  * ------------------------------------------------------------------------------------ */
 
-$failed = trimToPlan($cfg, $solr, $hitsCore, $sessionCore, $rollupForever, $dryRun) || $failed;
+$failed = trimToPlan($cfg, $solr, $hitsCore, $sessionCore, $rollupForever, $dryRun, $installId) || $failed;
 
 /* ---------------------------------------------------------------------------------------
  * Pass 3 — local SQLite state
@@ -190,6 +234,107 @@ $failed = trimToPlan($cfg, $solr, $hitsCore, $sessionCore, $rollupForever, $dryR
 purgeLocalState($cfg, $dryRun);
 
 exit($failed ? 2 : 0);
+
+/**
+ * Is this pair of indexes being written by more than one Loghound installation?
+ *
+ * A pair may be shared: a new installation can be pointed at an existing
+ * `loghound_<hex>_hits`/`_sessions` pair instead of creating its own, so that one dashboard
+ * covers several sites on several machines, told apart by `host_s`. Retention then becomes
+ * dangerous in a way it never was with one writer — a 90-day policy here would delete a
+ * neighbour's 365 days — so this is asked before anything is deleted.
+ *
+ * ANSWERED FROM EVIDENCE, NOT CONFIGURATION, like every other "is this actually the case"
+ * question in the product. A flag in the config file would say what somebody intended when
+ * they installed; a facet on `install_s` says who has actually written a document. One terms
+ * facet per core per run, and this script runs daily.
+ *
+ * FAILS CLOSED, and the direction matters. An unreachable Solr or an unreadable facet answers
+ * TRUE — assume shared — so a run that cannot establish it is alone deletes nothing rather
+ * than deleting everything. The cost of that is a day of retention not applied, which the next
+ * run makes up; the cost of the other direction is another installation's data, which nothing
+ * makes up.
+ *
+ * A value of `install_s` other than ours, on either core, is enough. Documents with no
+ * `install_s` at all are NOT evidence of a second writer: the field is newer than the product,
+ * so every document written before it exists is ours by construction — a pair could not be
+ * shared before sharing existed.
+ */
+function sharedPair(Solr $solr, string $sessionCore, string $hitsCore, string $installId): bool
+{
+    static $answer = null;
+    if ($answer !== null) {
+        return $answer;
+    }
+    $answer = sharedPairProbe($solr, $sessionCore, $hitsCore, $installId);
+
+    return $answer;
+}
+
+/**
+ * The filter clause that scopes a delete to this installation, or the reason there is none.
+ *
+ * Three answers, and the caller has to distinguish all three:
+ *
+ *   ''     the pair is not shared. Delete unscoped, exactly as this script always has.
+ *   '+…'   the pair is shared and this installation can name its documents. Scope every delete.
+ *   false  the pair is shared and this installation CANNOT name its documents, because it has
+ *          no usable `solr.install_id`. There is no safe delete; the caller must skip and fail.
+ *
+ * @return string|false
+ */
+function installScope(Solr $solr, string $sessionCore, string $hitsCore, string $installId)
+{
+    if (!sharedPair($solr, $sessionCore, $hitsCore, $installId)) {
+        return '';
+    }
+    if ($installId === '') {
+        return false;
+    }
+
+    return '+' . Solr::termFilter('install_s', $installId);
+}
+
+/**
+ * Ask Solr, once, whether any installation other than this one has written to the pair.
+ *
+ * Split from sharedPair() only so that the memoisation there has nothing else in it: the
+ * question is asked from both retention passes and it is one facet per core, not two.
+ */
+function sharedPairProbe(Solr $solr, string $sessionCore, string $hitsCore, string $installId): bool
+{
+    foreach ([$sessionCore, $hitsCore] as $core) {
+        if ($core === '') {
+            continue;
+        }
+        try {
+            $res = $solr->jsonFacet(
+                $core,
+                ['q' => '*:*', 'rows' => 0],
+                ['installs' => ['type' => 'terms', 'field' => 'install_s', 'limit' => 10, 'mincount' => 1]]
+            );
+        } catch (\Throwable $e) {
+            fwrite(STDERR, 'Loghound: cannot tell whether ' . $core . ' is shared (' . $e->getMessage()
+                . '); assuming it is.' . "\n");
+            return true;
+        }
+
+        $buckets = $res['installs']['buckets'] ?? null;
+        if (!is_array($buckets)) {
+            fwrite(STDERR, 'Loghound: cannot tell whether ' . $core . ' is shared; assuming it is.' . "\n");
+            return true;
+        }
+
+        foreach ($buckets as $bucket) {
+            $val = (string) ($bucket['val'] ?? '');
+            if ($val !== '' && $val !== $installId) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
 
 /**
  * Bring both cores back inside their Opensolr plan's disk quota.
@@ -202,6 +347,14 @@ exit($failed ? 2 : 0);
  * The sessions core additionally carries `doc_type_s:session`, so a size trim can no more
  * delete a daily rollup than the time-based pass above can.
  *
+ * WHEN THE PAIR IS SHARED, both targets also carry `install_s`, so a size trim deletes only
+ * documents this installation wrote. That is a real restriction on what the trim can achieve —
+ * an installation contributing a tenth of the index cannot free the other nine tenths, so a
+ * pair that is over its plan because of a NEIGHBOUR's traffic will stay over it, and the step
+ * reports "that cutoff covers every document in the index" rather than quietly deleting
+ * somebody else's data to make room for ours. Failing to trim is recoverable; deleting another
+ * installation's history is not.
+ *
  * A failure on one core does not stop the other: they have separate quotas on the platform
  * and one being blocked is a reason to trim the other, not a reason to give up.
  *
@@ -213,7 +366,8 @@ function trimToPlan(
     string $hitsCore,
     string $sessionCore,
     bool $rollupForever,
-    bool $dryRun
+    bool $dryRun,
+    string $installId = ''
 ): bool {
     try {
         $quota = new Quota($cfg);
@@ -223,13 +377,36 @@ function trimToPlan(
     }
 
     if (!$quota->enabled()) {
-        fwrite(STDOUT, "Size-based retention is switched off (quota.enabled = false).\n");
+        fwrite(STDOUT, "Nothing is deleted for size either: the rolling window is switched off "
+            . "(quota.enabled = false), so an index can grow until it reaches its Opensolr plan "
+            . "quota — at which point the platform blocks it, reads included.\n");
         return false;
     }
 
+    $scope = $dryRun ? '' : installScope($solr, $hitsCore, $sessionCore, $installId);
+
+    if ($scope === false) {
+        fwrite(
+            STDERR,
+            "Loghound: this pair of indexes is shared with another installation and this one has no\n"
+            . "usable solr.install_id. Size-based retention did NOT run: trimming here would delete\n"
+            . "another installation's data to make room for ours.\n"
+        );
+        return true;
+    }
+
+    $scope = ltrim((string) $scope, '+');
+
+    $hitsExtra = $scope === '' ? null : $scope;
+
+    $sessionExtra = $rollupForever ? Solr::termFilter('doc_type_s', 'session') : null;
+    if ($scope !== '') {
+        $sessionExtra = $sessionExtra === null ? $scope : $sessionExtra . ' +' . $scope;
+    }
+
     $targets = [
-        [$hitsCore, 'ts', null],
-        [$sessionCore, 'ts_start', $rollupForever ? Solr::termFilter('doc_type_s', 'session') : null],
+        [$hitsCore, 'ts', $hitsExtra],
+        [$sessionCore, 'ts_start', $sessionExtra],
     ];
 
     $failed = false;

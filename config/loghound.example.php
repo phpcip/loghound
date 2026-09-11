@@ -340,6 +340,50 @@ return [
          * single email address.
          */
         'store_signed_in' => true,
+
+        /**
+         * Hostnames whose beacons may open a session. Empty means every host.
+         *
+         * THIS IS A PERMISSION, NOT A PASSWORD. It is matched against the Origin the caller
+         * sent, and the caller chooses that header: a browser reports it honestly, and
+         * anything that is not a browser sends whatever it likes. Listing a host therefore
+         * means beacons can be FABRICATED against that host by anyone who bothers to try.
+         * What the list is good for is keeping one honest site's measurements out of
+         * another's when several of them report into the same pair of indexes.
+         *
+         * Empty by default, which accepts every host, so an installation that never sets it
+         * behaves exactly as it did before this setting existed.
+         *
+         *     'allowed_hosts' => ['shop.example.com', 'www.example.com'],
+         */
+        'allowed_hosts' => [],
+
+        /**
+         * Query-string parameter NAMES whose values are kept as search terms.
+         *
+         * THE ONE PLACE LOGHOUND STORES SOMETHING A PERSON TYPED. Everything else in the
+         * index is what a request looked like — an address, a path, a header, a hash, a
+         * duration. This is what somebody was looking FOR, in their own words, and it is
+         * attached to a session that may also carry their address.
+         *
+         * So it is empty by default and nothing is collected until you name a parameter.
+         * Adding 'q' here is a decision about your visitors' privacy, not a display option;
+         * docs/PRIVACY.md covers what it means and what to tell them.
+         *
+         *     'query_params' => ['q', 's', 'search'],
+         */
+        'query_params' => [],
+
+        /**
+         * Beacon requests per minute per HOSTNAME, above the per-address `rate_per_min`.
+         *
+         * The per-address bucket stops one visitor flooding the endpoint; this one stops one
+         * site doing it, which is the case that matters when a single pair of indexes is
+         * collecting for several. Generous by default: a busy site legitimately sends
+         * thousands a minute, and a limit that fires on real traffic is a limit that gets
+         * turned off.
+         */
+        'rate_per_min_host' => 3000,
     ],
 
     // =====================================================================
@@ -364,7 +408,15 @@ return [
         /** SECRET, used only by 'hash' mode. With it, IPv4 is trivially brute-forced. */
         'ip_salt' => '',
 
-        /** loghound-retention deletes past this. 0 disables deletion entirely. */
+        /**
+         * Delete hits older than this many days. 0 means NEVER delete for age.
+         *
+         * Read the zero carefully: it does not mean "keep nothing", it means there is no AGE
+         * limit and hits are kept indefinitely as far as age is concerned. Whether they
+         * actually survive is then decided by the other rule — the rolling size window under
+         * `quota`, which deletes the oldest data when an index approaches the disk its
+         * Opensolr plan gives it. The two are independent and whichever bites first wins.
+         */
         'retention_days' => 90,
 
         /**
@@ -417,7 +469,9 @@ return [
          *           analytics dashboard left open on the internet is a data breach,
          *           and defaults decide outcomes.
          * 'basic'   HTTP Basic. Simple, works behind any proxy, easy to script against.
-         * 'session' Form login with a session cookie.
+         * 'session' Form login with a session cookie. Required for two-factor and for
+         *           "stay signed in": HTTP Basic has no second step to put a code in,
+         *           and no way to sign out.
          */
         'mode' => 'basic',
 
@@ -425,6 +479,86 @@ return [
 
         /** password_hash(PASSWORD_DEFAULT). NEVER a plaintext password. */
         'password_hash' => '',
+
+        /**
+         * Session-mode timeouts, in seconds. Both are enforced by the application on every
+         * request, not left to PHP's session garbage collector.
+         *
+         * `idle_timeout` ends a session that has done nothing for this long.
+         * `absolute_timeout` ends one this long after sign-in, however busy it has been.
+         *
+         * NEITHER APPLIES TO A BROWSER THAT TOOK "Stay signed in" on the sign-in form. That
+         * is what the option is; every other session is governed by these exactly as before.
+         */
+        'idle_timeout'     => 1800,
+        'absolute_timeout' => 43200,
+
+        /**
+         * Failed sign-ins from ONE address within `lockout_window` seconds that lock that
+         * address out until the window passes.
+         *
+         * ONE LEDGER COVERS EVERYTHING THAT CHECKS A CREDENTIAL: both sign-in modes, the
+         * second-factor step, the two-factor enrollment confirmation, turning two-factor
+         * off, reissuing recovery codes, and a request arriving with a "stay signed in"
+         * cookie. A recovery code counts the same as a six-digit one, and a wrong code
+         * costs the same delay as a wrong password, so no endpoint is a cheaper place to
+         * guess and alternating between them buys no extra attempts. Six digits is a
+         * million possibilities; this is the only thing standing between a stolen password
+         * and a guessed code, so raising it materially weakens the second factor.
+         */
+        'lockout_attempts' => 8,
+        'lockout_window'   => 900,
+
+        /**
+         * How long a "stay signed in" token lives, in seconds, renewed every time the
+         * browser is used. The default is ten years, which for a browser in daily use is
+         * indistinguishable from permanent; a number is needed at all only so that a
+         * genuinely abandoned token can be pruned instead of accumulating.
+         *
+         * Clamped to 86400 at the bottom, because anything shorter is the idle timeout with
+         * extra steps and nobody who ticked that box wanted it.
+         *
+         * WHAT THE OPTION COSTS, since this is where an operator will come looking: a
+         * browser that takes it has no timeout at all. Whoever holds that browser profile
+         * has this panel until somebody presses Sign out. Signing out revokes every token,
+         * and so does changing the password, changing `mode`, or turning two-factor on.
+         * Settings > Sign-in says how many browsers are currently remembered and can
+         * destroy all of them. The tokens live in `var/persistent-logins.json`, mode 0600;
+         * deleting that file signs every remembered browser out.
+         */
+        'persistent_lifetime' => 315360000,
+
+        /**
+         * Two-factor authentication (TOTP — RFC 6238, the six-digit codes every
+         * authenticator app produces). Off by default; existing installs are untouched.
+         *
+         * SET THIS UP IN Settings > Two-factor, not by hand. That screen mints the secret,
+         * draws the QR code locally (nothing is sent to any third party), and refuses to
+         * switch anything on until you have entered a code that proves your app has it —
+         * which is what stops a half-finished setup from locking you out.
+         *
+         * 'enabled'  true only once a code has confirmed the secret. `enabled` true with no
+         *            usable `secret` is refused by Config::validate(), because it would
+         *            demand a code that nothing on earth could produce.
+         * 'secret'   The shared key, Base32. Treat it exactly like the password hash below:
+         *            anyone who reads it can generate your codes.
+         * 'recovery' SHA-256 hashes of the ten one-time recovery codes. The codes themselves
+         *            are shown once, at the moment they are generated, and are not stored —
+         *            so they cannot be recovered from here, only replaced.
+         *
+         * LOST THE PHONE AND THE RECOVERY CODES? Run bin/loghound-setup on the server and
+         * set a new password. That turns two-factor off and revokes every remembered
+         * browser. Being able to run it is already proof of who you are.
+         *
+         * The replay floor — the last code step that was accepted, which is what stops a
+         * code being used twice — is NOT here. It changes on every sign-in, so it lives in
+         * `var/auth-state.json` rather than in this file.
+         */
+        'totp' => [
+            'enabled'  => false,
+            'secret'   => '',
+            'recovery' => [],
+        ],
     ],
 
     /**

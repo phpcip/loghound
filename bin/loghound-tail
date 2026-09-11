@@ -1126,15 +1126,24 @@ final class Pipeline
      *
      * Parser is given the privacy mode, the salt and the raw-retention toggle, because those
      * decide what the document is allowed to contain and therefore belong at parse time rather
-     * than being stripped out afterwards.
+     * than being stripped out afterwards. The search-parameter whitelist is there for the same
+     * reason and is the same list the beacon collector applies: a term that is not to be kept
+     * must never be written, not written and filtered later.
+     *
+     * The installation id is there because a pair of indexes may be shared by several
+     * installations: it goes into the hit id, where it stops two machines tailing identically
+     * named log files from overwriting each other's documents, and onto the document as
+     * `install_s`. Parser::normalize() carries the full reasoning.
      */
     private function initParser(): void
     {
         if (class_exists('\\Loghound\\Parser')) {
             $this->parser = new \Loghound\Parser([
-                'ip_mode'  => (string) $this->cfg->get('privacy.ip_mode', 'full'),
-                'ip_salt'  => (string) $this->cfg->get('privacy.ip_salt', ''),
-                'keep_raw' => (bool) $this->cfg->get('ingest.keep_raw', true),
+                'ip_mode'       => (string) $this->cfg->get('privacy.ip_mode', 'full'),
+                'ip_salt'       => (string) $this->cfg->get('privacy.ip_salt', ''),
+                'keep_raw'      => (bool) $this->cfg->get('ingest.keep_raw', true),
+                'search_params' => (array) $this->cfg->get('beacon.query_params', []),
+                'install_id'    => (string) $this->cfg->get('solr.install_id', ''),
             ]);
             return;
         }

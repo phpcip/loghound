@@ -20,7 +20,17 @@
 
 'use strict';
 
-/** ISO 3166-1 alpha-2 → [latitude, longitude, English name]. */
+import { boot } from './core.js';
+
+/**
+ * ISO 3166-1 alpha-2 → [latitude, longitude, English name].
+ *
+ * The coordinates are what this file is for. The names beside them are a FALLBACK only: the
+ * authoritative table is Geo\Countries in PHP and it reaches the browser in the boot payload,
+ * so `SC` is "Seychelles" everywhere in the panel and not only where this partial list happens
+ * to carry it. These stay so that a lookup by name — some geolocation feeds return one —
+ * still resolves to a coordinate.
+ */
 const CENTROIDS = {
     AE: [23.9, 54.3, 'United Arab Emirates'],
     AR: [-35.4, -65.2, 'Argentina'],
@@ -181,6 +191,13 @@ export function locate(value) {
 
 /** Display name for a country value, falling back to the raw value when unmapped. */
 export function countryName(value) {
+    const cc = String(value || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(cc)) {
+        const named = (boot.countries || {})[cc];
+        if (named) {
+            return named;
+        }
+    }
     const hit = locate(value);
     return hit ? hit.name : String(value || '—');
 }

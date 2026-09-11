@@ -151,6 +151,27 @@
     <field name="ts" type="pdate" indexed="true" stored="true" docValues="true"/>
 
     <!-- Virtual host (%v). Low cardinality, so its docValues ordinals cost ~1 byte/doc. -->
+    <!--
+      WHICH LOGHOUND INSTALLATION WROTE THIS DOCUMENT.
+
+      One pair of indexes may be shared by several installations on different machines, which
+      is what lets an operator run Loghound across several sites and tell them apart by
+      `host_s`. This field is not how the panel tells them apart — that is `host_s`, and a
+      shared pair is meant to be read as one dashboard. It exists for DESTRUCTIVE operations:
+      retention and quota trimming delete by query, and an installation with a 90-day policy
+      must not be able to delete a neighbour's 365 days of data. bin/loghound-retention detects
+      a shared pair from this field and scopes its deletes when it finds one.
+
+      The same value is mixed into the hit id, because two machines tailing identically named
+      log files produce identical `src:offset` pairs and would otherwise overwrite each other's
+      documents silently — see Parser::normalize().
+
+      ABSENT on every document written before this field existed, and absence is read as "the
+      only installation there was". That is sound: a pair could not be shared before sharing
+      existed. Never given a default, for the reason `provisional_b` is never given one.
+    -->
+    <field name="install_s" type="string" indexed="true" stored="false" docValues="true"/>
+
     <field name="host_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <!-- Which configured log file the line came from. Lets an operator prove a source is
@@ -248,6 +269,30 @@
       the drill-down can show the full request and so retroactive analysis has the data.
     -->
     <field name="query_s" type="string" indexed="false" stored="true" docValues="false"/>
+
+    <!--
+      THE NAMED QUERY PARAMETERS, AND ONLY THE NAMED ONES. `query_s` above is the whole query
+      string and is deliberately unfaceted for the reason stated there. This field is its
+      opposite in every respect: a short list of values pulled out of that string by NAME, from
+      the whitelist in `beacon.query_params`, so "what did people search for" becomes a real
+      dimension that can be counted, filtered and drilled like any other.
+
+      WHY THIS IS NOT THE SAME DECISION AS `query_s`. A stored-only field is visible on one
+      document at a time; an indexed one with docValues is a term dictionary and a facet. That
+      is exactly why the whitelist is a list of parameter NAMES rather than a switch: a page URL
+      carries session tokens, reset codes and email addresses, and none of that may become a
+      facet value. EMPTY BY DEFAULT — an installation that names no parameters writes this field
+      on no document at all.
+
+      Values are lower-cased and whitespace-collapsed by Beacon::normaliseTerm() so that one
+      search is one value rather than three that look identical on screen, and dropped rather
+      than truncated when over-long, so no facet value exists that nobody ever typed.
+
+      ABSENT, never empty, on every hit with no whitelisted parameter — including every hit
+      indexed before this field existed. A multi-valued field with no values is not a document
+      that searched for nothing.
+    -->
+    <field name="search_terms_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
 
     <field name="proto_s" type="string" indexed="true" stored="false" docValues="true"/>
 

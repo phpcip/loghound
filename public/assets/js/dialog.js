@@ -15,6 +15,14 @@
  * EVERYTHING A VIEW PUTS IN THE BODY CAME OFF THE WIRE. The dialog itself sets textContent
  * and never innerHTML, and the openers are held to the same rule by core.js's el().
  *
+ * A LINK INSIDE A CLICKABLE ROW WINS, AND THAT IS WHY EVERY ROW ALSO HAS A CONTROL. A value
+ * in a cell is a real <a href> that filters the dashboard to it, so a click on the value must
+ * navigate rather than open the dialog. Once the identity cells carry two lines of values
+ * each, most of a row's surface is link, and a reader aiming at "the row" hits one and the
+ * dialog appears not to open at all. The rule stays — a link that did not navigate would be a
+ * worse surprise — and every drillable row carries an explicit opener at its end instead, so
+ * there is always somewhere to press that is unambiguously "open this record".
+ *
  * ACCESSIBILITY, because a modal that traps a keyboard user is worse than no modal:
  * aria-modal with a labelled heading, focus moved into the panel on open, Tab cycling kept
  * inside it while it is open, Escape and the scrim both close it, and focus returned to the
@@ -211,9 +219,18 @@ function onActivate(event) {
     if (!target || typeof target.closest !== 'function') {
         return;
     }
-    if (target.closest('a[href], button, input, select, textarea')) {
+    if (target.closest('a[href], input, select, textarea')) {
         return;
     }
+
+    /* A button is interactive and normally wins, EXCEPT the one whose whole job is to open
+       this dialog. Without the exception the explicit row opener would be swallowed by the
+       same guard that protects the filter links beside it. */
+    const button = target.closest('button');
+    if (button && !button.hasAttribute('data-lh-open')) {
+        return;
+    }
+
     const node = target.closest('[data-lh-open]');
     if (!node) {
         return;
@@ -224,11 +241,22 @@ function onActivate(event) {
     }
     event.preventDefault();
     opener = node;
-    Promise.resolve(fn(datasetOf(node))).catch(() => {
-        const body = byId('lh-dialog-body');
-        if (body) {
-            dialogFail(body, new Error('The detail view failed to render.'));
+
+    /* A rejected opener must never leave the row looking inert. If the opener got as far as
+       putting a dialog on screen, the failure is rendered into it; if it threw before that —
+       which is the case that used to be swallowed entirely, because there was no body to
+       render into — a dialog is opened for the purpose. The error still reaches the console,
+       because an operator reporting "clicking does nothing" needs something to paste. */
+    Promise.resolve(fn(datasetOf(node))).catch((err) => {
+        let body = byId('lh-dialog-body');
+        if (!body) {
+            openDialog('That could not be opened', '');
+            body = byId('lh-dialog-body');
         }
+        if (body) {
+            dialogFail(body, err instanceof Error ? err : new Error('The detail view failed to render.'));
+        }
+        console.error('loghound: opening a ' + node.dataset.lhOpen + ' failed', err);
     });
 }
 

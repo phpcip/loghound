@@ -650,6 +650,15 @@ final class Detector
      *    that does not compile and one that backtracks badly enough to wedge the ingest
      *    daemon. Rejecting it here is the only moment a human is present to fix it.
      *
+     * THE WAY OUT NAMED IN THE FIRST REFUSAL HAS TO BE ONE THAT WORKS. It used to say "add the
+     * directory to allowed_log_roots with the shell wizard, then come back" — and the shell
+     * wizard's own manual-path prompt calls THIS function and was refused with the same
+     * sentence, so the only instruction on the screen sent the operator in a circle. What
+     * genuinely widens the list is an explicit consent at a terminal, which bin/loghound-setup
+     * now asks for on a typed path exactly as it already did for a detected one, and which
+     * Steps::allowLogRoot() records; editing config/loghound.php by hand works whether or not
+     * a wizard is involved. Both are named, and both are true.
+     *
      * @return array{ok:bool,error:string,source:array<string,mixed>}
      */
     public static function manualSource(Config $cfg, string $path, string $format, string $regex): array
@@ -668,9 +677,11 @@ final class Detector
         if (Security::safePath($path, $roots) === null) {
             return $fail(
                 $path . ' is outside the directories Loghound is allowed to read ('
-                . implode(', ', $roots) . '). That list is a safety control, so it is not '
-                . 'widened from a web form: add the directory to allowed_log_roots with the '
-                . 'shell wizard, then come back.'
+                . implode(', ', $roots) . '). That list is a safety control and it is never '
+                . 'widened from a web form. Either put the file somewhere already on the list, '
+                . 'or run bin/loghound-setup in a shell — it offers this same path and asks '
+                . 'whether ' . dirname($path) . ' may be read — or add that directory to '
+                . 'allowed_log_roots in config/loghound.php yourself.'
             );
         }
 

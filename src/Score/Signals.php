@@ -412,7 +412,6 @@ final class Signals
         $s['fp_ips_24h'] = $fpIps;
 
         $s['beacon']         = (bool) ($beacon['beacon_b'] ?? false);
-        $s['beacon_orphan']  = (bool) ($beacon['beacon_orphan_b'] ?? false);
         $s['js']             = array_key_exists('js_b', $beacon) ? (bool) $beacon['js_b'] : null;
         $s['headless']       = array_key_exists('headless_b', $beacon) ? (bool) $beacon['headless_b'] : null;
         $s['ua_claim_ok']    = array_key_exists('ua_claim_ok_b', $beacon) ? (bool) $beacon['ua_claim_ok_b'] : null;

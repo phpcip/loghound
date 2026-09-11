@@ -60,6 +60,43 @@ final class Beacon
     public const MAX_IDENT = 128;
 
     /**
+     * Length ceiling on the hostname a beacon reports for the page it is running on.
+     *
+     * 253 is the maximum length of a DNS name, so this refuses nothing legitimate and bounds a
+     * hostile string at the widest value that can be real. The charset check in
+     * normaliseHost() is the guard that matters; this is the cheap one applied first.
+     */
+    public const MAX_HOST = 253;
+
+    /**
+     * Bounds on a collected search term.
+     *
+     * MAX_TERM is the length kept from one term and MAX_TERMS the number accepted from one
+     * payload or one log line. MAX_SESSION_TERMS bounds the union across a whole session, the
+     * same way Sessionizer bounds the path list: a visitor who runs four hundred searches must
+     * not be able to make one session document four hundred values wide.
+     *
+     * 96 characters holds any search a person types. A longer value is a paste, a generated
+     * probe or an attempt to make the facet expensive, and it is DROPPED rather than truncated
+     * — truncating would coin a facet value that nobody ever searched for, and the value
+     * browser would then show it as if somebody had.
+     */
+    public const MAX_TERM = 96;
+    public const MAX_TERMS = 8;
+    public const MAX_SESSION_TERMS = 20;
+
+    /**
+     * The prefix and shape of a session id the COLLECTOR minted, as opposed to one the
+     * sessionizer opened from a log line.
+     *
+     * collect.php mints 'b' . bin2hex(random_bytes(20)). The scorer has to be able to tell the
+     * two apart — a beacon-minted id is the id a standalone session is published at, and it is
+     * also the id that has to be deleted if the same visit later turns out to have a log line
+     * behind it. Matching on the shape rather than on a flag keeps that knowledge in one place.
+     */
+    public const PROVISIONAL_ID = '/^b[0-9a-f]{40}$/';
+
+    /**
      * Slack allowed between a claimed wall_ms and the time actually elapsed since
      * the token was issued.
      *
@@ -207,6 +244,317 @@ final class Beacon
     }
 
     /**
+     * Requests per minute allowed from one HOSTNAME.
+     *
+     * A third bucket alongside the per-IP and per-session ones, and it exists because the
+     * hostname allowlist would otherwise be a way around the limiter rather than a permission:
+     * a listed host is the only kind of beacon that can create a session, so it is the only
+     * kind whose flood costs us index writes rather than a discarded row. The default is
+     * higher than the per-IP figure on purpose — a whole site's visitors share one hostname
+     * bucket, where an IP bucket normally holds one visitor.
+     */
+    public function ratePerMinHost(): int
+    {
+        return Security::clampInt($this->cfg['rate_per_min_host'] ?? 3000, 1, 1000000, 3000);
+    }
+
+    /**
+     * The hostnames this installation is willing to hear from, normalised and de-duplicated.
+     *
+     * THIS LIST IS THE WHOLE PERMISSION MODEL, and it is deliberately the smallest one that
+     * can work. There is no per-site key, no registration flow and no shared secret, because
+     * a secret that has to sit in the source of a public HTML page is not a secret and saying
+     * otherwise in the documentation would be the dishonest kind of security.
+     *
+     * What being on this list buys a hostname, and nothing else buys:
+     *
+     *   - its beacons may CREATE a session when no log source covers the host (standalone
+     *     mode, see Beacon::isStandalone() and bin/loghound-score);
+     *   - its reported hostname is recorded as the session's `host_s`, so it appears in the
+     *     Virtual host dimension beside the hosts that come from log lines;
+     *   - the whitelisted URL parameters it reports are kept as `search_terms_ss`.
+     *
+     * A beacon from ANY other hostname keeps exactly the behaviour this endpoint has always
+     * had: a fresh provisional id, a staged row, merge-only, no session created, no hostname
+     * and no search term recorded. Empty by default, so an installation that says nothing
+     * behaves precisely as it did before this existed.
+     *
+     * What a listed hostname does NOT buy, and docs/BEACON.md says this in the same words:
+     * anything that is not a browser can send any Origin and any hostname it likes, so
+     * somebody who knows a host is listed can fabricate sessions attributed to it. That is
+     * the exposure every client-side analytics product carries. It is bounded to the hosts
+     * the operator listed, it cannot read anything, it cannot touch another host's data, and
+     * it cannot reach the log-backed planes at all — and it is exactly why a beacon-only
+     * session stays marked as single-plane rather than being folded in with the rest.
+     *
+     * @return array<int,string>
+     */
+    public function allowedHosts(): array
+    {
+        $out = [];
+        foreach ((array) ($this->cfg['allowed_hosts'] ?? []) as $host) {
+            if (!is_string($host)) {
+                continue;
+            }
+            $norm = self::normaliseHost($host);
+            if ($norm !== '') {
+                $out[$norm] = true;
+            }
+        }
+        return array_keys($out);
+    }
+
+    /**
+     * Is this hostname one the operator listed?
+     *
+     * Compared after both sides have been through normaliseHost(), so a configuration entry
+     * written as "Search.OpenSolr.com:443" matches a beacon reporting "search.opensolr.com".
+     * An empty or unparseable hostname is never allowed: fail closed.
+     */
+    public function hostAllowed(string $host): bool
+    {
+        $host = self::normaliseHost($host);
+        return $host !== '' && in_array($host, $this->allowedHosts(), true);
+    }
+
+    /**
+     * The URL query-parameter names whose values are kept as search terms.
+     *
+     * EMPTY BY DEFAULT, and that default is a policy decision rather than a safety one, in
+     * exactly the sense storesIdentity() is. Everything else Loghound keeps about a request
+     * is either a measurement or a hashed identifier; a search term is a literal string a
+     * person typed, and keeping it widens what this product stores into content. `query_s`
+     * has been on the hits core all along precisely as a stored-only field for that reason:
+     * visible on one document, faceted on none.
+     *
+     * So it is a whitelist of NAMES and never "collect the query string". A page URL carries
+     * session tokens, password-reset codes, coupon codes and email addresses in its
+     * parameters, and a product whose privacy posture is "we hash everything except the
+     * address" cannot ship a switch that hoovers all of that into a faceted field. The
+     * operator names the parameters their search box uses — `q`, `s`, `query`, `search` — and
+     * nothing else is looked at on either side of the wire.
+     *
+     * @return array<int,string>
+     */
+    public function searchParams(): array
+    {
+        return self::normaliseParamNames((array) ($this->cfg['query_params'] ?? []));
+    }
+
+    /**
+     * Clean a list of configured parameter names.
+     *
+     * Lower-cased, de-duplicated, and restricted to the characters a query-string key can
+     * sensibly have. The restriction is what stops a configuration typo from becoming a
+     * pattern that matches more than the operator meant, and it is applied to the CONFIGURED
+     * side as well as the reported one so the two can be compared as plain strings.
+     *
+     * @param array<int,mixed> $names
+     * @return array<int,string>
+     */
+    public static function normaliseParamNames(array $names): array
+    {
+        $out = [];
+        foreach ($names as $name) {
+            if (!is_string($name) || $name === '' || strlen($name) > 40) {
+                continue;
+            }
+            $name = strtolower($name);
+            if (preg_match('/^[a-z0-9_\-.\[\]]+$/', $name)) {
+                $out[$name] = true;
+            }
+        }
+        return array_keys($out);
+    }
+
+    /**
+     * Normalise a hostname to the form `host_s` uses on a log-derived hit.
+     *
+     * Same treatment Parser::normalize() gives `%v`: lower-cased, `:port` removed, one
+     * trailing dot removed. Then validated as a DNS name — labels of letters, digits and
+     * hyphens, no empty label, no leading or trailing hyphen. Anything else returns the
+     * empty string, which every caller reads as "no hostname", never as a hostname.
+     *
+     * This is the only place a hostname from the wire becomes a value the rest of the system
+     * will treat as a host. It has to be strict, because the value ends up as a facet value
+     * in the Virtual host dimension next to hosts that came from the operator's own logs: a
+     * hostname carrying a quote, a space or a newline would be a foreign string sitting in a
+     * dimension that everybody reads as trustworthy.
+     *
+     * @param mixed $v
+     */
+    public static function normaliseHost($v): string
+    {
+        if (!is_string($v) || $v === '') {
+            return '';
+        }
+        $v = strtolower(trim(substr($v, 0, self::MAX_HOST + 8)));
+        $v = (string) preg_replace('/:\d{1,5}$/', '', $v);
+        $v = rtrim($v, '.');
+        if ($v === '' || strlen($v) > self::MAX_HOST) {
+            return '';
+        }
+        if (!preg_match('/^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)*$/', $v)) {
+            return '';
+        }
+        return $v;
+    }
+
+    /**
+     * The host part of an Origin header, or the empty string.
+     *
+     * An Origin is `scheme://host[:port]`, and only the host is comparable with the hostname
+     * the page reported. Nothing else about the header is trusted or kept: the scheme does
+     * not matter to the comparison, and a header that is not shaped like an origin at all
+     * yields nothing rather than being coerced into something.
+     *
+     * @param mixed $v
+     */
+    public static function originHost($v): string
+    {
+        if (!is_string($v) || $v === '') {
+            return '';
+        }
+        $host = parse_url(substr($v, 0, 255), PHP_URL_HOST);
+        return is_string($host) ? self::normaliseHost($host) : '';
+    }
+
+    /**
+     * Bound one search term, or return the empty string when it is not usable.
+     *
+     * The single place a typed string becomes a facet value, so every rule about what a
+     * facet value may be is applied here and nowhere else:
+     *
+     *   - control characters removed, invalid UTF-8 repaired, because a term travels into
+     *     a Solr document, a JSON response and an HTML table. The WHITESPACE control
+     *     characters — tab, newline, carriage return, form feed, vertical tab — become a
+     *     space first, because they are word separators and deleting them would weld two
+     *     words together into a term nobody typed. The rest are deleted, because a NUL
+     *     between two letters is not a space;
+     *   - internal whitespace collapsed, so "solr   hosting" and "solr hosting" are one
+     *     value rather than two that look identical on screen;
+     *   - LOWER-CASED, which is the decision worth arguing about and is made deliberately.
+     *     The field exists to be counted, and a dimension that lists "Solr", "solr" and
+     *     "SOLR" as three rows answers "what did people search for" worse than one that
+     *     lists it once. The literal casing a visitor used is not kept anywhere.
+     *   - dropped entirely when longer than MAX_TERM, never truncated.
+     *
+     * The value is returned as a plain string for the caller to bind. Nothing here escapes
+     * it for any particular sink, because a value escaped for one sink is wrong for every
+     * other one.
+     *
+     * @param mixed $v
+     */
+    public static function normaliseTerm($v): string
+    {
+        if (!is_string($v) || $v === '') {
+            return '';
+        }
+        if (strlen($v) > self::MAX_TERM * 4) {
+            return '';
+        }
+        if (!mb_check_encoding($v, 'UTF-8')) {
+            $v = mb_convert_encoding($v, 'UTF-8', 'UTF-8');
+        }
+        $v = (string) preg_replace('/[\x09-\x0D]/u', ' ', $v);
+        $v = (string) preg_replace('/[\x00-\x1F\x7F]/u', '', $v);
+        $v = trim((string) preg_replace('/\s+/u', ' ', $v));
+        if ($v === '' || mb_strlen($v) > self::MAX_TERM) {
+            return '';
+        }
+        return mb_strtolower($v, 'UTF-8');
+    }
+
+    /**
+     * Pull the whitelisted parameters out of a raw query string.
+     *
+     * Used by the LOG side — Parser::normalize() calls it with the query string it recovered
+     * from the request line — so that a site whose access log this installation already reads
+     * gets search terms with no beacon involved at all. The beacon side reaches the same
+     * normaliser through termsOf() with the parameters the page already split up.
+     *
+     * parse_str() is not used: it mangles keys into PHP variable names (a dot becomes an
+     * underscore), it would silently overwrite one value with another for a repeated key,
+     * and its array syntax turns `q[]=a&q[]=b` into a nested structure this has no use for.
+     * Splitting by hand keeps every repeated `q=` as its own term, which is what a facet
+     * wants.
+     *
+     * @param string          $query A query string WITHOUT the leading '?'.
+     * @param array<int,string> $names Whitelisted parameter names, already normalised.
+     * @return array<int,string>
+     */
+    public static function searchTerms(string $query, array $names): array
+    {
+        if ($query === '' || $names === [] || strlen($query) > 8192) {
+            return [];
+        }
+
+        $out = [];
+        foreach (explode('&', $query) as $pair) {
+            if ($pair === '') {
+                continue;
+            }
+            $eq = strpos($pair, '=');
+            if ($eq === false) {
+                continue;
+            }
+            $name = strtolower(rawurldecode(substr($pair, 0, $eq)));
+            if (!in_array($name, $names, true)) {
+                continue;
+            }
+            $term = self::normaliseTerm(rawurldecode(str_replace('+', ' ', substr($pair, $eq + 1))));
+            if ($term !== '') {
+                $out[$term] = true;
+            }
+            if (count($out) >= self::MAX_TERMS) {
+                break;
+            }
+        }
+
+        return array_keys($out);
+    }
+
+    /**
+     * The whitelisted parameters out of the object a beacon payload carries.
+     *
+     * b.js sends `qp` as a flat name => value map already reduced to the names the snippet was
+     * told to collect. That client-side reduction is a PRIVACY measure, not a security one:
+     * it keeps the rest of the URL — the session token, the reset code — from leaving the
+     * visitor's browser at all. The whitelist is applied AGAIN here because the payload is
+     * attacker-chosen, and the server's configuration is the only side that decides what this
+     * installation stores.
+     *
+     * @param mixed $v
+     * @return array<int,string>
+     */
+    public function termsOf($v): array
+    {
+        if (!is_array($v) || array_is_list($v)) {
+            return [];
+        }
+        $names = $this->searchParams();
+        if ($names === []) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($v as $name => $value) {
+            if (!is_string($name) || !in_array(strtolower($name), $names, true)) {
+                continue;
+            }
+            $term = self::normaliseTerm($value);
+            if ($term !== '') {
+                $out[$term] = true;
+            }
+            if (count($out) >= self::MAX_TERMS) {
+                break;
+            }
+        }
+
+        return array_keys($out);
+    }
+
+    /**
      * Mint a token for a session, bound to the Origin that asked for it.
      *
      * Thin wrapper over Security::mintToken so that callers never have to know the
@@ -288,8 +636,22 @@ final class Beacon
      * number is clamped into a possible range, and unknown keys are dropped. The
      * result is safe to bind into SQLite and safe to hand to mergeIntoSession().
      *
-     * Note what is NOT taken from the payload: IP, User-Agent, host and referer. The
-     * collector reads those from the connection. A client that sends them is ignored.
+     * Note what is NOT taken from the payload: IP, User-Agent and referer. The collector reads
+     * those from the connection. A client that sends them is ignored.
+     *
+     * THE HOSTNAME IS THE ONE EXCEPTION, and it is an exception because there is no other
+     * source for it. The collector runs on the Loghound host; the page runs somewhere else
+     * entirely, which is the whole point of a standalone beacon, so `$_SERVER['HTTP_HOST']`
+     * names US and says nothing about the measured site. The page is the only party that
+     * knows which of the operator's sites it is. What makes that safe enough to act on is not
+     * the field itself: it is the allowlist the value has to appear in (allowedHosts()), and
+     * the cross-check against the Origin header the browser sets and a page cannot forge,
+     * which collect.php performs. Here the value is only made syntactically safe.
+     *
+     * The search terms are the same story with a second gate: they are reduced to the
+     * configured whitelist HERE, before anything is written anywhere, so an installation that
+     * has configured no parameters stages no terms at all rather than storing them and
+     * hiding them later.
      *
      * Values are read once into a local before being tested. Testing the value and then
      * re-reading the key would let a null slip through the strict in_array() as -1 and then
@@ -339,6 +701,9 @@ final class Beacon
 
             'ident'        => $this->storesIdentity() ? $this->text($in['xi'] ?? '', self::MAX_IDENT) : '',
             'signed_in'    => $this->storesSignedIn() ? $this->tri($in['xs'] ?? null) : null,
+
+            'hostname'     => self::normaliseHost($in['hn'] ?? ''),
+            'terms'        => $this->termsOf($in['qp'] ?? null),
 
             'platform'     => $this->text($in['pl'] ?? '', self::MAX_STR),
             'touch'        => (int) $this->num($in['mt'] ?? 0, 0, 32),
@@ -563,6 +928,20 @@ final class Beacon
      * the reason the field exists — would be a fabrication. `ident_s` is likewise absent rather
      * than empty when nothing was sent or when `beacon.store_identity` is off.
      *
+     * THE HOSTNAME IS FOLDED ON ONLY WHEN THE DOCUMENT HAS NONE, which is the log-wins-on-facts
+     * rule of SPEC §6.4 applied to the one field where the two planes can both have an opinion.
+     * A session built from log lines already carries the vhost the SERVER recorded, and a
+     * payload claiming a different one must never be able to move a session from one site to
+     * another in the Virtual host dimension. The branch therefore fires for exactly one case:
+     * a standalone session, where there is no log line and the beacon is the only source of
+     * the hostname there will ever be.
+     *
+     * SEARCH TERMS ARE A UNION, capped at MAX_SESSION_TERMS and sorted, because a session is
+     * one visitor who may have searched several times and every one of those searches is a
+     * fact about the session. Sorting is not cosmetic: mergeIntoSession() is re-run from
+     * scratch on every provisional publish, and a set whose order varied would rewrite the
+     * document with different content for identical input.
+     *
      * Where payloads disagree across a session, the resolution follows what actually happened:
      * the LAST non-empty identity wins, because a visitor who signs in halfway through is that
      * person by the end of the visit; and signed-in wins over anonymous for the same reason —
@@ -589,6 +968,8 @@ final class Beacon
         $webgl = '';
         $ident = '';
         $signedIn = null;
+        $terms = [];
+        $host = '';
 
         foreach ($beaconRows as $row) {
             $rowId = $row['id'] ?? null;
@@ -638,6 +1019,25 @@ final class Beacon
             }
             if ($webgl === '' && !empty($row['webgl'])) {
                 $webgl = (string) $row['webgl'];
+            }
+
+            if ($host === '') {
+                $host = self::normaliseHost($row['host'] ?? '');
+            }
+
+            $rowTerms = $row['terms'] ?? [];
+            if (is_string($rowTerms)) {
+                $decodedTerms = json_decode($rowTerms, true);
+                $rowTerms = is_array($decodedTerms) ? $decodedTerms : [];
+            }
+            foreach ((array) $rowTerms as $term) {
+                if (count($terms) >= self::MAX_SESSION_TERMS) {
+                    break;
+                }
+                $term = self::normaliseTerm($term);
+                if ($term !== '') {
+                    $terms[$term] = true;
+                }
             }
 
             if (isset($row['ident']) && is_string($row['ident']) && $row['ident'] !== '') {
@@ -702,6 +1102,16 @@ final class Beacon
             $session['signed_in_b'] = $signedIn;
         }
 
+        if ($terms !== []) {
+            $termList = array_keys($terms);
+            sort($termList);
+            $session['search_terms_ss'] = $termList;
+        }
+
+        if ($host !== '' && ($session['host_s'] ?? '') === '') {
+            $session['host_s'] = $host;
+        }
+
         $geoTz = (string) ($session['tz_s'] ?? '');
         if ($tz !== '' && $geoTz !== '') {
             $session['tz_match_b'] = ($tz === $geoTz);
@@ -759,7 +1169,7 @@ final class Beacon
      *
      * MUST stay identical to Sessionizer.php's definition (SPEC.md §5.4:
      * `client_key = ip_net + ua_hash`), or beacons and log lines will never meet
-     * and every session will look like a `beacon_orphan_b`.
+     * and every session will come out `planes_s: beacon_only`.
      */
     public static function clientKey(string $ip, string $ua): string
     {

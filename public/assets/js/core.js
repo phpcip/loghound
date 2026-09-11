@@ -386,6 +386,49 @@ export function clockOnly(iso) {
     return parts.month + '/' + parts.day + ' ' + parts.hour + ':' + parts.minute;
 }
 
+/**
+ * The two halves of an instant, for a cell that shows the time over the date.
+ *
+ * A table of sessions is almost always a table of one day, so the date repeats down the
+ * column and the clock is the part being read — but a full `mm/dd/yyyy hh:mm:ss` needs about
+ * 160px and the column it was in has 110. Splitting it puts the part that differs on the
+ * first line at full size and the part that repeats underneath in the secondary tone, and
+ * neither is truncated. Same timezone rule as when(): Solr stores UTC, `boot.tz` displays it.
+ */
+export function timeOnly(iso) {
+    return isoParts(iso, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false },
+        (p) => p.hour + ':' + p.minute + ':' + p.second);
+}
+
+/** The date half of an instant, mm/dd/yyyy. */
+export function dayOnly(iso) {
+    return isoParts(iso, { year: 'numeric', month: '2-digit', day: '2-digit' },
+        (p) => p.month + '/' + p.day + '/' + p.year);
+}
+
+/**
+ * Format an instant from its parts in the display timezone.
+ *
+ * @param {string} iso
+ * @param {Object} opts  Intl.DateTimeFormat options, without the timeZone.
+ * @param {Function} join (parts) => string
+ */
+function isoParts(iso, opts, join) {
+    if (!iso) {
+        return '—';
+    }
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) {
+        return '—';
+    }
+    const parts = {};
+    for (const p of new Intl.DateTimeFormat(LOCALE, Object.assign({ timeZone: boot.tz || 'UTC' }, opts))
+        .formatToParts(d)) {
+        parts[p.type] = p.value;
+    }
+    return join(parts);
+}
+
 /** Shorten a hash for display while keeping enough of it to be identifiable. */
 export function shortHash(hash, keep) {
     const h = String(hash || '');

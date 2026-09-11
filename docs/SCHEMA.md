@@ -262,9 +262,12 @@ ABSENT, never zero.** A zero is a measurement; an absent field is an admission. 
 `avg()` skips missing values, which is exactly the behaviour wanted — and it is why every
 chart must state its population (SPEC §10: "an unlabelled number is a lie").
 
-`beacon_orphan_b` — a beacon arrived that matched no open log session. Suspicious in itself
-(a replayed token, or a page served from a cache we never logged), so it is surfaced rather
-than dropped.
+A beacon that matched no open log session is recorded as `planes_s: beacon_only`, not as a
+suspicion. There used to be a `beacon_orphan_b` for it, described as suspicious in itself; nothing
+ever wrote it, and the description had stopped being true — a tailer that is behind, or a site
+whose logs have not been read yet, produces beacon-only sessions in bulk and none of them is
+evidence of anything. The field and the rule input that read it are gone; `planes_s` states the
+same observation without the accusation.
 
 ### Behavioural and execution plane
 

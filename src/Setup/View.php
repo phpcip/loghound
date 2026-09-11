@@ -39,17 +39,20 @@ final class View
      *
      * The storage step is the first point at which Loghound asks for something the operator
      * may not have yet, and "an Opensolr account is required" with no way to get one is a
-     * dead end in the middle of an installation. Constants rather than inline literals so
-     * the three places that offer them — this step, the shell wizard and the docs — cannot
-     * drift apart.
+     * dead end in the middle of an installation.
+     *
+     * The addresses themselves live on Setup\Storage, which is the class both front ends
+     * share, so the shell wizard and this screen cannot send an operator to two different
+     * pages for the same thing. They are re-exported here only because this file reads better
+     * with short names in the markup.
      */
-    private const URL_REGISTER = 'https://opensolr.com/register';
+    private const URL_REGISTER = Storage::URL_REGISTER;
 
     /** Sign-in, for an operator who already has an account and needs the API key. */
-    private const URL_LOGIN = 'https://opensolr.com/users/login';
+    private const URL_LOGIN = Storage::URL_LOGIN;
 
     /** What each plan holds, since retention is sized to it. */
-    private const URL_PLANS = 'https://opensolr.com/solr-hosting';
+    private const URL_PLANS = Storage::URL_PLANS;
 
     private Config $cfg;
 
@@ -92,11 +95,15 @@ final class View
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\n";
         echo '<meta name="robots" content="noindex, nofollow">' . "\n";
         echo '<title>Set up Loghound</title>' . "\n";
+        echo '<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">' . "\n";
+        echo '<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">' . "\n";
         echo '<link rel="stylesheet" href="' . Security::esc($asset('assets/css/panel.css')) . '">' . "\n";
+        echo '<link rel="stylesheet" href="' . Security::esc($asset('assets/css/mobile.css')) . '">' . "\n";
         echo '<link rel="icon" href="' . Security::esc($asset('favicon.svg')) . '" type="image/svg+xml">' . "\n";
         echo '<link rel="icon" href="' . Security::esc($asset('favicon.ico')) . '" sizes="any">' . "\n";
         echo '<link rel="apple-touch-icon" href="' . Security::esc($asset('apple-touch-icon.png')) . '">' . "\n";
         echo '<script src="' . Security::esc($asset('assets/js/theme.js')) . '"></script>' . "\n";
+        echo '<script type="module" src="' . Security::esc($asset('assets/js/responsive.js')) . '"></script>' . "\n";
         echo "</head>\n<body class=\"setup-body\">\n";
 
         echo '<script type="application/json" id="lh-setup-boot">'
@@ -674,6 +681,9 @@ final class View
         if (isset($jobs[Job::KIND_OPENSOLR])) {
             $this->jobPanel(Job::KIND_OPENSOLR, (string) $jobs[Job::KIND_OPENSOLR], 'Creating your indexes');
         }
+        if (isset($jobs[Job::KIND_REUSE])) {
+            $this->jobPanel(Job::KIND_REUSE, (string) $jobs[Job::KIND_REUSE], 'Joining your existing indexes');
+        }
         if (isset($jobs[Job::KIND_SOLRTEST])) {
             $this->jobPanel(Job::KIND_SOLRTEST, (string) $jobs[Job::KIND_SOLRTEST], 'Testing the connection');
         }
@@ -694,11 +704,12 @@ final class View
             echo '</section>';
 
             echo '<details class="card">';
-            echo '<summary>Provision again on a different region</summary>';
-            echo '<p class="muted">The two indexes above already exist and answer. Running this '
-                . 'again creates a NEW pair under a fresh name and leaves the current two on your '
-                . 'account, where they keep counting against the plan until you delete them. '
-                . 'Normally there is nothing to do here — carry on with Continue.</p>';
+            echo '<summary>Point this installation at different indexes</summary>';
+            echo '<p class="muted">The two indexes above already exist and answer, so normally '
+                . 'there is nothing to do here — carry on with Continue. Opening this lets you '
+                . 'join a different pair your account already holds, which creates nothing, or '
+                . 'create a NEW pair under a fresh name. Creating leaves the current two on your '
+                . 'account, where they keep counting against your plan until you delete them.</p>';
             $this->opensolrPanel();
             echo '</details>';
 
@@ -715,6 +726,11 @@ final class View
      * the credentials are: enter the account details, then choose from the regions the
      * platform actually returned for it. The API key is a password field, is never
      * re-rendered, and is never placed in a hidden field.
+     *
+     * The three panels below the form have nothing to say until the account has been read, so
+     * the method returns before them. Until credentials are entered the snapshot is a BLANK
+     * one rather than a failed one, and rendering it anyway opened the screen with an empty
+     * red banner reporting a failure that had not happened.
      */
     private function opensolrPanel(): void
     {
@@ -762,27 +778,195 @@ final class View
         echo '<button type="submit" class="primary">Check these credentials</button>';
         echo '</form>';
 
-        if ($regions !== []) {
-            echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
-            $this->csrf(Installer::STEP_STORAGE, 'provision');
-            echo '<h3>Where should the indexes live?</h3>';
-            echo '<label for="region">Region</label>';
-            echo '<select id="region" name="region" required>';
-            foreach ($regions as $region) {
-                $region = (string) $region;
-                echo '<option value="' . Security::esc($region) . '"'
-                    . ($region === (string) $this->cfg->get('opensolr.region') ? ' selected' : '') . '>'
-                    . Security::esc($region) . '</option>';
-            }
-            echo '</select>';
-            echo '<p class="muted">These are the regions your account can use, as the platform '
-                . 'returned them. The two index names are generated for you — an Opensolr index name '
-                . 'has to be unique across the whole platform, so a fixed name would collide with '
-                . 'someone else\'s.</p>';
-            echo '<button type="submit" class="primary">Create my indexes</button>';
-            echo '</form>';
+        echo '</section>';
+
+        $account = (array) ($this->ctx['account'] ?? []);
+        if (empty($account['ok']) && (string) ($account['error'] ?? '') === '') {
+            return;
         }
 
+        $this->accountPanel($account);
+        $this->reusePanel($account);
+        $this->createPanel($account, $regions);
+    }
+
+    /**
+     * What this account holds and whether the plan has room, before anything is created.
+     *
+     * THE NUMBERS COME FIRST, on their own, above both of the choices they bear on. An
+     * operator about to pick "create a new pair" has to know the plan is full BEFORE they
+     * press it, not after — and an operator whose plan is full has to be able to see that the
+     * reason the reuse list matters is sitting right above it.
+     *
+     * A read that failed is reported as a failed read. It is not rendered as an account with
+     * nothing in it, because "you have no Loghound indexes" and "we could not ask" lead to
+     * opposite decisions.
+     *
+     * @param array<string,mixed> $account
+     */
+    private function accountPanel(array $account): void
+    {
+        $capacity = (array) ($account['capacity'] ?? []);
+        $blocked  = !empty($capacity['blocked']);
+        $failed   = empty($account['ok']);
+
+        echo '<section class="card">';
+        echo '<h2>Your Opensolr account</h2>';
+
+        if ($failed) {
+            echo '<div class="banner banner-bad" role="alert">'
+                . Security::esc((string) ($account['error'] ?? '')) . '</div>';
+        } elseif ($blocked) {
+            echo '<div class="banner banner-bad" role="alert">'
+                . Security::esc((string) ($capacity['sentence'] ?? '')) . '</div>';
+        } else {
+            echo '<p>' . Security::esc((string) ($capacity['sentence'] ?? '')) . '</p>';
+        }
+
+        if ($blocked) {
+            echo '<p>Three ways on from here:</p>';
+            echo '<ul>';
+            foreach (Pairs::waysForward(!empty($account['pairs'])) as $way) {
+                echo '<li>' . Security::esc($way['text']);
+                if ($way['url'] !== '') {
+                    echo ' <a href="' . Security::safeUrl($way['url'])
+                        . '" target="_blank" rel="noopener noreferrer">Open your Opensolr account</a>';
+                }
+                echo '</li>';
+            }
+            echo '</ul>';
+        }
+
+        foreach ((array) ($account['halves'] ?? []) as $half) {
+            echo '<p class="muted"><strong>' . Security::esc((string) $half['name']) . '</strong> is on '
+                . 'this account without its matching <strong>' . Security::esc((string) $half['missing'])
+                . '</strong>. That is what a setup run that stopped half way leaves behind: it holds '
+                . 'no usable data on its own, it cannot be joined as a pair, and it still counts '
+                . 'against your plan. Delete it in your Opensolr account, or leave it and create a '
+                . 'new pair below — Loghound will not touch it either way.</p>';
+        }
+
+        echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
+        $this->csrf(Installer::STEP_STORAGE, 'refresh');
+        echo '<button type="submit">Check the account again</button>';
+        echo '</form>';
+        echo '</section>';
+    }
+
+    /**
+     * The Loghound index pairs this account already holds, offered as pairs.
+     *
+     * WHY THIS SCREEN EXISTS. One pair of indexes can serve many sites. Every document
+     * Loghound writes carries the virtual host it came from, so six installations reporting
+     * into one pair stay separable in the panel by its Virtual host dimension — and an
+     * operator with six sites wants two indexes and six hostnames, not twelve indexes.
+     *
+     * They are shown as PAIRS and are only selectable as pairs, because half a pair is not
+     * somewhere Loghound can work: hits and sessions are two different shapes, and adopting
+     * one without the other would leave a step of setup that no screen can finish.
+     *
+     * The consequence is printed next to the button that accepts it, not in a paragraph
+     * further up: joining means this site's traffic lands among data that is already there.
+     *
+     * @param array<string,mixed> $account
+     */
+    private function reusePanel(array $account): void
+    {
+        $pairs = (array) ($account['pairs'] ?? []);
+        if ($pairs === []) {
+            return;
+        }
+
+        $host = Pairs::siteHost($this->cfg);
+
+        echo '<section class="card storage-option on">';
+        echo '<h2>Use indexes this account already has</h2>';
+        echo '<p>Loghound found ' . count($pairs) . ' pair' . (count($pairs) === 1 ? '' : 's')
+            . ' of its own indexes on this account. <strong>One pair can serve several sites.</strong> '
+            . 'Every record carries the hostname it came from, so this installation appears as its own '
+            . 'value under Virtual host in the panel, next to whatever else is reporting in.</p>';
+
+        echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
+        $this->csrf(Installer::STEP_STORAGE, 'reuse');
+
+        $first = true;
+        foreach ($pairs as $pair) {
+            $id      = (string) $pair['install_id'];
+            $current = Pairs::isCurrent($this->cfg, $pair);
+
+            echo '<label class="radio">';
+            echo '<input type="radio" name="install_id" value="' . Security::esc($id) . '"'
+                . ($first || $current ? ' checked' : '') . ' required>';
+            echo '<span><span class="mono">' . Security::esc((string) $pair['hits']) . '</span><br>'
+                . '<span class="mono">' . Security::esc((string) $pair['sessions']) . '</span>'
+                . ($current ? ' <span class="chip chip-good">already in use here</span>' : '')
+                . '</span>';
+            echo '</label>';
+            $first = false;
+        }
+
+        echo '<p class="muted">' . Security::esc(Pairs::reuseConsequence($pairs[0], $host)) . '</p>';
+
+        echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
+            . 'If these indexes were made by an older Loghound, add the fields this version writes</label>';
+        echo '<p class="muted">Leave it unticked and Loghound checks the shape first and stops if it '
+            . 'does not match, changing nothing. Ticked, it adds the missing fields — which only ever '
+            . 'adds, and does not alter or remove a single document already in there.</p>';
+
+        echo '<button type="submit" class="primary">Use these indexes</button>';
+        echo '</form>';
+        echo '</section>';
+    }
+
+    /**
+     * Create a brand-new pair, in a region this account can use.
+     *
+     * The button is withheld when the plan is known to be full, and the reason is the sentence
+     * in the panel above rather than a second copy of it here. A control that cannot succeed is
+     * not shown as a control: pressing "Create my indexes" and watching a job fail on its
+     * second step is the experience this whole screen exists to replace.
+     *
+     * @param array<string,mixed> $account
+     * @param array<int,mixed>    $regions
+     */
+    private function createPanel(array $account, array $regions): void
+    {
+        if ($regions === []) {
+            return;
+        }
+
+        $capacity = (array) ($account['capacity'] ?? []);
+        $blocked  = !empty($capacity['blocked']);
+
+        echo '<section class="card">';
+        echo '<h2>Or create a new pair</h2>';
+
+        if ($blocked) {
+            echo '<div class="banner banner-bad" role="alert">'
+                . Security::esc((string) ($capacity['sentence'] ?? ''))
+                . ' So there is nothing to create here yet — free a slot or move to a larger plan, '
+                . 'then check the account again.</div>';
+            echo '</section>';
+            return;
+        }
+
+        echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
+        $this->csrf(Installer::STEP_STORAGE, 'provision');
+        echo '<label for="region">Region</label>';
+        echo '<select id="region" name="region" required>';
+        foreach ($regions as $region) {
+            $region = (string) $region;
+            echo '<option value="' . Security::esc($region) . '"'
+                . ($region === (string) $this->cfg->get('opensolr.region') ? ' selected' : '') . '>'
+                . Security::esc($region) . '</option>';
+        }
+        echo '</select>';
+        echo '<p class="muted">These are the regions your account can use, as the platform '
+            . 'returned them. The two index names are generated for you — an Opensolr index name '
+            . 'has to be unique across the whole platform, so a fixed name would collide with '
+            . 'someone else\'s. Two indexes are created, and they count against your plan.</p>';
+        echo '<button type="submit" class="primary">Create my indexes</button>';
+        echo '</form>';
         echo '</section>';
     }
 
@@ -930,6 +1114,13 @@ final class View
      * operation looks identical here and in Settings.
      *
      * The panel carries no secret: step names, human progress lines and index names only.
+     *
+     * "TRY AGAIN" RE-RUNS THE SAME KIND OF WORK, which is why the action posted is chosen from
+     * the job's kind rather than being 'provision' for everything that is not detection.
+     * Posting 'provision' for a failed REUSE job would quietly turn "join the indexes I picked"
+     * into "create two more" — the one thing an operator reusing a pair is trying to avoid, and
+     * on a full plan something that could only fail a second time. The chosen pair travels with
+     * the retry for the same reason: without it there is nothing to adopt.
      */
     private function jobPanel(string $kind, string $id, string $title): void
     {
@@ -964,11 +1155,25 @@ final class View
 
         echo '<div class="job-actions">';
         if ((string) $status['state'] === 'error') {
+            $action = [
+                Job::KIND_DETECT   => 'detect',
+                Job::KIND_REUSE    => 'reuse',
+                Job::KIND_SOLRTEST => 'test',
+            ][$kind] ?? 'provision';
+
             echo '<form method="post" action="?setup=' . Security::esc($this->stepFor($kind)) . '">';
-            $this->csrf($this->stepFor($kind), $kind === Job::KIND_DETECT ? 'detect' : 'provision');
+            $this->csrf($this->stepFor($kind), $action);
             if ($kind === Job::KIND_OPENSOLR) {
                 echo '<input type="hidden" name="region" value="'
                     . Security::esc((string) $this->cfg->get('opensolr.region', '')) . '">';
+            }
+            if ($kind === Job::KIND_REUSE) {
+                $params = $job->params();
+                echo '<input type="hidden" name="install_id" value="'
+                    . Security::esc((string) ($params['install_id'] ?? '')) . '">';
+                if (!empty($params['upgrade_schema'])) {
+                    echo '<input type="hidden" name="upgrade_schema" value="1">';
+                }
             }
             echo '<button type="submit">Try again</button>';
             echo '</form>';

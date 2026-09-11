@@ -1,9 +1,10 @@
 /*
  * Loghound — the phone and tablet stylesheet.
  *
- * Loaded AFTER public/assets/css/panel.css, and it owns nothing that panel.css owns. Three
- * agents are writing in this tree at once, so every rule here is additive, every new class is
- * prefixed `lh-`, and no declaration in panel.css is edited to make one below work.
+ * Loaded AFTER public/assets/css/panel.css. It holds the rules that exist ONLY because a
+ * screen is narrow or a pointer is a thumb; anything that was simply wrong at every width was
+ * corrected in panel.css itself rather than patched here. Every class this file introduces is
+ * prefixed `lh-`.
  *
  * ---------------------------------------------------------------------------------------
  * WHAT THIS FILE IS FOR
@@ -31,18 +32,18 @@
  * ---------------------------------------------------------------------------------------
  * Three kinds of rule, three kinds of query, deliberately:
  *
- *   - **No query at all** for anything that was simply wrong at every width: a 13px label
- *     under the 14px floor, a grid track wider than its container, an unpadded password
- *     field. Narrowing those to a phone query would leave the bug standing on a desktop.
+ *   - **No query at all** for anything that is wrong at every width but only SHOWS on a
+ *     narrow one: a grid track wider than its container, an unpadded password field, an
+ *     unbreakable path. Narrowing those to a phone query would leave the bug standing on a
+ *     desktop.
  *   - **`(pointer: coarse), (max-width: 900px)`** for touch sizing. The pointer query is the
  *     honest test — a 768px tablet needs a thumb target and a 900px laptop window does not —
  *     and the width is kept alongside it so that a desktop browser dragged to phone width
  *     shows the phone build, which is how this gets reviewed.
  *   - **`(max-width: 900px)`** for the three layout-mode switches (navigation, tables,
- *     facet rail). These override a desktop-first base that belongs to another file: writing
- *     them unscoped and "restoring" desktop above 901px would mean copying somebody else's
- *     sidebar geometry into this file and keeping the copy correct. Scoping the switch is the
- *     change that cannot silently break the wide layout.
+ *     facet rail). These are genuine mode switches rather than corrections: the desktop
+ *     arrangement is right at desk width and a different arrangement is right on a phone, so
+ *     the switch is scoped and the wide layout is left exactly as panel.css states it.
  *
  * 900px is the boundary already used by panel.css for the detail dialog and the facet rail,
  * so there is no fourth breakpoint in the panel.
@@ -87,23 +88,6 @@
 /* ===========================================================================
    1. FOUNDATIONS — true at every width, so no media query.
    =========================================================================== */
-
-/*
- * The 14px floor, enforced where it had been broken.
- *
- * Four labels were set at 13px: the bandwidth strip in the page header, the two role
- * captions on the plan usage view, and the host picker's label. All four are uppercase
- * tracked-out type, which is the hardest thing on the page to read small, and all four sit
- * next to a number a reader is checking. 14px is the floor for the panel and it has no
- * per-component exceptions.
- */
-
-.bwstrip-label,
-.hostpick label,
-.meterrow-role,
-.windowrow-role {
-    font-size: 14px;
-}
 
 /*
  * Grid tracks that cannot be wider than the space they are in.
@@ -355,10 +339,10 @@ textarea {
     .banner a,
     .caveat a,
     .note a {
-        padding-top: 10px;
-        padding-bottom: 10px;
-        margin-top: -10px;
-        margin-bottom: -10px;
+        padding-top: 13px;
+        padding-bottom: 13px;
+        margin-top: -13px;
+        margin-bottom: -13px;
     }
 }
 
@@ -502,9 +486,15 @@ textarea {
         border-radius: var(--radius);
         cursor: pointer;
     }
-    .lh-navbtn[aria-expanded="true"] {
-        color: var(--on-accent);
+    .lh-navbtn:hover {
+        background: var(--ink);
+        color: var(--page);
+        border-color: var(--ink);
+    }
+    .lh-navbtn[aria-expanded="true"],
+    .lh-navbtn[aria-expanded="true"]:hover {
         background: var(--accent);
+        color: var(--on-accent);
         border-color: var(--accent);
     }
 
@@ -606,7 +596,7 @@ textarea {
         padding: 0;
         cursor: pointer;
     }
-    .lh-scrim:hover { background: var(--ink); }
+    .lh-scrim:hover { background: var(--ink); color: var(--ink); }
 
     html.lh-nav-open { overflow: hidden; }
 }
@@ -706,7 +696,7 @@ textarea {
         border: 1px solid var(--hairline);
         border-radius: var(--radius);
     }
-    table.lh-stack tbody tr:hover td { background: none; }
+    table.lh-stack tbody tr:hover td { background: none; color: var(--ink); }
 
     /* A row that opens something keeps saying so: the accent rule on the left is the same
        device the panel uses for "this is the one that matters". */
@@ -825,19 +815,10 @@ textarea {
 
 @media (max-width: 900px) {
 
-    /* The collapse the appended rule cancelled. */
+    /* The collapse itself is in panel.css, at 1120px, with the arithmetic that chose the
+       number. Only the gap is a phone decision. */
 
-    .explorer {
-        grid-template-columns: minmax(0, 1fr);
-        gap: 24px;
-    }
-
-    /* The rail's own scroll container and its borders belong to a column layout. */
-
-    .explorer .facets {
-        border-right: 0;
-        padding-right: 0;
-    }
+    .explorer { gap: 24px; }
 
     /*
      * Closed, the rail is its heading and its control and nothing else.
@@ -925,12 +906,15 @@ textarea {
     .lh-dialog-head #lh-dialog-close { flex: none; }
 
     /* Definition lists: a label column sized by its longest term leaves nothing for the
-       value at 343px. One column per pair, label above value. */
+       value at 343px. One column per pair, label above value — and once the term has the
+       whole width to itself there is nothing left for `nowrap` to protect, so it goes: a
+       term is the one thing on this page that can hold an unbreakable 400px identifier. */
 
     dl.kv {
         grid-template-columns: minmax(0, 1fr);
         gap: 0;
     }
+    dl.kv dt { white-space: normal; overflow-wrap: anywhere; }
     dl.kv dt { border-bottom: 0; padding-bottom: 0; }
     dl.kv dd { padding-top: 2px; }
 

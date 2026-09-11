@@ -57,6 +57,22 @@ final class Job
     public const KIND_OPENSOLR = 'opensolr';
     public const KIND_SOLRTEST = 'solrtest';
 
+    /**
+     * Adopting a pair of indexes the account already holds.
+     *
+     * A kind of its own rather than a flag on KIND_OPENSOLR, because the two have different
+     * steps, different failure modes and different consequences: one creates indexes and can
+     * leave something behind, the other creates nothing and must not. Keeping them apart is
+     * what stops a reuse run from ever reaching a create call.
+     */
+    public const KIND_REUSE = 'reuse';
+
+    /** @return string[] Every kind create() will accept. */
+    public static function kinds(): array
+    {
+        return [self::KIND_DETECT, self::KIND_OPENSOLR, self::KIND_SOLRTEST, self::KIND_REUSE];
+    }
+
     /** Seconds a single browser-driven run() may spend before handing control back. */
     private const BUDGET_SECONDS = 20;
 
@@ -90,7 +106,7 @@ final class Job
      */
     public static function create(string $dir, string $kind, array $params = []): self
     {
-        if (!in_array($kind, [self::KIND_DETECT, self::KIND_OPENSOLR, self::KIND_SOLRTEST], true)) {
+        if (!in_array($kind, self::kinds(), true)) {
             throw new \InvalidArgumentException('Unknown job kind: ' . $kind);
         }
         $dir = rtrim($dir, '/');
@@ -476,6 +492,8 @@ final class Job
                 return Storage::opensolrSteps($this, $cfg, $root);
             case self::KIND_SOLRTEST:
                 return Storage::solrTestSteps($this, $cfg);
+            case self::KIND_REUSE:
+                return Storage::reuseSteps($this, $cfg, $root);
         }
         return [];
     }

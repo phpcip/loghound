@@ -39,15 +39,46 @@ abstract class Controller
     /**
      * @var array<string,array<int,string>> Active facet filters, field => list of values.
      * Only fields in Query::filterFields() ever land here.
+     *
+     * The flattened view of Panel\Facets, kept because it is what every API payload's `active`
+     * key has carried since the beginning. The OPERATOR is not in it and must not be folded in:
+     * a view reading this sees which values are selected, and `$this->facets->op($field)` says
+     * what is being done with them.
      */
     protected array $filters = [];
+
+    /**
+     * The facet layer for Loghound's own cores: selection, operator, tagging, exclusion, URLs.
+     *
+     * One object per request, built from the query string. Every `fq` list, every facet
+     * definition and every filter link on every view comes out of it, so there is nowhere left
+     * for a view to keep a private copy of how filtering works.
+     */
+    protected Facets $facets;
+
+    /**
+     * The same layer restricted to the fields the HITS core defines.
+     *
+     * A second instance rather than a flag, because the two cores answer different questions
+     * and the hits plane has to be able to report what it dropped without the sessions plane
+     * knowing about it.
+     */
+    protected Facets $hitFacets;
 
     public function __construct(Config $cfg, Gateway $gw)
     {
         $this->cfg   = $cfg;
         $this->gw    = $gw;
         $this->range = Query::range(isset($_GET['range']) && is_string($_GET['range']) ? $_GET['range'] : null);
-        $this->filters = self::readFilters();
+        $this->facets = Facets::sessions($_GET);
+        $this->hitFacets = Facets::hits($_GET);
+        $this->filters = $this->facets->flat();
+    }
+
+    /** The facet layer, for a view that needs the operator or a filter URL. */
+    public function facetLayer(): Facets
+    {
+        return $this->facets;
     }
 
     /** URL slug for this view, e.g. 'overview'. Used for routing and nav highlighting. */
@@ -110,72 +141,27 @@ abstract class Controller
     }
 
     /**
-     * Read the active facet filters from the query string.
-     *
-     * Shape: `?f[bot_class_s][]=proxy_fleet&f[country_s][]=DE`. A field that is not in
-     * Query::filterFields() is dropped silently — the UI never generates one, so its
-     * presence means someone is probing, and there is nothing useful to tell them.
-     *
-     * @return array<string,array<int,string>>
-     */
-    private static function readFilters(): array
-    {
-        $raw = $_GET['f'] ?? null;
-        if (!is_array($raw)) {
-            return [];
-        }
-        $allowed = Query::filterFields();
-        $out = [];
-        foreach ($raw as $field => $values) {
-            if (!is_string($field) || !isset($allowed[$field]) || !Security::isSafeFieldName($field)) {
-                continue;
-            }
-            foreach ((array) $values as $v) {
-                if (!is_string($v) || $v === '') {
-                    continue;
-                }
-                $out[$field][] = mb_substr($v, 0, 256);
-            }
-            if (isset($out[$field])) {
-                $out[$field] = array_values(array_unique(array_slice($out[$field], 0, 20)));
-            }
-        }
-        return $out;
-    }
-
-    /**
      * Turn the active filters into Solr `fq` clauses.
      *
-     * Values within one field are OR-ed (a facet is a multi-select); different fields are
-     * separate fq entries, so they AND together and each is independently cacheable in
-     * Solr's filter cache.
+     * DELEGATED, and that is the change. This used to build the clauses itself, as
+     * `field:("a" OR "b")` with no tag, which is precisely the defect the facet layer exists to
+     * fix: an untagged filter is inside its own facet, so picking one host left the host list
+     * with one entry in it and no way to add a second. Every clause now carries
+     * `{!tag=f_<field>}` and the operator the dimension is set to, and the facet for that
+     * dimension is asked for with the matching `domain.excludeTags`.
      *
-     * Passing `$only` restricts the clauses to fields that exist on the core about to be
-     * queried. The two schemas are not the same shape, and an `fq` naming a field a core
-     * does not define matches nothing, so an unrestricted list would turn a filtered
-     * hits-core view into an empty one.
+     * The signature is unchanged so that no view has to move at the same time as the engine.
+     * `$rename` is accepted and ignored: the aliases are a property of the plane (the sessions
+     * core spells `session_id_s` as `id`) and are now declared once on the Facets instance
+     * rather than passed in at each of five call sites, any one of which could forget.
      *
-     * `$rename` maps a sidebar field onto the name the target core actually uses, for the
-     * cases where the same fact is spelled differently on each side.
-     *
-     * @param array<int,string>|null   $only   Field names to keep, or null for all active filters.
-     * @param array<string,string>     $rename Sidebar field => field name on the target core.
+     * @param array<int,string>|null $only   Field names to keep, or null for all active filters.
+     * @param array<string,string>   $rename Ignored; kept so callers need not change together.
      * @return array<int,string>
      */
     protected function filterFqs(?array $only = null, array $rename = []): array
     {
-        $out = [];
-        foreach ($this->filters as $field => $values) {
-            if ($only !== null && !in_array($field, $only, true)) {
-                continue;
-            }
-            $parts = [];
-            foreach ($values as $v) {
-                $parts[] = Query::quote($v);
-            }
-            $out[] = ($rename[$field] ?? $field) . ':(' . implode(' OR ', $parts) . ')';
-        }
-        return $out;
+        return $this->facets->fqs($only);
     }
 
     /**
@@ -255,7 +241,7 @@ abstract class Controller
     {
         return array_merge(
             [self::FQ_SESSION_DOCS, Query::rangeFq('ts_start', $this->range)],
-            $this->filterFqs(null, Query::sessionFilterAliases())
+            $this->facets->fqs()
         );
     }
 
@@ -292,14 +278,55 @@ abstract class Controller
      * Filters the hits core cannot answer are dropped here and reported by
      * ignoredHitFilters(), which the view surfaces.
      *
+     * It goes through the HITS facet instance and not the sessions one, and the difference is
+     * load-bearing rather than tidiness: the sessions instance rewrites `session_id_s` to `id`,
+     * because a session document IS its session. On the hits core `session_id_s` is a real field
+     * and `id` is the hit's own identifier, so borrowing the sessions instance here would filter
+     * a hit timeline by a session id against the wrong field and return nothing.
+     *
      * @return array<int,string>
      */
     protected function hitFqs(): array
     {
         return array_merge(
             [Query::rangeFq('ts', $this->range)],
-            $this->filterFqs(array_keys(Query::hitFilterFields()))
+            $this->hitFacets->fqs()
         );
+    }
+
+    /**
+     * The card a cross-tabulation is drawn into, or nothing when this view has no pivot.
+     *
+     * ONE CARD SHAPE for all of them, emitted here rather than written out in each view, for the
+     * same reason the facet markup is: three hand-written copies of a table skeleton is three
+     * places for a `<colgroup>` to drift out of step.
+     *
+     * The heading and the caption come from Query::pivots(), so the question the cross-tab answers
+     * is on screen above it. A grid of numbers with no stated question is one the reader has to
+     * guess the point of, and the guess is usually that the row total equals the sum of its cells —
+     * which it does not, because the inner facet is limited. The renderer states the shortfall per
+     * row; the caption states the population.
+     */
+    protected function pivotCard(string $id, string $num): void
+    {
+        $pivot = Query::pivots()[$this->slug()] ?? null;
+        if ($pivot === null) {
+            return;
+        }
+        $labels = Query::filterFields();
+        $outer = $labels[$pivot[0]] ?? $pivot[0];
+        $inner = $labels[$pivot[1]] ?? $pivot[1];
+
+        self::cardOpen($id, $num, $outer . ' by ' . $inner, $pivot[2]);
+        self::skeleton($id, 'rows', 0, 'Cross-tabulating ' . mb_strtolower($outer) . ' by ' . mb_strtolower($inner));
+        echo '<div class="table-wrap"><table id="' . Security::esc($id) . '-table" class="table-fixed pivot">'
+            . '<colgroup><col style="width:32%"><col style="width:12%"><col style="width:56%"></colgroup>'
+            . '<thead><tr>'
+            . '<th scope="col">' . Security::esc($outer) . '</th>'
+            . '<th scope="col" class="num">Sessions</th>'
+            . '<th scope="col">' . Security::esc($inner) . '</th>'
+            . '</tr></thead><tbody></tbody></table></div>';
+        self::cardClose($id);
     }
 
     /**
@@ -335,7 +362,88 @@ abstract class Controller
             'range_label' => $this->range['label'],
             'demo'       => $this->gw->isDemo(),
             'error'      => $this->gw->error(),
+            'filters'    => $this->facets->payload(),
         ], $extra);
+    }
+
+    /**
+     * Facet definitions for a set of dimensions, each one excluding its own filter.
+     *
+     * The method a view calls instead of hand-writing a terms facet. It is what makes the
+     * multi-select work: the definition for `host_s` carries `domain.excludeTags: ['f_host_s']`
+     * when a host filter is in force, so the host list keeps every host with the count it would
+     * have if that filter were lifted, while every other dimension in the same request still
+     * narrows. One Solr round trip, however many dimensions.
+     *
+     * @param array<int,string> $fields
+     * @return array<string,mixed>
+     */
+    protected function facetDefs(array $fields, int $limit = 12, bool $numBuckets = false): array
+    {
+        return $this->facets->termsFacets($fields, $limit, $numBuckets);
+    }
+
+    /**
+     * The rendered dimension groups for a facet response.
+     *
+     * @param array<string,mixed> $facets
+     * @param array<int,string>   $fields
+     * @param array<int,string>   $mono   Dimensions rendered monospace, because the value is an id.
+     * @return array<int,array<string,mixed>>
+     */
+    protected function facetGroups(array $facets, array $fields, int $limit = 12, array $mono = []): array
+    {
+        return $this->facets->groups($facets, $fields, $limit, $mono);
+    }
+
+    /**
+     * This view's cross-tabulation, as a facet definition, or an empty array when it has none.
+     *
+     * The pairing comes from Query::pivots(), keyed by view slug, so the choice of what is worth
+     * cross-tabulating is declared in one table rather than decided inside eleven view files.
+     *
+     * @return array<string,mixed>
+     */
+    protected function pivotDef(int $outerLimit = 8, int $innerLimit = 5): array
+    {
+        $pivot = Query::pivots()[$this->slug()] ?? null;
+        if ($pivot === null) {
+            return [];
+        }
+        return $this->facets->pivot('pivot', $pivot[0], $pivot[1], $outerLimit, $innerLimit);
+    }
+
+    /**
+     * This view's cross-tabulation, shaped for the browser, or null when it has none.
+     *
+     * Carries the question it answers alongside the rows, because a cross-tab with no stated
+     * question is a grid of numbers a reader has to guess the point of — and `covered`, per row,
+     * because the inner facet is limited and the cells of a row therefore do NOT add up to the
+     * row total. Presenting them as if they did would be a wrong number.
+     *
+     * @param array<string,mixed> $facets
+     * @return array<string,mixed>|null
+     */
+    protected function pivotRows(array $facets): ?array
+    {
+        $pivot = Query::pivots()[$this->slug()] ?? null;
+        if ($pivot === null) {
+            return null;
+        }
+        $rows = Facets::pivotRows($facets, 'pivot', $pivot[0], $pivot[1]);
+        if ($rows === []) {
+            return null;
+        }
+
+        $labels = Query::filterFields();
+        return [
+            'outer'       => $pivot[0],
+            'inner'       => $pivot[1],
+            'outer_label' => $labels[$pivot[0]] ?? $pivot[0],
+            'inner_label' => $labels[$pivot[1]] ?? $pivot[1],
+            'question'    => $pivot[2],
+            'rows'        => $rows,
+        ];
     }
 
     /**

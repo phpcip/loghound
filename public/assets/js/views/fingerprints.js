@@ -37,7 +37,7 @@ function hashNode(hash) {
 /** Verdict chip with the shared verdict colouring. */
 function verdictChip(verdict) {
     return el('span', {
-        class: 'chip chip-word v-' + String(verdict || 'unknown'),
+        class: 'chip v-' + String(verdict || 'unknown'),
         text: verdict || 'unknown'
     });
 }
@@ -95,13 +95,19 @@ function clusterRow(row, sparkBuckets) {
 
     tr.appendChild(el('td', { class: 'mono', 'data-sort': row.fp }, [hashNode(row.fp)]));
 
-    tr.appendChild(el('td', { class: 'num', 'data-sort': String(row.uniq_ips) }, [
-        row.fleet
-            ? el('strong', { text: num(row.uniq_ips) })
-            : document.createTextNode(num(row.uniq_ips))
+    tr.appendChild(el('td', {
+        class: 'num',
+        'data-sort': String(row.uniq_ips),
+        title: num(row.uniq_ips) + ' addresses across ' + num(row.uniq_nets) + ' netblocks and '
+            + num(row.uniq_asns) + ' networks'
+    }, [
+        el('div', { class: 'clip-line' }, [
+            row.fleet
+                ? el('strong', { text: num(row.uniq_ips) })
+                : document.createTextNode(num(row.uniq_ips))
+        ]),
+        el('div', { class: 'sub', text: num(row.uniq_nets) + ' nets · ' + num(row.uniq_asns) + ' AS' })
     ]));
-    tr.appendChild(el('td', { class: 'num', text: num(row.uniq_nets), 'data-sort': String(row.uniq_nets) }));
-    tr.appendChild(el('td', { class: 'num', text: num(row.uniq_asns), 'data-sort': String(row.uniq_asns) }));
     tr.appendChild(el('td', { class: 'num', text: num(row.sessions), 'data-sort': String(row.sessions) }));
 
     const canvas = el('canvas', {
@@ -121,14 +127,15 @@ function clusterRow(row, sparkBuckets) {
         el('div', { class: 'sub clip-line' }, networkParts(row))
     ]));
 
-    tr.appendChild(el('td', {
-        class: 'num',
-        text: row.avg_score === null ? '—' : dec(row.avg_score, 0),
-        'data-sort': row.avg_score === null ? '' : String(row.avg_score)
-    }));
-    tr.appendChild(el('td', { 'data-sort': row.verdict || '' }, [
-        verdictChip(row.verdict),
-        row.declared ? el('span', { class: 'chip chip-word chip-good', text: 'declared' }) : null
+    tr.appendChild(el('td', { class: 'clip', 'data-sort': row.avg_score === null ? '' : String(row.avg_score) }, [
+        el('div', { class: 'clip-line' }, [
+            verdictChip(row.verdict),
+            row.declared ? el('span', { class: 'chip chip-good', text: 'declared' }) : null
+        ]),
+        el('div', {
+            class: 'sub mono',
+            text: row.avg_score === null ? '—' : 'score ' + dec(row.avg_score, 0)
+        })
     ]));
 
     button.addEventListener('click', () => toggle(tr, row));
@@ -229,7 +236,7 @@ function renderMembers(inner, data) {
             el('td', { 'data-sort': m.as_type || '' }, [
                 m.as_type
                     ? dimValue('as_type_s', m.as_type)
-                    : el('span', { class: 'chip chip-word', text: 'unknown' })
+                    : el('span', { class: 'chip', text: 'unknown' })
             ]),
             el('td', {
                 class: 'clip',

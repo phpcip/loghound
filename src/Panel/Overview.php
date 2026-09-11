@@ -52,6 +52,7 @@ final class Overview extends Controller
             'timing'   => $this->timing(),
             'series'   => $this->series(),
             'toppages' => $this->topPages(),
+            'searches' => $this->searches(),
             default    => ['error' => 'Unknown action'],
         };
     }
@@ -77,7 +78,7 @@ final class Overview extends Controller
         $f = $this->gw->facet('overview.totals', $this->gw->sessionsCore(), [
             'q'  => '*:*',
             'fq' => $this->sessionFqs(),
-        ], $facet);
+        ], array_merge($facet, $this->pivotDef(10, 5)));
 
         $totals = [];
         foreach (array_keys(Query::populations()) as $key) {
@@ -96,6 +97,11 @@ final class Overview extends Controller
                 'hits'      => self::num($human, 'hits'),
                 'bytes'     => self::num($human, 'bytes'),
             ],
+
+            /* The cross-tab rides on THIS request rather than one of its own: same `fq`, one more
+               nested facet, no extra round trip. Which pairing it is comes from Query::pivots(),
+               keyed by view slug, so the choice is declared in one table. */
+            'pivot'          => $this->pivotRows($f),
         ]);
     }
 
@@ -126,6 +132,12 @@ final class Overview extends Controller
                 'log_span_avg' => 'avg(log_span_ms_l)',
                 'log_span_p50' => 'percentile(log_span_ms_l,50)',
             ]],
+            /* Does this range mix planes? The note under the card is shown only when it does,
+               because on a single-machine install it would be a paragraph about a situation
+               that does not apply, and a panel that explains absent caveats is one nobody
+               reads. Absent `planes_s` means the session predates the field, which can only be
+               a log-backed session, so the negation is the correct form of the question. */
+            'beacon_only' => ['type' => 'query', 'q' => 'planes_s:beacon_only'],
             'beaconed' => ['type' => 'query', 'q' => $human . ' AND ' . Query::POP_BEACON, 'facet' => [
                 'log_span_avg' => 'avg(log_span_ms_l)',
                 'log_span_p50' => 'percentile(log_span_ms_l,50)',
@@ -143,8 +155,11 @@ final class Overview extends Controller
         $population = (int) ($beaconed['count'] ?? 0);
         $humanCount = (int) ($humans['count'] ?? 0);
 
+        $beaconOnly = is_array($f['beacon_only'] ?? null) ? $f['beacon_only'] : [];
+
         return $this->envelope([
             'timing' => [
+                'beacon_only'      => (int) ($beaconOnly['count'] ?? 0),
                 'population'       => $population,
                 'humans'           => $humanCount,
                 'without_beacon'   => max(0, $humanCount - $population),
@@ -259,6 +274,61 @@ final class Overview extends Controller
     }
 
     /**
+     * What visitors typed into the site's own search box.
+     *
+     * A terms facet on `search_terms_ss`, which is populated from two places and reads the same
+     * from both: the log parser pulls the named parameters out of the request line for a host
+     * whose access log this installation reads, and the beacon reports them for a host it does
+     * not. So a search page on another server appears here beside one on this machine.
+     *
+     * COUNTED AS SESSIONS, not as searches, and the caption says so. The field is a per-session
+     * union capped at Beacon::MAX_SESSION_TERMS, so a visitor who ran the same search six times
+     * contributes one — which is the number worth having ("how many people looked for this")
+     * rather than the one that flatters ("how many times was this typed"). Publishing the
+     * second under the first's name is the class of quiet lie this product exists to stop.
+     *
+     * The population toggle is deliberately absent. Filtering to humans is one click away
+     * through the Verdict dimension, which scopes every card on the page at once, and a second
+     * per-card toggle would let two cards on one screen disagree about who they are describing.
+     *
+     * @return array<string,mixed>
+     */
+    private function searches(): array
+    {
+        $f = $this->gw->facet('overview.searches', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $this->sessionFqs(),
+        ], [
+            'terms' => [
+                'type'  => 'terms',
+                'field' => 'search_terms_ss',
+                'limit' => Security::clampInt($_GET['limit'] ?? null, 5, 50, 15),
+                'sort'  => 'count desc',
+            ],
+            'searched' => ['type' => 'query', 'q' => 'search_terms_ss:*'],
+        ]);
+
+        $rows = [];
+        foreach (self::buckets($f, 'terms') as $bucket) {
+            $rows[] = [
+                'term'     => (string) ($bucket['val'] ?? ''),
+                'sessions' => (int) ($bucket['count'] ?? 0),
+            ];
+        }
+
+        $searched = is_array($f['searched'] ?? null) ? $f['searched'] : [];
+
+        return $this->envelope([
+            'configured' => \Loghound\Beacon::normaliseParamNames(
+                (array) $this->cfg->get('beacon.query_params', [])
+            ),
+            'total'    => (int) ($f['count'] ?? 0),
+            'searched' => (int) ($searched['count'] ?? 0),
+            'rows'     => $rows,
+        ]);
+    }
+
+    /**
      * The static skeleton of the page.
      *
      * Contains headings, captions, table headers and empty states but no data: every
@@ -278,6 +348,35 @@ final class Overview extends Controller
             'Bucketing sessions by hour'
         );
         $this->pagesCard();
+        $this->searchesCard();
+        $this->pivotCard('ov-pivot', '06');
+    }
+
+    /**
+     * What they searched for, and an honest empty state when nothing is configured.
+     *
+     * The empty state matters more than the table here. A card that reads "no data" when the
+     * feature was never switched on sends an operator looking for a bug in their search page,
+     * so when `beacon.query_params` names nothing the card says that is why and where to change
+     * it — the front end swaps in that message rather than the generic one.
+     */
+    private function searchesCard(): void
+    {
+        self::cardOpen(
+            'ov-searches',
+            '05',
+            'What they searched for',
+            'Sessions that ran a search, by term.'
+        );
+        self::skeleton('ov-searches', 'rows', 0, 'Faceting search terms');
+
+        echo '<div class="table-wrap"><table id="ov-searches-table"><thead><tr>'
+            . '<th scope="col">Search term</th>'
+            . '<th scope="col" class="num">Sessions</th>'
+            . '<th scope="col" class="bar-col">Share</th>'
+            . '</tr></thead><tbody></tbody></table></div>';
+
+        self::cardClose('ov-searches');
     }
 
     /** The five headline counters. */
@@ -364,6 +463,11 @@ final class Overview extends Controller
             . '<p><strong>Log span is not one of the three.</strong> It comes from the access log, exists for every '
             . 'session, and is structurally blind to the final pageview. The other three come from the beacon and '
             . 'exist only for sessions where it ran — sessions without one are excluded, not counted as zero.</p>'
+            . '<p id="ov-timing-planes" hidden><strong>Some of this traffic has no access log behind it.</strong> '
+            . 'Sessions from a host measured by the beacon alone have no log span at all, so they contribute to '
+            . 'the three beacon clocks and to nothing else. The log-span figure therefore covers a smaller '
+            . 'population than the ones beside it, and the contrast between them is not like-for-like on a '
+            . 'mixed install. Filter by <em>Planes</em> to compare one kind at a time.</p>'
             . '</div>';
 
         self::cardClose('ov-timing');

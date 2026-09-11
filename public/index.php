@@ -81,6 +81,7 @@ declare(strict_types=1);
 require __DIR__ . '/../src/autoload.php';
 
 use Loghound\Config;
+use Loghound\Geo\Countries;
 use Loghound\Panel\Bots;
 use Loghound\Panel\Callers;
 use Loghound\Panel\Controller;
@@ -100,6 +101,7 @@ use Loghound\Panel\Query;
 use Loghound\Panel\Sessions;
 use Loghound\Panel\Settings;
 use Loghound\Panel\Usage;
+use Loghound\Panel\Vocabulary;
 use Loghound\Security;
 use Loghound\Setup\Installer;
 
@@ -208,16 +210,28 @@ $boot = [
     'tz'      => (string) $cfg->get('ui.timezone', 'UTC'),
     'query'   => $_SERVER['QUERY_STRING'] ?? '',
     'labels'  => Query::populationLabels(),
-    'filters' => (function (): array {
-        $out = [];
-        $allowed = Query::filterFields();
-        foreach ((array) ($_GET['f'] ?? []) as $field => $values) {
-            if (is_string($field) && isset($allowed[$field])) {
-                $out[$field] = array_values(array_filter((array) $values, 'is_string'));
-            }
-        }
-        return $out;
-    })(),
+
+    /* ONE country table, served once. Every surface in the panel shows a country as its flag
+       and its full English name — a facet list of `SC VE ZA` names nothing a reader knows —
+       and the mapping is Geo\Countries, in PHP, so there is exactly one of it. The browser
+       gets it here rather than shipping a second copy inside a module, which is how the two
+       drift. It is about 4 KB and the page is behind authentication and never cached. */
+    'countries' => Countries::all(),
+
+    /* ONE vocabulary table, on the same reasoning as the countries above. A verdict is stored as
+       `likely_human`, a fired signal as `fp_cluster_proxy_fleet`, a network type as `hosting`:
+       the right things to store, to filter on and to grep for, and the wrong things to print at
+       somebody who has not read src/Score/Rules.php. Panel\Vocabulary is the authority for the
+       words and for which values exist; assets/js/icons.js is the authority for the MARK in
+       front of one and for nothing else. */
+    'vocabulary' => Vocabulary::all(),
+
+    /* The whole filter state, straight from the one component that owns it: which values are
+       selected on each dimension, the boolean operator in force, and which operators that
+       dimension can offer. This used to be re-parsed out of `$_GET['f']` right here, which was a
+       fourth copy of the reading rules and knew nothing about the operator. */
+    'filters' => $view->facetLayer()->payload(),
+    'dimensions' => Query::filterFields(),
 ];
 
 header('Content-Type: text/html; charset=utf-8');

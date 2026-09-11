@@ -113,6 +113,17 @@
  * it can only ever include slightly MORE neighbouring traffic, never less, and the effect
  * on a >=5 threshold is negligible. Documented rather than hidden.
  *
+ * A SHARED PAIR OF INDEXES WIDENS THIS COUNT, AND THAT IS THE CHOICE, NOT AN OVERSIGHT. When
+ * several installations write into one pair, the facet below spans every site in it, so a
+ * fingerprint seen from three addresses on one site and three on another counts as six rather
+ * than as two separate threes. That is what `fp_cluster_proxy_fleet` is for: a rotating fleet
+ * working through an operator's sites in turn is precisely the pattern that is invisible from
+ * inside any one of them, and scoping the count per host or per installation would hide the
+ * only case where cross-site correlation adds anything. It does mean the rule is more likely
+ * to fire on a shared pair than on a private one — a NAT gateway shared by visitors to several
+ * of the operator's sites reaches five addresses sooner — which is why it is worth 45 points
+ * and designed to be corroborated rather than decisive alone.
+ *
  * unique() is an approximation above about 100 values by default, which is fine here: the
  * rule asks "is this at least 5", and the approximation is exact well below that. If Solr
  * is unreachable, every fingerprint in the chunk stays UNKNOWN (null), which makes
@@ -140,6 +151,18 @@
  * ---------------------------------------------------------------------------------
  * STEP 6 — THE DAILY ROLLUP
  * ---------------------------------------------------------------------------------
+ * SEVERAL INSTALLATIONS MAY WRITE THE SAME ROLLUP, and the recompute below is what makes that
+ * safe rather than merely tolerable. When a pair of indexes is shared, every installation's
+ * facet query covers every session document in the index — its own and the others' — so they
+ * all compute the SAME numbers for a day and write the same document at the same deterministic
+ * id. The last writer wins with a value identical to the one it replaced. An atomic increment,
+ * which is the design this one deliberately rejects, would instead have each installation add
+ * its own sessions to a shared counter and the day would be inflated by the number of writers.
+ *
+ * The rollup therefore carries NO `install_s`. It is a statement about the index, not about an
+ * installation, and stamping a writer onto a document that several writers produce identically
+ * would make the field flap between runs while meaning nothing.
+ *
  * Recomputed from the sessions core rather than incremented. An atomic `inc` would be one
  * cheap call, and it would be WRONG: send() retries a request whose response was lost, and
  * a retried increment double-counts. Recomputing the whole day with one facet query is
@@ -221,6 +244,22 @@ $all         = $cfg->all();
 $hitsCore    = (string) $cfg->get('solr.hits_core');
 $sessionCore = (string) $cfg->get('solr.sessions_core');
 
+/**
+ * This installation's own id, stamped onto every session document it writes.
+ *
+ * A pair of indexes may be shared by several installations on different machines, some
+ * contributing a log plane and some only a beacon. `install_s` is what makes a destructive
+ * operation scopeable to the documents this installation actually wrote, and it is the only
+ * thing in the data model that distinguishes writers. It is NOT a filter the panel applies:
+ * the whole point of a shared pair is that one dashboard shows every site in it, told apart
+ * by `host_s`.
+ *
+ * Validated to the same shape Config::coreName() demands, so a hand-edited configuration
+ * cannot put an arbitrary string into a field that delete queries are built from.
+ */
+$installId = (string) $cfg->get('solr.install_id', '');
+$installId = preg_match('/^[a-f0-9]{4,32}$/', $installId) === 1 ? $installId : '';
+
 try {
     $solr = new Solr((array) $cfg->get('solr', []));
     $rules = new Rules((array) $cfg->get('scoring', []));
@@ -287,6 +326,20 @@ $batch = array_merge($closed, $open);
 $docs      = [];
 $mergedIds = [];
 
+/**
+ * Beacon-minted session ids whose staged rows turned out to belong to a log-backed session
+ * after all, and which may therefore have a standalone document of their own to remove.
+ *
+ * Narrowed twice, because a delete-by-query per beaconed session per run would be real cost for
+ * an answer that is almost always "nothing there". Only rows the collector recorded a HOSTNAME
+ * on can ever have become a standalone document, and only a session that has CLOSED is looking
+ * at its rows for the last time — so the set is at most one entry per settled session on an
+ * allowlisted host, which is the same order as the upsert it rides in front of.
+ *
+ * @var array<string,bool>
+ */
+$superseded = [];
+
 foreach ($batch as $session) {
     $sid = (string) $session['session_id'];
     $provisional = isset($isProvisional[$sid]);
@@ -305,13 +358,150 @@ foreach ($batch as $session) {
                         $mergedIds[] = (int) $row['id'];
                     }
                 }
+                foreach ($rows as $row) {
+                    $staged  = (string) ($row['session_id'] ?? '');
+                    $payload = isset($row['payload']) && is_array($row['payload']) ? $row['payload'] : [];
+                    if ($staged !== $sid
+                        && (string) ($payload['host'] ?? '') !== ''
+                        && preg_match(\Loghound\Beacon::PROVISIONAL_ID, $staged) === 1) {
+                        $superseded[$staged] = true;
+                    }
+                }
             }
         } catch (\Throwable $e) {
             $log('beacon merge failed for ' . $sid . ': ' . $e->getMessage());
         }
     }
 
+    $doc['planes_s'] = !empty($doc['beacon_b']) ? 'log_beacon' : 'log_only';
+
     $docs[$sid] = $doc;
+}
+
+/*
+ * ---------------------------------------------------------------------------------
+ * STEP 2b — STANDALONE SESSIONS
+ * ---------------------------------------------------------------------------------
+ * A beacon on a host this installation has no access log for. There is no log line
+ * coming, so nothing will ever claim these rows by client key, and merge-only would
+ * mean the site is measured and never appears. They are published as sessions of their
+ * own, at the id the collector minted, marked `planes_s:beacon_only`.
+ *
+ * THE THREE GATES, and a group has to pass all of them:
+ *
+ *   1. The collector recorded a hostname on the rows at all. It does that only when the
+ *      hostname the page reported agreed with the Origin the browser set AND appeared on
+ *      `beacon.allowed_hosts` (public/collect.php, lh_site()). A group with no hostname is
+ *      an ordinary merge-only beacon and is left alone to be claimed or purged.
+ *   2. No log source covers that hostname — hostHasLogSource(), derived from evidence.
+ *   3. The beacon merger is available and the feature has somewhere to write.
+ *
+ * PROVISIONAL FIRST, SETTLED WHEN QUIET, exactly like an open log session and for the same
+ * reason: a site whose sessions appeared only half an hour after the visit would look
+ * broken to the person who just installed the snippet. A group whose newest row is younger
+ * than the idle timeout is published provisional and its rows are left UNMERGED, so the
+ * next run recomputes the whole group rather than accumulating; once it has gone quiet the
+ * document is rewritten in final form at the same id and the rows are consumed.
+ *
+ * SUPERSESSION — the case that could duplicate. A host that is standalone today may gain a
+ * log source tomorrow: the operator adds the vhost, or moves the site onto this machine.
+ * From that moment both planes describe the same visit. Three things make that produce one
+ * session rather than two. Gate 2 flips as soon as hits appear, so nothing new is promoted.
+ * The staged rows of a visit in flight are claimed by the log session through the client
+ * key, which is the mechanism that has always existed for a beacon that arrived before its
+ * log line. And any PROVISIONAL standalone document already published for those rows is
+ * deleted by id before this run indexes anything — `$superseded`, collected in the merge
+ * loop above. History is untouched: a session that really was beacon-only when it happened
+ * stays beacon-only, because a reconfiguration today is not evidence about last week.
+ */
+$standaloneCandidates = [];
+if ($beaconMerger !== null && $beaconMerger->allowedHosts() !== []) {
+    $covered = coveredHosts($solr, $hitsCore);
+    if ($covered === null) {
+        $log('standalone: host coverage unknown, publishing nothing this run');
+    }
+
+    $idleSeconds = \Loghound\Security::clampInt($cfg->get('ingest.session_idle_sec'), 60, 86400, 1800);
+
+    try {
+        $groups = $state->unmergedBeaconGroups(PROVISIONAL_BATCH);
+    } catch (\Throwable $e) {
+        $log('standalone: listing beacon groups failed: ' . $e->getMessage());
+        $groups = [];
+    }
+
+    foreach ($groups as $group) {
+        $sid = (string) $group['session_id'];
+        if (isset($docs[$sid]) || isset($superseded[$sid])) {
+            continue;
+        }
+        if (preg_match(\Loghound\Beacon::PROVISIONAL_ID, $sid) !== 1) {
+            continue;
+        }
+
+        try {
+            $rows = $state->beaconsFor($sid, null);
+        } catch (\Throwable $e) {
+            $log('standalone: reading rows for ' . $sid . ' failed: ' . $e->getMessage());
+            continue;
+        }
+        if ($rows === []) {
+            continue;
+        }
+
+        $host = '';
+        foreach ($rows as $row) {
+            $payload = isset($row['payload']) && is_array($row['payload']) ? $row['payload'] : [];
+            $host = \Loghound\Beacon::normaliseHost($payload['host'] ?? '');
+            if ($host !== '') {
+                break;
+            }
+        }
+        if ($host === '' || hostHasLogSource($host, $covered)) {
+            continue;
+        }
+
+        $clientKey = (string) $group['client_key'];
+        $provisional = ((int) $group['last_ts']) > ($now - $idleSeconds);
+
+        try {
+            $doc = buildStandaloneDoc($rows, $clientKey, $host, $sid);
+            $doc = $beaconMerger->mergeIntoSession($doc, $rows);
+        } catch (\Throwable $e) {
+            $log('standalone: building ' . $sid . ' failed: ' . $e->getMessage());
+            continue;
+        }
+
+        $doc['planes_s'] = 'beacon_only';
+        if ($provisional) {
+            $doc['provisional_b'] = true;
+        } else {
+            foreach ($rows as $row) {
+                if (isset($row['id'])) {
+                    $mergedIds[] = (int) $row['id'];
+                }
+            }
+        }
+
+        $docs[$sid] = $doc;
+        if ($provisional) {
+            $isProvisional[$sid] = true;
+        }
+
+        $standaloneCandidates[] = [
+            'session_id'   => $sid,
+            'client_key'   => $clientKey,
+            'ts_start'     => (int) $group['first_ts'],
+            'ts_end'       => (int) $group['last_ts'],
+            'first'        => $doc,
+            '_beacon_only' => true,
+        ];
+    }
+
+    if ($standaloneCandidates !== []) {
+        $batch = array_merge($batch, $standaloneCandidates);
+        $log('standalone: ' . count($standaloneCandidates) . ' beacon-only session(s)');
+    }
 }
 
 $beaconDeployed = false;
@@ -412,6 +602,7 @@ foreach ($batch as $session) {
             'beacon_deployed' => $beaconDeployed,
             'site_sends_304'  => $siteSends304,
             'provisional'     => $provisional,
+            'no_transport'    => !empty($session['_beacon_only']),
         ]);
     } catch (\Throwable $e) {
         fwrite(STDERR, 'Loghound: scoring failed for session ' . $sid . ': ' . $e->getMessage() . "\n");
@@ -424,16 +615,52 @@ foreach ($batch as $session) {
     $doc['bot_class_s']    = (string) $verdict['class'];
     $doc['rule_version_i'] = (int) $verdict['rule_version'];
 
+    if ($installId !== '') {
+        $doc['install_s'] = $installId;
+    }
+
     $ready[] = $doc;
 
     if ($provisional) {
-        $publishedOpen[] = $session;
+        if (empty($session['_beacon_only'])) {
+            $publishedOpen[] = $session;
+        }
     } else {
         $days[gmdate('Y-m-d', (int) $session['ts_start'])] = true;
     }
 }
 
 $docs = $ready;
+
+/*
+ * Remove any standalone document whose visit turned out to have a log line behind it.
+ *
+ * BEFORE the upsert, not after: a run that indexed the log-backed session and then failed
+ * would leave both documents in the index, and the duplicate is the thing this exists to
+ * prevent. Deleting first means a failure leaves the OLD state — the standalone document
+ * gone, the log-backed one arriving on the next run — which is a gap, not a double count.
+ *
+ * The ids are matched against Beacon::PROVISIONAL_ID before they are built into a filter, so
+ * the literal is forty-one characters of `b` and lowercase hex and can carry nothing else.
+ * Chunked so one filter stays far inside Solr::assertSafeFilter()'s length ceiling.
+ */
+if ($superseded !== []) {
+    foreach (array_chunk(array_keys($superseded), 100) as $chunk) {
+        $safe = array_values(array_filter(
+            $chunk,
+            static fn (string $id): bool => preg_match(\Loghound\Beacon::PROVISIONAL_ID, $id) === 1
+        ));
+        if ($safe === []) {
+            continue;
+        }
+        try {
+            $solr->deleteByQuery($sessionCore, 'id:(' . implode(' ', $safe) . ')');
+            $log('superseded ' . count($safe) . ' standalone document(s) now covered by a log source');
+        } catch (\Throwable $e) {
+            $log('superseding standalone documents failed: ' . $e->getMessage());
+        }
+    }
+}
 
 if ($docs !== []) {
     try {
@@ -549,6 +776,9 @@ function buildSessionDoc(array $session, bool $provisional = false): array
     if (!empty($session['paths'])) {
         $doc['paths_ss'] = array_values($session['paths']);
     }
+    if (!empty($session['terms'])) {
+        $doc['search_terms_ss'] = array_values($session['terms']);
+    }
 
     foreach ((array) ($session['first'] ?? []) as $field => $value) {
         if (str_starts_with((string) $field, '_')) {
@@ -558,6 +788,193 @@ function buildSessionDoc(array $session, bool $provisional = false): array
     }
 
     return $doc;
+}
+
+/**
+ * Build the BASE document for a STANDALONE session — a visit measured by the beacon alone.
+ *
+ * The counterpart of buildSessionDoc() for a host whose access log is not one of this
+ * installation's sources. There is no aggregate, no log line and no transport plane: the only
+ * evidence is the staged beacon rows, plus the facts the collector read off each of those
+ * connections. Everything the execution plane knows is folded on afterwards by
+ * Beacon::mergeIntoSession(), exactly as it is for a log-backed session, so there is one
+ * definition of what the beacon contributes rather than two that can drift.
+ *
+ * WHAT IS DELIBERATELY NOT ON THIS DOCUMENT, and this is the important half of the function.
+ * No `hits_i`, `pages_i`, `assets_i`, `bytes_l`, status counters, `got_304_b`, `asset_ratio_f`,
+ * `log_span_ms_l` or gap statistics. Not zero — ABSENT. A zero in any of those is a
+ * measurement, and a measurement nobody made is a fabrication: `asset_ratio_f: 0.0` would read
+ * as "this client fetched only markup", which is a bot signal, on a visitor whose asset
+ * fetching was never observable from here. SPEC §1 forbids exactly this. The scoring side is
+ * defended separately, by Rules::TRANSPORT_CODES, because silence on the document and silence
+ * in the ruleset are two different guarantees and this product needs both.
+ *
+ * `planes_s` is `beacon_only`, which is what every count that mixes populations splits on.
+ *
+ * WHAT IT DOES CARRY. The hostname the page reported, cross-checked against the browser's
+ * Origin and against the operator's allowlist before the collector ever staged it — so the
+ * session sits in the Virtual host dimension beside the hosts that come from log lines. The
+ * address, under the configured privacy mode, exactly like a log hit. The network prefix,
+ * recovered from the client key rather than recomputed, because the collector derived it from
+ * the TRUE address before the privacy transform and the client key is where that already
+ * lives. And the User-Agent, which the collector read off the connection and which
+ * Enrich\Ua turns into browser, OS and device — a purely local parse with no lookup, so it
+ * costs the run nothing.
+ *
+ * The times are the arrival times of the first and last staged row. They are the honest
+ * answer: what the server knows is when the beacons reached it.
+ *
+ * @param array<int,array<string,mixed>> $rows      Staged rows, oldest first.
+ * @param string                         $clientKey The group's client key, `ip_net|ua_hash`.
+ * @param string                         $host      The hostname, already validated by the collector.
+ * @return array<string,mixed>
+ */
+function buildStandaloneDoc(array $rows, string $clientKey, string $host, string $sessionId): array
+{
+    $first = [];
+    $last  = [];
+    foreach ($rows as $row) {
+        $payload = isset($row['payload']) && is_array($row['payload']) ? $row['payload'] : $row;
+        if ($first === []) {
+            $first = $payload;
+        }
+        $last = $payload;
+    }
+
+    $firstTs = (int) ($rows[0]['received_at'] ?? time());
+    $lastTs  = (int) ($rows[count($rows) - 1]['received_at'] ?? $firstTs);
+
+    $doc = [
+        'id'         => $sessionId,
+        'doc_type_s' => 'session',
+        'ts_start'   => gmdate('Y-m-d\TH:i:s\Z', $firstTs),
+        'ts_end'     => gmdate('Y-m-d\TH:i:s\Z', max($firstTs, $lastTs)),
+        'host_s'     => $host,
+        'planes_s'   => 'beacon_only',
+        'beacon_b'   => false,
+    ];
+
+    $ip = (string) ($first['ip'] ?? '');
+    if ($ip !== '') {
+        $doc['ip_s'] = $ip;
+    }
+
+    $net = strstr($clientKey, '|', true);
+    if (is_string($net) && $net !== '' && $net !== '-') {
+        $doc['ip_net_s'] = $net;
+        $doc['ip_ver_i'] = str_contains($net, ':') ? 6 : 4;
+    }
+
+    $ua = (string) ($last['ua'] ?? ($first['ua'] ?? ''));
+    if ($ua !== '' && class_exists('\\Loghound\\Enrich\\Ua')) {
+        $doc['ua_s'] = $ua;
+        foreach (\Loghound\Enrich\Ua::parse($ua)->fields() as $field => $value) {
+            if ($value !== null && $value !== '') {
+                $doc[$field] = $value;
+            }
+        }
+    }
+    if (!isset($doc['ua_hash_s']) && isset($first['ua_hash']) && is_string($first['ua_hash'])) {
+        $doc['ua_hash_s'] = $first['ua_hash'];
+    }
+
+    $paths = [];
+    foreach ($rows as $row) {
+        $payload = isset($row['payload']) && is_array($row['payload']) ? $row['payload'] : $row;
+        $path = (string) ($payload['path'] ?? '');
+        if ($path !== '' && !isset($paths[$path]) && count($paths) < 50) {
+            $paths[$path] = true;
+        }
+    }
+    if ($paths !== []) {
+        $doc['paths_ss']     = array_keys($paths);
+        $doc['uniq_paths_i'] = count($paths);
+        $doc['entry_path_s'] = (string) array_key_first($paths);
+        $doc['exit_path_s']  = (string) ($last['path'] ?? array_key_first($paths));
+    }
+
+    return $doc;
+}
+
+/**
+ * Is this hostname already covered by a log source in this installation?
+ *
+ * THE MODE DECISION, and it is derived rather than configured. `beacon.allowed_hosts` says
+ * which hosts may report at all; this says which of those already have a transport plane here.
+ * A host in both is MERGE mode — today's behaviour exactly, the log is the authority on facts
+ * and the beacon on time, and the staged rows are claimed by client key the moment the tailer
+ * opens a session. A host only in the allowlist is STANDALONE mode. Asking the operator to
+ * declare the mode as well would be asking them to restate, in a second place, something the
+ * system can observe, and the two would drift the first time a site moved.
+ *
+ * EVIDENCE, NOT CONFIGURATION, for the same reason `beacon_deployed` and `site_sends_304` are:
+ * configuration says what somebody intended and evidence says what is true, and only the
+ * second is safe to act on. A source may name its vhost explicitly, or take it from `%v` in a
+ * format that serves fifty of them, so the configured `sources` list simply does not know the
+ * answer. One terms facet on `host_s` over the recent hits does.
+ *
+ * The window is seven days, which is long enough that a quiet weekend on a low-traffic vhost
+ * does not make it look uncovered, and short enough that a site REMOVED from the log sources a
+ * month ago is correctly treated as standalone again.
+ *
+ * FAILS CLOSED. If Solr cannot be reached the answer is "covered", so nothing is published as
+ * standalone during an outage. The cost of that is a delay: the beacons stay staged, unmerged,
+ * and the next healthy run publishes them. The cost of the other direction would be a
+ * duplicate session for every visit during the outage, published as single-plane and with its
+ * log-backed twin arriving later — and there is no undo for that.
+ *
+ * Answered once per run for the whole batch, because it is one query whatever the number of
+ * candidates.
+ *
+ * @param array<string,bool>|null $covered Resolved host set, or null when Solr failed.
+ */
+function hostHasLogSource(string $host, ?array $covered): bool
+{
+    if ($covered === null) {
+        return true;
+    }
+    return isset($covered[$host]);
+}
+
+/**
+ * The set of virtual hosts this installation has actually ingested log lines for.
+ *
+ * One terms facet, capped. The cap is generous rather than unbounded: a machine with more
+ * virtual hosts than this has a different problem, and an unbounded terms facet on a string
+ * field is a way to ask Solr for every distinct value it has ever seen.
+ *
+ * @return array<string,bool>|null Null when the query failed, which callers read as "assume
+ *                                 covered" — see hostHasLogSource().
+ */
+function coveredHosts(Solr $solr, string $hitsCore): ?array
+{
+    try {
+        $res = $solr->jsonFacet(
+            $hitsCore,
+            [
+                'q'  => '*:*',
+                'fq' => ['ts:[NOW-7DAYS TO NOW]'],
+                'rows' => 0,
+            ],
+            ['hosts' => ['type' => 'terms', 'field' => 'host_s', 'limit' => 500, 'mincount' => 1]]
+        );
+    } catch (\Throwable $e) {
+        return null;
+    }
+
+    $buckets = $res['hosts']['buckets'] ?? null;
+    if (!is_array($buckets)) {
+        return null;
+    }
+
+    $out = [];
+    foreach ($buckets as $bucket) {
+        $val = \Loghound\Beacon::normaliseHost($bucket['val'] ?? '');
+        if ($val !== '') {
+            $out[$val] = true;
+        }
+    }
+    return $out;
 }
 
 /**

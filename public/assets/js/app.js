@@ -15,6 +15,7 @@ import { boot, initCopyButtons, initTheme } from './core.js';
 import { initCharts } from './charts.js';
 import { initDetail } from './detail.js';
 import { initFilterBar } from './facets.js';
+import { initFacetControls } from './facetfilter.js';
 import { initSortableTables } from './sorttable.js';
 
 import overview from './views/overview.js';
@@ -76,6 +77,7 @@ function start() {
     initBandwidthStrip();
     initHostPicker();
     initFilterBar();
+    initFacetControls();
     initDetail();
     initSortableTables();
 

@@ -27,6 +27,7 @@
 
 import { api, byId, dec, el, hideEmpty, num, pct, setPop, showEmpty } from '../core.js';
 import { dispose, lines, tokens } from '../charts.js';
+import { basisNote, operatorControl, toggleUrl } from '../facetfilter.js';
 
 /** The in-flight or resolved index list, shared by every card on a page. */
 let listPromise = null;
@@ -176,6 +177,17 @@ export function handleState(emptyId, data, what) {
  * Everything below builds URLs and anchors. A filtered page is a link somebody can send.
  * ---------------------------------------------------------------------- */
 
+/**
+ * The query-string namespace for this plane.
+ *
+ * `lf`, not `f`, and the separation is load-bearing rather than tidy: these field names exist on
+ * the platform's analytics shards and none of Loghound's own fields does. One namespace would mean
+ * every chip set on the session explorer arrived here as a field the request log has never heard
+ * of, and an `fq` naming an absent field matches nothing — so every figure would read zero under a
+ * chip that looked like it was working.
+ */
+const LF = 'lf';
+
 /** Field labels, matching OpensolrView::logFilterFields(). */
 const FILTER_LABELS = {
     path: 'Handler',
@@ -191,25 +203,22 @@ const OUTCOME_LABELS = {
     slow: 'Slow answers'
 };
 
-/** The current URL with one request-log filter value added. */
+/**
+ * The current URL with one request-log filter value added.
+ *
+ * Delegated to the one reader-writer of the filter contract, with `lf` as the namespace. Kept as
+ * an exported name because three views call it, but it no longer knows the encoding: the reserved
+ * `op` key and the rule that an absent operator means "any of" are facetfilter.js's, and a second
+ * implementation of them here is what made this plane's filters behave differently from the rest
+ * of the panel's.
+ */
 export function lfAdd(field, value) {
-    const params = new URLSearchParams(window.location.search);
-    params.append('lf[' + field + '][]', value);
-    params.delete('start');
-    return '?' + params.toString();
+    return toggleUrl(field, value, LF);
 }
 
-/** The current URL with one request-log filter value removed. */
+/** The current URL with one request-log filter value removed. The same gesture, same function. */
 export function lfRemove(field, value) {
-    const params = new URLSearchParams(window.location.search);
-    const key = 'lf[' + field + '][]';
-    const kept = params.getAll(key).filter((v) => v !== value);
-    params.delete(key);
-    for (const v of kept) {
-        params.append(key, v);
-    }
-    params.delete('start');
-    return '?' + params.toString();
+    return toggleUrl(field, value, LF);
 }
 
 /** The current URL with a parameter replaced, or removed when the value is null. */
@@ -256,11 +265,18 @@ function renderActive(id, data) {
     }
     const chips = [];
 
-    for (const field of Object.keys(data.active || {})) {
-        for (const value of data.active[field]) {
-            chips.push(el('a', { href: lfRemove(field, value), title: 'Remove this filter' }, [
-                el('span', { text: (FILTER_LABELS[field] || field) + ': ' + value }),
-                el('span', { text: '×' })
+    for (const dim of (data.filters && data.filters.dimensions) || []) {
+        const excluded = dim.op === 'none';
+        for (const value of dim.values) {
+            chips.push(el('a', {
+                class: excluded ? 'excluded' : '',
+                href: toggleUrl(dim.field, value, LF),
+                title: excluded ? 'Stop excluding this value' : 'Remove this filter'
+            }, [
+                el('span', {
+                    text: (FILTER_LABELS[dim.field] || dim.field) + ': ' + (excluded ? 'not ' : '') + value
+                }),
+                el('span', { text: '\u00d7' })
             ]));
         }
     }
@@ -325,21 +341,32 @@ function renderRail(id, data) {
     if (!mount) {
         return;
     }
-    const groups = (data.groups || []).map((group) => el('div', {}, [
+    const groups = (data.groups || []).map((group) => el('div', { class: 'facet', dataset: { field: group.field, ns: LF } }, [
         el('h3', { text: group.label }),
+        operatorControl(group),
         el('ul', {}, group.buckets.map((bucket) => {
-            const on = isActive(data.active, group.field, bucket.value);
+            const state = bucket.state || (isActive(data.active, group.field, bucket.value) ? 'on' : 'off');
+            const verb = state === 'on' ? 'Remove ' : (state === 'excluded' ? 'Stop excluding ' : 'Filter to ');
             return el('li', {}, [
                 el('a', {
-                    class: on ? 'on' : '',
-                    href: on ? lfRemove(group.field, bucket.value) : lfAdd(group.field, bucket.value),
-                    title: (on ? 'Remove ' : 'Filter to ') + group.label + ': ' + bucket.value
+                    class: state === 'on' ? 'on' : (state === 'excluded' ? 'excluded' : ''),
+                    href: toggleUrl(group.field, bucket.value, LF),
+                    title: verb + group.label + ': ' + bucket.value
                 }, [
+                    el('span', {
+                        class: 'fm',
+                        'aria-hidden': 'true',
+                        text: state === 'on' ? '\u2713' : (state === 'excluded' ? '\u2212' : '')
+                    }),
                     el('span', { class: 'fv', text: bucket.value }),
-                    el('span', { class: 'fc', text: num(bucket.count) })
+                    el('span', {
+                        class: 'fc',
+                        text: bucket.count === null || bucket.count === undefined ? '\u2014' : num(bucket.count)
+                    })
                 ])
             ]);
-        }))
+        })),
+        basisNote(group)
     ]));
 
     mount.replaceChildren(...groups);
@@ -365,10 +392,10 @@ export function renderFilters(id, data) {
     const note = byId(id + '-note');
     if (note) {
         const parts = [
-            'Each column lists the ' + num(data.limit) + ' most common values under the filters ' +
-                'currently set, so picking one narrows the others. The platform cannot compute a facet ' +
-                'that excludes its own filter, so a narrowed column is expected — remove the chip above ' +
-                'to widen it again.'
+            'Each column lists the ' + num(data.limit) + ' most common values. Picking a value narrows ' +
+                'every OTHER column and leaves its own complete, so a second value can always be added ' +
+                'to the same column — each filtered column is counted again with its own filter lifted, ' +
+                'which is what the sentence under it says.'
         ];
         if ((data.ignored || []).length) {
             parts.push('Not applied here: ' + data.ignored.join(', ') + '. Those filters describe web ' +

@@ -123,7 +123,14 @@ final class Parser
             'src'            => '',
             'internal_hosts' => [],
             'beacon_paths'   => ['/collect.php', '/lh/collect', '/loghound/collect.php'],
+            'search_params'  => [],
+            'install_id'     => '',
         ];
+
+        $this->opts['search_params'] = Beacon::normaliseParamNames((array) $this->opts['search_params']);
+
+        $installId = (string) $this->opts['install_id'];
+        $this->opts['install_id'] = preg_match('/^[a-f0-9]{4,32}$/', $installId) === 1 ? $installId : '';
     }
 
     /**
@@ -260,12 +267,38 @@ final class Parser
      *
      * The document is assembled in sections, and each one has decisions behind it.
      *
-     * Identity and time. The id is idempotent — derived from the file and the byte offset —
-     * so re-ingesting the same file after a crash overwrites rather than duplicates, which
-     * is what lets the tail daemon restart from a stale offset safely. `ts` is written as an
-     * ISO-8601 instant in UTC with a trailing Z, which is what Solr's pdate wants.
+     * Identity and time. The id is idempotent — derived from the installation, the file and the
+     * byte offset — so re-ingesting the same file after a crash overwrites rather than
+     * duplicates, which is what lets the tail daemon restart from a stale offset safely. `ts` is
+     * written as an ISO-8601 instant in UTC with a trailing Z, which is what Solr's pdate wants.
+     *
+     * THE INSTALLATION ID IS IN THE HIT ID, AND THAT IS NOT DECORATION. One pair of indexes may
+     * be shared by SEVERAL installations on different machines — that is the point of pointing a
+     * new install at an existing `loghound_<hex>_hits`/`_sessions` pair. Two machines both
+     * tailing `/var/log/apache2/access.log` produce the same `$src` and the same byte offsets,
+     * so `sha1($src . ':' . $offset)` gave them IDENTICAL document ids, and a Solr update with a
+     * duplicate uniqueKey is a delete-and-add: each machine would have silently overwritten the
+     * other's traffic, one request at a time, with no error anywhere. Mixing the installation id
+     * in removes the collision while keeping the idempotency that matters, because re-ingest is
+     * always the SAME installation reading the same file again.
+     *
+     * A NUL separator is used for the reason it is used in the beacon token: it cannot occur in
+     * an install id or a path, so no pair of values can be made to collide by moving the
+     * boundary. An empty install id reproduces the old ids exactly, so an installation that has
+     * not got one — only a test harness, in practice — is unaffected.
+     *
+     * `install_s` carries the same value onto the document, so a destructive operation can be
+     * scoped to the documents this installation actually wrote. See bin/loghound-retention.
      *
      * Request line. Path depth counts real segments, so '/a/b/c' is 3 and '/' is 0.
+     *
+     * Search terms. `query_s` keeps the whole query string, stored and unfaceted, for the
+     * reasons written next to it in the schema. `search_terms_ss` is the opposite: the values
+     * of the parameters the operator NAMED in `beacon.query_params`, and nothing else out of
+     * the URL, as a faceted dimension. A site whose access log this installation reads
+     * therefore gets its visitors' searches with no beacon involved at all — which is the
+     * whole reason the extraction lives here rather than only on the beacon path. The field
+     * is absent when no parameter was named or none was present; see Beacon::searchTerms().
      *
      * Host. When the format has no %v, the vhost is the one the operator told us this file
      * serves. Either way a :port suffix is stripped and the host lowercased, because hosts
@@ -321,8 +354,16 @@ final class Parser
     ): ?array {
         $doc = [];
 
-        $doc['id']    = sha1($src . ':' . $offset);
+        $installId = (string) $this->opts['install_id'];
+
+        $doc['id']    = $installId === ''
+            ? sha1($src . ':' . $offset)
+            : sha1($installId . "\0" . $src . ':' . $offset);
         $doc['src_s'] = self::sanitizeText($src, 512) ?? $src;
+
+        if ($installId !== '') {
+            $doc['install_s'] = $installId;
+        }
 
         $ts = $this->extractTimestamp($raw, $timeFormat);
         if ($ts === null) {
@@ -343,6 +384,11 @@ final class Parser
         $doc['path_s'] = $req['path'];
         self::put($doc, 'query_s', $req['query']);
         self::put($doc, 'proto_s', self::normalizeProto($req['proto'] ?? ($raw['proto'] ?? null)));
+
+        $terms = Beacon::searchTerms((string) ($req['query'] ?? ''), (array) $this->opts['search_params']);
+        if ($terms !== []) {
+            $doc['search_terms_ss'] = $terms;
+        }
 
         $doc['path_depth_i'] = count(array_filter(explode('/', $req['path']), 'strlen'));
 

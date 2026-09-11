@@ -17,7 +17,14 @@
  *      middle-clicked into a new tab, and the resulting state is in the URL where it can be
  *      bookmarked and screenshotted.
  *
- *   3. PARSED FACTS, NOT THE RAW STRING. A User-Agent in a list column is a truncated
+ *   3. A MARK PER CATEGORY. Every dimension with a closed vocabulary — verdict, browser,
+ *      operating system, device class, network type, bot class, referrer type — renders a
+ *      small drawn mark in front of its value, from assets/js/icons.js. It is added inside
+ *      dimValue() rather than at each call site, which is what makes the facet list, the
+ *      table cell, the session row and the detail dialog agree without any of them knowing
+ *      about it. The mark is aria-hidden and the word beside it never goes away.
+ *
+ *   4. PARSED FACTS, NOT THE RAW STRING. A User-Agent in a list column is a truncated
  *      sausage that tells the reader nothing, and three identical ones tell them less. The
  *      parser already produced browser_s, browser_ver_i, os_s, device_s, ua_bot_name_s and
  *      ua_bot_cat_s at ingest; those are what a table shows. The raw string belongs in the
@@ -31,40 +38,28 @@
 
 'use strict';
 
-import { el, num, urlAddFilter } from './core.js';
+import { boot, el, num } from './core.js';
+import { toggleUrl } from './facetfilter.js';
 import { countryName } from './geo.js';
+import { icon } from './icons.js';
 
 /**
- * Field → label, mirroring Panel\Query::filterFields() exactly.
+ * Field → label, from the server's own filter allowlist.
  *
- * THIS LIST IS THE FILTERABLE SET. A dimension that is not here cannot be filtered on,
- * because Controller::readFilters() drops any field the server-side allowlist does not
- * carry — so rendering a link for one would produce a control that silently does nothing.
- * dimValue() therefore falls back to plain text for anything absent, and the gap is reported
- * rather than worked around. Absent today and needed: `ua_bot_name_s`, `city_s`, `region_s`,
- * `asn_i` and `paths_ss`. They are rendered as text until Query.php carries them.
+ * THIS LIST IS THE FILTERABLE SET, and it is no longer retyped here. It was a hand-kept copy of
+ * Panel\Query::filterFields() and it had drifted: `ua_bot_name_s`, `city_s`, `region_s`, `asn_i`
+ * and `paths_ss` were all in the server's allowlist and missing from this table, so the panel
+ * rendered five dimensions as plain text and DROPPED a filter on any of them out of the URL it had
+ * itself been given — the server honoured the chip and the browser refused to draw it.
+ *
+ * It arrives in the boot payload, which is the same answer the country names and the value
+ * vocabulary got, for the same reason: one table in PHP, served once, nothing to keep in step.
+ * The fallback is an empty set rather than a guessed one, so a page served without the payload
+ * renders values as text instead of inventing controls.
+ *
+ * @type {Object<string,string>}
  */
-export const FILTER_LABELS = {
-    host_s: 'Virtual host',
-    bot_verdict_s: 'Verdict',
-    bot_class_s: 'Bot class',
-    as_type_s: 'Network type',
-    country_s: 'Country',
-    browser_s: 'Browser',
-    os_s: 'OS',
-    device_s: 'Device',
-    ua_bot_cat_s: 'Declared bot category',
-    referer_type_s: 'Referrer type',
-    bot_reasons_ss: 'Signal fired',
-    as_org_s: 'AS organisation',
-    netname_s: 'Netname',
-    fp_hash_s: 'Fingerprint',
-    ip_s: 'IP',
-    session_id_s: 'Session',
-    sec_ch_ua_s: 'Client hints (Sec-CH-UA)',
-    sec_ch_platform_s: 'Client platform',
-    tls_proto_s: 'TLS version'
-};
+export const FILTER_LABELS = boot.dimensions || {};
 
 /** Is this dimension one the dashboard can actually be filtered by? */
 export function isFilterable(field) {
@@ -151,41 +146,128 @@ export function flagNode(code) {
  * ---------------------------------------------------------------------- */
 
 /**
+ * The words for a stored value, or null when the dimension holds real-world text already.
+ *
+ * Read from the boot payload, which carries Panel\Vocabulary once per page for the same reason it
+ * carries the country names once: two copies of a table are two tables that drift. A value the
+ * table does not know answers null, and the caller renders the value itself — never a
+ * wrong-but-plausible label and never a blank.
+ *
+ * @returns {{label: string, why: string}|null}
+ */
+export function valueWords(field, value) {
+    const table = boot.vocabulary && boot.vocabulary[field];
+    if (!table) {
+        return null;
+    }
+    return table[String(value)] || null;
+}
+
+/**
+ * What a person reads for this value: the label when there is one, the value itself otherwise.
+ *
+ * THE SLUG IS NEVER SHOWN. Not as primary text, not as secondary text, not in a tooltip, not in a
+ * detail view. `likely_human`, `fp_cluster_proxy_fleet`, `beacon_only` and `hosting` are what the
+ * URL carries and what Solr stores, and they are not words; a person reading the panel sees
+ * "Likely human", "Proxy fleet fingerprint", "Beacon only" and "Hosting / datacentre". The mapping
+ * between the two belongs in the documentation, not on screen.
+ *
+ * Use this anywhere a value reaches a chart label, a legend, a table cell, a heading or a
+ * sentence. dimValue() applies it for anything that is also a control.
+ */
+export function valueText(field, value) {
+    const spoken = valueWords(field, value);
+    return spoken ? spoken.label : String(value === null || value === undefined ? '' : value);
+}
+
+/**
  * Render one dimension value as the control that filters the dashboard to it.
  *
- * A filterable field becomes an <a> carrying `f[field][]=value` on top of the current URL,
- * so the existing server-side mechanism does all the work and the selection lands in the
- * URL. A field the allowlist does not carry becomes plain text — a link that cannot filter
- * is a lie about what clicking it will do.
+ * A filterable field becomes an <a> carrying `f[field][]=value` on top of the current URL — built
+ * by facetfilter.js, so the operator already in force on that dimension is preserved and the same
+ * gesture removes a value it had added. A field the allowlist does not carry becomes plain text: a
+ * link that cannot filter is a lie about what clicking it will do.
+ *
+ * THE WORD IS NOT THE STORED VALUE. A verdict is stored as `likely_human`, a fired signal as
+ * `fp_cluster_proxy_fleet`, a network type as `hosting`. Those are the right things to store, to
+ * filter on and to grep for, and the wrong things to print at somebody who has not read
+ * src/Score/Rules.php — so a closed vocabulary is spoken in words here, once, for every table
+ * cell, facet row, chip and dialog in the panel. The table is Panel\Vocabulary in PHP and arrives
+ * in the boot payload; this file keeps no second copy of it, and icons.js is the authority for the
+ * MARK in front of a value and for nothing else. An unrecognised value renders as itself.
  *
  * @param {string} field  Solr field name.
  * @param {string} value  The value, exactly as it came back from Solr.
- * @param {Object} [opts] {text, mono, title, count}
+ * @param {Object} [opts] {text, mono, title, count, link, why}
  */
 export function dimValue(field, value, opts) {
     const options = opts || {};
     const raw = value === null || value === undefined ? '' : String(value);
-    const text = options.text === undefined || options.text === null ? raw : String(options.text);
+    const spoken = valueWords(field, raw);
+
+    /* A DIMENSION WITH A VOCABULARY IS SHOWN IN WORDS, WHATEVER THE CALLER ASKED FOR. Several
+       callers used to pass the slug as the visible text, or mono:true, which renders a label as
+       though it were an identifier. Both are overridden here rather than fixed once per call site,
+       because the next call site would get it wrong too. The slug still travels in the href. */
+    const text = spoken
+        ? spoken.label
+        : (options.text === undefined || options.text === null ? raw : String(options.text));
+    const mono = spoken ? false : options.mono;
 
     if (raw === '') {
         return el('span', { class: 'muted', text: '—' });
     }
 
     const classes = ['dim'];
-    if (options.mono) {
+    if (mono) {
         classes.push('mono');
     }
 
-    if (!isFilterable(field)) {
-        return el('span', { class: options.mono ? 'mono' : null, title: options.title || raw, text: text });
+    /* A closed vocabulary gets its mark, wherever the value appears. Putting it HERE rather
+       than at each call site is what makes a facet list, a table cell, a session row and a
+       detail dialog agree: they all render a value through this one function. `mark: false`
+       is for the few places where the mark is already on screen beside the value.
+
+       A COUNTRY'S MARK IS ITS FLAG, AND ITS TEXT IS ITS NAME. Same single insertion point,
+       for the same reason: a facet list, a pivot row and a table cell were each free to
+       render `SC` on their own, and most of them did. A caller that has already put a flag
+       beside the value passes `mark: false`; one that genuinely wants the code passes its
+       own `text`. */
+    const country = field === 'country_s';
+    const mark = options.mark === false
+        ? null
+        : (country ? flagNode(raw) : icon(field, raw));
+
+    /* A caller that passed the CODE as the text has not chosen the code — it has passed the
+       stored value through, which every facet bucket and every pivot row does. Only a caller
+       that asked for something genuinely different keeps its own text. */
+    const shown = country && (text === '' || text === raw)
+        ? (countryName(raw) || raw)
+        : text;
+
+    if (!isFilterable(field) || options.link === false) {
+        const span = el('span', {
+            class: mono ? 'mono' : null,
+            title: options.title || (spoken && spoken.why ? spoken.why : (spoken ? '' : raw))
+        });
+        if (mark) {
+            span.appendChild(mark);
+        }
+        span.appendChild(document.createTextNode(shown));
+        return span;
     }
 
     const node = el('a', {
         class: classes.join(' '),
-        href: urlAddFilter(field, raw),
-        title: options.title || ('Filter every view to ' + dimLabel(field) + ': ' + raw),
-        text: text
+        href: toggleUrl(field, raw),
+        title: (spoken && spoken.why)
+            || options.title
+            || ('Filter every view to ' + dimLabel(field) + ': ' + text)
     });
+    if (mark) {
+        node.appendChild(mark);
+    }
+    node.appendChild(document.createTextNode(shown));
     if (options.count !== undefined && options.count !== null) {
         node.appendChild(el('span', { class: 'dim-count', text: num(options.count) }));
     }
@@ -193,10 +275,17 @@ export function dimValue(field, value, opts) {
 }
 
 /**
- * A country: flag, then the country's name, as a filter control.
+ * A country: the flag, then the country's full name, as a filter control.
  *
- * `short` shows the two-letter code instead of the name, for the dense cells where the code
- * is what the rest of the column is already using.
+ * ALWAYS THE NAME, NEVER THE BARE CODE. A sidebar reading `US BR RU IN RO KE PT SC TR VE ZA AE`
+ * names nothing a reader knows: `SC` and `VE` are a guess, and a facet list you have to guess
+ * at is not a filter. The flag is the regional-indicator pair the platform composes — no image,
+ * no request — and the name comes from Geo\Countries through the boot payload, so there is one
+ * table behind every country in the panel.
+ *
+ * `short` is accepted and ignored. It existed for dense cells, and the answer to a dense cell
+ * is a cell that truncates its own line with the full name in a title, not a cell that shows
+ * two letters. Call sites keep passing it; nothing keeps honouring it.
  */
 export function countryNode(code, opts) {
     const options = opts || {};
@@ -207,7 +296,7 @@ export function countryNode(code, opts) {
     const name = countryName(cc) || cc;
     const flag = flagNode(cc);
     const label = dimValue('country_s', cc, {
-        text: options.short ? cc : name,
+        text: name,
         title: 'Filter every view to ' + name + ' (' + cc + ')'
     });
     return el('span', { class: 'geo' }, [flag, label]);
@@ -311,6 +400,35 @@ export function drillRow(kind, data) {
         dataset: dataset,
         title: 'Open the full record'
     };
+}
+
+/**
+ * The explicit "open this record" control that ends a drillable row.
+ *
+ * WHY A ROW NEEDS ONE. The row is clickable and so is every value in it, and the two mean
+ * different things: the value filters the dashboard to itself, the row opens the record. A
+ * link has to win that contest or a link would not be a link — but once each identity cell
+ * carries two lines of values, most of the row's surface IS link, and a reader aiming at the
+ * row hits one and concludes the row does nothing. This is the surface that is always the
+ * row: one control, at the end, with a name.
+ *
+ * It is a button rather than a third affordance invented for the purpose, and it carries the
+ * same data-lh-open the row does, so dialog.js's single delegated listener dispatches it with
+ * no extra wiring and a table replaced by a fetch needs none either.
+ *
+ * @param {string} kind Subject kind a view registered an opener for.
+ * @param {Object} data Extra data- attributes, without the lh prefix.
+ * @param {string} [label] What the control says it will open.
+ */
+export function openButton(kind, data, label) {
+    const attrs = {
+        type: 'button',
+        class: 'rowopen',
+        'aria-label': label || 'Open the full record',
+        title: label || 'Open the full record',
+        dataset: Object.assign({ lhOpen: String(kind) }, data || {})
+    };
+    return el('button', attrs, [el('span', { 'aria-hidden': 'true', text: '\u203A' })]);
 }
 
 /**

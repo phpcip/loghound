@@ -260,7 +260,9 @@ that rotate daily rather than addresses.
 
 ## Retention
 
-`privacy.retention_days` (default **90**, `0` disables deletion). `loghound-retention`
+`privacy.retention_days` (default **90**; `0` means no AGE limit, so nothing is deleted for
+being old — it does not mean nothing is deleted, because the rolling size window under `quota`
+still removes the oldest data when an index approaches its plan's disk quota). `loghound-retention`
 runs daily and issues a real `delete-by-query` — this is a deletion job that actually
 deletes, not a paragraph of documentation saying you ought to.
 

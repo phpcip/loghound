@@ -126,6 +126,9 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
     /** @var array<string,mixed>|null Per-request memo of the index list. */
     private ?array $indexMemo = null;
 
+    /** @var Facets|null The request-log filter layer, built on first use. */
+    private ?Facets $logFacetLayer = null;
+
     /**
      * Replace the request-log client, so tests run with no network.
      *
@@ -307,28 +310,30 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      */
     protected function logFilters(): array
     {
-        $raw = $_GET['lf'] ?? null;
-        if (!is_array($raw)) {
-            return [];
-        }
-        $allowed = self::logFilterFields();
+        return $this->logFacets()->flat();
+    }
 
-        $out = [];
-        foreach ($raw as $field => $values) {
-            if (!is_string($field) || !isset($allowed[$field]) || !Security::isSafeFieldName($field)) {
-                continue;
-            }
-            foreach ((array) $values as $value) {
-                if (!is_string($value) || !self::isFilterableValue($value)) {
-                    continue;
-                }
-                $out[$field][] = mb_substr($value, 0, 256);
-            }
-            if (isset($out[$field])) {
-                $out[$field] = array_values(array_unique(array_slice($out[$field], 0, 20)));
-            }
+    /**
+     * The facet layer for this plane, built once per request.
+     *
+     * SAME COMPONENT, SAME SEMANTICS, DIFFERENT NAMESPACE. The reading rules, the value checks, the
+     * three boolean operators and the URL contract are Panel\Facets — this used to be a second
+     * implementation of all of it, which is how the two planes came to disagree about what a filter
+     * even was: this one had no operator at all, so there was no way to ask the request log for
+     * "every handler except /select".
+     *
+     * The namespace stays separate for the reason logFilterFields() gives: these field names exist
+     * on the platform's analytics shards and nowhere in Loghound's schemas.
+     *
+     * The exclusion strategy is the one difference, and it is forced rather than chosen. See
+     * logFilterFqs().
+     */
+    protected function logFacets(): Facets
+    {
+        if ($this->logFacetLayer === null) {
+            $this->logFacetLayer = Facets::log($_GET, self::logFilterFields());
         }
-        return $out;
+        return $this->logFacetLayer;
     }
 
     /**
@@ -385,7 +390,7 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      */
     protected function logFqs(): array
     {
-        return self::logFqsFor((string) $this->range['start'], $this->logFilters(), $this->outcome());
+        return self::logFqsFor((string) $this->range['start'], $this->logFacets()->selection(), $this->outcome());
     }
 
     /**
@@ -401,13 +406,48 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      */
     protected static function logFqsFor(string $rangeStart, array $filters, string $outcome): array
     {
-        $fqs = [OpensolrLog::dateFq($rangeStart)];
-
-        foreach ($filters as $field => $values) {
-            $fqs[] = OpensolrLog::termsFq((string) $field, $values);
-        }
+        $fqs = array_merge(
+            [OpensolrLog::dateFq($rangeStart)],
+            Facets::logFor($filters, self::logFilterFields())->fqs()
+        );
 
         $slice = self::outcomeFq($outcome);
+        if ($slice !== null) {
+            $fqs[] = $slice;
+        }
+        return $fqs;
+    }
+
+    /**
+     * The filter list with ONE dimension lifted, for computing that dimension's own facet.
+     *
+     * THE REQUERY STRATEGY, AND WHY THIS PLANE HAS NO CHOICE. On Loghound's own cores a filter
+     * carries `{!tag=…}` and its facet is asked for with the matching `domain.excludeTags`, so one
+     * request answers a whole sidebar and every dimension keeps listing every value it has.
+     * Neither half of that mechanism can reach the platform:
+     *
+     *   - \Loghound\OpensolrLog::assertSafeFq() refuses any `{!` in a filter, by throwing. It is a
+     *     blunt check and it is the right one — it is what stops a crafted value switching the
+     *     query parser — so the tag cannot be added even if the endpoint would carry it.
+     *   - the endpoint rewrites every underscored parameter name into a dotted Solr parameter and
+     *     sanitises its VALUE down to a class with no braces, so `facet.field={!ex=…}path` would
+     *     arrive as a corrupted field name.
+     *
+     * So the same semantics are produced by asking again with that dimension's clause removed: one
+     * extra call per FILTERED dimension, at most four because this plane has four filterable
+     * fields, and exactly none when nothing is filtered. The client memoises by request shape, so
+     * two dimensions sharing a filter set share the call.
+     *
+     * @return array<int,string>
+     */
+    protected function logFqsExcept(string $field): array
+    {
+        $fqs = array_merge(
+            [OpensolrLog::dateFq((string) $this->range['start'])],
+            $this->logFacets()->fqs(null, $field)
+        );
+
+        $slice = self::outcomeFq($this->outcome());
         if ($slice !== null) {
             $fqs[] = $slice;
         }
@@ -448,12 +488,12 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
         $budget = 240;
         $out = '';
 
-        foreach ($this->logFilters() as $field => $values) {
+        foreach ($this->logFacets()->selection() as $field => $spec) {
             $encoded = [];
-            foreach ($values as $value) {
+            foreach ($spec['values'] as $value) {
                 $encoded[] = rawurlencode($value);
             }
-            $part = ($out === '' ? '' : ';') . $field . '=' . implode(',', $encoded);
+            $part = ($out === '' ? '' : ';') . $field . '=' . $spec['op'] . ':' . implode(',', $encoded);
             if (strlen($out) + strlen($part) > $budget) {
                 continue;
             }
@@ -489,15 +529,26 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             if (!isset($allowed[$field]) || !Security::isSafeFieldName($field)) {
                 continue;
             }
+
+            $op = Facets::OP_ANY;
+            $marked = explode(':', $joined, 2);
+            if (count($marked) === 2 && in_array($marked[0], Facets::OPERATORS, true)) {
+                [$op, $joined] = $marked;
+            }
+
+            $values = [];
             foreach (explode(',', $joined) as $raw) {
                 $value = rawurldecode($raw);
                 if (!self::isFilterableValue($value)) {
                     continue;
                 }
-                $out[$field][] = mb_substr($value, 0, 256);
+                $values[] = mb_substr($value, 0, 256);
             }
-            if (isset($out[$field])) {
-                $out[$field] = array_values(array_unique(array_slice($out[$field], 0, 20)));
+            if ($values !== []) {
+                $out[$field] = [
+                    'values' => array_values(array_unique(array_slice($values, 0, 20))),
+                    'op'     => $op,
+                ];
             }
         }
         return $out;
@@ -805,12 +856,17 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
     /**
      * The filter rail: one call, four terms facets and the outcome split.
      *
-     * The counts are for the CURRENT slice, filters included. The platform's endpoint
-     * rewrites any parameter whose name contains an underscore into a dotted Solr parameter
-     * and strips braces out of its value, so Solr's `{!ex=…}` tag exclusion — the mechanism
-     * that gives a multi-select facet its own unfiltered counts — cannot survive the trip.
-     * Faceting under the filters is what is actually available; the card says so, and every
-     * active filter is a chip that removes itself, so a narrowed rail is never a dead end.
+     * A FILTERED DIMENSION IS ASKED AGAIN WITHOUT ITS OWN FILTER, so the rail behaves exactly
+     * as the sidebar on Loghound's own views does: the handler list keeps listing every handler
+     * with the count it would have if the handler filter were lifted, and a second handler can
+     * therefore be added. That used to be impossible here — the facet was computed inside its own
+     * filter, so choosing `/select` left the HANDLER list with one entry in it and nothing to
+     * press.
+     *
+     * It costs one extra call per FILTERED dimension rather than nothing, and that is forced:
+     * `{!ex=…}` cannot reach this plane at all (see logFqsExcept() for both reasons). Four
+     * filterable fields means four calls in the worst case and none in the ordinary one, the
+     * client memoises by request shape, and each call is `rows=0` with one facet on it.
      *
      * The outcome counts come from a single-bucket range facet on `hits`: `[0 TO 1)` is the
      * requests that matched nothing, and the facet's `after` counter is everything else. One
@@ -822,6 +878,9 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      */
     private function filterFacets(): array
     {
+        $facets = $this->logFacets();
+        $filtered = $facets->selected();
+
         $res = $this->fetch([
             'fq'           => $this->logFqs(),
             'rows'         => 0,
@@ -830,23 +889,74 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             'ranges'       => ['hits' => ['start' => '0', 'end' => '1', 'gap' => '1', 'other' => 'all']],
         ]);
 
+        $lifted = [];
+        foreach ($filtered as $field) {
+            $one = $this->fetch([
+                'fq'           => $this->logFqsExcept($field),
+                'rows'         => 0,
+                'facet_fields' => [$field],
+                'facet_limit'  => self::FILTER_FACET_LIMIT,
+            ]);
+            $lifted[$field] = (array) ($one['facet_fields'][$field] ?? []);
+        }
+
         $groups = [];
         foreach (self::logFilterFields() as $field => $label) {
-            $terms = (array) ($res['facet_fields'][$field] ?? []);
-            if ($terms === []) {
+            $excluded = array_key_exists($field, $lifted);
+            $terms = $excluded ? $lifted[$field] : (array) ($res['facet_fields'][$field] ?? []);
+            $chosen = $facets->values($field);
+            if ($terms === [] && $chosen === []) {
                 continue;
             }
+
             $buckets = [];
+            $seen = [];
             foreach ($terms as $value => $count) {
-                $buckets[] = ['value' => (string) $value, 'count' => (int) $count];
+                $value = (string) $value;
+                $seen[$value] = true;
+                $buckets[] = [
+                    'value' => $value,
+                    'label' => $value,
+                    'count' => (int) $count,
+                    'state' => $this->logState($field, $value),
+                ];
             }
-            $groups[] = ['field' => $field, 'label' => $label, 'buckets' => $buckets];
+            foreach ($chosen as $value) {
+                if (!isset($seen[$value])) {
+                    $buckets[] = [
+                        'value' => $value,
+                        'label' => $value,
+                        'count' => null,
+                        'state' => $this->logState($field, $value),
+                    ];
+                }
+            }
+
+            $groups[] = [
+                'field'      => $field,
+                'label'      => $label,
+                'ns'         => 'lf',
+                'filterable' => true,
+                'arity'      => $facets->arity($field),
+                'op'         => $facets->op($field),
+                'operators'  => $facets->operators($field),
+                'chosen'     => $chosen,
+                'buckets'    => $buckets,
+                'truncated'  => count($buckets) >= self::FILTER_FACET_LIMIT,
+                'basis'      => $excluded ? 'excluded' : 'filtered',
+                'basis_note' => $excluded
+                    ? 'Counts are what each value would match with the ' . mb_strtolower($label)
+                        . ' filter lifted, so a second value can be added.'
+                    : 'Counts are what each value matches on this page as filtered.',
+                'overlaps'   => false,
+            ];
         }
 
         $hits = $res['facet_ranges']['hits'] ?? null;
 
         return $this->logEnvelope($res, [
             'groups'   => $groups,
+            'filters'  => $facets->payload(),
             'limit'    => self::FILTER_FACET_LIMIT,
             'outcomes' => [
                 'zero'  => is_array($hits) ? (int) ($hits['counts']['0'] ?? 0) : null,
@@ -855,6 +965,21 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             ],
             'slow_ms'  => self::SLOW_MS,
         ]);
+    }
+
+    /**
+     * What one request-log value is doing: chosen, chosen-and-excluded, or nothing.
+     *
+     * The same three states the sessions plane uses, because they are the states the operator
+     * created and a rail that showed only two would put a tick beside a value just excluded.
+     */
+    private function logState(string $field, string $value): string
+    {
+        $facets = $this->logFacets();
+        if (!in_array($value, $facets->values($field), true)) {
+            return 'off';
+        }
+        return $facets->op($field) === Facets::OP_NONE ? 'excluded' : 'on';
     }
 
     /**

@@ -71,6 +71,13 @@
  * a session's pageviews can be told apart in the panel, and the server treats even
  * that as untrusted. Full field-by-field list: docs/BEACON.md.
  *
+ * A SECOND EXCEPTION, ALSO THE SITE'S OWN DOING, was added for search pages: the
+ * operator may NAME query parameters to collect, through `data-params`, and only
+ * those named parameters are read out of the URL. The rest of the query string is
+ * still never looked at. That is a deliberate widening of what Loghound stores —
+ * a search term is a literal string somebody typed, where everything else here is
+ * a measurement or a hash — and it is off unless configured, on both sides.
+ *
  * THE ONE EXCEPTION, AND IT IS THE SITE'S OWN DOING. A site may DECLARE an identity
  * for the session — an email, a customer number — and whether the visitor was signed
  * in, through the two data- attributes documented at the top of section 2. Nothing
@@ -99,9 +106,26 @@
  *
  * Optional attributes: data-endpoint (collector URL), data-hb (heartbeat ms),
  * data-idle (engagement idle timeout ms), data-ident (an identity the site attaches
- * to the session) and data-signed-in (1 or 0). The collector is assumed to live next
+ * to the session), data-signed-in (1 or 0) and data-params (URL query parameters to
+ * collect, comma separated — see section 2b). The collector is assumed to live next
  * to b.js unless data-endpoint says otherwise, so the install snippet is one line
  * with no second URL to keep in sync.
+ *
+ * ============================================================================
+ * A SITE ON ANOTHER SERVER
+ * ============================================================================
+ * This file works unchanged on a host that has no Loghound and no shared access log
+ * with the one that does. Everything it needs is either measured in the page or read
+ * off the connection by the collector; nothing is read from a file on the monitored
+ * machine. The page reports its own hostname, the collector cross-checks it against
+ * the Origin the browser set and against the operator's allowlist, and the scorer
+ * publishes a session for it marked as having one plane rather than three. The
+ * mechanics are in docs/BEACON.md under "Standalone mode".
+ *
+ * A site with a Content-Security-Policy needs `script-src` to allow the Loghound
+ * origin and `connect-src` to allow it too — the second is the one people forget,
+ * and without it the browser blocks the POST silently and the operator sees nothing
+ * at all. docs/BEACON.md gives the exact directives.
  */
 (function (w, d) {
     'use strict';
@@ -156,6 +180,91 @@
 
     var HB   = attrInt('data-hb', 15000, 2000, 300000);
     var IDLE = attrInt('data-idle', 30000, 1000, 600000);
+
+    /**
+     * ============================================================================
+     * WHICH SITE THIS IS, AND WHAT WAS SEARCHED FOR
+     * ============================================================================
+     * Two things the page knows and the collector cannot find out for itself, because the
+     * page and the collector are on DIFFERENT MACHINES. That is the whole point of a
+     * standalone beacon: `search.opensolr.com` is not the Loghound host, its access log is
+     * not one of Loghound's sources, and the only party that can say which site this
+     * pageview belongs to is the page.
+     *
+     *   hn  location.hostname. Sent on every payload. The server does not take our word
+     *       for it — it cross-checks the value against the Origin header the BROWSER set,
+     *       which page script cannot forge, and then against the operator's own allowlist.
+     *       See lh_site() in public/collect.php. Sending it is therefore free of any
+     *       decision on our part: it either agrees with what the browser said and is
+     *       listed, or it is ignored.
+     *
+     *   qp  the URL's query parameters, restricted to the names in `data-params`. This is
+     *       how "what did people search for" reaches Loghound from a search page whose log
+     *       lives on another host.
+     *
+     * WHY `data-params` IS A WHITELIST AND NEVER "SEND THE QUERY STRING". The URL of a real
+     * page carries password-reset codes, session tokens, invitation keys and email
+     * addresses. The privacy note at the top of this file says the query string is never
+     * sent, and this does not retract it: what is sent is the value of parameters the
+     * operator NAMED, and nothing else in the URL is read. The server applies its own
+     * whitelist again on arrival (`beacon.query_params`), so this side is a promise to the
+     * visitor and that side is the decision about what is stored.
+     *
+     *   <script src="/b.js?v=1" data-params="q" defer></script>
+     *
+     * Empty by default. An installation that does not ask for parameters sends none, so
+     * upgrading b.js cannot start shipping URLs that were not being shipped before.
+     */
+    var HOST = T(function () { return (w.location.hostname || '').toLowerCase(); }) || '';
+
+    var PARAMS = (function () {
+        var raw = attr('data-params');
+        if (!raw || typeof raw !== 'string') { return []; }
+        var out = [], parts = raw.toLowerCase().split(','), i, n;
+        for (i = 0; i < parts.length && out.length < 8; i++) {
+            n = parts[i].replace(/^\s+|\s+$/g, '');
+            if (n && n.length <= 40 && /^[a-z0-9_\-.[\]]+$/.test(n)) { out.push(n); }
+        }
+        return out;
+    }());
+
+    /**
+     * The whitelisted parameters of the CURRENT url, as a name => value map.
+     *
+     * Read at send time rather than at load, so a single-page application that navigates
+     * from one search to the next reports each one. URLSearchParams is not used: this file
+     * is ES5 for the reasons in the header, and a beacon that throws on an old engine
+     * reports nothing at all, which reads as a bot.
+     *
+     * Values are capped here as well as on the server. The cap on this side is about not
+     * making a visitor's browser upload a long string; the cap on that side is about not
+     * being made to store one.
+     */
+    function urlParams() {
+        var out = {};
+        if (!PARAMS.length) { return out; }
+        T(function () {
+            var q = (w.location.search || '').replace(/^\?/, '');
+            if (!q || q.length > 8192) { return; }
+            var pairs = q.split('&'), i, eq, name, val;
+            for (i = 0; i < pairs.length; i++) {
+                eq = pairs[i].indexOf('=');
+                if (eq < 1) { continue; }
+                name = T(function () {
+                    return decodeURIComponent(pairs[i].slice(0, eq)).toLowerCase();
+                });
+                if (!name) { continue; }
+                for (var j = 0; j < PARAMS.length; j++) {
+                    if (PARAMS[j] !== name || out[name] !== undefined) { continue; }
+                    val = T(function () {
+                        return decodeURIComponent(pairs[i].slice(eq + 1).replace(/\+/g, ' '));
+                    });
+                    if (val) { out[name] = String(val).slice(0, 96); }
+                }
+            }
+        });
+        return out;
+    }
 
     /**
      * ============================================================================
@@ -694,7 +803,12 @@
      * fields is documented in docs/BEACON.md and implemented in src/Beacon.php.
      *
      * `e` is the event: 'h' hello, 'b' heartbeat, 'x' final. `w` is wall_ms. `u` is the
-     * path ONLY, never the query string. The `pl`/`mt`/`dp`/`sw`/`sh`/`aw`/`ah`/`ow`/`oh`
+     * path ONLY, never the query string — `qp` carries the NAMED parameters and nothing
+     * else, so the two together still never amount to the whole URL. `hn` is the hostname
+     * the page is on, and `qp` is omitted entirely when no parameter was collected rather
+     * than sent as an empty object, because an absent key costs nothing and an empty one
+     * would have to be distinguished from a real one on the far side. The
+     * `pl`/`mt`/`dp`/`sw`/`sh`/`aw`/`ah`/`ow`/`oh`
      * group is the raw environment measurement the SERVER cross-checks: navigator.platform
      * or the modern userAgentData.platform, and touch capability as a count, with
      * 'ontouchstart' covering older engines.
@@ -744,6 +858,13 @@
 
         if (xIdent) { out.xi = xIdent; }
         if (xSigned !== undefined) { out.xs = xSigned; }
+
+        if (HOST) { out.hn = HOST; }
+
+        var qp = urlParams();
+        for (var k in qp) {
+            if (Object.prototype.hasOwnProperty.call(qp, k)) { out.qp = qp; break; }
+        }
 
         return out;
     }

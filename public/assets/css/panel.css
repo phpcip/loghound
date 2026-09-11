@@ -146,16 +146,16 @@ body {
 
 h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
 h1 { font-size: clamp(28px, 3.2vw, 38px); line-height: 1.05; }
-h2 { font-size: 22px; }
-h3 { font-size: 18px; letter-spacing: -0.015em; }
+h2 { font-size: 20px; }
+h3 { font-size: 17px; letter-spacing: -0.015em; }
 h4 { font-size: 15px; letter-spacing: 0; }
 p { margin: 0 0 10px; }
 p:last-child { margin-bottom: 0; }
 
 a { color: var(--accent-ink); font-weight: 600; text-decoration: none; }
-a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+a:hover { background: none; color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 
-code, .mono, pre { font-family: var(--font-mono); }
+code, .mono, pre { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 code {
     font-size: 14px;
     background: var(--chip);
@@ -218,8 +218,8 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
     font-size: 15px;
     border-left: 2px solid transparent;
 }
-.side li a:hover { color: var(--ink); text-decoration: none; }
-.side li a.on { color: var(--ink); font-weight: 700; border-left-color: var(--accent); }
+.side li a:hover { background: var(--band); color: var(--ink); text-decoration: none; }
+.side li a.on { background: none; color: var(--ink); font-weight: 700; border-left-color: var(--accent); }
 
 .theme-toggle {
     margin: 20px 24px 0;
@@ -232,7 +232,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
     cursor: pointer;
     text-align: left;
 }
-.theme-toggle:hover { border-color: var(--ink); color: var(--ink); }
+.theme-toggle:hover { background: transparent; border-color: var(--ink); color: var(--ink); }
 
 main {
     margin-left: var(--side-w);
@@ -245,7 +245,7 @@ main {
 
 .head { margin-bottom: 34px; }
 .head h1 { margin-bottom: 12px; }
-.head .sub { font-size: 19px; line-height: 1.5; color: var(--muted); max-width: 720px; margin: 0; }
+.head .sub { font-size: 17px; line-height: 1.5; color: var(--muted); max-width: 720px; margin: 0; }
 
 .head-tools {
     display: flex; flex-wrap: wrap; gap: 16px;
@@ -256,15 +256,15 @@ main {
 
 .ranges { display: flex; flex-wrap: wrap; gap: 18px; }
 .ranges a {
-    font: 600 14px/1 var(--font-mono);
+    font: 600 14px/1 var(--font-ui);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--faint);
     padding-bottom: 4px;
     border-bottom: 2px solid transparent;
 }
-.ranges a:hover { color: var(--ink); text-decoration: none; }
-.ranges a.on { color: var(--ink); border-bottom-color: var(--accent); }
+.ranges a:hover { background: none; color: var(--ink); text-decoration: none; }
+.ranges a.on { background: none; color: var(--ink); border-bottom-color: var(--accent); }
 
 /* Notices. Error is an accent left rule; anything affirmative is an ink one. */
 
@@ -285,26 +285,63 @@ main {
 
 /* Sections. Hairline-ruled, numbered 01 / 02 / 03, label in 14px uppercase. */
 
-.view { display: flex; flex-direction: column; gap: 44px; }
+.view { display: flex; flex-direction: column; gap: 56px; }
 
 .card { position: relative; }
 
+/* ---------------------------------------------------------------------------
+   A SECTION HEADING IS A LANDMARK, NOT A LABEL.
+
+   It was 14px uppercase with wide tracking — the same treatment as a column
+   header or a field label — so a reader who jumped here from the sticky nav
+   arrived with nothing on screen saying they had moved. A heading's job is to
+   be seen from the corner of the eye while scrolling, and at that size and
+   weight it could not be.
+
+   So: the largest type on the page after the H1, in sentence case, with the
+   tracking that made it a label taken back out. The number keeps the accent
+   and stays part of the heading, one step smaller and monospaced so it reads
+   as a marker rather than as the first word.
+
+   WHAT DID NOT CHANGE. No new colour, no box, and no second rule — the head
+   already draws a hairline under itself and a division does not need two.
+   Nothing here touches `.card`'s scroll-margin either: the offset is measured
+   from the top of the CARD, and the card still starts where it did, so a
+   bigger heading lands in the same place under the sticky nav.
+
+   IT HAS TO WRAP. "Beacon / JavaScript tracking" at this size does not fit a
+   375px screen on one line, and a heading that overflows starts a horizontal
+   scroll on the whole page. The h2 is a wrapping flex row and its words are a
+   shrinkable box, so the number stays with the first line and the rest falls
+   to the next.
+   --------------------------------------------------------------------------- */
+
 .card-head {
-    display: flex; flex-wrap: wrap; gap: 12px 20px;
+    display: flex; flex-wrap: wrap; gap: 10px 20px;
     align-items: baseline; justify-content: space-between;
-    padding-bottom: 10px;
-    margin-bottom: 18px;
+    padding-bottom: 14px;
+    margin-bottom: 26px;
     border-bottom: 1px solid var(--hairline);
 }
 .card-head > h2 {
-    font: 700 14px/1.2 var(--font-ui);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
+    flex: 1 1 auto;
+    font: 700 clamp(23px, 2.5vw, 30px)/1.15 var(--font-ui);
+    letter-spacing: -0.02em;
+    text-transform: none;
     color: var(--ink);
-    display: flex; align-items: baseline; gap: 10px;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+    min-width: 0;
     margin: 0;
+    overflow-wrap: anywhere;
 }
-.card-num { color: var(--accent); font-family: var(--font-mono); font-weight: 700; }
+.card-head > h2 > span:not(.card-num) { min-width: 0; }
+.card-num {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 0.62em;
+    flex: none;
+}
 
 .pop {
     margin: 0 0 20px;
@@ -327,7 +364,7 @@ main {
     padding: 20px 22px;
 }
 
-.explain p { max-width: 88ch; font-size: 16px; line-height: 1.6; }
+.explain p { max-width: 88ch; font-size: 15px; line-height: 1.6; }
 
 /* Stat rows. Hairline-separated columns, not cards. */
 
@@ -344,7 +381,7 @@ main {
 }
 .stat:first-child { border-left: 0; padding-left: 0; }
 .stat-label { font-size: 14px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint); font-weight: 600; }
-.stat-value { font: 700 34px/1 var(--font-ui); letter-spacing: -0.03em; }
+.stat-value { font: 700 28px/1 var(--font-ui); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
 .stat-hint  { font-size: 14px; color: var(--faint); line-height: 1.45; }
 
 /* The four timing numbers */
@@ -367,7 +404,7 @@ main {
 .timing[data-timing="engaged"] .timing-value { color: var(--accent-ink); }
 
 .timing-label { font-size: 14px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint); font-weight: 600; }
-.timing-value { font: 700 32px/1 var(--font-ui); letter-spacing: -0.03em; }
+.timing-value { font: 700 28px/1 var(--font-ui); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
 .timing-sub   { font-size: 14px; color: var(--faint); font-family: var(--font-mono); }
 .timing-defn  { font-size: 15px; color: var(--ink); }
 .timing-why   { font-size: 14px; color: var(--muted); margin: 8px 0 0; line-height: 1.5; }
@@ -384,7 +421,41 @@ main {
 }
 .note strong { color: var(--ink); }
 
-/* Tables. Hairlines, content-sized columns, scrolling inside their own box. */
+/* ---------------------------------------------------------------------------
+   TABLES.
+
+   The panel is judged on these, and the thing that was wrong with them was not
+   decoration: it was that a reader could not tell where one column ended and
+   the next began. Three causes, all fixed here.
+
+   ONE. THE GUTTER WAS ON ONE SIDE ONLY. `padding: 9px 16px 9px 0` puts the
+   whole column gap to the right of a cell, so two cells that both truncate are
+   16px apart — two characters at this size — and `AMAZON-AES - Amaz` reads
+   straight into `Chrome 139`. The padding is symmetric now and the gap between
+   two columns is the sum of both sides: 28px, with the outer edges flush so
+   the table still starts and ends on the text column like everything else on
+   the page.
+
+   TWO. NOTHING SEPARATED THE COLUMNS BUT THAT GAP. The remedy is the one the
+   editorial system already uses everywhere else — type and alignment, not
+   boxes. The header is one band of tracked-out 14px caps over a single ink
+   rule, so the column starts are declared once at the top; every numeric
+   column is right-aligned, which puts a hard edge between a number and the
+   prose next to it; and the second line of a two-line cell is a tone lighter,
+   so a cell reads as one block rather than as two neighbours. No vertical
+   rules: nine hairlines down a page of rows is a spreadsheet, and this is not
+   one.
+
+   THREE. TRUNCATION HAPPENS ON THE LINE, NOT ON THE CELL. `text-overflow`
+   needs `white-space: nowrap` and `overflow: hidden` on the box that actually
+   holds the text, and in a two-line cell that box is the inner div, never the
+   <td>. `.clip-line` is that box, and `.clip` on a cell now sets all three so
+   a single-line cell is handled too. A cell that clips without an ellipsis is
+   a cell that looks like it continues into its neighbour.
+
+   Density is one number per table: 8px of vertical padding, 6px for `.tight`.
+   The same kind of row had four different paddings across the views.
+   --------------------------------------------------------------------------- */
 
 .table-wrap {
     overflow-x: auto;
@@ -392,6 +463,7 @@ main {
 }
 
 table { width: 100%; border-collapse: collapse; font-size: 15px; }
+
 thead th {
     position: sticky; top: 0; z-index: 1;
     background: var(--page);
@@ -400,25 +472,28 @@ thead th {
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--faint);
-    padding: 0 16px 10px 0;
+    padding: 0 14px 9px;
     border-bottom: 1px solid var(--ink);
 
     white-space: nowrap;
 }
+thead th:first-child { padding-left: 0; }
 thead th:last-child { padding-right: 0; }
+
 tbody td, tbody th {
-    padding: 9px 16px 9px 0;
+    padding: 8px 14px;
     border-bottom: 1px solid var(--hairline);
     vertical-align: top;
     font-weight: 400;
     text-align: left;
 }
+tbody td:first-child, tbody th:first-child { padding-left: 0; }
 tbody td:last-child, tbody th:last-child { padding-right: 0; }
 tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
-tbody tr:hover td { background: var(--band); }
+tbody tr:hover td { background: var(--band); color: var(--ink); }
 
 th.num, td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
-td.mono, th.mono { font-family: var(--font-mono); font-size: 14px; }
+td.mono, th.mono, table .mono { font-family: var(--font-mono); font-size: 14px; font-variant-numeric: tabular-nums; }
 td.nowrap, th.nowrap { white-space: nowrap; }
 
 td.clip { max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -430,17 +505,28 @@ table.tight td, table.tight th { padding-top: 6px; padding-bottom: 6px; }
 .bar > span { display: block; height: 100%; background: var(--accent); }
 .bar.bar-split { display: flex; }
 .bar.bar-split > span { height: 100%; }
-.bar-human    { background: var(--c-human); }
-.bar-unknown  { background: var(--c-unknown); }
-.bar-declared { background: var(--c-declared); }
-.bar-evasive  { background: var(--c-evasive); }
+/*
+ * A SPLIT BAR'S SEGMENTS BEAT THE BAR'S OWN FILL.
+ *
+ * `.bar > span` is (0,1,1) and `.bar-human` was (0,1,0), so every segment of every mix bar in
+ * the panel resolved to the accent: a row of 24 human and 5 unknown sessions drew as one solid
+ * orange block, which says the exact opposite of what it is there to say. It was invisible
+ * while the column was 130px of a nine-column table and obvious the moment the column had
+ * room. Qualifying each class with the element it lands on settles it.
+ */
+
+.bar > span.bar-human    { background: var(--c-human); }
+.bar > span.bar-unknown  { background: var(--c-unknown); }
+.bar > span.bar-declared { background: var(--c-declared); }
+.bar > span.bar-evasive  { background: var(--c-evasive); }
+.bar > span.bar-ai       { background: var(--c-ai); }
 
 /* Chips and meters */
 
 .chip {
     display: inline-block;
-    padding: 2px 8px;
-    font: 600 14px/1.4 var(--font-mono);
+    padding: 1px 7px;
+    font: 600 14px/1.4 var(--font-ui);
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
     color: var(--muted);
@@ -449,6 +535,9 @@ table.tight td, table.tight th { padding-top: 6px; padding-bottom: 6px; }
     text-overflow: ellipsis;
     max-width: 26ch;
 }
+
+/* A host cell carrying its plane mark: the name, then the chip, on one line that may wrap. */
+.plane-cell { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 
 .chip-good   { border-color: var(--ink); color: var(--ink); }
 .chip-warn   { border-color: var(--accent); color: var(--accent-ink); }
@@ -552,7 +641,7 @@ table.tight td, table.tight th { padding-top: 6px; padding-bottom: 6px; }
 }
 .job-head { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
 .job-title { font-weight: 700; font-size: 15px; }
-.job-meta { font-family: var(--font-mono); font-size: 14px; color: var(--faint); }
+.job-meta { font-family: var(--font-mono); font-size: 14px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .job-steps { list-style: none; margin: 14px 0 0; padding: 0; font-size: 15px; }
 .job-steps li {
     display: grid;
@@ -574,6 +663,29 @@ table.tight td, table.tight th { padding-top: 6px; padding-bottom: 6px; }
 /* Charts */
 
 .chart { width: 100%; min-height: 120px; }
+
+/* ---------------------------------------------------------------------------
+   EVERY STATE STATES BOTH COLOURS.
+
+   THE DEFECT THIS RULE EXISTS TO PREVENT. `button:hover` fills the button with
+   ink and sets the label to the page colour. `.theme-toggle:hover` set only a
+   colour — ink, chosen for the resting background — so on hover the element
+   got ink from one rule and ink from the other and the label disappeared into
+   a solid black rectangle. One rule changed the ground, another changed the
+   figure, and neither knew about the other.
+
+   So the pattern, and it is a pattern rather than a fix: ANY rule that reacts
+   to a pointer or carries a selected state declares BOTH `background` and
+   `color`, even when one of them is `none` or `transparent`. Writing the
+   unchanged half explicitly is what makes a state self-contained and what
+   stops the next variant inheriting half of a different one. tests/
+   test_responsive.php asserts it, so a background-only hover cannot come back
+   without the suite going red.
+
+   The only exemptions are elements that carry no text of their own — a bar
+   segment, a meter fill, a scrim, a drawn mark — and they are named in the
+   test rather than left to judgement.
+   --------------------------------------------------------------------------- */
 
 /* Buttons and controls */
 
@@ -602,11 +714,11 @@ button.primary[disabled]:hover { background: var(--accent); color: var(--on-acce
     border: 0; border-bottom: 2px solid transparent; border-radius: 0;
     background: transparent; color: var(--faint);
     padding: 2px 0 4px;
-    font: 600 14px/1 var(--font-mono);
+    font: 600 14px/1 var(--font-ui);
     letter-spacing: 0.06em; text-transform: uppercase;
 }
 .toggle button:hover { background: transparent; color: var(--ink); }
-.toggle button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.toggle button.on { background: transparent; color: var(--ink); border-bottom-color: var(--accent); }
 
 .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 15px; }
 .controls label { color: var(--faint); font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
@@ -637,7 +749,7 @@ input[type="number"] { width: 7em; text-align: right; font-family: var(--font-mo
 
 .split-stats { display: flex; flex-wrap: wrap; gap: 28px; margin-top: auto; padding-top: 20px; }
 .split-stats div { display: flex; flex-direction: column; gap: 4px; }
-.split-stats .stat-value { font-size: 28px; }
+.split-stats .stat-value { font-size: 24px; }
 
 /* Fingerprint clusters */
 
@@ -663,8 +775,12 @@ tr.members > td { padding: 0; background: var(--band); }
 .searchbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
 .searchbar input[type="search"] { flex: 1 1 340px; min-width: 0; }
 
-.explorer { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 44px; align-items: start; }
-.facets h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink); padding-bottom: 10px; border-bottom: 1px solid var(--hairline); margin-bottom: 16px; }
+.explorer { display: grid; grid-template-columns: 292px minmax(0, 1fr); gap: 32px; align-items: start; }
+/* The facet rail's heading is a numbered section heading like every other card's, and it was
+   being held at label size by this rule — equal specificity to `.card-head > h2` and further
+   down the file, so it won and card 02 alone stayed small, taking its accent number down to
+   8.7px with it. What the rule still owns is the rail's own spacing. */
+.facets h2 { color: var(--ink); padding-bottom: 10px; margin-bottom: 16px; }
 .facet-group { margin-bottom: 22px; }
 .facet-group h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--faint); margin-bottom: 6px; }
 .facet-group ul { list-style: none; margin: 0; padding: 0; }
@@ -672,7 +788,7 @@ tr.members > td { padding: 0; background: var(--band); }
     display: flex; justify-content: space-between; gap: 10px;
     padding: 3px 0; font-size: 14px; color: var(--muted); font-weight: 400;
 }
-.facet-group li a:hover { color: var(--ink); text-decoration: none; }
+.facet-group li a:hover { background: var(--band); color: var(--ink); text-decoration: none; }
 .facet-group .fv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .facet-group .fc { font-family: var(--font-mono); color: var(--faint); flex: none; }
 
@@ -710,6 +826,13 @@ tr.row-link { cursor: pointer; }
 /* Settings */
 
 dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 24px; margin: 0 0 18px; font-size: 15px; }
+/* A term is a short label and must not wrap — "Sessions core", "Query timeout". A term that
+   holds a CODE identifier is not a short label: `window.loghound.identify(ident, signedIn)` is
+   402px of unbreakable string in a 343px column, and `white-space: nowrap` on the dt defeats
+   the `overflow-wrap: anywhere` on the code inside it, so the string walks straight off the
+   screen and takes the whole page's horizontal scroll with it. A term containing code wraps. */
+dl.kv dt:has(code) { white-space: normal; overflow-wrap: anywhere; }
+
 dl.kv dt {
     color: var(--faint); white-space: nowrap; font-size: 14px;
     text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;
@@ -787,7 +910,7 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
 .plane:first-child { border-left: 0; padding-left: 0; }
 .plane-without { border-top: 2px solid var(--ink); margin-top: -1px; }
 .plane-with    { border-top: 2px solid var(--accent); margin-top: -1px; }
-.plane h3 { margin-bottom: 6px; font-size: 19px; }
+.plane h3 { margin-bottom: 6px; font-size: 17px; }
 .plane-sub { color: var(--muted); font-size: 15px; }
 .plane-list { margin: 14px 0; padding: 0; list-style: none; font-size: 15px; }
 .plane-list li { padding: 9px 0 9px 20px; border-bottom: 1px solid var(--hairline); position: relative; line-height: 1.5; }
@@ -805,7 +928,7 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
     text-transform: uppercase; letter-spacing: 0.08em;
 }
 .tab:hover { background: transparent; color: var(--ink); }
-.tab.on { color: var(--ink); border-bottom-color: var(--accent); }
+.tab.on { background: transparent; color: var(--ink); border-bottom-color: var(--accent); }
 .snippet-actions { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 14px; }
 .snippet-actions .muted { flex: 1 1 320px; min-width: 0; }
 
@@ -894,7 +1017,7 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
     max-width: 900px;
 }
 .setup-lead {
-    font-size: 19px;
+    font-size: 17px;
     line-height: 1.5;
     color: var(--muted);
     max-width: 68ch;
@@ -934,10 +1057,10 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
     color: var(--faint);
     white-space: nowrap;
 }
-.setup-rail li a:hover { color: var(--ink); text-decoration: none; }
+.setup-rail li a:hover { background: none; color: var(--ink); text-decoration: none; }
 .setup-rail li.done a { color: var(--muted); }
 .setup-rail li.on a,
-.setup-rail li.on span { color: var(--ink); font-weight: 700; box-shadow: none; }
+.setup-rail li.on span { background: none; color: var(--ink); font-weight: 700; box-shadow: none; }
 .setup-rail li.on { border-bottom: 2px solid var(--accent); }
 
 .setup-missing { margin: 12px 0 0; padding-left: 20px; font-size: 15px; }
@@ -1026,7 +1149,7 @@ table.checks .snippet {
    measure for two fields reads as a mistake. */
 
 .setup.login { max-width: 520px; }
-.setup.login h1 { font-size: 34px; }
+.setup.login h1 { font-size: 28px; }
 .setup.login .setup-lead { font-size: 17px; margin-bottom: 24px; }
 .setup.login > .card:first-of-type { margin-top: 0; }
 .login-form input[type="text"],
@@ -1100,7 +1223,7 @@ td .shape { white-space: nowrap; }
 
 /* The "not connected to Opensolr" explainer lists what the section would show. */
 
-.explain ul { margin: 0 0 16px; padding-left: 22px; max-width: 88ch; font-size: 16px; line-height: 1.6; }
+.explain ul { margin: 0 0 16px; padding-left: 22px; max-width: 88ch; font-size: 15px; line-height: 1.6; }
 .explain li { margin-bottom: 6px; color: var(--muted); }
 .explain li strong { color: var(--ink); }
 
@@ -1137,7 +1260,7 @@ td .shape { white-space: nowrap; }
     text-transform: uppercase;
     letter-spacing: 0.1em;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 14px;
 }
 .bwstrip .meter { width: 92px; }
 .bwstrip-detail { color: var(--muted); }
@@ -1147,7 +1270,7 @@ td .shape { white-space: nowrap; }
     border-bottom: 1px solid var(--hairline);
     text-decoration: none;
 }
-.bwstrip-link:hover { color: var(--ink); border-bottom-color: var(--ink); text-decoration: none; }
+.bwstrip-link:hover { background: none; color: var(--ink); border-bottom-color: var(--ink); text-decoration: none; }
 
 .bwstrip-warn .bwstrip-label,
 .bwstrip-critical .bwstrip-label,
@@ -1182,7 +1305,7 @@ td .shape { white-space: nowrap; }
 }
 .meterrow-name { font-weight: 700; color: var(--ink); }
 .meterrow-role {
-    font-size: 13px;
+    font-size: 14px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--faint);
@@ -1210,7 +1333,7 @@ td .shape { white-space: nowrap; }
 .windowrow-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .windowrow-name { font-weight: 700; color: var(--ink); }
 .windowrow-role {
-    font-size: 13px;
+    font-size: 14px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: var(--faint);
@@ -1254,7 +1377,7 @@ td .shape { white-space: nowrap; }
     text-transform: uppercase;
     letter-spacing: 0.1em;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 14px;
     color: var(--faint);
 }
 .hostpick select {
@@ -1266,11 +1389,6 @@ td .shape { white-space: nowrap; }
     padding: 4px 8px;
     max-width: 260px;
 }
-
-/* AI crawlers had no colour of their own in the split bar; the four other
-   populations did, so the fifth was silently drawn as a declared crawler. */
-
-.bar-ai { background: var(--c-ai); }
 
 @media (max-width: 900px) {
     .bwstrip .meter { width: 64px; }
@@ -1317,7 +1435,7 @@ td .shape { white-space: nowrap; }
     color: var(--faint);
     padding: 4px 0;
 }
-.finish-all > summary:hover { color: var(--ink); }
+.finish-all > summary:hover { background: none; color: var(--ink); }
 .finish-all > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .finish-group { margin-top: 20px; }
 .finish-group h3 { font-size: 17px; margin-bottom: 6px; }
@@ -1443,7 +1561,7 @@ td .shape { white-space: nowrap; }
 .set-nav-num { font-family: var(--font-mono); font-size: 14px; color: var(--faint); }
 .set-nav a:hover .set-nav-num,
 .set-nav a:focus-visible .set-nav-num,
-.set-nav a.on .set-nav-num { color: var(--accent-ink); }
+.set-nav a.on .set-nav-num { background: none; color: var(--accent-ink); }
 
 /* Every card is a jump target, so every card clears the bar.
 
@@ -1480,7 +1598,8 @@ td .shape { white-space: nowrap; }
 
 .lf-active:empty,
 .lf-outcomes:empty,
-.lf-rail:empty { display: none; }
+.lf-rail:empty,
+.filterbar-active:empty { display: none; }
 
 .lf-active { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .lf-active a {
@@ -1504,7 +1623,7 @@ td .shape { white-space: nowrap; }
 .lf-outcomes a.on { border-color: var(--accent); color: var(--accent-ink); background: var(--chip); }
 .lf-outcomes .lf-count { font-family: var(--font-mono); color: var(--faint); }
 .lf-outcomes a.on .lf-count,
-.lf-outcomes a:hover .lf-count { color: var(--accent-ink); }
+.lf-outcomes a:hover .lf-count { background: none; color: var(--accent-ink); }
 
 .lf-rail {
     display: grid;
@@ -1523,8 +1642,8 @@ td .shape { white-space: nowrap; }
     padding: 3px 0; font-size: 14px; color: var(--muted); font-weight: 400;
     text-decoration: none;
 }
-.lf-rail li a:hover { color: var(--accent-ink); }
-.lf-rail li a.on { color: var(--accent-ink); font-weight: 600; }
+.lf-rail li a:hover { background: var(--band); color: var(--accent-ink); }
+.lf-rail li a.on { background: none; color: var(--accent-ink); font-weight: 600; }
 .lf-rail .fv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .lf-rail .fc { font-family: var(--font-mono); color: var(--faint); flex: none; }
 
@@ -1533,7 +1652,7 @@ td .shape { white-space: nowrap; }
 
 tr.lf-pick td:first-child { cursor: pointer; }
 tr.lf-pick a { color: inherit; text-decoration: none; }
-tr.lf-pick a:hover { color: var(--accent-ink); text-decoration: underline; }
+tr.lf-pick a:hover { background: none; color: var(--accent-ink); text-decoration: underline; }
 
 /* =====================================================================================
    VISITOR DETAIL — flags, the value-as-filter control, the filter bar and the dialog.
@@ -1554,9 +1673,17 @@ tr.lf-pick a:hover { color: var(--accent-ink); text-decoration: underline; }
    viewport, which is how a Verdict column ends up reading "VERD" with its badges sliced in
    half. Fixed layout makes the declared widths authoritative, every cell clips with an
    ellipsis instead of pushing its neighbours, and min-width turns the wrapper's overflow-x
-   into the backstop — content scrolls rather than disappearing. */
+   into the backstop — content scrolls rather than disappearing.
 
-table.table-fixed { table-layout: fixed; min-width: 900px; }
+   THE MINIMUM WAS 900px AND THAT WAS ITSELF A DEFECT. Measured at a 1440px window, the
+   session explorer's results column is 836px wide, so a 900px minimum put a horizontal
+   scrollbar under a table on a desktop and then starved the percentage columns inside it.
+   The minimum is a floor for the narrowest arrangement a table can still be read in, not a
+   width it wants; at 680px every restructured table fits the column it lives in at every
+   window this panel is used at, and a table that genuinely needs more sets --table-min
+   itself. */
+
+table.table-fixed { table-layout: fixed; min-width: var(--table-min, 680px); }
 table.table-fixed td,
 table.table-fixed th { overflow: hidden; text-overflow: ellipsis; }
 table.table-fixed td.clip { max-width: none; }
@@ -1576,9 +1703,9 @@ table.table-fixed th.num, table.table-fixed td.num { white-space: nowrap; }
    Underlined on hover only. A table where every identity value is a permanently underlined
    link reads as a wall of blue, and the point is that the value looks like the value. */
 
-a.dim { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--field-border); }
+a.dim { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--hairline); }
 a.dim:hover,
-a.dim:focus-visible { color: var(--accent-ink); border-bottom-color: var(--accent); }
+a.dim:focus-visible { background: none; color: var(--accent-ink); border-bottom-color: var(--accent); }
 .dim-count { margin-left: 8px; color: var(--faint); font-family: var(--font-mono); font-size: 14px; }
 
 /* --- Flags ---------------------------------------------------------------------------
@@ -1619,7 +1746,7 @@ a.dim:focus-visible { color: var(--accent-ink); border-bottom-color: var(--accen
     background: var(--page);
     font-size: 14px; color: var(--ink); text-decoration: none;
 }
-.fchip:hover, .fchip:focus-visible { border-color: var(--accent); color: var(--accent-ink); }
+.fchip:hover, .fchip:focus-visible { background: var(--page); border-color: var(--accent); color: var(--accent-ink); }
 .fchip-dim { color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-size: 14px; }
 .fchip-val { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; max-width: 30ch; }
 .fchip-x { color: var(--faint); font-weight: 700; }
@@ -1672,7 +1799,7 @@ html.lh-dialog-open { overflow: hidden; }
 }
 .lh-dialog-head h2 {
     margin: 0;
-    font: 700 24px/1.2 var(--font-ui); letter-spacing: -0.02em;
+    font: 700 20px/1.2 var(--font-ui); letter-spacing: -0.02em;
     overflow-wrap: anywhere;
 }
 .lh-dialog-head p { margin: 6px 0 0; font-size: 14px; }
@@ -1686,7 +1813,7 @@ html.lh-dialog-open { overflow: hidden; }
 .lh-dialog-body h4 { margin: 20px 0 8px; font: 600 15px/1.3 var(--font-ui); }
 .lh-dialog-body > :first-child { margin-top: 0; }
 .lh-dialog-body .stats { margin-bottom: 18px; }
-.lh-dialog-body .stat-value { font-size: 26px; }
+.lh-dialog-body .stat-value { font-size: 22px; }
 .lh-dialog-body .fpanel { border-top: 0; padding-top: 0; }
 
 /* The trail carries a sixth column — how long the server took — so it needs its own grid
@@ -1705,7 +1832,7 @@ html.lh-dialog-open { overflow: hidden; }
     font: 600 14px/1.4 var(--font-ui);
     text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint);
 }
-.ident-value { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+.ident-value { font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
 .ident-strip .faint { flex-basis: 100%; font-size: 14px; line-height: 1.45; }
 
 @media (max-width: 900px) {
@@ -1722,7 +1849,7 @@ html.lh-dialog-open { overflow: hidden; }
    VISITOR DETAIL, PART TWO — sortable headers, the facet control, and alignment.
 
    Second half of the same appended block, kept separate from the rules two other agents
-   are writing above. Prefixes: .sortable/.sort-mark, .facet-*, .chip-word, .sub, .score.
+   are writing above. Prefixes: .sortable/.sort-mark, .facet-*, .sub, .score.
    ================================================================================== */
 
 /* --- Sortable column headers ---------------------------------------------------------
@@ -1731,15 +1858,31 @@ html.lh-dialog-open { overflow: hidden; }
    header row has to read as ONE thing rather than as a row of separate words, which is what
    the rule under it and the shared background are for. */
 
-thead tr { background: var(--band); }
 thead th { position: relative; }
-th.sortable { cursor: pointer; user-select: none; padding-right: 18px; }
-th.sortable:hover,
-th.sortable:focus-visible { color: var(--accent-ink); }
-th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-th.num.sortable { padding-right: 18px; }
+/*
+ * The mark follows the LABEL, it does not sit at the edge of the column.
+ *
+ * It was absolutely positioned against the cell's right edge, so on a wide column the arrow
+ * floated far from the word it belonged to and read as a mark on the NEXT column — and the
+ * padding reserved for it was taken out of every column's usable width whether the column was
+ * sortable or not. Inline, it is unambiguous and it costs nothing when there is nothing to
+ * mark. A numeric header is right-aligned, so there the mark leads instead of trails.
+ */
 
-.sort-mark { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); font-size: 14px; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover,
+th.sortable:focus-visible { background: var(--page); color: var(--accent-ink); }
+th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/*
+ * The mark takes no width.
+ *
+ * A zero-width inline-block whose glyph overhangs into the cell's own padding. Inline, it
+ * belongs to the label it marks rather than floating at the column edge and reading as a mark
+ * on the next column; zero-width, it does not cost every sortable header sixteen pixels of
+ * the width it needed for its own word — which is why REQS was rendering as `REQS…`.
+ */
+.sort-mark { display: inline-block; width: 0; margin-left: 6px; font-size: 14px; }
 th.sortable .sort-mark::after { content: "\2195"; color: var(--field-border); }
 th.sorted-asc  .sort-mark::after { content: "\25B2"; color: var(--accent-ink); }
 th.sorted-desc .sort-mark::after { content: "\25BC"; color: var(--accent-ink); }
@@ -1749,18 +1892,33 @@ th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
 
    Monospace is for values whose characters line up or must be copied exactly: an address, a
    path, a fingerprint, a session id, a raw User-Agent, a number compared down a column. An
-   organisation name, a country, a timezone, a verdict and a device class are prose. The chip
-   class had been setting monospace on all of them. */
+   organisation name, a country, a timezone, a verdict and a device class are prose.
 
-.chip-word { font-family: var(--font-ui); font-weight: 600; }
+   `.chip` itself is the body face now — a chip carries a word in every one of its uses — so
+   the `.chip-word` opt-in that used to correct it is gone from here and from every call site.
+   A chip that really does hold an identifier says so with `.mono` like everything else. */
 
 /* The second line of a two-line cell: the qualifier under the name. Set apart by colour and
    size rather than by a separator, so an absent value leaves no stray punctuation. */
-.sub { display: block; font-size: 14px; color: var(--faint); }
+/*
+ * The second line of a two-line cell.
+ *
+ * The truncation is scoped to a table on purpose: `.sub` is also the class on the page
+ * subtitle under every H1, and giving the bare class `white-space: nowrap` with an ellipsis
+ * clipped every view's lead sentence to one line. A class that means "a quieter second line"
+ * must not carry a layout decision that only makes sense inside a cell.
+ */
+.sub {
+    display: block;
+    font-size: 14px;
+    color: var(--faint);
+}
+table .sub,
+.lh-dialog .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub .chip { margin: 2px 0 0; }
 
 /* A bot score sitting next to a verdict chip: a number, so tabular and aligned. */
-.score { margin-left: 8px; font-variant-numeric: tabular-nums; }
+.score { margin-left: 8px; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 
 /* --- The facet control --------------------------------------------------------------
 
@@ -1769,14 +1927,20 @@ th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
    proportional bar behind the row makes the distribution readable without reading a number —
    which is most of why anybody opens a facet list. */
 
-.facet-how {
-    margin: 0 0 16px;
-    padding: 10px 12px;
-    background: var(--band);
-    border-left: 2px solid var(--hairline);
-    font-size: 14px; color: var(--muted); line-height: 1.5;
-}
 .facet-groups { display: flex; flex-direction: column; gap: 0; }
+
+/*
+ * THE EXPANDED PANEL USES ITS WHOLE WIDTH.
+ *
+ * `.fpanel` is a grid, because in the detail dialog its children ARE the dimension groups and
+ * they want columns. On the filter bar its child is a single wrapper holding all of them, so
+ * that wrapper landed in ONE grid track and the facets were squeezed into the remainder while
+ * a third of the panel stood empty for the full height of the page. A direct child that is
+ * itself a container of groups spans every track, and the columns are then decided once,
+ * inside it, across the full width.
+ */
+
+.fpanel > .facet-groups { grid-column: 1 / -1; }
 .fpanel .facet-groups {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 0 32px;
@@ -1819,7 +1983,7 @@ th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
     border-radius: var(--radius);
 }
 .facet-opt:hover,
-.facet-opt:focus-visible { border-color: var(--field-border); background: var(--band); }
+.facet-opt:focus-visible { border-color: var(--field-border); background: var(--band); color: var(--ink); }
 .facet-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .facet-opt.is-static { color: var(--muted); }
 
@@ -1837,9 +2001,9 @@ th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
     color: var(--faint); text-align: right;
 }
 
-.facet-opt.is-on { border-color: var(--accent); background: var(--band); font-weight: 600; }
+.facet-opt.is-on { border-color: var(--accent); background: var(--band); color: var(--ink); font-weight: 600; }
 .facet-opt.is-on .facet-fill { background: var(--c-human); }
-.facet-opt.is-on .facet-n { color: var(--ink); }
+.facet-opt.is-on .facet-n { background: none; color: var(--ink); }
 
 .facet-more {
     margin-top: 6px;
@@ -1851,7 +2015,7 @@ th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
     border-radius: var(--radius);
     cursor: pointer;
 }
-.facet-more:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-ink); }
+.facet-more:hover:not(:disabled) { background: transparent; border-color: var(--accent); color: var(--accent-ink); }
 .facet-more:disabled { cursor: default; opacity: 0.6; }
 .facet-note { margin: 8px 0 0; font-size: 14px; color: var(--faint); line-height: 1.45; }
 
@@ -1864,6 +2028,1055 @@ th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
     .fpanel .facet-groups { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* The explorer sidebar holds a real control now rather than five lists of body text, so it
-   needs the width for a value and its count side by side. */
-.explorer { grid-template-columns: 292px minmax(0, 1fr); gap: 32px; }
+/*
+ * ONE COLUMN UNDER 1120px, and the number is arithmetic rather than taste.
+ *
+ * The rail takes 292px plus a 32px gap. At 1000px of window the results column is left with
+ * about 610px for a seven-column table, which is narrower than the table's own minimum, so
+ * the reader gets a horizontal scrollbar on a laptop. Below 1120px the rail therefore goes
+ * above the results instead of beside them, which is also what the phone layout wants.
+ *
+ * This rule used to sit at the very end of the file, AFTER the media query that collapses the
+ * explorer, so at every width it won: measured at 375px the facet rail kept its 292px and the
+ * results column was 19px wide, with the session rows rendering into nineteen pixels and the
+ * detail dialog unreachable. The declaration is in the base rule above now, and a rule that
+ * overrides a breakpoint cannot be written below it by accident.
+ */
+
+@media (max-width: 1120px) {
+    .explorer { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+    .explorer .facets { border-right: 0; padding-right: 0; }
+}
+
+/* ---------------------------------------------------------------------------
+   THE ROW OPENER.
+
+   A drillable row and the filter links inside it want different things from the
+   same click, and the link has to win — so the row needs one piece of surface
+   that is unambiguously "open this record". It is quiet by default, because a
+   table of twenty-five rows with twenty-five loud buttons down its right edge
+   would be the noisiest thing on the page, and it takes the accent only when it
+   is being pointed at or focused.
+   --------------------------------------------------------------------------- */
+
+.rowopen-cell { text-align: right; }
+
+.rowopen {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    font: 700 18px/1 var(--font-ui);
+    color: var(--faint);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.rowopen:hover,
+tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); background: var(--page); }
+.rowopen:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------------------------------------------------------------------------
+   THE NAVIGATION RAIL, AND THE FACET COLUMN THE WIDTH PAYS FOR.
+
+   THE PROBLEM BOTH OF THESE SOLVE IS THE SAME ONE: where the horizontal space
+   goes. The navigation listed twelve views at full heading length and took
+   216px of every desk screen to do it, and the facets had nowhere to live but
+   a block across the top of the page that pushed the content down. Collapsing
+   the navigation to a 60px rail of marks returns 156px, and that is exactly
+   what the facet column beside the results is built out of.
+
+   COLLAPSED IS THE DEFAULT, and it is a real default rather than a saved one:
+   a browser with nothing stored gets the rail. An operator learns twelve marks
+   in a day; one who has not is one press from the words, and until then every
+   mark carries the view's name as its accessible name and as a tooltip, so
+   nothing in the rail is ever unlabelled.
+
+   --side-w IS THE ONE NUMBER. The rail's width and <main>'s left margin both
+   read it, so overriding it on the root element moves both and the width lands
+   in the content instead of in a gutter. Everything below is scoped to the
+   desk layout: under 900px the navigation is the drawer in mobile.css and none
+   of this applies.
+   --------------------------------------------------------------------------- */
+
+@media (min-width: 901px) {
+
+    :root.lh-rail-collapsed { --side-w: 60px; }
+
+    .lh-rail .side { padding-top: 16px; overflow-x: hidden; }
+
+    /* The toggle sits where the eye already is: directly under the brand, above
+       the list, which is where the reference rail in the Opensolr admin puts it. */
+
+    .lh-railbtn {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 34px;
+        margin: 0 0 14px;
+        padding: 6px 24px;
+        font: 600 14px/1.2 var(--font-ui);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--faint);
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        cursor: pointer;
+        text-align: left;
+    }
+    .lh-railbtn:hover { background: var(--band); color: var(--ink); }
+    .lh-railbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+    /* Two chevrons drawn from borders: one asset fewer, and it turns with the
+       state so the control says which way it will go. */
+
+    .lh-railbtn-mark {
+        flex: none;
+        width: 8px;
+        height: 8px;
+        border-top: 1.5px solid currentColor;
+        border-right: 1.5px solid currentColor;
+        transform: rotate(-135deg);
+    }
+    .lh-railbtn[aria-expanded="false"] .lh-railbtn-mark { transform: rotate(45deg); }
+
+    .lh-rail .side li a {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        white-space: nowrap;
+    }
+    .lh-rail .side li a .vicon { flex: none; }
+
+    /* Collapsed: marks only, centred, and the current view is the one in the
+       accent with a rule beside it — the same two devices the expanded list
+       uses, so the rail is the same navigation rather than a second one. */
+
+    :root.lh-rail-collapsed .side { padding-left: 0; padding-right: 0; }
+    :root.lh-rail-collapsed .brand { padding: 0 0 20px; justify-content: center; }
+    :root.lh-rail-collapsed .brand-name { display: none; }
+    :root.lh-rail-collapsed .lh-railbtn { justify-content: center; padding: 6px 0; }
+    :root.lh-rail-collapsed .lh-railbtn-label { display: none; }
+    :root.lh-rail-collapsed .side li a { justify-content: center; padding: 11px 0; }
+    :root.lh-rail-collapsed .side li a .navlabel,
+    :root.lh-rail-collapsed .side li a .lh-navhint { display: none; }
+    :root.lh-rail-collapsed .side li a.on { background: var(--band); color: var(--accent-ink); }
+    :root.lh-rail-collapsed .theme-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        margin: 16px auto 0;
+        padding: 8px 0;
+        border-color: transparent;
+    }
+    :root.lh-rail-collapsed .theme-toggle .lh-themelabel { display: none; }
+    .lh-rail .theme-toggle { display: flex; align-items: center; gap: 10px; }
+    :root.lh-rail-collapsed .side .signout { padding: 0 10px; }
+    :root.lh-rail-collapsed .side .signout button { padding: 8px 4px; text-align: center; }
+    :root.lh-rail-collapsed .signout-who { display: none; }
+
+    /* THE FACET COLUMN.
+
+       The expanded filter panel is markup at the top of the view and was drawn
+       as a block across the full width, which put the facets on top and every
+       card below them. Here the view becomes two columns while the panel is
+       open: the panel takes the first one and spans every row, the cards take
+       the second. No markup moves — assets/js/responsive.js only mirrors the
+       panel's own `hidden` attribute onto the view as a class — so the module
+       that owns the panel keeps owning it. */
+
+    .view.has-facet-column {
+        display: grid;
+        grid-template-columns: 292px minmax(0, 1fr);
+        grid-auto-flow: dense;
+        column-gap: 32px;
+        align-items: start;
+    }
+    .view.has-facet-column > * { grid-column: 2; }
+    .view.has-facet-column > .filterbar {
+        grid-column: 1;
+        grid-row: 1 / 200;
+        position: sticky;
+        top: calc(var(--set-nav-h) + 12px);
+        max-height: calc(100vh - var(--set-nav-h) - 32px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        border-right: 1px solid var(--hairline);
+        padding-right: 24px;
+    }
+    .view.has-facet-column > .filterbar .fpanel {
+        grid-template-columns: minmax(0, 1fr);
+        border-top: 0;
+        padding-top: 0;
+    }
+    .view.has-facet-column > .filterbar .fpanel .facet-groups {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* Each of the two collapse controls belongs to exactly one layout. The rail exists because a
+   desk screen has a sidebar; the facet disclosure exists because a phone does not have room
+   for a rail of values above the results. Showing either one on the other's layout produced a
+   control that did nothing and a label with no styles behind it. */
+
+@media (max-width: 900px) {
+    .lh-railbtn { display: none; }
+}
+
+@media (min-width: 901px) {
+    .lh-facetbtn { display: none; }
+}
+
+/* ---------------------------------------------------------------------------------------
+   Two-factor enrollment and the recovery codes.
+
+   The QR code is the only graphic in the panel whose colours are not a style choice: a reader
+   measures reflectance, and an inverted or tinted symbol is refused outright by some scanners
+   and read by others. So the frame paints a fixed light ground under it in BOTH themes, and the
+   SVG itself carries #000 on #fff from the encoder. Everything around it follows the theme as
+   usual; the 180 square millimetres a camera looks at do not.
+
+   The key and the codes are identifiers being transcribed by a human, so they are monospace,
+   generously letter-spaced and selectable. `user-select: all` makes one click take the whole
+   value, which is the difference between copying a 16-character key correctly and not.
+   --------------------------------------------------------------------------------------- */
+
+.qr-frame {
+    display: inline-block;
+    margin: 14px 0 4px;
+    padding: 12px;
+    background: #ffffff;
+    color: #000000;
+    border: 1px solid var(--hairline);
+    border-radius: 2px;
+    max-width: 100%;
+}
+.qr-frame .qr { display: block; width: 100%; height: auto; max-width: 260px; }
+
+.qr-key {
+    margin: 12px 0 6px;
+    padding: 10px 12px;
+    background: var(--chip);
+    color: var(--ink);
+    border-radius: 2px;
+    font-size: 16px;
+    letter-spacing: 0.06em;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+.steps-2fa { margin: 0 0 18px; padding-left: 22px; }
+.steps-2fa > li { margin-bottom: 22px; }
+.steps-2fa > li > strong { display: block; margin-bottom: 4px; }
+
+.recovery-codes {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 8px;
+    margin: 16px 0;
+    padding: 0;
+}
+.recovery-codes > li {
+    padding: 9px 12px;
+    background: var(--chip);
+    color: var(--ink);
+    border-radius: 2px;
+    font-size: 16px;
+    letter-spacing: 0.04em;
+    user-select: all;
+}
+
+.warn-text { color: var(--accent-ink); font-weight: 700; }
+
+@media (max-width: 560px) {
+    .qr-frame { display: block; }
+    .qr-frame .qr { max-width: 100%; }
+}
+
+/* =====================================================================================
+   THE FACET CONTROLS, THE VALUE BROWSER AND THE PIVOTS.
+
+   Everything below is markup another pass landed unstyled. One rule governs the whole
+   block and it is not decoration: THE OPERATOR CHANGES WHAT EVERY NUMBER ON THE PAGE
+   MEANS, so its state has to be legible at a glance, and a value that is EXCLUDED must
+   never look like a value that is SELECTED. Those are opposite instructions; drawn
+   similarly they make the page lie.
+
+   The vocabulary is the one the panel already has, so none of this is a new component:
+   selected is a solid accent rule and a tick, excluded is a DASHED accent rule, a minus
+   and a struck value, pending is dashed where applied is solid, and anything that is a
+   remainder rather than a category is faint with no border at all. Flat, 2px corners,
+   hairlines, one accent, no gradient, no shadow, nothing under 14px. Every state
+   declares both its background and its colour — tests/test_responsive.php enforces it.
+   ================================================================================== */
+
+/* --- The per-dimension operator -------------------------------------------------------
+
+   Any of / All of / None of, as a segmented row of real links. It has to read correctly
+   with two segments as well as three, because "All of" is only offered on a dimension the
+   server says holds a list — so the shape is a bordered row of equals rather than a
+   layout that assumes a middle. The active segment takes the accent and a rule beneath
+   it; every segment reserves that rule in transparent, so switching moves no pixels. */
+
+.facet-op {
+    display: flex;
+    margin: 0 0 10px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+.facet-op-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 6px 8px;
+    border-left: 1px solid var(--hairline);
+    border-bottom: 2px solid transparent;
+    font: 600 14px/1.3 var(--font-ui);
+    letter-spacing: 0.04em;
+    color: var(--faint);
+    background: var(--page);
+    text-align: center;
+    text-decoration: none;
+    white-space: nowrap;
+}
+.facet-op-btn:first-child { border-left: 0; }
+.facet-op-btn:hover,
+.facet-op-btn:focus-visible {
+    background: var(--band);
+    color: var(--ink);
+    text-decoration: none;
+}
+.facet-op-btn.is-on {
+    background: var(--chip);
+    color: var(--accent-ink);
+    border-bottom-color: var(--accent);
+    font-weight: 700;
+}
+.facet-op-btn.is-on:hover {
+    background: var(--chip);
+    color: var(--accent-ink);
+}
+
+/* --- What the counts count ------------------------------------------------------------
+
+   With an exclusion in force the number beside a value is not the number of things on the
+   page. The sentence that says so is quiet type under a hairline: it is a footnote to the
+   list, not a warning about it. */
+
+.facet-basis {
+    margin: 0 0 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--hairline);
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--faint);
+}
+
+/* Clearing one dimension. It sits in the facet head beside the name, so it is the same
+   weight as the head itself and only takes the accent when it is pointed at. */
+
+.facet-clear {
+    font: 600 14px/1.3 var(--font-ui);
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--faint);
+    background: none;
+    text-decoration: none;
+}
+.facet-clear:hover,
+.facet-clear:focus-visible { background: none; color: var(--accent-ink); text-decoration: underline; }
+
+/* --- Excluded is the opposite of selected, and is drawn as the opposite ----------------
+
+   Selected: solid accent rule, band fill, a tick, the value in full colour.
+   Excluded: DASHED accent rule, no fill, a minus, and the value struck through. A reader
+   never has to remember which mark means which — one of them has a line through it.
+
+   The proportional bar is suppressed on an excluded row on purpose. Its width is a share
+   of a count that this row has just removed from the page, so leaving it would draw a
+   quantity that is no longer being shown. */
+
+.facet-opt.is-excluded {
+    border-color: var(--accent);
+    border-style: dashed;
+    background: var(--page);
+    color: var(--faint);
+    font-weight: 400;
+}
+.facet-opt.is-excluded:hover,
+.facet-opt.is-excluded:focus-visible { background: var(--band); color: var(--ink); }
+.facet-opt.is-excluded .facet-fill { display: none; }
+.facet-opt.is-excluded .facet-mark { color: var(--accent-ink); font-weight: 700; }
+.facet-opt.is-excluded .facet-val { text-decoration: line-through; text-decoration-thickness: 1px; }
+.facet-opt.is-excluded .facet-n { color: var(--faint); }
+
+/* The "not reported" row is a real filter over an absence, not a caption, so it is a row
+   like any other — set apart only by a rule above it and by its label being muted, which
+   is what says the value is the absence rather than a value. */
+
+.facet-li-absent { margin-top: 6px; border-top: 1px solid var(--hairline); padding-top: 6px; }
+.facet-li-absent .facet-val { font-style: italic; }
+
+/* --- The active-filter chip for an exclusion ------------------------------------------
+
+   Same shape as every other chip so removing it is the same gesture, and the same dashed
+   accent rule the excluded facet row uses so the two are recognisably one idea. The word
+   "not" is carried on the chip itself: a bar that drew "hosting" and "not hosting" the
+   same way would make every number under it unreadable. */
+
+.fchip.is-excluded {
+    border-color: var(--accent);
+    border-style: dashed;
+    background: var(--page);
+    color: var(--accent-ink);
+}
+.fchip.is-excluded:hover,
+.fchip.is-excluded:focus-visible { background: var(--band); color: var(--accent-ink); }
+.fchip.is-excluded .fchip-val { text-decoration: line-through; text-decoration-thickness: 1px; }
+.fchip-not {
+    font: 700 14px/1.3 var(--font-ui);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent-ink);
+}
+
+/* --- The value browser, inside the shared dialog shell ---------------------------------
+
+   The same dialog every detail view uses, with different content: a search field, an A-Z
+   index, the values grouped under letter headings in columns, and a footer that applies.
+
+   STAGED IS NOT APPLIED, AND IS DRAWN AS PENDING. A row the reader has ticked here has
+   changed nothing yet — the page behind the dialog is still showing the old filter — so a
+   staged row carries a DASHED accent rule, which is this stylesheet's mark for "not
+   settled", while an applied filter in the rail behind it carries a solid one. The footer
+   says how many changes are waiting and its button only becomes the primary one when
+   there is something to apply. */
+
+.fb-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding-bottom: 12px;
+    margin-bottom: 4px;
+    background: var(--page);
+}
+.fb-search { width: 100%; }
+
+.fb-letters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--hairline);
+}
+.fb-letter {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    padding: 4px 4px;
+    font: 600 14px/1 var(--font-mono);
+    color: var(--accent-ink);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    text-decoration: none;
+    cursor: pointer;
+}
+.fb-letter:hover,
+.fb-letter:focus-visible { background: var(--band); color: var(--ink); border-color: var(--hairline); }
+
+/* A letter with nothing under it is shown and is visibly inactive, rather than removed:
+   the index has to stay the same shape as the reader types, or the letters move under
+   the pointer between one keystroke and the next. */
+.fb-letter.is-off {
+    color: var(--field-border);
+    background: none;
+    border-color: transparent;
+    cursor: default;
+    pointer-events: none;
+}
+
+.fb-letter-head {
+    margin: 18px 0 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--hairline);
+    font: 700 14px/1.2 var(--font-mono);
+    letter-spacing: 0.1em;
+    color: var(--faint);
+}
+.fb-body > .fb-letter-head:first-child { margin-top: 0; }
+
+.fb-values {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+    gap: 0 24px;
+}
+
+.fb-value { min-width: 0; }
+.fb-value > a {
+    display: grid;
+    grid-template-columns: 16px minmax(0, max-content) max-content;
+    justify-content: start;
+    align-items: baseline;
+    gap: 4px 8px;
+    padding: 5px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    font-size: 15px;
+    font-weight: 400;
+    color: var(--ink);
+    background: none;
+    text-decoration: none;
+}
+.fb-value > a:hover,
+.fb-value > a:focus-visible { background: var(--band); color: var(--ink); border-color: var(--hairline); }
+
+.fb-value.is-on > a {
+    border-color: var(--accent);
+    border-style: dashed;
+    background: var(--band);
+    color: var(--ink);
+    font-weight: 600;
+}
+.fb-value.is-on > a:hover { background: var(--band); color: var(--accent-ink); }
+
+.fb-mark { color: var(--accent-ink); font-weight: 700; text-align: center; }
+.fb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-count {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+    color: var(--faint);
+}
+
+/* The stored value beside the spoken one. It is there so a reader can see what actually
+   travels in the filter, and it is a whisper: second line, 14px, the faintest tone, and
+   it never competes with the label for the row. */
+.fb-slug {
+    grid-column: 2 / -1;
+    font-size: 14px;
+    color: var(--faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fb-note { margin: 0 0 12px; font-size: 14px; line-height: 1.45; color: var(--faint); }
+
+.fb-foot {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+    padding-top: 14px;
+    border-top: 1px solid var(--hairline);
+    background: var(--page);
+}
+.fb-foot .fb-note { flex: 1 1 240px; margin: 0; }
+
+/* The footer's apply control is an <a>, not a <button> — it carries the URL the staged set
+   resolves to, so it can be middle-clicked, copied, or followed with scripting off. That
+   means none of the `button.primary` / `button.ghost` rules reach it and it has to state the
+   same two shapes itself. It is the panel's only button-shaped link and it is deliberate. */
+
+.fb-apply {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 18px;
+    font: 700 15px/1.2 var(--font-ui);
+    color: var(--ink);
+    background: var(--page);
+    border: 1px solid var(--ink);
+    border-radius: var(--radius);
+    text-decoration: none;
+}
+.fb-apply:hover,
+.fb-apply:focus-visible { background: var(--ink); color: var(--page); text-decoration: none; }
+.fb-apply.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.fb-apply.primary:hover,
+.fb-apply.primary:focus-visible { background: var(--ink); border-color: var(--ink); color: var(--page); }
+.fb-apply.ghost { border-color: var(--hairline); color: var(--muted); font-weight: 600; }
+.fb-apply.ghost:hover,
+.fb-apply.ghost:focus-visible { background: var(--band); border-color: var(--ink); color: var(--ink); }
+
+/* How many values are staged. Quiet at nothing, and in the accent the moment there is
+   something waiting to be applied — which is the difference between what this dialog is
+   showing and what the page behind it is still filtered by. */
+
+.fb-selected { margin-right: auto; font-size: 14px; color: var(--faint); }
+.fb-foot:has(.fb-apply.primary) .fb-selected { color: var(--accent-ink); font-weight: 600; }
+
+/* The operator control appears a second time in the footer, where it applies to the staged
+   set. Inline there rather than a full-width row, so it sits with the buttons. */
+
+.fb-foot .facet-op { flex: 0 0 auto; width: auto; margin: 0; }
+.fb-foot .facet-op-btn { flex: 0 0 auto; padding: 8px 12px; }
+
+/* --- Pivots ---------------------------------------------------------------------------
+
+   One row per outer value, its total, and the inner breakdown as a wrapping row of cells.
+   A cell is a link that filters on both dimensions at once, so it is drawn as a control:
+   a hairline box with the value and its count.
+
+   THE REMAINDER IS NOT A CATEGORY. The inner facet is limited, so the cells do not sum to
+   the row, and the shortfall is shown as its own cell. It must never read as another
+   value: no border, no box, faint type, and it is a <span> rather than a link because
+   there is no single filter that would select "everything else". */
+
+.pivot-cells { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+
+.pivot-cell {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    max-width: 100%;
+    padding: 3px 9px;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--ink);
+    background: var(--page);
+    text-decoration: none;
+}
+.pivot-cell:hover,
+.pivot-cell:focus-visible {
+    background: var(--band);
+    color: var(--accent-ink);
+    border-color: var(--accent);
+    text-decoration: none;
+}
+.pivot-cell-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pivot-cell-n {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--faint);
+    flex: none;
+}
+.pivot-cell:hover .pivot-cell-n { background: none; color: var(--accent-ink); }
+
+.pivot-cell.is-rest {
+    border-color: transparent;
+    background: none;
+    color: var(--faint);
+    font-style: italic;
+    cursor: default;
+}
+
+/* --- The same controls on a phone ----------------------------------------------------- */
+
+@media (pointer: coarse), (max-width: 900px) {
+    .facet-op-btn,
+    .fb-letter,
+    .fb-value > a,
+    .pivot-cell {
+        min-height: var(--lh-tap);
+        align-items: center;
+    }
+    .fb-letter { min-width: var(--lh-tap); }
+    .fb-value > a { align-items: baseline; padding-top: 8px; padding-bottom: 8px; }
+}
+
+@media (max-width: 900px) {
+    /* One column of values, and a footer clear of the gesture bar. The letter index keeps
+       every letter — it is how a reader gets to Z in a list of two hundred — and scrolls
+       in one row rather than wrapping into four. */
+    .fb-values { grid-template-columns: minmax(0, 1fr); }
+    .fb-letters {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+    }
+    .fb-letters::-webkit-scrollbar { display: none; }
+    .fb-foot {
+        padding-bottom: max(4px, env(safe-area-inset-bottom));
+        justify-content: flex-start;
+        gap: 8px;
+    }
+    /* The count takes its own line so the two controls share the next one rather than
+       stacking, which on a 375px sheet is the difference between one row and three. */
+    .fb-selected { flex-basis: 100%; margin-right: 0; }
+    .fb-foot .fb-apply { flex: 1 1 auto; }
+
+    /* A pivot row becomes a card like every other stacked row, and its cells become a
+       wrapping list inside it rather than a third column of nothing. */
+    table.lh-stack .pivot-cells { gap: 8px; }
+    table.lh-stack .pivot-cell { max-width: 100%; }
+}
+
+/* --- A search that has left the machine ------------------------------------------------
+
+   The value browser's search and the sidebar's inline box now go to the SERVER. They are
+   debounced 250ms and then make a round trip, so there is a real gap where the operator
+   has typed and nothing on screen has changed yet — and a box that looks idle during it
+   is a box they type into twice.
+
+   THE SIGNAL IS THE FIELD'S OWN GROUND, and that choice is forced rather than stylistic.
+   The obvious candidate, the border, is already the accent whenever the field is focused,
+   which it always is while somebody is typing into it — the state would be invisible
+   exactly when it is needed. A spinner is not available either: these are <input>
+   elements and an input has no ::before or ::after to hang one on, and adding a wrapper
+   would be markup that belongs to another module. So the ground moves one step to --chip
+   and back, which is perceptible on a field the reader is looking at, silent everywhere
+   else, and changes no geometry at all — no border width, no padding, nothing that could
+   shift the letters under the cursor mid-word.
+
+   IT MUST NOT FLASH ON THE FAST PATH. The same class is set around the warm-up fetch and
+   around a search that may resolve in twenty milliseconds, and the local filter path does
+   not set it at all. A 180ms animation delay is what keeps a quick answer silent: the
+   field sits at its resting colour until a request has been slow enough to be worth
+   mentioning, and most of them never are.
+
+   REDUCED MOTION KEEPS THE STATE, NOT THE MOVEMENT. panel.css flattens every animation to
+   nothing under that query, which would leave the field looking idle, so the pulse is
+   replaced by the same step held still — after the same delay, for the same reason. */
+
+.facet-q.is-loading,
+.fb-search.is-loading {
+    background-color: var(--page);
+    color: var(--ink);
+    animation: lh-inflight 1.1s ease-in-out 180ms infinite;
+}
+
+@keyframes lh-inflight {
+    0%, 100% { background-color: var(--page); }
+    50%      { background-color: var(--chip); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .facet-q.is-loading,
+    .fb-search.is-loading {
+        animation-name: none;
+        transition: background-color 0s 180ms;
+        background-color: var(--chip);
+        color: var(--ink);
+    }
+}
+
+/* --- What the list in front of you actually is -----------------------------------------
+
+   One line, four different things to say: these are the most common values, this is what
+   your search matched, there were more matches than are shown, or nothing matched. The
+   reader cannot tell those apart from the list itself — a short list of results and a
+   short list of the top values look identical — so the line is not decoration and is set
+   as content: --muted rather than --faint, and a rule above it that separates it from the
+   controls rather than a box that detaches it from the values it describes.
+
+   NOTHING MATCHED IS AN ANSWER. A search that found no value has done its job and said so,
+   and the sentence above the list carries the whole finding ("no value contains X; every
+   value was searched"). What must not happen is the answer arriving as a blank panel with
+   an apology in it, so the empty body is given the room and the tone of a paragraph
+   somebody meant to write. There is no accent and no alert colouring anywhere in here:
+   this is a result, not a failure. */
+
+.fb-notes:empty { display: none; }
+.fb-notes {
+    margin-bottom: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--hairline);
+}
+/* The letter index already draws a rule under itself, so the notes line must not draw a
+   second one 10px below it. Two hairlines with nothing between them read as a mistake. */
+.fb-letters + .fb-notes { border-top: 0; padding-top: 0; }
+
+.fb-notes .fb-note { margin: 0 0 6px; color: var(--muted); }
+.fb-notes .fb-note:last-child { margin-bottom: 0; }
+
+.fb-body > .fb-note:only-child {
+    margin: 0;
+    padding: 22px 0 24px;
+    font-size: 15px;
+    color: var(--muted);
+}
+
+/* ---------------------------------------------------------------------------
+   ANYTHING THAT LOOKS INTERACTIVE MUST BE INTERACTIVE.
+
+   THE DEFECT. The Solr card's API key row rendered its value as
+   `<span class="chip chip-good">Set</span>` — a bordered box, in a definition
+   list where account, region, both core names and the timeout are all plain
+   text. The one boxed thing on the card read as the one pressable thing on the
+   card, and it was a status word. Somebody clicked it and nothing happened.
+
+   THE GENERAL RULE, because this is not a one-row bug. A chip is a BADGE
+   vocabulary and it earns its box in a table, where a column of them reads as
+   a column of categories and there is nothing else there to mistake it for. It
+   does not earn one in a definition list or in the middle of a sentence, where
+   it is the only bordered thing among plain values and there is exactly one
+   thing it can be mistaken for. So a chip in either of those two contexts
+   loses its box and becomes what it is: a status word.
+
+   That is a structural rule rather than a fix to one card — a future card that
+   drops a chip into a value list or a paragraph gets the value treatment
+   automatically — and tests/test_responsive.php pins the direction so a status
+   cannot be dressed as a control again.
+
+   `.state` is the same thing said explicitly, for markup that never wanted a
+   chip in the first place: a status word, bold, ink for a settled state and
+   the one accent for a state the operator has to act on. No box either way.
+   --------------------------------------------------------------------------- */
+
+/* A sub-heading that follows a paragraph is starting a new thought and needs the space to
+   say so. Scoped to that exact shape rather than to h4, which several components already
+   position themselves. */
+p + h4 { margin-top: 22px; }
+
+.state {
+    font-weight: 700;
+    color: var(--ink);
+    background: none;
+}
+.state-bad { color: var(--accent-ink); }
+
+dl.kv dd > .chip,
+.kv dd > .chip,
+p > .chip {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    max-width: none;
+    font-weight: 700;
+    color: var(--ink);
+}
+dl.kv dd > .chip-warn,
+dl.kv dd > .chip-bad,
+dl.kv dd > .chip-accent,
+.kv dd > .chip-warn,
+.kv dd > .chip-bad,
+.kv dd > .chip-accent,
+p > .chip-warn,
+p > .chip-bad,
+p > .chip-accent { color: var(--accent-ink); }
+
+/* ---------------------------------------------------------------------------
+   A FILE PATH IS THE HEADING OF THE BLOCK UNDER IT.
+
+   `/var/log/apache2/other_vhosts_access.log` set as another line of monospaced
+   prose is a string the eye slides over, and on a card that names three of them
+   there is nothing saying where one file's block ends and the next begins. So a
+   path gets a filled band, type a step above body size, and the word FILE in
+   front of it — the reader should not have to parse the string to know that a
+   file is being named.
+
+   It is a heading, so it is spaced as one: air above, and the block it
+   introduces attached directly beneath with no gap of its own.
+
+   A path is one unbreakable token and some of them are long, so the band wraps
+   internally rather than widening the page. That is the whole reason it is a
+   block-level band and not an inline chip.
+   --------------------------------------------------------------------------- */
+
+.filepath {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 28px 0 0;
+    padding: 10px 14px;
+    background: var(--chip);
+    border-left: 2px solid var(--accent);
+    border-radius: var(--radius);
+    font: 400 17px/1.4 var(--font-mono);
+    color: var(--ink);
+    overflow-wrap: anywhere;
+    min-width: 0;
+}
+.filepath:first-child { margin-top: 0; }
+.filepath-label {
+    flex: none;
+    font: 700 14px/1.7 var(--font-ui);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--faint);
+}
+.filepath-value { min-width: 0; overflow-wrap: anywhere; }
+
+/* The band is the head of the block, so whatever follows it is attached to it. */
+.filepath + * { margin-top: 12px; }
+
+/* ---------------------------------------------------------------------------
+   FOLDED BLOCKS.
+
+   A parsed five-line sample, a field-mapping table and a list of everything the
+   format does not log are each correct, each occasionally essential, and each
+   several screens long — so on a card that carries all three per file they bury
+   the thing the card is actually for. They are <details>, closed for anybody who
+   has not opened one, and assets/js/responsive.js remembers the choice per block
+   so an operator who wants mappings gets them on every file and on every visit.
+
+   The summary keeps the heading's own wording. "Details" would make the reader
+   open it to find out whether they wanted it.
+   --------------------------------------------------------------------------- */
+
+.fold {
+    margin: 18px 0 0;
+    border-top: 1px solid var(--hairline);
+}
+.fold > summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    cursor: pointer;
+    font: 700 15px/1.3 var(--font-ui);
+    color: var(--muted);
+    background: none;
+    list-style: none;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary:hover { background: none; color: var(--ink); }
+.fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The marker is drawn, so it turns with the state and needs no font or asset. */
+.fold > summary::before {
+    content: "";
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid var(--accent);
+    border-bottom: 1.5px solid var(--accent);
+    transform: rotate(-45deg);
+    transition: transform .15s ease-out;
+}
+.fold[open] > summary::before { transform: rotate(45deg); }
+.fold-note { margin-left: auto; font-weight: 400; font-size: 14px; color: var(--faint); }
+.fold > :not(summary) { margin-bottom: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+    .fold > summary::before { transition: none; }
+}
+
+@media (pointer: coarse), (max-width: 900px) {
+    .fold > summary { min-height: var(--lh-tap); }
+    .filepath { font-size: 16px; }
+}
+
+/* ---------------------------------------------------------------------------
+   SECTIONS THAT FOLD.
+
+   Only the first section of a page is open for somebody who has never touched
+   it. "09 Scoring weights" is a wall of rules nobody wants until they want it,
+   and a page that opens with six of those has hidden the one card the reader
+   came for behind four screens of scrolling.
+
+   THE HEADING IS THE CONTROL. The h2 keeps its level, its number and its size —
+   everything the enlarged-heading treatment and the section nav depend on — and
+   what sits inside it is a button, which is what gets an accordion keyboard
+   support and a real `aria-expanded` rather than a div pretending. The button
+   carries no chrome of its own: the heading already looks like a heading, and a
+   box around it would say "control" twice.
+
+   THE MARKER IS THE ONLY THING ADDED. A drawn chevron in the accent, turning
+   with the state — the same mark the folded blocks inside a card use, so there
+   is one open/closed affordance in the panel rather than two.
+
+   WHAT STAYS VISIBLE WHEN A SECTION IS SHUT: the number, the title and the
+   card's own tools. A collapsed section still has to be able to say whether it
+   is worth opening, and on several cards the tools are a live count that does
+   exactly that.
+
+   Everything here is gated on `.lh-sections`, which assets/js/responsive.js adds
+   only once it has built the regions and the controls. With scripting off every
+   section is open, which is the state this page had before and is never worse.
+   --------------------------------------------------------------------------- */
+
+.card-toggle {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+
+    /* Not `width: 100%`. The button is a flex item inside the h2, which is itself a flex item
+       sharing the card head with the card's tools — a percentage width there resolves against
+       a box that has not finished shrinking, and the heading overflowed its own head by the
+       gap. Growing and shrinking with a floor of zero is what a flex item wants. */
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+}
+.card-toggle:hover { background: none; color: var(--accent-ink); }
+.card-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; background: none; color: inherit; }
+
+/* The marker trails the words rather than leading them, so the number stays the
+   first thing on the line and the headings all start at the same x. */
+.card-toggle::after {
+    content: "";
+    flex: none;
+    align-self: center;
+    width: 9px;
+    height: 9px;
+    margin-left: 2px;
+    border-right: 2px solid var(--accent);
+    border-bottom: 2px solid var(--accent);
+    transform: rotate(45deg) translate(-2px, -2px);
+    transition: transform .15s ease-out;
+}
+.lh-sections .card.is-shut .card-toggle::after { transform: rotate(-45deg) translate(-2px, -2px); }
+
+.lh-sections .card.is-shut > .card-region { display: none; }
+
+/* A shut section is a line, not a block: the rule under its head is what separates it from
+   the next one, and the 56px gap the open sections use would leave a stack of shut headings
+   floating in the middle of nothing. */
+.lh-sections .card.is-shut > .card-head { margin-bottom: 0; padding-bottom: 14px; }
+.lh-sections .view { gap: 30px; }
+.lh-sections .card:not(.is-shut) { margin-bottom: 18px; }
+
+/* Expand all, in the one piece of chrome every multi-section page already has. Ghost-weight,
+   because it is a way out of a state rather than the thing to press first. */
+.lh-expandall {
+    flex: none;
+    margin-left: auto;
+    padding: 5px 12px;
+    font: 600 14px/1.2 var(--font-ui);
+    color: var(--muted);
+    background: var(--page);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.lh-expandall:hover { background: var(--band); color: var(--ink); border-color: var(--ink); }
+.lh-expandall:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The bar is a flex row of links; the control sits at its end and must not be scrolled away
+   with them, so the row keeps its scroll and the button is pinned after it. */
+.set-nav { display: flex; align-items: center; gap: 12px; }
+.set-nav ul { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.set-nav ul::-webkit-scrollbar { display: none; }
+
+@media (pointer: coarse), (max-width: 900px) {
+    .lh-expandall { min-height: var(--lh-tap); }
+}
+
+/* On paper there is nothing to press, so there is nothing folded either. */
+@media print {
+    .lh-sections .card.is-shut > .card-region { display: block; }
+    .card-toggle::after,
+    .lh-expandall { display: none; }
+}

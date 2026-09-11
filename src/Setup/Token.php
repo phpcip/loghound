@@ -63,6 +63,67 @@ final class Token
     /** File name inside var/. Named so it is obvious in a directory listing. */
     public const FILENAME = 'install-token';
 
+    /**
+     * How long a reinstall grant stands, in seconds.
+     *
+     * Half an hour: long enough to walk through three screens without being hurried, short
+     * enough that a browser left open on a shared machine does not stay a way in. It is also
+     * consumed on first use, so this is the ceiling and not the usual lifetime.
+     */
+    private const GRANT_TTL = 1800;
+
+    /** Session key holding a reinstall grant. */
+    private const GRANT_KEY = 'lh_setup_grant';
+
+    /**
+     * Record that THIS browser has already proved what the token exists to prove.
+     *
+     * THE TRAP THIS EXISTS TO CLOSE. Pressing Reinstall in the panel resets the configuration,
+     * which makes Installer::isNeeded() true again — and the installer then asks for the token
+     * in var/install-token, which needs shell access to read. An operator who administers this
+     * box entirely through the browser would have destroyed their panel and been locked out of
+     * the installer in the same click, with no way back that does not involve SSH.
+     *
+     * The resolution is not to weaken the token. It is that pressing the button in an
+     * AUTHENTICATED session is itself a stronger proof than reading a file: it required the
+     * panel password, and a second factor where one is configured. So that proof is carried
+     * forward, to that browser's session and nowhere else.
+     *
+     * A FRESH VISITOR IS UNAFFECTED. There is no cookie, header or URL parameter that carries
+     * this; it lives in the session and only the session that pressed the button has it.
+     * Anyone else reaching the installer still has to read the file.
+     */
+    public static function grant(): void
+    {
+        Security::startSession();
+        $_SESSION[self::GRANT_KEY] = time();
+    }
+
+    /**
+     * Spend a reinstall grant, if this session holds one that is still good.
+     *
+     * ONE-TIME AND SHORT-LIVED. It is removed whether or not it was still valid, so an expired
+     * one cannot sit in a session being re-tested, and a valid one converts into the installer's
+     * ordinary unlock exactly once. After that the session is unlocked on its own terms and this
+     * has nothing more to say.
+     */
+    public static function spendGrant(): bool
+    {
+        Security::startSession();
+
+        $at = $_SESSION[self::GRANT_KEY] ?? null;
+        unset($_SESSION[self::GRANT_KEY]);
+
+        return is_int($at) && $at > 0 && (time() - $at) <= self::GRANT_TTL;
+    }
+
+    /** Drop any grant this session holds, without spending it. */
+    public static function revokeGrant(): void
+    {
+        Security::startSession();
+        unset($_SESSION[self::GRANT_KEY]);
+    }
+
     /** Attempt ledger, next to the token. */
     private const ATTEMPTS = 'install-attempts.json';
 

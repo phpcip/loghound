@@ -1,16 +1,21 @@
 /*
  * Loghound — Session explorer.
  *
- * The recent-visitors list. Every row carries identity at a glance — the flag and the city, the
- * network the address belongs to BY NAME, the parsed client rather than the raw User-Agent, the
- * time and the page they came in on — and clicking a row opens the whole visit in the shared
- * dialog, including every request in order. All of those facts were already on the session
+ * The recent-visitors list. Every row carries identity at a glance — the flag, the address with
+ * the city and the declared identity under it, the network the address belongs to BY NAME, the
+ * parsed client rather than the raw User-Agent — and clicking a row opens the whole visit in the
+ * shared dialog, including every request in order. All of those facts were already on the session
  * document; none of them were shown, and the table was a dead end.
  *
  * Two affordances per row, and they answer different questions. The ROW opens the record: show
  * me everything about this visit. A VALUE inside it is a link that filters the dashboard to it:
  * show me only this network, only this browser, only this country. The link wins over the row
  * because it is a real anchor, which is also what makes it work with scripting off.
+ *
+ * WHICH IS WHY THE ROW ENDS IN A CONTROL. Every identity cell carries two lines of values now,
+ * so most of the row's surface is link and a reader aiming at the row lands on one: the row
+ * filters instead of opening and reads as dead. The last cell is an explicit opener, always
+ * there, never a link, and it is what the row's click was silently asking the reader to find.
  *
  * Everything rendered here came off the wire. It reaches the DOM through core.js's el({text}),
  * which is textContent, and the only value that ever becomes an href is `referer_href`, which
@@ -20,21 +25,22 @@
 'use strict';
 
 import {
-    api, byId, dec, dur, el, fill, hideEmpty, loadCard, noDataYet, num, pct, when
+    api, byId, dayOnly, dec, el, fill, hideEmpty, loadCard, noDataYet, num, pct, timeOnly, when
 } from '../core.js';
-import { clientNode, countryNode, dimValue, drillRow } from '../identity.js';
+import { clientNode, countryNode, dimValue, drillRow, openButton } from '../identity.js';
 import { activeFilters, renderFacetPanel } from '../facets.js';
 
 /**
  * Verdict chip, the same colouring the whole panel uses.
  *
- * `chip-word` puts it in the body face. A verdict is a word — "human", "likely_bot" — not
- * something whose characters have to line up or be copied exactly, and the panel had drifted
- * into setting every value in monospace regardless of what it was.
+ * The chip is set in the body face, because a verdict is a word — "human", "likely_bot" — not
+ * something whose characters have to line up or be copied exactly. The score sits beside it in
+ * monospace with tabular figures, because that IS a number read down the column. One judgement,
+ * one cell: the two were separate columns and neither was legible in the width it got.
  */
 function verdictChip(verdict) {
     return el('span', {
-        class: 'chip chip-word v-' + String(verdict || 'unknown'),
+        class: 'chip v-' + String(verdict || 'unknown'),
         text: verdict || 'unknown'
     });
 }
@@ -82,6 +88,11 @@ const SIDEBAR_VALUES = 6;
  * EVERY CELL THAT IS NOT SORTABLE AS TEXT CARRIES ITS OWN SORT KEY. "2.3 s" and "09/11/2026
  * 02:44" are rendered for a human and sort wrongly as strings, so the raw number goes on the cell
  * and assets/js/sorttable.js reads it.
+ *
+ * SEVEN CELLS, NOT TEN. Log span, engaged time and the entry page are no longer columns here —
+ * see Panel\Sessions::resultsCard() for the measurements that forced it. All three are in the
+ * detail dialog the row opens, engaged time with the sentence that says why it can be unknown
+ * rather than zero, which is a distinction a right-aligned column of durations cannot make.
  */
 function renderRows(data) {
     const table = byId('se-table');
@@ -97,15 +108,9 @@ function renderRows(data) {
     for (const doc of data.docs) {
         const tr = el('tr', drillRow('session', { id: doc.id }));
 
-        tr.appendChild(el('td', {
-            class: 'mono nowrap',
-            text: when(doc.ts_start),
-            'data-sort': doc.ts_start || ''
-        }));
-
-        tr.appendChild(el('td', { 'data-sort': doc.score === null ? '' : String(doc.score) }, [
-            verdictChip(doc.verdict),
-            doc.score === null ? null : el('span', { class: 'muted mono score', text: dec(doc.score, 0) })
+        tr.appendChild(el('td', { class: 'clip', title: when(doc.ts_start), 'data-sort': doc.ts_start || '' }, [
+            el('div', { class: 'clip-line mono', text: timeOnly(doc.ts_start) }),
+            el('div', { class: 'sub mono', text: dayOnly(doc.ts_start) })
         ]));
 
         tr.appendChild(el('td', {
@@ -113,17 +118,14 @@ function renderRows(data) {
             title: [doc.city, doc.region, doc.country].filter(Boolean).join(', ') || 'Not geolocated',
             'data-sort': [doc.country, doc.city].filter(Boolean).join(' ')
         }, [
-            doc.country ? countryNode(doc.country, { short: true }) : el('span', { class: 'muted', text: '—' }),
-            doc.city ? el('span', { class: 'sub clip-line', text: doc.city }) : null
+            doc.country ? countryNode(doc.country, { short: true }) : el('span', { class: 'muted', text: '—' })
         ]));
 
-        tr.appendChild(el('td', { class: 'clip', title: doc.ip || 'Address not recorded', 'data-sort': doc.ip || '' }, [
-            doc.ip ? dimValue('ip_s', doc.ip, { mono: true }) : el('span', { class: 'muted', text: '—' }),
-            doc.ident ? el('span', { class: 'sub clip-line', text: doc.ident }) : null,
-            doc.signed_in === true
-                ? el('span', { class: 'sub' }, [el('span', { class: 'chip chip-word chip-good', text: 'signed in' })])
-                : null
-        ]));
+        tr.appendChild(el('td', {
+            class: 'clip',
+            title: [doc.ip, doc.ident, doc.city].filter(Boolean).join(' · ') || 'Address not recorded',
+            'data-sort': doc.ip || ''
+        }, [visitorCell(doc)]));
 
         tr.appendChild(el('td', {
             class: 'clip',
@@ -142,25 +144,58 @@ function renderRows(data) {
             text: num(doc.hits),
             'data-sort': doc.hits === null ? '' : String(doc.hits)
         }));
-        tr.appendChild(el('td', {
-            class: 'num',
-            text: dur(doc.log_span_ms),
-            'data-sort': doc.log_span_ms === null ? '' : String(doc.log_span_ms)
-        }));
-        tr.appendChild(el('td', {
-            class: 'num',
-            text: doc.beacon ? dur(doc.engaged_ms) : '—',
-            title: doc.beacon
-                ? 'Visible and within 30s of a real interaction'
-                : 'No beacon arrived, so this was never measured. It is unknown, not zero.',
-            'data-sort': doc.beacon && doc.engaged_ms !== null ? String(doc.engaged_ms) : ''
-        }));
-        tr.appendChild(el('td', { class: 'clip mono', title: doc.entry || '', 'data-sort': doc.entry || '' }, [
-            el('span', { text: doc.entry || '—' })
+
+        tr.appendChild(el('td', { class: 'clip', 'data-sort': doc.score === null ? '' : String(doc.score) }, [
+            el('div', { class: 'clip-line' }, [verdictChip(doc.verdict)]),
+            doc.score === null
+                ? null
+                : el('div', { class: 'sub mono', text: 'score ' + dec(doc.score, 0) })
+        ]));
+
+        tr.appendChild(el('td', { class: 'rowopen-cell' }, [
+            openButton('session', { id: doc.id }, 'Open this visit')
         ]));
 
         body.appendChild(tr);
     }
+}
+
+/**
+ * The visitor cell: the address, then what is known about who was behind it.
+ *
+ * The address leads and is monospaced, because it is an identifier whose characters are read
+ * one at a time and compared down the column. The second line is prose and is set in the body
+ * face a tone lighter: the city, and the identity the measured site declared for this visit if
+ * it declared one. A signed-in visit says so as a chip, because "this was a logged-in human"
+ * is the single most useful thing on the row when it is true and is worth the width.
+ *
+ * Both lines truncate on their OWN box. A `<td>` cannot truncate a two-line cell: the ellipsis
+ * belongs to the line, and a cell that clips without one is what makes two columns read as one.
+ */
+function visitorCell(doc) {
+    const lower = [];
+    if (doc.city) {
+        lower.push(el('span', { text: doc.city }));
+    }
+    if (doc.ident) {
+        if (lower.length) {
+            lower.push(el('span', { text: ' · ' }));
+        }
+        lower.push(el('span', { text: doc.ident }));
+    }
+    if (doc.signed_in === true) {
+        if (lower.length) {
+            lower.push(el('span', { text: ' ' }));
+        }
+        lower.push(el('span', { class: 'chip chip-good', text: 'signed in' }));
+    }
+
+    return el('div', { class: 'client' }, [
+        el('div', { class: 'clip-line mono' }, [
+            doc.ip ? dimValue('ip_s', doc.ip, { mono: true }) : el('span', { class: 'muted', text: '—' })
+        ]),
+        el('div', { class: 'sub clip-line' }, lower.length ? lower : [el('span', { text: '—' })])
+    ]);
 }
 
 /**

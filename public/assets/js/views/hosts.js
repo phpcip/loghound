@@ -121,7 +121,7 @@ function renderTable(data) {
     tbody(table, data.rows.map((row) => ({
         attrs: dimRow('host_s', row.host),
         cells: [
-            { node: dimValue('host_s', row.host, { mono: true }), clip: true, title: row.host, sort: row.host },
+            { node: planeName(row), clip: true, title: row.host, sort: row.host },
             { text: num(row.sessions), num: true, sort: row.sessions },
             { text: num(row.counts.human), num: true, sort: row.counts.human },
             { text: num(row.counts.evasive), num: true, sort: row.counts.evasive },
@@ -136,9 +136,46 @@ function renderTable(data) {
         ]
     })));
 
+    const singlePlane = data.rows.filter((row) => row.beacon_only > 0).length;
+
     setPop('hosts-table', num(data.rows.length) + ' virtual hosts, ' + num(data.total) +
         ' scored sessions in the selected range. The five populations are mutually exclusive, ' +
-        'so they add up to the session count on each row.');
+        'so they add up to the session count on each row.' +
+        (singlePlane
+            ? ' ' + num(singlePlane) + ' of these hosts carry sessions measured by the beacon alone, with no ' +
+              'access log behind them: their verdicts rest on one plane, and one plane is the plane a ' +
+              'determined client controls. They are marked in the first column.'
+            : ''));
+}
+
+/**
+ * The host cell, carrying a mark when the host has sessions with no transport plane.
+ *
+ * The mark is on the row rather than in a footnote because the table mixes the two kinds and a
+ * reader comparing two rows has to be able to see which is which without leaving the row. Three
+ * states, and they are genuinely different situations: every session single-plane (a site on
+ * another server), some of them (a site that gained or lost a log source partway through the
+ * range), or none.
+ */
+function planeName(row) {
+    const name = dimValue('host_s', row.host, { mono: true });
+    if (!row.beacon_only) {
+        return name;
+    }
+
+    const single = row.single_plane;
+    return el('span', { class: 'plane-cell' }, [
+        name,
+        el('span', {
+            class: 'chip chip-accent',
+            text: single ? 'beacon only' : 'part beacon only',
+            title: single
+                ? 'No access log in this installation covers this host, so every session here was measured ' +
+                  'by the beacon alone. The five signals that read the request log were not evaluated.'
+                : num(row.beacon_only) + ' of ' + num(row.sessions) + ' sessions on this host were measured ' +
+                  'by the beacon alone, with no access log behind them. The rest have all three planes.'
+        })
+    ]);
 }
 
 /** A single bar split into the five population colours, in stacking order. */

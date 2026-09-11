@@ -81,11 +81,24 @@ final class Opensolr
      * object form used by /vector_regions is tolerated too, in case the two endpoints
      * converge later.
      *
+     * A REFUSAL IS A MAP, AND SOME OF THEM ARRIVE AS HTTP 200, which decode() therefore hands
+     * back rather than throwing on. Read as a list, such a map yields no regions at all — so
+     * without the explicit check below, an operator with a mistyped key was told "this account
+     * has no regions, check that it is active" and sent to look at their account settings,
+     * which is a confidently wrong diagnosis of a one-character mistake.
+     *
      * @return string[]
      */
     public function listRegions(): array
     {
         $res = $this->call('regions', [], 'GET');
+
+        if (array_key_exists('status', $res) && empty($res['status'])) {
+            throw new \RuntimeException(
+                'Opensolr refused the request for regions: '
+                . $this->redact(self::stringifyMsg($res['msg'] ?? 'no reason given'))
+            );
+        }
 
         $list = $res['_list'] ?? [];
         $out = [];
@@ -121,16 +134,211 @@ final class Opensolr
      */
     public function listIndexes(): array
     {
+        return array_column($this->listIndexEntries(), 'name');
+    }
+
+    /**
+     * List the indexes this account owns, keeping the platform's own type marker.
+     *
+     * Same endpoint and same filtering as listIndexes(), which is a thin wrapper around
+     * this. The extra field matters for one question and one only: HOW MANY INDEXES COUNT
+     * AGAINST THE PLAN. `index_type` is the platform's `parent_id` — `-1` for a standalone
+     * index and `0` for a core belonging to a cluster — and the limit the platform enforces
+     * when it refuses a create counts standalone indexes ONLY. Counting the whole list would
+     * over-report capacity use on any account that also runs a cluster, and would tell an
+     * operator they are full when they are not.
+     *
+     * The type is carried as the string the platform sent rather than being interpreted
+     * here, so a value neither side has seen before travels intact to the one place that
+     * makes a decision from it.
+     *
+     * @return array<int,array{name:string,type:string}>
+     */
+    public function listIndexEntries(): array
+    {
         $res = $this->call('get_index_list', [], 'GET');
 
         $out = [];
         foreach ((array) ($res['_list'] ?? []) as $entry) {
             $name = is_array($entry) ? ($entry['index_name'] ?? null) : $entry;
-            if (is_string($name) && Security::isSafeCoreName($name)) {
-                $out[] = $name;
+            if (!is_string($name) || !Security::isSafeCoreName($name)) {
+                continue;
             }
+            $type = is_array($entry) ? ($entry['index_type'] ?? '') : '';
+            $out[] = [
+                'name' => $name,
+                'type' => is_scalar($type) ? (string) $type : '',
+            ];
         }
         return $out;
+    }
+
+    /**
+     * The platform's marker for an index that counts against the plan's index limit.
+     *
+     * `parent_id = -1` is a standalone index. Anything else belongs to a cluster and is not
+     * counted by the gate in the platform's create_index.
+     */
+    public const TYPE_STANDALONE = '-1';
+
+    /**
+     * How many indexes on this account count against the plan's index limit.
+     *
+     * An entry whose type the platform did not send is counted, because the safe direction
+     * for a capacity figure is to over-report use: telling an operator they have less room
+     * than they do costs them a click, and telling them they have more costs them a
+     * half-provisioned install.
+     *
+     * @param array<int,array{name:string,type:string}> $entries From listIndexEntries().
+     */
+    public static function countAgainstLimit(array $entries): int
+    {
+        $n = 0;
+        foreach ($entries as $entry) {
+            if (($entry['type'] ?? '') === '' || ($entry['type'] ?? '') === self::TYPE_STANDALONE) {
+                $n++;
+            }
+        }
+        return $n;
+    }
+
+    /**
+     * The account's plan allowance and index usage, as the platform itself reports them.
+     *
+     * Endpoint: GET /get_account_summary?core_name=&signature=&email=&api_key=
+     *
+     * THIS IS THE AUTHORITY ON HOW MANY INDEXES MAY EXIST, and the three fields it is read for
+     * — `index_limit`, `indexes_used`, `indexes_available` — are built by the platform from the
+     * SAME two calls its own create gate consults, so the number a client is told and the
+     * number the platform enforces cannot drift apart. The usage counts standalone indexes
+     * only, exactly like the gate.
+     *
+     * It costs an existing index to ask. The endpoint is scoped to one core: the caller has to
+     * name an index the account owns and sign it, so an account holding nothing has nothing to
+     * name and its allowance cannot be read at all. That case is reported as unknown rather
+     * than guessed at — see Setup\Pairs::capacity(), which never blocks on a number nobody has.
+     *
+     * The signature is HMAC-SHA256 over core_name . email, keyed with the API key. It proves
+     * the request was built by something holding the key rather than merely replaying a URL,
+     * and it is computed here because this is the one class allowed to touch the key.
+     *
+     * MISSING FIELDS ARE NULL, NOT ZERO. A platform older than these fields answers with the
+     * rest of the summary and none of them, and a zero there would read as "your plan allows no
+     * indexes" — refusing an operator whose plan is perfectly fine. Absent means unknown, and
+     * unknown is the caller's problem to describe honestly.
+     *
+     * @return array{ok:bool,message:string,index_limit:?int,indexes_used:?int,indexes_available:?int}
+     */
+    public function accountSummary(string $indexName): array
+    {
+        if (!Security::isSafeCoreName($indexName)) {
+            throw new \InvalidArgumentException('Opensolr: invalid index name: ' . $indexName);
+        }
+
+        $blank = static function (string $message): array {
+            return [
+                'ok'                => false,
+                'message'           => $message,
+                'index_limit'       => null,
+                'indexes_used'      => null,
+                'indexes_available' => null,
+            ];
+        };
+
+        try {
+            $res = $this->call('get_account_summary', [
+                'core_name' => $indexName,
+                'signature' => hash_hmac('sha256', $indexName . $this->email, $this->apiKey),
+            ], 'GET');
+        } catch (\Throwable $e) {
+            return $blank($this->redact($e->getMessage()));
+        }
+
+        if (empty($res['status'])) {
+            return $blank(self::stringifyMsg($res['msg'] ?? 'the platform refused the request'));
+        }
+
+        $msg = (array) ($res['msg'] ?? []);
+        $int = static function (array $from, string $key): ?int {
+            return array_key_exists($key, $from) && is_numeric($from[$key]) ? (int) $from[$key] : null;
+        };
+
+        return [
+            'ok'                => true,
+            'message'           => '',
+            'index_limit'       => $int($msg, 'index_limit'),
+            'indexes_used'      => $int($msg, 'indexes_used'),
+            'indexes_available' => $int($msg, 'indexes_available'),
+        ];
+    }
+
+    /**
+     * Did this create_index response fail because the plan has no room for another index?
+     *
+     * THE REFUSAL IS STILL THE AUTHORITY AT THE MOMENT OF CREATION, which is why it is still
+     * recognised: the allowance is read from get_account_summary before anything is created,
+     * but another session can take the last slot between that check and this call. So this
+     * exists to report a rare race cleanly — NOT to discover the allowance. Loghound used to
+     * parse the number out of this message and remember it, because the platform published it
+     * nowhere else; it publishes it now, and a remembered number goes stale the moment a plan
+     * changes while one read from the account cannot.
+     *
+     * @param array<string,mixed> $response A decoded createIndex() response.
+     */
+    public static function isAtIndexLimit(array $response): bool
+    {
+        if (!empty($response['status'])) {
+            return false;
+        }
+        return stripos(self::stringifyMsg($response['msg'] ?? ''), 'CANNOT_ADD_MORE_THAN') !== false;
+    }
+
+    /**
+     * Read one configuration file back from a managed index.
+     *
+     * Endpoint: GET /get_file?index_name=&file_name=&file_extension=, which answers
+     * {"status":true,"msg":"<the file's contents>"}.
+     *
+     * READ-ONLY, and the only reason it exists is reuse: before this installation writes
+     * documents into an index that another installation created, it has to know whether that
+     * index's schema is the shape this version writes. Comparing the file the platform holds
+     * against the one in this checkout answers that exactly, with no version marker to keep
+     * in step and no guessing from a document sample.
+     *
+     * The platform strips the name down to [A-Za-z0-9_-] and the extension to [A-Za-z0-9]
+     * before it uses either, so a path cannot travel in them; they are shape-checked here as
+     * well so a caller bug fails locally rather than being silently rewritten server-side.
+     *
+     * Failure is a null rather than an exception. A configset the platform cannot hand back
+     * — an older index, a node that did not answer, an account that lost the file — is a
+     * normal state that the reuse flow has to describe to the operator, not a crash.
+     */
+    public function fetchConfigFile(string $indexName, string $fileName, string $extension): ?string
+    {
+        if (!Security::isSafeCoreName($indexName)) {
+            throw new \InvalidArgumentException('Opensolr: invalid index name: ' . $indexName);
+        }
+        if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $fileName)
+            || !preg_match('/^[A-Za-z0-9]{1,8}$/', $extension)) {
+            throw new \InvalidArgumentException('Opensolr: invalid configset file name.');
+        }
+
+        try {
+            $res = $this->call('get_file', [
+                'index_name'     => $indexName,
+                'file_name'      => $fileName,
+                'file_extension' => $extension,
+            ], 'GET');
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        if (empty($res['status'])) {
+            return null;
+        }
+
+        $body = $res['msg'] ?? '';
+        return is_string($body) && $body !== '' ? $body : null;
     }
 
     /**

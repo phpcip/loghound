@@ -241,6 +241,150 @@ the machine. Grant the traversal by mode instead. That is what `0751` is for.
 
 ---
 
+## Signing in to the panel
+
+The panel shows every visitor, page and address on your site, so it is never served without
+a password. With no credentials configured it answers **503 and refuses to serve** — an
+analytics dashboard left open on the internet is a data breach, and defaults decide
+outcomes.
+
+### The two sign-in methods
+
+Chosen during setup, changeable afterwards in **Settings › Sign-in**. Changing it applies to
+the next request and does not touch your username or password.
+
+| | |
+|---|---|
+| **The browser's own password prompt** (`auth.mode: basic`) | HTTP Basic. Every tool that speaks HTTP can sign in the same way, so `curl --user` and monitoring checks work. The prompt cannot be styled, and there is no way to sign out short of closing the browser. |
+| **A sign-in page** (`auth.mode: session`) | Loghound's own form, a real session, and a Sign out button that destroys the session on the server. Required for two-factor and for "stay signed in". It only works in a browser: `curl` cannot sign in to it, so move any monitoring check to Basic or drop it. |
+
+Session mode keeps its session files in the directory named by `session.save_path` in the
+FPM pool — `<prefix>/var/sessions` in a standard install. If you switch to it on a host
+where it has never been used, create that directory and give it to the service user first.
+
+### Timeouts
+
+Session mode only, both enforced by the application on every request rather than left to
+PHP's session garbage collector, which is best-effort by design and runs on somebody else's
+request:
+
+- `auth.idle_timeout` — 30 minutes. Ends a session that has done nothing for that long.
+- `auth.absolute_timeout` — 12 hours. Ends one that long after sign-in, however busy.
+
+An expired session is destroyed on the spot and the operator lands back on the sign-in
+page, so a timeout is a door that reopens rather than a dead end.
+
+### The lockout
+
+`auth.lockout_attempts` failed sign-ins from **one address** inside `auth.lockout_window`
+seconds lock that address out until the window passes. Eight in fifteen minutes by default.
+
+It is per address and deliberately has no global cap: a global counter on a login form is a
+denial-of-service primitive handed to anyone who can reach it — a few thousand wrong
+passwords from a botnet would trip it and lock the legitimate operator out of their own
+panel. Per address, an attacker can only lock out the address they are attacking from.
+
+The counter is a **file**, `var/login-attempts.json`, with addresses stored hashed. Nothing
+clears it faster than the window except deleting that file; restarting PHP-FPM does nothing
+to it, whatever other software may have told you.
+
+It applies to HTTP Basic, to the sign-in form, to the two-factor step, and to a request
+arriving with a "stay signed in" cookie. A stolen cookie is not a way round it. If the
+ledger cannot be written, sign-in is **refused** rather than allowed: a check that cannot be
+performed is a failed check.
+
+### Stay signed in
+
+The sign-in form offers **Stay signed in on this browser**, off by default. A browser that
+takes it is signed in with **no idle timeout and no maximum session age**: the session
+survives closing the browser, restarting the machine, and any amount of inactivity, and ends
+only when somebody presses Sign out.
+
+**What that costs, plainly:** whoever holds that browser profile has this panel,
+indefinitely. There is no timeout to save you from a lost laptop. Leave the box unticked on
+a shared or portable machine.
+
+It is not just a long-lived cookie, because a long-lived cookie does not work: PHP deletes
+session files on a schedule of its own, and a cookie that outlives the file it names signs
+you out by accident — the exact thing the option is for. The cookie instead carries a
+lookup id and a secret, of which only a **hash** of the secret is stored, in
+`var/persistent-logins.json` at mode 0600. The secret is **replaced every time the cookie is
+used**, so a copy taken from a backup or a synced profile stops working the moment the real
+browser makes one more request; and because the lookup id does not change, a secret that
+turns up twice is unambiguously a **replay**. When that happens every token for the account
+is destroyed, every browser has to sign in again, and the sign-in page says so.
+
+Five things revoke it:
+
+- **Sign out** — revokes every token, not just this browser's.
+- **Signing in with the box unticked** — you said you did not want to be remembered.
+- **Settings › Sign-in › Sign every remembered browser out** — which also reports how many
+  there are.
+- **Changing the password** (`bin/loghound-setup`) or **changing the sign-in method**.
+- **Turning two-factor on** — a token issued on the strength of one factor cannot survive as
+  a way past two.
+- Deleting `var/persistent-logins.json`.
+
+`auth.persistent_lifetime` caps how long a token can live, renewed on every use. The default
+is ten years, which for a browser in daily use is indistinguishable from permanent; the
+number exists so an abandoned token can be pruned rather than accumulate. It is clamped to a
+day at the bottom.
+
+### Two-factor authentication
+
+Standard TOTP — the six-digit codes every authenticator app produces (RFC 6238: HMAC-SHA1,
+six digits, a 30-second step). Off by default; existing installations are untouched. Needs
+`auth.mode: session`, because HTTP Basic has no second step to put a code in.
+
+Set it up in **Settings › Two-factor**, not by hand:
+
+1. **Set up two-factor authentication** mints a fresh secret and shows a QR code. The QR
+   code is drawn **on your own server**, by Loghound, in pure PHP — no chart-server URL, no
+   CDN'd encoder. Sending the shared secret to a third party to have a picture of it drawn
+   would hand somebody else your second factor.
+2. Scan it with any standard app (Google Authenticator, Aegis, 1Password, Bitwarden,
+   FreeOTP), or type the key in by hand — it is shown grouped in fours for exactly that.
+3. **Enter the code the app shows now.** Nothing is stored until this is accepted, so
+   closing the tab half way through leaves two-factor off and locks nobody out.
+4. **Save the ten recovery codes.** They are shown once, and downloadable as a text file,
+   because only their hashes are stored. Each works once, in place of a code from the app.
+   They are the only way back in if you lose the phone. You can issue a fresh set at any
+   time, which invalidates the old one.
+
+An unconfirmed enrollment **expires 15 minutes after you press the button**, on the clock
+and not on the session. Walk away from that screen and the candidate secret is discarded;
+come back and you start again with a fresh QR code. The distinction matters because "Stay
+signed in" means a session can now last forever, and a pending secret must not inherit that
+— the expiry is swept on every authenticated request, so it happens whether or not anybody
+reloads the page.
+
+A code is accepted within one 30-second step either side of now, for clock drift, and
+**once**: the last accepted step is recorded in `var/auth-state.json` and anything at or
+below it is refused, so a code read over your shoulder is worth thirty seconds of nothing.
+
+**Every place a code is checked is rate limited, on the same per-address ledger as the
+sign-in form** — the sign-in page's second step, the enrollment confirmation, turning
+two-factor off, and reissuing recovery codes. `auth.lockout_attempts` wrong codes inside
+`auth.lockout_window` (eight in fifteen minutes by default) lock the address out, and a
+recovery code counts the same as a six-digit one. A wrong code costs exactly what a wrong
+password costs, including the delay, so no endpoint is the cheaper place to guess; and
+because there is one ledger rather than one per endpoint, alternating between them buys no
+extra attempts. Six digits is a million possibilities, and that limiter is the only thing
+between a stolen password and a guessed code.
+
+**Turning two-factor off requires a current code or a recovery code**, and so does
+**reissuing recovery codes** — never just being signed in. If a stolen session cookie were
+enough to strip the second factor, the second factor would be protecting nothing; and ten
+fresh recovery codes are a standing way past the phone, so minting them is the same act by
+a quieter route.
+
+**Lost the phone and the recovery codes?** Run `bin/loghound-setup` on the server and set a
+new password. That turns two-factor off and revokes every remembered browser. Being able to
+run it is already proof of who you are — which is also why there is no reset by email:
+Loghound has no mail path and would not use one for this.
+
+---
+
 ## The recommended LogFormat
 
 **Loghound works out of the box on plain `combined`.** Detection is materially better if
@@ -409,11 +553,99 @@ way to keep the schema right — so the option promised something the product ca
 See [An older configuration on `solr.mode: custom`](#an-older-configuration-on-solrmode-custom)
 if you are upgrading one.
 
+### Join a pair you already have, or create one
+
+You give it the email address and API key from your Opensolr control panel. Before it offers
+you anything, it reads your account once and tells you what is there: how many indexes it
+holds, which pairs of Loghound indexes are already on it, and anything a half-finished setup
+run left behind.
+
+**One pair of indexes can serve several sites.** Every record Loghound writes carries the
+virtual host it came from, so a pair collecting traffic from six machines stays separable in
+the panel by its **Virtual host** dimension. If you are installing Loghound on your third
+site, joining the pair the first two report into is usually what you want — and on a plan with
+a small index limit it is the only thing that will work.
+
+Pairs are listed and chosen as pairs, never as halves:
+
+```
+aaaa1111   loghound_aaaa1111_hits + loghound_aaaa1111_sessions
+```
+
+Choosing one confirms the pair is still on the account, reads the connection details, **checks
+the indexes have the shape this version writes** — by comparing their live schema against the
+one in this release, field by field — and queries both. **Reusing joins; it never overwrites.**
+Nothing is cleared, reshaped or reloaded, and what this installation records is added alongside
+what is already there.
+
+If the indexes were made by an older Loghound and are missing fields this version writes, the
+run stops and names the missing fields, having changed nothing. Answer yes to *"add the fields
+this version writes"* (or set `LOGHOUND_OPENSOLR_UPGRADE_SCHEMA=yes`) to have them added — that
+only ever adds fields and never alters a document already in the index.
+
+An **unmatched half** — a `_hits` with no `_sessions` — is what a run that died between the two
+creates leaves behind. It is reported as exactly that, with the name of the index and the name
+of the one it is missing. It cannot be joined and it holds no usable data on its own, but it
+still counts against your plan.
+
+### Starting over
+
+`bin/loghound-setup --reset`, or the **Reinstall** card at the bottom of Settings, clears the log
+sources, the index names and the sign-in and walks you back through setup. It is not an
+uninstall: your indexes, every document in them and your log files are untouched, and the
+Opensolr account is kept so setup can offer the pair you were already using. `install/uninstall.sh`
+is the thing that removes data.
+
+From the panel it does not lock you out: pressing the button in a signed-in session is a stronger
+proof than the token file, so that proof is carried to that browser for half an hour, once.
+Anyone else reaching the installer still has to read `var/install-token` over a shell.
+
+### Your plan has to have room, and that is checked first
+
+Opensolr plans limit how many indexes an account may hold, and Loghound needs **two**.
+Discovering that halfway through provisioning means one index created, one refused, and a bill
+for the orphan — so the account is counted **before** the first create, and when the allowance
+is known and too small the wizard stops with the numbers and does not create anything:
+
+```
+Your Opensolr plan allows 4 indexes and 4 are already in use, so there is room for
+none more and Loghound needs 2.
+
+xx  There is no room on this plan for the two indexes Loghound needs.
+      - Delete an index you no longer need, which frees a slot immediately. https://opensolr.com/solr_manager/admin
+      - Move to a plan that allows more indexes. https://opensolr.com/solr-hosting
+```
+
+Joining a pair you already have is offered first when there is one, because it creates nothing
+and the limit does not apply to it.
+
+The allowance comes from Opensolr's `get_account_summary`, which reports how many indexes the
+plan allows, how many exist and how many more can be created — from the same two figures the
+platform's own create gate uses, so what you are told and what it enforces cannot disagree. It
+is read every time rather than remembered, because a plan can change.
+
+Asking costs an existing index: the endpoint is scoped to one core you own. An account with no
+indexes at all therefore has no readable allowance, and Loghound says that plainly instead of
+assuming there is room.
+
+A check is a check, not a promise — another machine can take the last slot between the check and
+the create — so if the **second** index is the one refused, the first is deleted and you are told
+that nothing was left behind:
+
+```
+ok    Creating the hits index — Created loghound_9ce6e3c9_hits.
+xx    Creating the sessions index:
+      Your Opensolr plan allows 4 indexes and 3 are in use, so there is room for the 2
+      Loghound needs. ...
+      Removing loghound_9ce6e3c9_hits, which this attempt created and will not be using …
+      Removed loghound_9ce6e3c9_hits. Nothing has been left behind on your account.
+```
+
 ### What it provisions
 
-You give it the email address and API key from your Opensolr control panel and pick a
-region from the list the platform returns — nothing is hardcoded, so a region added by
-Opensolr shows up without a Loghound release. It then creates both indexes, pushes the
+If you are creating a new pair, you pick a region from the list the platform returns — nothing
+is hardcoded, so a region added by Opensolr shows up without a Loghound release. It then
+creates both indexes, pushes the
 configset to each (**schema first, then `solrconfig.xml`** — reversed, the core reloads
 against a config referencing field types the old schema does not define and the reload
 fails), reads the connection URL and credentials back, writes them into
@@ -719,8 +951,8 @@ sudo LOGHOUND_HOSTNAME=loghound.example.com \
        --tls-key  /etc/letsencrypt/live/loghound.example.com/privkey.pem
 ```
 
-The full list of `LOGHOUND_*` variables is in the header comment of `bin/loghound-setup`.
-The API key is never echoed to the terminal and never written to the install log.
+The full list of `LOGHOUND_*` variables is `bin/loghound-setup --help`, which prints every one
+of them. The API key is never echoed to the terminal and never written to the install log.
 
 `LOGHOUND_IP_MODE` and `LOGHOUND_RETENTION_DAYS` are overrides with no prompt behind them —
 the wizard does not ask about either, interactively or otherwise. Leave them out and the
@@ -729,9 +961,31 @@ Either works on its own; the one you do not set keeps whatever the configuration
 
 There is **no variable that supplies a Solr address, HTTP credentials or a core name**. The
 connection details come back from Opensolr and the two index names are generated, so an
-unattended install needs the three `LOGHOUND_OPENSOLR_*` answers and nothing else about
-storage. Re-running the wizard on a box that already has both indexes leaves them alone —
-`LOGHOUND_RECONFIGURE_STORAGE=yes` if you really do want provisioning to run again.
+unattended install needs the `LOGHOUND_OPENSOLR_*` answers and nothing else about storage.
+Re-running the wizard on a box that already has both indexes leaves them alone —
+`LOGHOUND_RECONFIGURE_STORAGE=yes` if you really do want storage to be settled again.
+
+**To have a machine join a pair of indexes that already exists** rather than creating two,
+give it the pair's installation id:
+
+```bash
+sudo LOGHOUND_HOSTNAME=shop.example.com \
+     LOGHOUND_OPENSOLR_EMAIL=you@example.com \
+     LOGHOUND_OPENSOLR_API_KEY='...' \
+     LOGHOUND_OPENSOLR_REUSE=aaaa1111 \
+     ./install/install.sh --non-interactive
+```
+
+That is how several sites report into one pair; they are told apart in the panel by the
+hostname on every record. The id is the 8 hex characters in the middle of the index names, and
+the wizard prints the account's pairs with their ids before it asks. `LOGHOUND_OPENSOLR_REUSE`
+defaults to `new`, so an unattended re-run never adopts another site's indexes merely because
+it found some. Add `LOGHOUND_OPENSOLR_UPGRADE_SCHEMA=yes` only if you accept that indexes made
+by an older Loghound may have the fields this version writes added to them; without it, a
+mismatch stops the run and changes nothing.
+
+`LOGHOUND_OPENSOLR_REGION` applies only to indexes this run **creates**. Reusing a pair asks no
+region question, because the indexes are already wherever they were made.
 
 `--non-interactive` also switches on automatically when stdin is not a terminal, because
 a wizard that blocks forever on a closed stdin is the worst possible failure mode inside

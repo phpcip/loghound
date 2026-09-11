@@ -493,7 +493,10 @@ return [
         $back = (new ReflectionMethod(Indexes::class, 'decodeLogFilters'))->invoke(null, $packed);
 
         lh_same(
-            ['path' => ['/se;lect,odd', 'plain'], 'ip' => ['203.0.113.9']],
+            [
+                'path' => ['values' => ['/se;lect,odd', 'plain'], 'op' => 'any'],
+                'ip'   => ['values' => ['203.0.113.9'], 'op' => 'any'],
+            ],
             $back,
             'a value containing both separators cannot split the string it travels in'
         );
@@ -507,20 +510,34 @@ return [
         lh_same([], $decode(''), 'an empty string is no filters');
         lh_same([], $decode('bot_verdict_s=bot'), 'a field that is not on the allowlist is dropped');
         lh_same([], $decode('nonsense'), 'a fragment with no separator is dropped');
-        lh_same(['ip' => ['1.2.3.4']], $decode('evil=x;ip=1.2.3.4'), 'a good field survives a bad neighbour');
+        lh_same(
+            ['ip' => ['values' => ['1.2.3.4'], 'op' => 'any']],
+            $decode('evil=x;ip=1.2.3.4'),
+            'a good field survives a bad neighbour, and an unmarked set means "any of"'
+        );
+        lh_same(
+            ['path' => ['values' => ['/select'], 'op' => 'none']],
+            $decode('path=none:' . rawurlencode('/select')),
+            'a resumed scan must rebuild the OPERATOR too, or it answers the opposite question'
+        );
+        lh_same(
+            ['path' => ['values' => ['weird:thing'], 'op' => 'any']],
+            $decode('path=' . rawurlencode('weird:thing')),
+            'a colon inside a value is not an operator marker'
+        );
         lh_same(
             [],
             $decode('ip=' . rawurlencode("1.2.3.4\nwt=xml")),
             'a stored value with a control character is dropped whole, never stitched back together'
         );
         lh_same(
-            ['ip' => ['1.2.3.4']],
+            ['ip' => ['values' => ['1.2.3.4'], 'op' => 'any']],
             $decode('ip=' . rawurlencode("1.2.3.4\nwt=xml") . ',1.2.3.4'),
             'and its neighbours still survive'
         );
         lh_same(
             20,
-            count($decode('path=' . implode(',', array_map('strval', range(1, 60))))['path']),
+            count($decode('path=' . implode(',', array_map('strval', range(1, 60))))['path']['values']),
             'the number of values is capped exactly as it is on the way in'
         );
     },

@@ -40,6 +40,10 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../src/autoload.php';
 
+use Loghound\Auth\Persistence;
+use Loghound\Auth\Store;
+use Loghound\Auth\Totp;
+use Loghound\Auth\TwoFactor;
 use Loghound\Config;
 use Loghound\Security;
 use Loghound\Setup\Steps;
@@ -128,6 +132,13 @@ $_SERVER['REQUEST_METHOD'] = (string) getenv('LH_METHOD');
 $_SERVER['REMOTE_ADDR']    = (string) getenv('LH_IP');
 $_SERVER['HTTP_HOST']      = 'loghound.test';
 
+$cookies = json_decode((string) getenv('LH_COOKIES'), true);
+if (is_array($cookies)) {
+    foreach ($cookies as $name => $value) {
+        $_COOKIE[(string) $name] = (string) $value;
+    }
+}
+
 if (getenv('LH_BASIC_USER') !== false) {
     $_SERVER['PHP_AUTH_USER'] = (string) getenv('LH_BASIC_USER');
     $_SERVER['PHP_AUTH_PW']   = (string) getenv('LH_BASIC_PASS');
@@ -145,33 +156,37 @@ register_shutdown_function(static function () use ($root): void {
         'code'    => http_response_code(),
         'sid'     => session_id(),
         'session' => $_SESSION ?? [],
+        'cookies' => $_COOKIE ?? [],
     ]));
 });
 
 require $root . '/public/index.php';
 PHP);
 
+    $keep = ($opt['keep'] ?? false) === true;
+
     $post = (array) ($opt['post'] ?? []);
-    if (($opt['csrf'] ?? true) === true && ($opt['method'] ?? 'GET') === 'POST') {
+    if (($opt['csrf'] ?? true) === true && ($opt['method'] ?? 'GET') === 'POST' && !$keep) {
         $post['csrf'] = 'lh-test-csrf';
     }
 
     $seed = $opt['seed'] ?? null;
     if (is_array($seed)) {
         $seed['lh_csrf'] = 'lh-test-csrf';
-    } elseif (($opt['method'] ?? 'GET') === 'POST') {
+    } elseif (($opt['method'] ?? 'GET') === 'POST' && !$keep) {
         $seed = ['lh_csrf' => 'lh-test-csrf'];
     }
 
     $env = [
-        'LH_ROOT'   => $root,
-        'LH_SID'    => $sid,
-        'LH_GET'    => (string) json_encode((array) ($opt['get'] ?? [])),
-        'LH_POST'   => (string) json_encode($post),
-        'LH_METHOD' => (string) ($opt['method'] ?? 'GET'),
-        'LH_IP'     => (string) ($opt['ip'] ?? '198.51.100.7'),
-        'LH_SEED'   => (string) json_encode($seed),
-        'PATH'      => (string) getenv('PATH'),
+        'LH_ROOT'    => $root,
+        'LH_SID'     => $sid,
+        'LH_GET'     => (string) json_encode((array) ($opt['get'] ?? [])),
+        'LH_POST'    => (string) json_encode($post),
+        'LH_METHOD'  => (string) ($opt['method'] ?? 'GET'),
+        'LH_IP'      => (string) ($opt['ip'] ?? '198.51.100.7'),
+        'LH_SEED'    => (string) json_encode($seed),
+        'LH_COOKIES' => (string) json_encode((array) ($opt['cookies'] ?? [])),
+        'PATH'       => (string) getenv('PATH'),
     ];
     if (isset($opt['basic'])) {
         $env['LH_BASIC_USER'] = (string) $opt['basic'][0];
@@ -200,8 +215,22 @@ PHP);
         'code'       => ((int) ($result['code'] ?? 0)) ?: 200,
         'sid'        => (string) ($result['sid'] ?? ''),
         'session'    => (array) ($result['session'] ?? []),
+        'cookies'    => (array) ($result['cookies'] ?? []),
         'sid_before' => $sid,
     ];
+}
+
+/**
+ * The CSRF token out of a rendered form.
+ *
+ * Needed by every test that drives the REAL token through a sequence of requests rather than
+ * seeding a fixed one. The token that a sign-in rotates away is the whole subject of the CSRF
+ * regression tests, so those cases cannot use the seeded shortcut: they have to hold the token
+ * a browser would be holding.
+ */
+function lh_auth_form_token(string $html): string
+{
+    return preg_match('/name="csrf" value="([a-f0-9]+)"/', $html, $m) ? $m[1] : '';
 }
 
 /** Sign in through the real form and return the request result. */
@@ -214,6 +243,49 @@ function lh_auth_signin(string $root, string $sid, string $ip = '198.51.100.7', 
         'sid'    => $sid,
         'ip'     => $ip,
     ]);
+}
+
+/**
+ * Switch two-factor on for a scaffolded installation and return the shared key.
+ *
+ * The key is minted and confirmed the same way the panel does it, so what these tests drive is
+ * the real enrollment result rather than a hand-written config block. The replay floor it leaves
+ * behind is one step in the past, so the code for the current step is still available to the
+ * test that follows.
+ */
+function lh_auth_enable_totp(Config $cfg): string
+{
+    $key = TwoFactor::begin();
+    $var = dirname(dirname($cfg->path())) . '/var';
+
+    $result = TwoFactor::enable($cfg, $key, (string) Totp::at($key, time() - 30), $var);
+    if ($result['errors'] !== []) {
+        lh_fail('could not enable two-factor for the fixture: ' . implode(' ', $result['errors']));
+    }
+    $cfg->save();
+
+    return $key;
+}
+
+/**
+ * Push a scaffold's persistent tokens past the rotation grace window.
+ *
+ * Persistence honours the verifier a rotation just replaced for a few seconds, because a browser
+ * waking several tabs at once presents one cookie several times and that is one use, not a theft.
+ * Any test about a REPLAY has to step outside that window first, or it is testing the grace.
+ */
+function lh_auth_age_tokens(string $root, int $seconds = 120): void
+{
+    Store::at($root . '/var', Persistence::STORE)->mutate(
+        static function (array &$data) use ($seconds): bool {
+            foreach (($data['tokens'] ?? []) as $key => $record) {
+                foreach (($record['recent'] ?? []) as $i => $entry) {
+                    $data['tokens'][$key]['recent'][$i]['t'] = (int) ($entry['t'] ?? time()) - $seconds;
+                }
+            }
+            return true;
+        }
+    );
 }
 
 /** Path of the PHP session file for an id, which is what "destroyed server-side" means. */
@@ -804,5 +876,911 @@ return [
             lh_true(($mode['cost'] ?? '') !== '', 'every mode states what it costs, not only what it gives');
         }
     },
+
+
+    /*
+     * ------------------------------------------------------------------------------------
+     * The reported bug: "CSRF token mismatch" on a sign-in that had in fact worked.
+     *
+     * The sequence below is the reproduction, driven through the real front controller with
+     * the real rotating token. It is three requests:
+     *
+     *   1. GET  ?login=1                 -> renders the form carrying token T1.
+     *   2. POST ?login=1 with T1         -> signs in, regenerates the id, ROTATES to T2.
+     *   3. POST ?login=1 with T1 again   -> the same form submitted a second time, now on the
+     *                                       session that step 2 authenticated.
+     *
+     * Step 3 used to answer 403 "CSRF token mismatch" while lh_user was set and the panel was
+     * fully reachable, because doLogin() ran requireCsrf() before checking whether the caller
+     * was already signed in. That is exactly what the operator saw. A double-clicked submit
+     * whose second request lands after the first response, a restored tab, or the form open in
+     * a second window all produce it.
+     * ------------------------------------------------------------------------------------
+     */
+
+    'a re-submitted sign-in form on an already-authenticated session is finished, not a CSRF error'
+        => static function (): void {
+            [$root] = lh_auth_scaffold('session');
+            $first = 'lhre' . bin2hex(random_bytes(4));
+
+            $page = lh_auth_request($root, ['get' => ['login' => '1'], 'sid' => $first, 'keep' => true]);
+            $token = lh_auth_form_token($page['out']);
+            lh_true($token !== '', 'the form must carry a real token to re-submit');
+
+            $signin = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'csrf' => $token],
+                'sid'    => $first,
+                'keep'   => true,
+            ]);
+            lh_same(303, $signin['code'], 'the first submission signs in');
+            $signedInSid = $signin['sid'];
+            lh_true($signedInSid !== $first, 'and regenerates the session id');
+            lh_true(
+                $token !== (string) ($signin['session']['lh_csrf'] ?? ''),
+                'sign-in rotates the token, which is what made the second submission stale'
+            );
+
+            $again = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'csrf' => $token],
+                'sid'    => $signedInSid,
+                'keep'   => true,
+            ]);
+
+            lh_same(303, $again['code'], 'a stale token from an already-signed-in session is a redirect');
+            lh_false(str_contains($again['out'], 'CSRF'), 'and never a CSRF failure page');
+            lh_same('operator', (string) ($again['session']['lh_user'] ?? ''), 'the session is still signed in');
+
+            lh_rmtree($root);
+        },
+
+    'the CSRF check is NOT weakened for anyone who is not signed in' => static function (): void {
+        [$root] = lh_auth_scaffold('session');
+
+        $anon = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'csrf' => 'stale-token'],
+            'sid'    => 'lhstale' . bin2hex(random_bytes(4)),
+            'keep'   => true,
+        ]);
+        lh_same(403, $anon['code'], 'a stale token with no session behind it is still refused');
+        lh_contains($anon['out'], 'CSRF', 'and still says why');
+        lh_same('', (string) ($anon['session']['lh_user'] ?? ''), 'nobody is signed in');
+
+        $pending = lh_auth_request($root, [
+            'get'    => ['logout' => '1'],
+            'method' => 'POST',
+            'post'   => ['csrf' => 'stale-token'],
+            'sid'    => 'lhout2' . bin2hex(random_bytes(4)),
+            'keep'   => true,
+        ]);
+        lh_same(403, $pending['code'], 'sign-out is not exempted either');
+
+        lh_rmtree($root);
+    },
+
+    'the sign-in page refuses to be cached, whatever session.cache_limiter says'
+        => static function (): void {
+            $login = (string) file_get_contents(lh_auth_repo() . '/src/Panel/Login.php');
+            lh_contains($login, "Cache-Control: no-store", 'the sign-in page sends no-store itself');
+
+            $security = (string) file_get_contents(lh_auth_repo() . '/src/Security.php');
+            lh_contains(
+                $security,
+                "session_cache_limiter('')",
+                'and no session start may let PHP replace that header with a cacheable one'
+            );
+
+            $starts = preg_match_all('/session_start\s*\(/', $security);
+            $neutralised = preg_match_all("/session_cache_limiter\('\'\)/", $security)
+                ?: preg_match_all("/session_cache_limiter\(''\)/", $security);
+            lh_true(
+                $neutralised >= 1 && $starts >= 1,
+                'every session start in Security goes through a limiter-neutralising path'
+            );
+
+            lh_rmtree(sys_get_temp_dir() . '/lh-nonexistent');
+        },
+
+    'no shipped pool locks session.cache_limiter, which would break that fix silently'
+        => static function (): void {
+            $files = [
+                'install/php-fpm-pool.conf.example',
+                'install/install.sh',
+            ];
+
+            foreach ($files as $rel) {
+                $path = lh_auth_repo() . '/' . $rel;
+                if (!is_file($path)) {
+                    continue;
+                }
+                $text = (string) file_get_contents($path);
+                lh_same(
+                    0,
+                    preg_match('/php_admin_value\[session\.cache_limiter\]/', $text),
+                    $rel . ': an admin_value for session.cache_limiter cannot be overridden at runtime, '
+                        . 'so it would make the sign-in page cacheable again with no error anywhere'
+                );
+            }
+        },
+
+    'the new authentication settings are documented where an operator will look'
+        => static function (): void {
+            $example = (string) file_get_contents(lh_auth_repo() . '/config/loghound.example.php');
+            foreach (['persistent_lifetime', "'totp'", "'recovery'", 'Stay signed in'] as $needle) {
+                lh_contains($example, $needle, 'the shipped example config explains ' . $needle);
+            }
+
+            $install = (string) file_get_contents(lh_auth_repo() . '/docs/INSTALL.md');
+            foreach (['Stay signed in', 'Two-factor authentication', 'recovery codes', 'lockout'] as $needle) {
+                lh_contains($install, $needle, 'docs/INSTALL.md covers ' . $needle);
+            }
+            lh_contains(
+                $install,
+                'no idle timeout and no maximum session age',
+                'and says what the option costs rather than only what it gives'
+            );
+
+            $spec = (string) file_get_contents(lh_auth_repo() . '/SPEC.md');
+            foreach (['RFC 6238', 'selector plus verifier', 'SameSite=Lax'] as $needle) {
+                lh_contains($spec, $needle, 'SPEC.md states the requirement for ' . $needle);
+            }
+        },
+
+
+    /*
+     * ------------------------------------------------------------------------------------
+     * "Stay signed in", end to end through the real front controller.
+     *
+     * The unit-level properties of the token are in tests/test_persistent_login.php. What is
+     * asserted here is the thing the operator asked for: that the option survives what would
+     * otherwise sign them out, and that not taking it changes nothing.
+     * ------------------------------------------------------------------------------------
+     */
+
+    'ticking stay signed in hands out a token, leaving it unticked does not' => static function (): void {
+        [$root] = lh_auth_scaffold('session');
+
+        $plain = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+            'sid'    => 'lhnorem' . bin2hex(random_bytes(4)),
+        ]);
+        lh_same(303, $plain['code'], 'the sign-in works');
+        lh_no_key($plain['cookies'], Persistence::COOKIE, 'and hands out no persistent token');
+        lh_false(($plain['session']['lh_persist'] ?? false) === true, 'the session is an ordinary one');
+
+        $remembered = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+            'sid'    => 'lhrem' . bin2hex(random_bytes(4)),
+        ]);
+        lh_same(303, $remembered['code'], 'so does the remembered one');
+        lh_has_key($remembered['cookies'], Persistence::COOKIE, 'which does hand out a token');
+        lh_true(($remembered['session']['lh_persist'] ?? false) === true, 'and marks the session');
+        lh_same(
+            1,
+            preg_match('/^[a-f0-9]{32}\.[a-f0-9]{64}$/', (string) $remembered['cookies'][Persistence::COOKIE]),
+            'the cookie is a selector and a verifier'
+        );
+
+        lh_rmtree($root);
+    },
+
+    'a remembered session survives what ends an ordinary one' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+        $cfg->set('auth.idle_timeout', 60);
+        $cfg->set('auth.absolute_timeout', 300);
+        $cfg->save();
+
+        $ancient = ['lh_user' => 'operator', 'lh_login_at' => time() - 99999, 'lh_seen_at' => time() - 99999];
+
+        $ordinary = lh_auth_request($root, [
+            'sid'  => 'lhord' . bin2hex(random_bytes(4)),
+            'get'  => ['v' => 'overview'],
+            'seed' => $ancient,
+        ]);
+        lh_same(302, $ordinary['code'], 'an ordinary session that old is ended');
+
+        $sid = 'lhkept' . bin2hex(random_bytes(4));
+        $kept = lh_auth_request($root, [
+            'sid'  => $sid,
+            'get'  => ['v' => 'overview'],
+            'seed' => $ancient + ['lh_persist' => true],
+        ]);
+        lh_same(200, $kept['code'], 'a remembered one is not, however old or idle it is');
+        lh_contains($kept['out'], '<html', 'the panel renders');
+        lh_true(is_file(lh_auth_session_file($root, $sid)), 'and the session is still there');
+
+        lh_rmtree($root);
+    },
+
+    'the timeouts are untouched for every session that did not take the option'
+        => static function (): void {
+            [$root, $cfg] = lh_auth_scaffold('session');
+            $cfg->set('auth.idle_timeout', 60);
+            $cfg->set('auth.absolute_timeout', 3600);
+            $cfg->save();
+
+            $idle = lh_auth_request($root, [
+                'sid'  => 'lht1' . bin2hex(random_bytes(4)),
+                'get'  => ['v' => 'overview'],
+                'seed' => ['lh_user' => 'operator', 'lh_login_at' => time(), 'lh_seen_at' => time() - 120],
+            ]);
+            lh_same(302, $idle['code'], 'the idle timeout still bites');
+
+            $old = lh_auth_request($root, [
+                'sid'  => 'lht2' . bin2hex(random_bytes(4)),
+                'get'  => ['v' => 'overview'],
+                'seed' => ['lh_user' => 'operator', 'lh_login_at' => time() - 7200, 'lh_seen_at' => time()],
+            ]);
+            lh_same(302, $old['code'], 'and so does the absolute one');
+
+            lh_rmtree($root);
+        },
+
+    'a session PHP deleted comes back from the cookie, and the cookie is rotated'
+        => static function (): void {
+            [$root] = lh_auth_scaffold('session');
+            $sid = 'lhgc' . bin2hex(random_bytes(4));
+
+            $signin = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+                'sid'    => $sid,
+            ]);
+            $cookie = (string) ($signin['cookies'][Persistence::COOKIE] ?? '');
+            lh_true($cookie !== '', 'a token was issued');
+
+            foreach (glob($root . '/var/sessions/sess_*') ?: [] as $file) {
+                unlink($file);
+            }
+
+            $back = lh_auth_request($root, [
+                'get'     => ['v' => 'overview'],
+                'sid'     => 'lhgcnew' . bin2hex(random_bytes(4)),
+                'cookies' => [Persistence::COOKIE => $cookie],
+            ]);
+
+            lh_same(200, $back['code'], 'the cookie recreates the session the collector deleted');
+            lh_same('operator', (string) ($back['session']['lh_user'] ?? ''), 'and signs the operator in');
+            lh_true(($back['session']['lh_persist'] ?? false) === true, 'the new session is remembered too');
+
+            $rotated = (string) ($back['cookies'][Persistence::COOKIE] ?? '');
+            lh_true($rotated !== '' && $rotated !== $cookie, 'and the cookie is replaced on use');
+
+            lh_auth_age_tokens($root);
+
+            $replay = lh_auth_request($root, [
+                'get'     => ['v' => 'overview'],
+                'sid'     => 'lhgcold' . bin2hex(random_bytes(4)),
+                'cookies' => [Persistence::COOKIE => $cookie],
+            ]);
+            lh_same(302, $replay['code'], 'the cookie that was already used gets nobody in');
+            lh_same('', (string) ($replay['session']['lh_user'] ?? ''), 'really nobody');
+
+            lh_rmtree($root);
+        },
+
+    'a stolen cookie replayed after the honest browser signs everybody out and warns'
+        => static function (): void {
+            [$root] = lh_auth_scaffold('session');
+
+            $signin = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+                'sid'    => 'lhth' . bin2hex(random_bytes(4)),
+            ]);
+            $stolen = (string) $signin['cookies'][Persistence::COOKIE];
+
+            lh_auth_request($root, [
+                'get'     => ['v' => 'overview'],
+                'sid'     => 'lhth2' . bin2hex(random_bytes(4)),
+                'cookies' => [Persistence::COOKIE => $stolen],
+            ]);
+
+            lh_auth_age_tokens($root);
+
+            $replay = lh_auth_request($root, [
+                'get'     => ['v' => 'overview'],
+                'sid'     => 'lhth3' . bin2hex(random_bytes(4)),
+                'cookies' => [Persistence::COOKIE => $stolen],
+            ]);
+            lh_same(302, $replay['code'], 'the replay is refused');
+            lh_same(0, Persistence::count($root . '/var'), 'and every token for the account is destroyed');
+
+            $page = lh_auth_request($root, ['get' => ['login' => '1']]);
+            lh_contains($page['out'], 'presented twice', 'the sign-in page warns the operator');
+            lh_contains($page['out'], 'destroyed', 'and says what was done about it');
+
+            $again = lh_auth_request($root, ['get' => ['login' => '1']]);
+            lh_contains($again['out'], 'presented twice', 'rendering the page does not clear the warning');
+
+            lh_auth_signin($root, 'lhth4' . bin2hex(random_bytes(4)));
+            $clean = lh_auth_request($root, ['get' => ['login' => '1']]);
+            lh_false(str_contains($clean['out'], 'presented twice'), 'a completed sign-in clears it');
+
+            lh_rmtree($root);
+        },
+
+    'signing out revokes every stay-signed-in token, not just this browser\'s'
+        => static function (): void {
+            [$root] = lh_auth_scaffold('session');
+
+            $first = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+                'sid'    => 'lhso1' . bin2hex(random_bytes(4)),
+            ]);
+            $elsewhere = (string) $first['cookies'][Persistence::COOKIE];
+
+            $sid = 'lhso2' . bin2hex(random_bytes(4));
+            lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+                'sid'    => $sid,
+            ]);
+            lh_true(Persistence::count($root . '/var') >= 2, 'two browsers are remembered');
+
+            $out = lh_auth_request($root, [
+                'get'    => ['logout' => '1'],
+                'method' => 'POST',
+                'sid'    => $sid,
+                'seed'   => ['lh_user' => 'operator', 'lh_login_at' => time(), 'lh_seen_at' => time()],
+            ]);
+            lh_same(303, $out['code'], 'sign-out redirects');
+            lh_same(0, Persistence::count($root . '/var'), 'AND revokes every token there is');
+
+            $stale = lh_auth_request($root, [
+                'get'     => ['v' => 'overview'],
+                'sid'     => 'lhso3' . bin2hex(random_bytes(4)),
+                'cookies' => [Persistence::COOKIE => $elsewhere],
+            ]);
+            lh_same(302, $stale['code'], 'so the other browser cannot get back in either');
+
+            lh_rmtree($root);
+        },
+
+    'signing in without the option revokes a token from a previous sign-in' => static function (): void {
+        [$root] = lh_auth_scaffold('session');
+
+        lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+            'sid'    => 'lhun1' . bin2hex(random_bytes(4)),
+        ]);
+        lh_same(1, Persistence::count($root . '/var'), 'a token exists');
+
+        lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+            'sid'    => 'lhun2' . bin2hex(random_bytes(4)),
+        ]);
+        lh_same(0, Persistence::count($root . '/var'), 'an unticked box means what it says');
+
+        lh_rmtree($root);
+    },
+
+    'the lockout applies to a request arriving with a persistent cookie' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+        $cfg->set('auth.lockout_attempts', 2);
+        $cfg->save();
+
+        $signin = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+            'sid'    => 'lhlk1' . bin2hex(random_bytes(4)),
+            'ip'     => '203.0.113.9',
+        ]);
+        $cookie = (string) $signin['cookies'][Persistence::COOKIE];
+
+        for ($i = 0; $i < 2; $i++) {
+            lh_auth_signin($root, 'lhlk' . $i, '203.0.113.9', 'wrong password');
+        }
+
+        $locked = lh_auth_request($root, [
+            'get'     => ['v' => 'overview'],
+            'sid'     => 'lhlk2' . bin2hex(random_bytes(4)),
+            'ip'      => '203.0.113.9',
+            'cookies' => [Persistence::COOKIE => $cookie],
+        ]);
+
+        lh_same(429, $locked['code'], 'A VALID COOKIE IS NOT A WAY PAST THE LOCKOUT');
+        lh_same('', (string) ($locked['session']['lh_user'] ?? ''), 'and nobody is signed in');
+        lh_same(1, Persistence::count($root . '/var'), 'the token is not consumed by a refused attempt either');
+
+        lh_rmtree($root);
+    },
+
+    'a POST whose session was collected is explained, not reported as a CSRF attack'
+        => static function (): void {
+            [$root] = lh_auth_scaffold('session');
+
+            $signin = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+                'sid'    => 'lh409' . bin2hex(random_bytes(4)),
+            ]);
+            $cookie = (string) $signin['cookies'][Persistence::COOKIE];
+
+            foreach (glob($root . '/var/sessions/sess_*') ?: [] as $file) {
+                unlink($file);
+            }
+
+            $r = lh_auth_request($root, [
+                'get'     => ['v' => 'settings'],
+                'method'  => 'POST',
+                'post'    => ['action' => 'ui', 'timezone' => 'UTC', 'csrf' => 'from-the-dead-session'],
+                'sid'     => 'lh409b' . bin2hex(random_bytes(4)),
+                'cookies' => [Persistence::COOKIE => $cookie],
+                'keep'    => true,
+            ]);
+
+            lh_same(409, $r['code'], 'the token cannot be valid, so the request is REFUSED');
+            lh_false(
+                str_contains($r['out'], 'CSRF token mismatch'),
+                'but reporting an attack to somebody who is signed in and did nothing wrong is the '
+                    . 'same misleading page this whole area was fixed to stop producing'
+            );
+            lh_contains($r['out'], 'Reload the page', 'the operator is told the actual remedy');
+            lh_same('operator', (string) ($r['session']['lh_user'] ?? ''), 'they really are signed in');
+
+            lh_rmtree($root);
+        },
+
+    'the sign-in page hands a remembered browser straight to the panel' => static function (): void {
+        [$root] = lh_auth_scaffold('session');
+
+        $signin = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+            'sid'    => 'lhlp' . bin2hex(random_bytes(4)),
+        ]);
+        $cookie = (string) $signin['cookies'][Persistence::COOKIE];
+
+        $page = lh_auth_request($root, [
+            'get'     => ['login' => '1'],
+            'sid'     => 'lhlp2' . bin2hex(random_bytes(4)),
+            'cookies' => [Persistence::COOKIE => $cookie],
+        ]);
+        lh_same(303, $page['code'], 'a remembered browser is never asked to sign in again');
+        lh_false(str_contains($page['out'], 'name="password"'), 'the form is not rendered');
+
+        $junk = str_repeat('a', 32) . '.' . str_repeat('b', 64);
+
+        $bounce = lh_auth_request($root, [
+            'get'     => ['login' => '1'],
+            'sid'     => 'lhlp3' . bin2hex(random_bytes(4)),
+            'cookies' => [Persistence::COOKIE => $junk],
+        ]);
+        lh_same(303, $bounce['code'], 'a cookie that turns out to be junk is sent to the panel to be tried');
+
+        $tried = lh_auth_request($root, [
+            'get'     => ['v' => 'overview'],
+            'sid'     => 'lhlp4' . bin2hex(random_bytes(4)),
+            'cookies' => [Persistence::COOKIE => $junk],
+        ]);
+        lh_same(302, $tried['code'], 'where it fails and is sent back to the sign-in page');
+        lh_no_key(
+            $tried['cookies'],
+            Persistence::COOKIE,
+            'having been cleared on the way, which is what stops the bounce becoming a loop'
+        );
+
+        $settled = lh_auth_request($root, [
+            'get' => ['login' => '1'],
+            'sid' => 'lhlp5' . bin2hex(random_bytes(4)),
+        ]);
+        lh_same(200, $settled['code'], 'so the third request renders the form');
+        lh_contains($settled['out'], 'name="password"', 'really the form');
+
+        lh_rmtree($root);
+    },
+
+    'a forged cookie counts as a failed sign-in, so guessing is rate limited'
+        => static function (): void {
+            [$root, $cfg] = lh_auth_scaffold('session');
+            $cfg->set('auth.lockout_attempts', 3);
+            $cfg->save();
+
+            $signin = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+                'sid'    => 'lhfg1' . bin2hex(random_bytes(4)),
+                'ip'     => '203.0.113.44',
+            ]);
+            $cookie = (string) $signin['cookies'][Persistence::COOKIE];
+            [$selector] = explode('.', $cookie, 2);
+            $forged = $selector . '.' . str_repeat('c', 64);
+
+            $r = lh_auth_request($root, [
+                'get'     => ['v' => 'overview'],
+                'sid'     => 'lhfg2' . bin2hex(random_bytes(4)),
+                'ip'      => '203.0.113.44',
+                'cookies' => [Persistence::COOKIE => $forged],
+            ]);
+            lh_same(302, $r['code'], 'a wrong verifier gets nobody in');
+
+            $ledger = lh_auth_ledger($root);
+            $counted = 0;
+            foreach ((array) ($ledger['ips'] ?? []) as $entry) {
+                $counted += (int) ($entry['n'] ?? 0);
+            }
+            lh_true($counted >= 1, 'and is recorded as a failed sign-in on the same ledger as a bad password');
+
+            lh_rmtree($root);
+        },
+
+
+    /*
+     * ------------------------------------------------------------------------------------
+     * Two-factor authentication, end to end.
+     *
+     * The arithmetic and the enrollment rules are in tests/test_totp.php. What is asserted here
+     * is that the panel is really closed between the two factors, and that the persistent token
+     * is only handed out once both are satisfied.
+     * ------------------------------------------------------------------------------------
+     */
+
+    'with two-factor on, the right password alone signs nobody in' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+        $key = lh_auth_enable_totp($cfg);
+
+        $r = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+            'sid'    => 'lh2f1' . bin2hex(random_bytes(4)),
+        ]);
+
+        lh_same(303, $r['code'], 'the password is accepted and the operator moves to the next step');
+        lh_same('', (string) ($r['session']['lh_user'] ?? ''), 'BUT NOBODY IS SIGNED IN');
+        lh_same('operator', (string) ($r['session']['lh_2fa_user'] ?? ''), 'only a pending stage is recorded');
+
+        $blocked = lh_auth_request($root, [
+            'get'  => ['v' => 'overview'],
+            'sid'  => $r['sid'],
+            'keep' => true,
+        ]);
+        lh_same(302, $blocked['code'], 'and the pending session reaches no view');
+        lh_false(str_contains($blocked['out'], '<html'), 'no panel HTML may be emitted');
+
+        lh_rmtree($root);
+    },
+
+    'the second factor finishes the sign-in, and the same code cannot do it twice'
+        => static function (): void {
+            [$root, $cfg] = lh_auth_scaffold('session');
+            $key = lh_auth_enable_totp($cfg);
+
+            $password = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+                'sid'    => 'lh2f2' . bin2hex(random_bytes(4)),
+            ]);
+            $pending = $password['sid'];
+
+            $page = lh_auth_request($root, ['get' => ['login' => '1'], 'sid' => $pending, 'keep' => true]);
+            lh_contains($page['out'], 'name="code"', 'the code form is shown');
+            lh_contains($page['out'], 'one-time-code', 'with the right autocomplete for a phone');
+            lh_false(str_contains($page['out'], 'name="password"'), 'and not the password form again');
+            $token = lh_auth_form_token($page['out']);
+
+            $code = (string) Totp::at($key);
+
+            $ok = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['code' => $code, 'csrf' => $token],
+                'sid'    => $pending,
+                'keep'   => true,
+            ]);
+            lh_same(303, $ok['code'], 'a current code finishes the sign-in');
+            lh_same('operator', (string) ($ok['session']['lh_user'] ?? ''), 'and the operator is signed in');
+            lh_no_key($ok['session'], 'lh_2fa_user', 'the pending stage is cleared');
+
+            $replay = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+                'sid'    => 'lh2f3' . bin2hex(random_bytes(4)),
+            ]);
+            $secondPage = lh_auth_request($root, [
+                'get' => ['login' => '1'], 'sid' => $replay['sid'], 'keep' => true,
+            ]);
+            $again = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['code' => $code, 'csrf' => lh_auth_form_token($secondPage['out'])],
+                'sid'    => $replay['sid'],
+                'keep'   => true,
+            ]);
+            lh_same(401, $again['code'], 'THE SAME CODE MUST NOT WORK A SECOND TIME');
+            lh_same('', (string) ($again['session']['lh_user'] ?? ''), 'nobody is signed in');
+
+            lh_rmtree($root);
+        },
+
+    'a recovery code finishes the sign-in once and is then gone' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+        $key = lh_auth_enable_totp($cfg);
+        $codes = TwoFactor::regenerate($cfg);
+        $cfg->save();
+
+        $drive = static function (string $code) use ($root): array {
+            $password = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+                'sid'    => 'lhrc' . bin2hex(random_bytes(5)),
+            ]);
+            $page = lh_auth_request($root, [
+                'get' => ['login' => '1'], 'sid' => $password['sid'], 'keep' => true,
+            ]);
+            return lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['code' => $code, 'csrf' => lh_auth_form_token($page['out'])],
+                'sid'    => $password['sid'],
+                'keep'   => true,
+            ]);
+        };
+
+        $first = $drive($codes[0]);
+        lh_same(303, $first['code'], 'a recovery code gets the operator in');
+        lh_same('operator', (string) ($first['session']['lh_user'] ?? ''), 'really in');
+
+        $second = $drive($codes[0]);
+        lh_same(401, $second['code'], 'and only once');
+
+        $other = $drive($codes[1]);
+        lh_same(303, $other['code'], 'while the rest of the set still works');
+
+        lh_rmtree($root);
+    },
+
+    'a wrong code is refused and counts toward the lockout' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+        lh_auth_enable_totp($cfg);
+        $cfg->set('auth.lockout_attempts', 2);
+        $cfg->save();
+
+        for ($i = 0; $i < 2; $i++) {
+            $r = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['code' => '000000'],
+                'sid'    => 'lhbc' . $i . bin2hex(random_bytes(4)),
+                'ip'     => '203.0.113.77',
+                'seed'   => ['lh_2fa_user' => 'operator', 'lh_2fa_at' => time()],
+            ]);
+            lh_same(401, $r['code'], 'wrong code, attempt ' . ($i + 1) . ', is a plain refusal');
+            lh_same('', (string) ($r['session']['lh_user'] ?? ''), 'and signs nobody in');
+        }
+
+        $locked = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+            'sid'    => 'lhbc9' . bin2hex(random_bytes(4)),
+            'ip'     => '203.0.113.77',
+        ]);
+        lh_same(
+            429,
+            $locked['code'],
+            'wrong codes land on the SAME ledger as wrong passwords, so guessing the six digits '
+                . 'locks the address out exactly as guessing the password would'
+        );
+
+        $stillLocked = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['code' => '000000'],
+            'sid'    => 'lhbc8' . bin2hex(random_bytes(4)),
+            'ip'     => '203.0.113.77',
+            'seed'   => ['lh_2fa_user' => 'operator', 'lh_2fa_at' => time()],
+        ]);
+        lh_same(429, $stillLocked['code'], 'and the code step is behind the same gate');
+
+        lh_rmtree($root);
+    },
+
+    'a correct password does not clear the lockout while the second factor is outstanding'
+        => static function (): void {
+            [$root, $cfg] = lh_auth_scaffold('session');
+            lh_auth_enable_totp($cfg);
+            $cfg->set('auth.lockout_attempts', 5);
+            $cfg->save();
+
+            lh_auth_signin($root, 'lhcl1', '203.0.113.88', 'wrong password');
+            lh_auth_signin($root, 'lhcl2', '203.0.113.88', 'wrong password');
+
+            lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+                'sid'    => 'lhcl3' . bin2hex(random_bytes(4)),
+                'ip'     => '203.0.113.88',
+            ]);
+
+            $counted = 0;
+            foreach ((array) (lh_auth_ledger($root)['ips'] ?? []) as $entry) {
+                $counted += (int) ($entry['n'] ?? 0);
+            }
+            lh_same(2, $counted, 'the two failures are still counted, so the guesses are still limited');
+
+            lh_rmtree($root);
+        },
+
+    'the stay-signed-in token is only issued once the second factor is satisfied'
+        => static function (): void {
+            [$root, $cfg] = lh_auth_scaffold('session');
+            $key = lh_auth_enable_totp($cfg);
+
+            $password = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+                'sid'    => 'lh2fr' . bin2hex(random_bytes(4)),
+            ]);
+            lh_no_key(
+                $password['cookies'],
+                Persistence::COOKIE,
+                'NO TOKEN ON THE STRENGTH OF HALF A CREDENTIAL'
+            );
+            lh_same(0, Persistence::count($root . '/var'), 'and none in the store either');
+            lh_true(($password['session']['lh_2fa_remember'] ?? false) === true, 'the request is remembered');
+
+            $page = lh_auth_request($root, [
+                'get' => ['login' => '1'], 'sid' => $password['sid'], 'keep' => true,
+            ]);
+            $done = lh_auth_request($root, [
+                'get'    => ['login' => '1'],
+                'method' => 'POST',
+                'post'   => ['code' => (string) Totp::at($key), 'csrf' => lh_auth_form_token($page['out'])],
+                'sid'    => $password['sid'],
+                'keep'   => true,
+            ]);
+
+            lh_same(303, $done['code'], 'the second factor completes it');
+            lh_has_key($done['cookies'], Persistence::COOKIE, 'and the token is issued then');
+            lh_same(1, Persistence::count($root . '/var'), 'exactly one');
+
+            lh_rmtree($root);
+        },
+
+    'a pending sign-in that sits too long has to start again' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+        $key = lh_auth_enable_totp($cfg);
+
+        $sid = 'lhstale2' . bin2hex(random_bytes(4));
+        $r = lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['code' => (string) Totp::at($key)],
+            'sid'    => $sid,
+            'seed'   => [
+                'lh_2fa_user' => 'operator',
+                'lh_2fa_at'   => time() - (Security::PENDING_TTL + 60),
+            ],
+        ]);
+
+        lh_same(401, $r['code'], 'a pending stage past its time is not a pending stage');
+        lh_same('', (string) ($r['session']['lh_user'] ?? ''), 'nobody is signed in');
+        lh_contains($r['out'], 'name="password"', 'and the password form is shown again');
+
+        lh_rmtree($root);
+    },
+
+    'turning two-factor on destroys every stay-signed-in token' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+
+        lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password(), 'remember' => '1'],
+            'sid'    => 'lh2fk' . bin2hex(random_bytes(4)),
+        ]);
+        lh_same(1, Persistence::count($root . '/var'), 'a token exists');
+
+        $candidate = TwoFactor::begin();
+        $result = TwoFactor::enable($cfg, $candidate, (string) Totp::at($candidate), $root . '/var');
+        lh_same([], $result['errors'], 'two-factor goes on');
+
+        lh_same(
+            0,
+            Persistence::count($root . '/var'),
+            'tokens issued on one factor cannot survive as a way past two'
+        );
+
+        lh_rmtree($root);
+    },
+
+    'changing the password revokes every token and turns two-factor off' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+        lh_auth_enable_totp($cfg);
+
+        lh_auth_request($root, [
+            'get'    => ['login' => '1'],
+            'method' => 'POST',
+            'post'   => ['user' => 'operator', 'password' => lh_auth_password()],
+            'sid'    => 'lhpw' . bin2hex(random_bytes(4)),
+        ]);
+        Persistence::issue('operator', $root . '/var', 86400);
+        lh_true(Persistence::count($root . '/var') >= 1, 'a token exists');
+
+        lh_same([], Steps::applyAdmin($cfg, 'operator', 'a-brand-new-password', '', 'session'));
+
+        lh_same(0, Persistence::count($root . '/var'), 'a new password revokes every token');
+        lh_false(
+            TwoFactor::isEnabled((array) $cfg->get('auth', [])),
+            'and turns two-factor off, which is the documented way back in without a phone'
+        );
+
+        lh_rmtree($root);
+    },
+
+    'changing the sign-in mode revokes every token' => static function (): void {
+        [$root, $cfg] = lh_auth_scaffold('session');
+
+        Persistence::issue('operator', $root . '/var', 86400);
+        lh_same(1, Persistence::count($root . '/var'), 'a token exists');
+
+        lh_same([], Steps::applyAuthMode($cfg, 'basic'));
+        lh_same(0, Persistence::count($root . '/var'), 'a session-mode token cannot outlive session mode');
+
+        lh_rmtree($root);
+    },
+
+    'Config::validate refuses a two-factor block that could never accept a code'
+        => static function (): void {
+            $cfg = Config::load('/nonexistent-loghound-config');
+            $cfg->set('solr.base_url', 'http://127.0.0.1:8983/solr');
+            $cfg->set('solr.hits_core', 'lh_hits');
+            $cfg->set('solr.sessions_core', 'lh_sessions');
+            $cfg->set('opensolr.email', 'operator@example.com');
+            $cfg->set('opensolr.api_key', 'not-a-real-key');
+            $cfg->set('beacon.enabled', false);
+            $cfg->set('auth.mode', 'session');
+            $cfg->set('auth.user', 'operator');
+            $cfg->set('auth.password_hash', password_hash('a-long-enough-password', PASSWORD_DEFAULT));
+
+            lh_same([], $cfg->validate(), 'the default two-factor block is fine');
+
+            $cfg->set('auth.totp', ['enabled' => true, 'secret' => '', 'recovery' => []]);
+            lh_contains(
+                implode(' ', $cfg->validate()),
+                'no code could ever be accepted',
+                'on with no secret is a locked-out operator, and is reported as the mistake it is'
+            );
+
+            $cfg->set('auth.totp', ['enabled' => 'yes', 'secret' => '', 'recovery' => []]);
+            lh_contains(implode(' ', $cfg->validate()), 'auth.totp.enabled must be', 'and so is a non-boolean');
+
+            $cfg->set('auth.totp', ['enabled' => false, 'secret' => '', 'recovery' => []]);
+            $cfg->set('auth.persistent_lifetime', 60);
+            lh_contains(
+                implode(' ', $cfg->validate()),
+                'auth.persistent_lifetime must be',
+                'a lifetime shorter than the idle timeout is a misconfiguration, not a feature'
+            );
+        },
 
 ];

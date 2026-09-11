@@ -18,10 +18,24 @@
  *   - a chosen value is unmistakable ON THE ROW, and choosing it again removes it;
  *   - the count sits in its own right-aligned column, with a proportional bar behind the row so
  *     the shape of the distribution is visible without reading a single number;
- *   - the panel SAYS how the filters combine, because nobody can tell OR from AND by looking;
  *   - a long tail gets a way in: the top twelve, a "show all", and a box that filters the values
  *     themselves — country and AS organisation both have hundreds;
  *   - the heading names the dimension in words a person uses, never a field name.
+ *
+ * WHAT MOVED OUT, AND WHY. The semantics are not here any more. `?f[field][]=value` plus
+ * `f[field][op]=any|all|none` is read, written and applied by src/Panel/Facets.php, and its
+ * browser half — the operator control, the inline filter box, the A–Z value browser — is
+ * assets/js/facetfilter.js. This file renders a payload and nothing more.
+ *
+ * THE PARAGRAPH SAYING HOW FILTERS COMBINE IS GONE ON PURPOSE. It used to be the only place the
+ * boolean behaviour was stated, which meant a reader had to hold "values within a dimension OR,
+ * dimensions AND" in their head while looking at a list somewhere else on the page. The operator
+ * is a control on each dimension now, showing its own state, so the prose has nothing left to
+ * say. Do not put it back.
+ *
+ * A VALUE HAS THREE STATES, NOT TWO: chosen, chosen-and-EXCLUDED, and untouched. The middle one
+ * is what the "None of" operator produces, and rendering it with a tick would put a selected mark
+ * beside a value the operator has just thrown away.
  *
  * Every value is a real <a href>, which is what makes it work with scripting off, middle-clickable
  * into a new tab, bookmarkable and visible in a screenshot. The CSP has no 'unsafe-inline', so
@@ -33,14 +47,23 @@
 
 'use strict';
 
-import { api, byId, clear, el, fill, num, urlAddFilter, urlRemoveFilter } from './core.js';
-import { FILTER_LABELS, dimLabel, flagNode, isFilterable } from './identity.js';
+import { api, boot, byId, clear, el, fill, num } from './core.js';
+import { FILTER_LABELS, dimLabel, dimValue, isFilterable } from './identity.js';
+import {
+    basisNote,
+    clearAllUrl,
+    clearFieldUrl,
+    filterInput,
+    operatorControl,
+    operatorOf,
+    readSelection,
+    showAllButton,
+    toggleUrl,
+    urlFor
+} from './facetfilter.js';
 
 /** Has the panel-wide dimension list been fetched? One request per page load, on first open. */
 let loaded = false;
-
-/** A bucket count above which the value list gets its own search box. */
-const SEARCHABLE_AT = 10;
 
 /**
  * Separator for the field/value keys of the active-filter set.
@@ -52,25 +75,22 @@ const SEARCHABLE_AT = 10;
 const SEP = '\u0000';
 
 /**
- * Read the active filters straight out of the query string.
+ * The active filters, flattened, from the one reader that understands the URL contract.
  *
- * The server's own allowlist is applied again here: a hand-edited URL naming a field the server
- * drops must not grow a chip claiming a filter that is not in force.
+ * Kept as an export because four views import it. It is now a thin view over
+ * facetfilter.readSelection(), so the parsing rules — including the reserved `op` key — live in
+ * exactly one place and a hand-edited URL is read the same way by every surface.
  *
- * @returns {Array<{field: string, value: string}>}
+ * @returns {Array<{field: string, value: string, op: string}>}
  */
 export function activeFilters() {
     const out = [];
-    const params = new URLSearchParams(window.location.search);
-    for (const key of Array.from(params.keys())) {
-        const match = /^f\[([A-Za-z0-9_]{1,64})\]\[\]$/.exec(key);
-        if (!match || !isFilterable(match[1])) {
+    for (const [field, entry] of readSelection()) {
+        if (!isFilterable(field)) {
             continue;
         }
-        for (const value of params.getAll(key)) {
-            if (value !== '') {
-                out.push({ field: match[1], value: value });
-            }
+        for (const value of entry.values) {
+            out.push({ field: field, value: value, op: entry.op });
         }
     }
     return out;
@@ -85,18 +105,6 @@ function activeKeys() {
     return set;
 }
 
-/** The URL with every filter removed, for the clear-all control. */
-function clearAllUrl() {
-    const params = new URLSearchParams(window.location.search);
-    for (const key of Array.from(params.keys())) {
-        if (/^f\[[A-Za-z0-9_]{1,64}\]\[\]$/.test(key)) {
-            params.delete(key);
-        }
-    }
-    params.delete('start');
-    return '?' + params.toString();
-}
-
 /* -------------------------------------------------------------------------
  * The facet control
  * ---------------------------------------------------------------------- */
@@ -104,67 +112,129 @@ function clearAllUrl() {
 /**
  * One value, as a control.
  *
- * A chosen value carries a tick, a filled marker and `.is-on`, and its href REMOVES it — so the
- * same gesture selects and deselects and there is nowhere else to go to undo a choice. The bar
- * behind the row is proportional to the largest bucket in the group, not to the total, because
- * the question a facet list answers is "which of these dominates" and scaling to the total
+ * THREE STATES. A chosen value carries a tick, `.is-on`, and an href that REMOVES it — so the same
+ * gesture selects and deselects. A chosen value under the "None of" operator carries a minus and
+ * `.is-excluded` instead, because a tick beside a value the operator has just thrown away would
+ * be a lie. An untouched value carries neither.
+ *
+ * The bar behind the row is proportional to the largest bucket in the group, not to the total,
+ * because the question a facet list answers is "which of these dominates" and scaling to the total
  * flattens every list where one value holds most of the traffic.
+ *
+ * The word on the row comes from the server: a stored value is `likely_human` or
+ * `fp_cluster_proxy_fleet`, and the reader gets "Likely human" and "Proxy fleet fingerprint" with
+ * the slug still beside it. It goes through identity.js's dimValue() so the mark, the flag and the
+ * label are applied in the one place every table cell and dialog uses too.
  *
  * The aria-label carries the whole sentence, because a screen reader gets no bar and no tick.
  */
-function option(group, bucket, largest, on) {
-    const share = largest > 0 ? Math.max(2, Math.round((bucket.count / largest) * 100)) : 0;
+function option(group, bucket, largest) {
+    const count = bucket.count === null || bucket.count === undefined ? null : bucket.count;
+    const share = largest > 0 && count !== null ? Math.max(2, Math.round((count / largest) * 100)) : 0;
     const label = dimLabel(group.field);
+    const state = bucket.state || 'off';
+    const shown = String(bucket.label || bucket.value);
 
-    if (group.filterable === false) {
-        return el('li', { class: 'facet-li' }, [
+    /* A value the server marked unfilterable is a static row, not a link: it has a real count and
+       no filter can be built for it, and a link that does nothing when pressed is worse than a row
+       that says why. Same treatment as a whole dimension that is not filterable. */
+    if (group.filterable === false || state === 'unfilterable') {
+        return el('li', { class: 'facet-li', title: bucket.why || '' }, [
             el('span', { class: 'facet-opt is-static' }, [
                 el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
                 el('span', { class: 'facet-mark', 'aria-hidden': 'true' }),
                 el('span', { class: 'facet-val' + (group.mono ? ' mono' : '') }, [
-                    group.field === 'country_s' ? flagNode(bucket.value) : null,
-                    el('span', { text: bucket.value })
+                    dimValue(group.field, bucket.value, { text: shown, mono: group.mono, link: false })
                 ]),
-                el('span', { class: 'facet-n', text: num(bucket.count) })
+                el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
             ])
         ]);
     }
 
-    return el('li', { class: 'facet-li', dataset: { value: bucket.value.toLowerCase() } }, [
+    const verb = state === 'on'
+        ? ' — selected, activate to remove'
+        : (state === 'excluded' ? ' — excluded, activate to stop excluding it' : ' — activate to filter to it');
+
+    return el('li', { class: 'facet-li', dataset: { value: String(bucket.value).toLowerCase() } }, [
         el('a', {
-            class: 'facet-opt' + (on ? ' is-on' : ''),
-            href: on ? urlRemoveFilter(group.field, bucket.value) : urlAddFilter(group.field, bucket.value),
-            title: on ? 'Remove this filter' : 'Filter every view to ' + label + ': ' + bucket.value,
-            'aria-label': label + ' ' + bucket.value + ', ' + num(bucket.count) + ' sessions' +
-                (on ? ' — selected, activate to remove' : ' — activate to filter to it')
+            class: 'facet-opt' + (state === 'on' ? ' is-on' : '') + (state === 'excluded' ? ' is-excluded' : ''),
+            href: toggleUrl(group.field, bucket.value, group.ns),
+            title: bucket.why || (state === 'off'
+                ? 'Filter every view to ' + label + ': ' + shown
+                : 'Remove this filter'),
+            'aria-label': label + ' ' + shown + ', ' + (count === null ? 'not counted' : num(count) + ' sessions') + verb
         }, [
             el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
-            el('span', { class: 'facet-mark', 'aria-hidden': 'true', text: on ? '✓' : '' }),
+            el('span', {
+                class: 'facet-mark',
+                'aria-hidden': 'true',
+                text: state === 'on' ? '\u2713' : (state === 'excluded' ? '\u2212' : '')
+            }),
             el('span', { class: 'facet-val' + (group.mono ? ' mono' : '') }, [
-                group.field === 'country_s' ? flagNode(bucket.value) : null,
-                el('span', { text: bucket.value })
+                dimValue(group.field, bucket.value, { text: shown, mono: group.mono, link: false })
             ]),
-            el('span', { class: 'facet-n', text: num(bucket.count) })
+            el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
         ])
     ]);
 }
 
 /**
- * One dimension: its name, its values, and a way into the long tail.
+ * The "not reported" row, for a dimension whose field is only sometimes written.
+ *
+ * A real filter rather than a caption, and it is the clearest thing the new operators bought:
+ * everything that is neither true nor false is "None of" over both values. Before there were
+ * three operators the row existed as a read-only number with an apology attached, because
+ * `?f[field][]=value` could not express an absence at all.
+ */
+function absentRow(group) {
+    const absent = group.absent;
+    if (!absent) {
+        return null;
+    }
+    const selection = readSelection(group.ns);
+    const on = absent.state === 'on';
+
+    if (on) {
+        selection.delete(group.field);
+    } else {
+        selection.set(group.field, { values: absent.values, op: absent.op });
+    }
+
+    return el('li', { class: 'facet-li facet-li-absent' }, [
+        el('a', {
+            class: 'facet-opt' + (on ? ' is-on' : ''),
+            href: urlFor(selection, group.ns),
+            title: absent.why
+        }, [
+            el('span', { class: 'facet-mark', 'aria-hidden': 'true', text: on ? '\u2713' : '' }),
+            el('span', { class: 'facet-val muted', text: absent.label }),
+            el('span', { class: 'facet-n', text: num(absent.count) })
+        ])
+    ]);
+}
+
+/**
+ * One dimension: its name, its operator, its values, and a way into the long tail.
  *
  * The group is a <section> with a rule above it so two dimensions cannot read as one list, and
  * the heading is the dimension's own name in words — "AS organisation", not `as_org_s`.
+ *
+ * The order is deliberate: the name, then the OPERATOR — visible before the values it governs,
+ * because a reader scanning a filtered list needs to know whether it is including or excluding
+ * before they read a single count — then the filter box, the values, the way into the long tail,
+ * and last the sentence saying what the counts mean.
  *
  * Exported because the session explorer's sidebar and the panel-wide bar must look and behave
  * identically. They used to be two renderers and the sidebar was the one nobody recognised.
  */
 export function renderFacetGroup(group, active, max) {
     const keys = active || activeKeys();
-    const largest = group.buckets.reduce((acc, bucket) => Math.max(acc, bucket.count), 0);
+    const buckets = group.buckets || [];
+    const largest = buckets.reduce((acc, bucket) => Math.max(acc, bucket.count || 0), 0);
 
-    const picked = group.buckets.filter((b) => keys.has(group.field + SEP + b.value));
-    const cap = max && max > 0 ? max : group.buckets.length;
-    const head = group.buckets.slice(0, cap);
+    const picked = buckets.filter((b) => keys.has(group.field + SEP + b.value));
+    const cap = max && max > 0 ? max : buckets.length;
+    const head = buckets.slice(0, cap);
     for (const bucket of picked) {
         if (head.indexOf(bucket) < 0) {
             head.push(bucket);
@@ -173,27 +243,29 @@ export function renderFacetGroup(group, active, max) {
 
     const list = el('ul', { class: 'facet-list' });
     for (const bucket of head) {
-        list.appendChild(option(group, bucket, largest, keys.has(group.field + SEP + bucket.value)));
+        list.appendChild(option(group, bucket, largest));
+    }
+    const absent = absentRow(group);
+    if (absent) {
+        list.appendChild(absent);
     }
 
-    const more = group.truncated || head.length < group.buckets.length;
     const chosen = picked.length;
 
-    const section = el('section', { class: 'facet', dataset: { field: group.field } }, [
+    return el('section', {
+        class: 'facet',
+        dataset: { field: group.field, ns: group.ns || 'f', op: group.op || operatorOf(group.field, group.ns) }
+    }, [
         el('h3', { class: 'facet-head' }, [
             el('span', { class: 'facet-name', text: group.label }),
-            chosen ? el('span', { class: 'facet-chosen', text: num(chosen) + ' selected' }) : null
+            chosen ? el('span', { class: 'facet-chosen', text: num(chosen) + ' selected' }) : null,
+            chosen ? el('a', { class: 'facet-clear', href: clearFieldUrl(group.field, group.ns), text: 'Clear' }) : null
         ]),
-        searchBox(group, head.length),
+        operatorControl(group),
+        filterInput(group, head.length),
         list,
-        more
-            ? el('button', {
-                type: 'button',
-                class: 'facet-more',
-                dataset: { field: group.field },
-                text: 'Show all values'
-            })
-            : null,
+        showAllButton(Object.assign({}, group, { truncated: group.truncated || head.length < buckets.length })),
+        basisNote(group),
         group.filterable === false
             ? el('p', {
                 class: 'facet-note',
@@ -202,44 +274,14 @@ export function renderFacetGroup(group, active, max) {
             })
             : null
     ]);
-
-    return section;
 }
 
 /**
- * The box that filters a long value list, added only when there is a list long enough to need it.
+ * Render a whole set of dimensions.
  *
- * It filters what has already been fetched rather than issuing a query per keystroke. Solr's JSON
- * facet has a `contains` option and it is deliberately not on this panel's allowlist of facet
- * keys — adding one for a search box that works perfectly well over two hundred rows already in
- * the DOM would be a new sanitiser surface bought for nothing.
- */
-function searchBox(group, shown) {
-    if ((shown === undefined ? group.buckets.length : shown) < SEARCHABLE_AT) {
-        return null;
-    }
-    const id = 'facet-q-' + group.field;
-    return el('div', { class: 'facet-search' }, [
-        el('label', { class: 'sr-only', for: id, text: 'Filter ' + group.label + ' values' }),
-        el('input', {
-            type: 'search',
-            id: id,
-            class: 'facet-q',
-            placeholder: 'Filter ' + String(group.label).toLowerCase() + '…',
-            autocomplete: 'off',
-            spellcheck: 'false',
-            dataset: { field: group.field }
-        })
-    ]);
-}
-
-/**
- * Render a whole set of dimensions, with the sentence that says how they combine.
- *
- * The sentence is not decoration. filterFqs() ORs the values within one field and ANDs the fields
- * together, which is the right behaviour and completely invisible — two countries widens the
- * result, a country plus a browser narrows it — and a reader who assumes the opposite reads every
- * number wrongly.
+ * No prose about how they combine. Each dimension carries its own operator control showing its
+ * own state, which is the only place that answer can be read without holding it in your head; the
+ * `note` argument is accepted and ignored so a caller that still passes one is harmless.
  */
 export function renderFacetPanel(holder, groups, note, max) {
     const keys = activeKeys();
@@ -248,95 +290,8 @@ export function renderFacetPanel(holder, groups, note, max) {
         fill(holder, [el('p', { class: 'muted', text: 'No dimension has a value in this range and filter set.' })]);
         return;
     }
-    fill(holder, [
-        note ? el('p', { class: 'facet-how', text: note }) : null,
-        el('div', { class: 'facet-groups' }, rendered)
-    ]);
-}
-
-/* -------------------------------------------------------------------------
- * Behaviour shared by every facet list on the page
- * ---------------------------------------------------------------------- */
-
-/**
- * Filter a group's visible values as the operator types.
- *
- * Case-insensitive substring over the value, which is what somebody typing "telefon" into a list
- * of six hundred AS organisations means. A group filtered to nothing says so rather than going
- * blank.
- */
-function onSearch(event) {
-    const input = event.target;
-    if (!input || !input.classList || !input.classList.contains('facet-q')) {
-        return;
-    }
-    const section = input.closest('.facet');
-    if (!section) {
-        return;
-    }
-    const needle = String(input.value || '').trim().toLowerCase();
-    let shown = 0;
-    for (const li of section.querySelectorAll('.facet-li')) {
-        const hit = needle === '' || String(li.dataset.value || '').indexOf(needle) >= 0;
-        li.hidden = !hit;
-        if (hit) {
-            shown += 1;
-        }
-    }
-    let empty = section.querySelector('.facet-empty');
-    if (!empty) {
-        empty = el('p', { class: 'facet-note facet-empty', hidden: true });
-        section.appendChild(empty);
-    }
-    empty.textContent = 'No value here matches “' + needle + '”.';
-    empty.hidden = shown > 0;
-}
-
-/**
- * Replace a group's top-twelve list with everything there is.
- *
- * One request per dimension, on demand. The button reports what happened rather than silently
- * doing nothing when the request fails: a control that looks broken is worse than one that says
- * it is.
- */
-async function onShowAll(event) {
-    const button = event.target.closest('.facet-more');
-    if (!button) {
-        return;
-    }
-    event.preventDefault();
-    const section = button.closest('.facet');
-    const field = button.dataset.field;
-    if (!section || !field) {
-        return;
-    }
-
-    button.disabled = true;
-    const original = button.textContent;
-    button.textContent = 'Loading every value…';
-
-    try {
-        const data = await api('sessions', 'values', { field: field });
-        if (!data.group) {
-            button.textContent = 'No further values';
-            return;
-        }
-        const fresh = renderFacetGroup(Object.assign({}, data.group, { truncated: false }), activeKeys());
-        section.replaceWith(fresh);
-        const input = fresh.querySelector('.facet-q');
-        if (input) {
-            input.focus();
-        }
-    } catch (err) {
-        button.disabled = false;
-        button.textContent = original;
-        let note = section.querySelector('.facet-note');
-        if (!note) {
-            note = el('p', { class: 'facet-note' });
-            section.appendChild(note);
-        }
-        note.textContent = 'The full list could not be loaded: ' + err.message;
-    }
+    void note;
+    fill(holder, [el('div', { class: 'facet-groups' }, rendered)]);
 }
 
 /* -------------------------------------------------------------------------
@@ -344,22 +299,29 @@ async function onShowAll(event) {
  * ---------------------------------------------------------------------- */
 
 /**
- * One removable chip per active filter, with the count the filter produced.
+ * One removable chip per active filter.
  *
  * The whole chip is the removal link, which is what the session explorer's chips already did, so
- * there is one gesture to learn rather than two. The count is filled in once the matched total
- * is known; until then the chip is still correct, it just does not yet say how much it removed.
+ * there is one gesture to learn rather than two.
+ *
+ * A chip under the "None of" operator says so ON ITSELF and carries `.is-excluded`. It is the
+ * difference between "show me hosting traffic" and "show me everything except hosting", and a bar
+ * that rendered both identically would make every number under it unreadable.
  */
 function chip(filter) {
+    const excluded = filter.op === 'none';
+    const dim = boot.vocabulary && boot.vocabulary[filter.field];
+    const spoken = dim && dim[filter.value] ? dim[filter.value].label : filter.value;
+
     return el('a', {
-        class: 'fchip',
-        href: urlRemoveFilter(filter.field, filter.value),
-        title: 'Remove this filter'
+        class: 'fchip' + (excluded ? ' is-excluded' : ''),
+        href: toggleUrl(filter.field, filter.value),
+        title: excluded ? 'Stop excluding this value' : 'Remove this filter'
     }, [
         el('span', { class: 'fchip-dim', text: dimLabel(filter.field) }),
-        filter.field === 'country_s' ? flagNode(filter.value) : null,
-        el('span', { class: 'fchip-val', text: filter.value }),
-        el('span', { class: 'fchip-x', 'aria-hidden': 'true', text: '×' })
+        excluded ? el('span', { class: 'fchip-not', text: 'not' }) : null,
+        el('span', { class: 'fchip-val' }, [dimValue(filter.field, filter.value, { text: spoken, link: false })]),
+        el('span', { class: 'fchip-x', 'aria-hidden': 'true', text: '\u00d7' })
     ]);
 }
 
@@ -378,7 +340,6 @@ function renderActive(holder) {
         holder.hidden = true;
         return;
     }
-    const fields = new Set(filters.map((f) => f.field));
     holder.hidden = false;
     fill(holder, [
         el('span', { class: 'filterbar-label', text: 'Filtered by' }),
@@ -386,13 +347,7 @@ function renderActive(holder) {
         el('a', { class: 'filterbar-clear', href: clearAllUrl(), text: 'Clear all' }),
         el('span', {
             class: 'filterbar-note',
-            text: 'Every number on this page counts only the traffic matching ' +
-                (filters.length === 1
-                    ? 'this filter.'
-                    : (fields.size === 1
-                        ? 'any of these ' + filters.length + ' values.'
-                        : 'all ' + fields.size + ' of these dimensions at once — values within one dimension ' +
-                          'match if any of them do.'))
+            text: 'Every number on this page counts only the traffic these filters leave.'
         })
     ]);
 }
@@ -456,7 +411,7 @@ function load(panel) {
     loaded = true;
     fill(panel, [el('p', { class: 'muted', text: 'Counting values for every dimension…' })]);
     api('sessions', 'dimensions').then((data) => {
-        renderFacetPanel(panel, data.dimensions, data.multi);
+        renderFacetPanel(panel, data.dimensions);
     }).catch((err) => {
         loaded = false;
         fill(panel, [el('p', { class: 'muted', text: 'The dimension list could not be loaded: ' + err.message })]);
@@ -464,17 +419,15 @@ function load(panel) {
 }
 
 /**
- * Wire the filter bar and the behaviour every facet list on the page shares.
+ * Wire the filter bar.
  *
- * The two delegated listeners cover the sidebar as well as the bar, so the session explorer gets
- * "show all" and value search for free and cannot drift from this file.
+ * The behaviour every facet list shares — the inline filter box, the value browser, the operator
+ * control — is wired by facetfilter.js's initFacetControls() with delegated listeners on the
+ * document, so the sidebar and this bar get it identically and neither can drift.
  *
  * Safe to call on a page with no `.view` container: it does nothing rather than throwing.
  */
 export function initFilterBar() {
-    document.addEventListener('input', onSearch);
-    document.addEventListener('click', onShowAll);
-
     const bar = mount();
     if (!bar) {
         return;

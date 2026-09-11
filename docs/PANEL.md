@@ -214,6 +214,238 @@ loader and nothing else.
 
 ---
 
+## Filtering: one component, every section
+
+Every filter in the panel goes through `src/Panel/Facets.php`. Filter state, the boolean
+operator, the Solr tag, the exclusion, the URL encoding and the payload shape live there and
+nowhere else. No view keeps a private copy, and the two copies that existed — the sidebar builder
+inside `Sessions.php` and the whole second implementation inside `OpensolrView.php` — are gone.
+
+### The bug it exists to fix
+
+A filter used to be applied as an ordinary `fq`, and the facet over the same field was computed
+inside it. So the moment you picked `host_s=opensolr.com`, the VIRTUAL HOST facet listed exactly
+one value: every other host had been filtered out of its own facet. Same for the verdict, the
+country, the browser. The interface removed the options a multi-select needs — you could not see
+what else existed and you could not add a second value. Measured against a real Solr node:
+
+```
+fq={!tag=f_ct}content_type:("text/html")
+  facet with no exclusion   → text/html 483                        (one option, and no way back)
+  facet with excludeTags    → text/html 483, application/pdf 2     (both, with honest counts)
+  facets.count in both      → 483, the fully filtered total
+```
+
+### Tag, then exclude
+
+Each dimension's `fq` carries a tag this component generates — `f_` plus the field name, never
+anything derived from a request. That dimension's own terms facet is asked for with
+`domain.excludeTags` naming its own tag **and no other**, so:
+
+- the dimension keeps listing every value it has, with the count each would have if **this**
+  dimension's filter were lifted;
+- every other dimension still narrows normally;
+- `facets.count`, the headline total, stays the fully filtered figure.
+
+One Solr round trip answers a whole sidebar, however many dimensions it has.
+
+### Three operators, chosen per dimension
+
+| Operator | Solr | Offered on |
+|---|---|---|
+| **Any of** (default) | `field:("a" OR "b")` | every dimension |
+| **All of** | `field:("a" AND "b")` | multi-valued fields only — `paths_ss`, `bot_reasons_ss` |
+| **None of** | `-field:("a" OR "b")` | every dimension |
+
+"All of" is **withheld**, not shown-and-disabled, on a single-valued field: `a AND b` over one
+value per document is empty by construction, and a control whose only possible answer is zero
+results is worse than no control. The arity comes from `Query::multiValuedFilterFields()`, and a
+test reads `solr/sessions/conf/managed-schema.xml` and fails if the two disagree.
+
+"None of" is the one the product was missing. `-as_type_s:("hosting")` is "everything except
+hosting"; it works for one value and for a set. It is also what finally expresses an **absent**
+field: `signed_in_b` is written only when the measured site said something, so "not reported" is
+`-signed_in_b:(true OR false)` — a real, selectable filter rather than a read-only number with an
+apology attached.
+
+**A field with no schema default must be asked for by exclusion**, and two dimensions now depend on
+it. `signed_in_b` is written only when the measured site said something. `planes_s` — which
+transport planes have seen a session — has no default either, so every session indexed before the
+field existed carries no value at all; the correct "has a transport plane" filter is
+`-planes_s:beacon_only` (`Query::HAS_LOG_PLANE`), which keeps that history, and `planes_s:log_only`
+would silently drop it while looking like a measurement. It is the same trap as `provisional_b`.
+The interface spells both with "None of", and the remainder is offered as its own **Not reported**
+row with the count behind it, so a reader can see how much history predates the field rather than
+having it folded into one of the named values.
+
+The operator is a control on the dimension, showing its own state. It is deliberately **not** a
+sentence somewhere else on the page: the paragraph that used to explain "values within one
+dimension OR, dimensions AND" is gone and must not come back.
+
+### The URL is the state
+
+Values are unchanged — `f[field][]=value`, repeated. The operator rides in the same array under a
+reserved key:
+
+```
+?v=networks&range=7d
+ &f[as_type_s][]=hosting&f[as_type_s][]=vpn&f[as_type_s][op]=none
+ &f[paths_ss][]=/pricing&f[paths_ss][]=/docs&f[paths_ss][op]=all
+```
+
+One parameter family carries a dimension's whole state. **A URL with no `op` means "any of"**, so
+everything already bookmarked or shared behaves byte-for-byte as it did. Numeric keys are values,
+`op` is the operator, any other key is ignored. The Opensolr request-log plane uses the same shape
+under `lf[…]`, which stays a separate namespace because those field names exist on the platform's
+analytics shards and none of Loghound's own fields does.
+
+### Counts say what they count
+
+With exclusions in play it is easy to render a number that answers a different question than its
+label claims, so every group carries the sentence that says which:
+
+- `basis: excluded` — "Counts are what each value would match with the *virtual host* filter
+  lifted, so a second value can be added."
+- `basis: filtered` — "Counts are what each value matches on this page as filtered."
+- `overlaps: true` on a multi-valued dimension — one session holds several values, so the buckets
+  **do not sum to the total**. Measured: three buckets of a multi-valued field totalled 398 inside
+  a population of 485.
+- A selected value that has fallen out of the top N is still listed, with a **null** count rather
+  than a fabricated one, so the filter always has a control that turns it off.
+
+### Two planes, two exclusion strategies
+
+Loghound's own cores take `{!tag=}` and `domain.excludeTags` and answer a view in one request.
+The Opensolr request-log plane cannot: `OpensolrLog::assertSafeFq()` refuses any `{!` outright,
+and the platform endpoint sanitises the value of every underscored parameter — `facet_field`
+among them — down to a class with no braces, so `{!ex=…}` could not arrive intact even if the
+filter could carry it. There the same semantics come from **lifting one dimension's clause and
+asking again**: one extra call per *filtered* dimension, at most four because that plane has four
+filterable fields, and none at all when nothing is filtered.
+
+### Values are spoken in words
+
+`bot_verdict_s` holds `likely_human`; `bot_reasons_ss` holds `fp_cluster_proxy_fleet`;
+`as_type_s` holds `hosting`. Those are the right things to store, to filter on, to put in a URL
+and to grep for, and the wrong things to print at somebody who has not read `src/Score/Rules.php`.
+
+- The words for a fired signal live with the rules that produce them, in
+  `Score\Rules::REASONS` — slug, short label, one sentence saying what the rule actually tests,
+  and a severity. A test fails if any code the scorer can emit has no entry.
+- The other closed vocabularies are `src/Panel/Vocabulary.php`, which also reads the reason table
+  rather than copying it.
+- **`Panel\Vocabulary` is authoritative for the value set and the words. `assets/js/icons.js` is
+  authoritative for the mark drawn in front of a value and for nothing else** — it has a generic
+  fallback per dimension and never enumerates what exists.
+- The slug stays: it is the filter value, it stays visible beside the label, and filtering,
+  multi-select and the operators all still work on it. Only the presentation changed.
+- An unrecognised value renders as itself. Never a wrong-but-plausible label, never blank.
+
+**A value that cannot be filtered is shown and says so.** This starts to matter with
+`search_terms_ss`, the first dimension whose values are text a person typed: a real search term can
+contain `{!` or `_query_`, and `Solr::assertSafeFilter()` refuses those anywhere in a filter — by
+throwing — even though `Query::quote()` has already made them inert (measured: `field:("{!frange
+l=0 u=100}")` matches 0 documents, and an escaped break-out attempt matches 0 too; only the
+*unquoted* form is dangerous). So the value is counted, listed, and drawn as a static row with the
+reason, rather than as a link that silently does nothing or hidden as though nobody searched for
+it. Relaxing the blunt check to permit those bytes inside a properly quoted literal would make them
+filterable and is a deliberate decision about a shared security primitive, not a tidy-up.
+
+The tables are shipped once in the boot payload, like the country names, so no JavaScript module
+keeps a second copy. `boot.dimensions` replaced the hand-kept `FILTER_LABELS` in `identity.js`,
+which had drifted: five fields the server filtered were missing from it, so the browser refused to
+draw chips the server was honouring.
+
+### Cross-tabulations
+
+Three, each answering a question its view cannot otherwise answer, each asked as a nested JSON
+facet folded into a request the view was already making — no extra round trip:
+
+| View | Pivot | The question |
+|---|---|---|
+| Overview | country × verdict | which countries send people and which send automation |
+| Bot forensics | bot class × network type | a declared crawler on hosting is ordinary; a headless browser on consumer broadband is not |
+| Networks | network type × verdict | should I rate-limit this address space |
+
+Every cell links through to the view filtered by **both** dimensions at once, each keeping the
+operator it already had. The inner facet is limited, so the cells of a row do **not** add up to
+the row total; the shortfall is printed as its own muted cell rather than left to be inferred.
+
+`Query::pivots()` records the omissions and why: Virtual hosts and Fingerprints already carry the
+cross-tab in their own tables, Performance would need `status_i` which cannot be in the filter
+allowlist, Sessions has the dimension dialog, and the Opensolr views cannot nest a facet at all.
+
+### The long tail
+
+Two controls, applied by one rule everywhere rather than on three dimensions and not the rest:
+
+- an **inline filter box** above any list longer than ten values. Focusing it warms the full value
+  list for that dimension (one request per dimension per page load, cached); typing then narrows
+  across every value the dimension has, not only the rows on screen, matching both the stored value
+  and its label. Without the cache it falls back to hiding rows, silently.
+- a **value browser** dialog behind "Show all N values": a search box, an A–Z index with the empty
+  letters visibly inactive and a `#` bucket, values grouped under letter headings in columns, each
+  with its count. It reuses the panel's one dialog shell.
+
+The browser **stages** its selection: clicking a value toggles it in a pending set and the dialog
+stays open, because the reason to open it is to pick several; Apply navigates once. Each row is
+still a real `<a href>` carrying the result of applying the pending set plus that row, so a
+middle-click, a copied link and a scripting-off click all land somewhere coherent. The sidebar
+keeps one-click-navigates, which is right for one decision with the result already on screen.
+
+The **listing** is bounded at 2,000 values, sorted by count, with `numBuckets` requested, so a
+dimension with more distinct values than that says "listing the 2,000 most common of 48,391".
+
+The **search is not bounded to that listing** — it covers every value the dimension has. The two
+are different populations and the dialog says which one is on screen, because they look identical
+otherwise: a listing note reads "the search box is not limited to these", and a search result reads
+"every value of this dimension was searched, not only the ones listed".
+
+Typing sends one request after a 250 ms pause, or immediately on Enter for somebody who types
+faster than that. An answer overtaken by a newer one is dropped — `searchToken` for searches within
+one open dialog, `isCurrent(generation)` for a dialog that has since been closed or replaced. Below
+two characters, and on any dimension whose values are *entirely* in the page already, it filters
+locally instead: a dimension with twelve values must not round-trip to narrow twelve values. Search
+results are capped at 200, which is read from the top down — nobody scrolls to the two hundredth
+match, they type another character.
+
+The same rule applies to the sidebar's inline `Filter…` box: local while the whole dimension is in
+the page, server-side once the list on screen is only the head of a longer one. Filtering a capped
+list locally is what made it report "no match" for values that exist.
+
+#### Why the search is a classic facet and not a JSON one
+
+**The JSON Facet API has no substring filter.** `contains` and `containsIgnoreCase` belong to the
+classic facet component; inside a `json.facet` block they are neither honoured nor rejected, they
+are silently dropped. Measured against a live Solr node:
+
+```
+json.facet {"type":"terms","field":"keywords_sm","contains":"Feature"}
+  → numBuckets 897; buckets: Solr, Opensolr Changelog, New Feature, REST API …
+json.facet {"type":"terms","field":"keywords_sm","bogusparam":"x"}
+  → numBuckets 897; the same buckets, byte for byte
+json.facet {"type":"terms","field":"keywords_sm","prefix":"New"}
+  → numBuckets 8, all beginning "New"                          (prefix IS supported)
+
+facet=true&facet.field=keywords_sm&facet.contains=feature&facet.contains.ignoreCase=true
+  → New Feature (74), AI And Vector Features … (1)             (this is the one that works)
+```
+
+Allowlisting `contains` in `Solr::sanitiseFacet()` would therefore have shipped a search box that
+returned the dimension's most common values *whatever was typed*, and was believed. So the search
+goes through `Solr::facetContains()`, which is the one classic-facet call in the panel. Tag
+exclusion still applies and is spelled on the field name there — `facet.field={!ex=f_host_s}host_s`
+— and `sanitiseQueryParams()` skips exactly that one block before the field-name allowlist, so
+`{!frange}`, `{!join}` and `{!xmlparser}` are still refused in the same parameter.
+
+The substring is request text — the first facet parameter that is — so it is capped at 64
+characters, rejected outright if it holds a control character, and refused when empty. It is **not**
+rejected for containing `{!`, `_query_` or `_val_`, unlike a filter value, and that difference is
+measured rather than assumed: with the rest of the query held constant at 485 documents,
+`facet.contains={!frange l=0 u=100}`, `_query_:"*:*"` and `") OR (""="` each returned `numFound 485`
+and zero matching terms. Solr compares the string literally and never parses it, and a path or a
+User-Agent can legitimately contain any of them.
+
 ## What each view requests
 
 Each row is one independent `fetch()` with its own progress strip, its own retry and its
@@ -675,6 +907,9 @@ a momentary outage bounced the operator out of their dashboard and re-opened the
 | Referer links | `Security::safeUrl()` runs **server-side**; the client only ever uses the pre-validated `referer_href`. |
 | CSP | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`. No inline `<script>`, no `onclick=`, no `eval`, no `new Function`, no dynamic `import()`. The theme bootstrap — normally the one place people cheat — is an external synchronous file. `'unsafe-inline'` on **styles only** is the one relaxation: the panel sets chart and bar heights with `style=` attributes, and every value in one is either a constant or an integer through `Security::clampInt()`. |
 | ECharts | Vendored at `public/assets/vendor/echarts.min.js` (5.6.0, Apache-2.0, licence alongside it). No CDN; the panel works air-gapped. Loaded as a classic UMD script with `defer`, so it is guaranteed to have executed before the module body runs. |
+| World outline | `public/assets/geo/world.json` (Natural Earth 110m Admin 0, **public domain**, provenance and the exact reductions in `public/assets/geo/README.md`). 155 KB, committed rather than fetched from a tile server, for the same air-gapped reason as ECharts. Loaded **only** by the Networks view, by the card that needs it, and a failed load falls back to the plain lon/lat grid rather than an empty card. Every feature carries one property: the country's ISO 3166-1 alpha-2 code. |
+| Country names | `src/Geo/Countries.php` is the one table, in PHP, and it reaches the browser once in the boot payload. There is no second copy in a module. A code the table does not carry renders as itself — geolocation data is third-party and incomplete, and a guess would be worse than a code. |
+| Icons | `public/assets/js/icons.js`, drawn inline with `createElementNS` from paths in that file. No icon font, no sprite request, no CDN. Neutral category shapes rather than vendor logos, because this repository is MIT and ships publicly. `currentColor` throughout, so there is no colour in the file and both themes follow the text. |
 | Index name from the URL or a POST | `Security::isSafeCoreName()` for shape, then — for anything that starts a job — checked against the account's own index list before the job exists. Ownership for a *read* is left to the platform, which answers `ERROR_NOT_CORE_OWNER` and is rendered as a sentence. |
 | Free text → the platform | Never. Callers of `src/OpensolrLog.php` hand over a validated structure, not Solr parameters; `q`/`fq`/`sort`/`fl`/`rows` are built from constants and escaped literals, `fq` is length-capped and re-asserted by `assertSafeFq()`, and `sort` is a map lookup. |
 | `full_request` in a shape row | Chosen byte for byte by whoever queried the index. Truncated to 600 characters server-side and escaped at every render site. |
@@ -751,6 +986,10 @@ public/assets/
                            jobs, URL helpers, theme, copy buttons
   js/charts.js             ECharts wrapper: reads tokens from CSS, re-renders on theme flip
   js/geo.js                country centroids for the Networks map
+  js/icons.js              the mark in front of a value: one closed vocabulary per dimension
+  js/responsive.js         the phone drawer, the icon rail, stacked tables, the facet column
+  css/mobile.css           the rules that exist only because a screen is narrow
+  geo/world.json           Natural Earth 110m outline, public domain (see its README)
   js/app.js                static view map, one entry point (ES module)
   js/views/*.js            one module per view
   js/setup.js              the browser installer's own script (src/Setup/View.php)

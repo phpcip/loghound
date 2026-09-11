@@ -19,6 +19,9 @@ declare(strict_types=1);
 
 namespace Loghound;
 
+use Loghound\Auth\Persistence;
+use Loghound\Auth\TwoFactor;
+
 final class Security
 {
     /** Hard ceiling on Solr `rows` regardless of what a caller asks for. */
@@ -37,6 +40,16 @@ final class Security
      */
     public const LOGIN_LEDGER = 'login-attempts.json';
 
+    /**
+     * Was this request's session created from a persistent-login token?
+     *
+     * Request-scoped, because it is a fact about THIS request and not about the session: the
+     * session it produced is an ordinary one from the next request onwards. requireCsrf() reads
+     * it so that a state-changing request whose session had to be re-established is answered
+     * with an explanation instead of a bare token mismatch. See requireCsrf().
+     */
+    private static bool $resumedFromToken = false;
+
     /** Session key holding the signed-in operator's username. */
     private const S_USER = 'lh_user';
 
@@ -45,6 +58,34 @@ final class Security
 
     /** Session key holding the instant of the last authenticated request (idle anchor). */
     private const S_SEEN_AT = 'lh_seen_at';
+
+    /**
+     * Session key marking a session that took the "stay signed in" option.
+     *
+     * Its only effect is that the idle and absolute timeouts are not applied. Every other
+     * session is governed by them exactly as before — the option is the whole of the
+     * difference, and an operator who did not take it is not affected by its existence.
+     */
+    private const S_PERSIST = 'lh_persist';
+
+    /** Session key holding the username that passed the password but not yet the second factor. */
+    private const S_2FA_USER = 'lh_2fa_user';
+
+    /** Session key holding when that happened, so a half-finished sign-in cannot sit open. */
+    private const S_2FA_AT = 'lh_2fa_at';
+
+    /** Session key remembering whether the sign-in that is pending asked to be remembered. */
+    private const S_2FA_REMEMBER = 'lh_2fa_remember';
+
+    /**
+     * How long a sign-in may sit waiting for its second factor.
+     *
+     * Five minutes is long enough to find a phone and short enough that a session holding
+     * "this username's password was correct" does not linger. The pending session grants no
+     * access to anything while it waits: it has no lh_user, so authenticate() reports it as
+     * not signed in like any other anonymous request.
+     */
+    public const PENDING_TTL = 300;
 
     /**
      * Escape for HTML text/attribute context.
@@ -207,9 +248,7 @@ final class Security
      */
     public static function csrfToken(): string
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        self::startSession();
         if (empty($_SESSION['lh_csrf'])) {
             $_SESSION['lh_csrf'] = bin2hex(random_bytes(32));
         }
@@ -226,11 +265,75 @@ final class Security
      */
     public static function rotateCsrf(): string
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        self::startSession();
         $_SESSION['lh_csrf'] = bin2hex(random_bytes(32));
         return $_SESSION['lh_csrf'];
+    }
+
+    /**
+     * Start a session without letting PHP rewrite our cache headers.
+     *
+     * THIS IS NOT A TIDINESS WRAPPER. session_start() emits its own Cache-Control according
+     * to session.cache_limiter, and it REPLACES whatever the application already sent. The
+     * front controller and the sign-in page both send `Cache-Control: no-store, private`
+     * before any session exists, and on a default php.ini the limiter happens to overwrite it
+     * with `no-store, no-cache, must-revalidate` — which is still no-store, so the mistake is
+     * invisible. On an installation whose pool sets `session.cache_limiter = private`, the
+     * same call replaces it with `private, max-age=10800`, and the SIGN-IN PAGE becomes
+     * cacheable: the browser is then free to re-present a form whose CSRF token was rotated
+     * hours ago, which is a guaranteed "CSRF token mismatch" on a sign-in that should have
+     * worked. Measured, not theorised.
+     *
+     * Passing an empty limiter tells PHP to send nothing, so the header the application chose
+     * is the header that is sent, on every php.ini.
+     *
+     * PUBLIC, because it was private and two other places grew their own copy of it —
+     * Panel\Settings::stashSolrNote() and takeSolrNote() both called session_start() directly,
+     * without the empty limiter, which is the defect described above reproduced twice. There is
+     * one way to start a session in this application and this is it.
+     *
+     * WHY THE headers_sent() GUARD IS NOT A PAPER-OVER. A session cannot be started once output
+     * has begun, because the session cookie is a header; PHP warns and refuses. Calling it anyway
+     * produced 127 warnings per test run, which is noise that trains everybody to ignore warnings.
+     * But the guard must not turn a real defect into a silence, so the two cases are separated:
+     *
+     *   CLI — the test runner prints each result as it goes, so by the time a test asks for a
+     *         session, output has been written. There are no headers and no cookie to send; the
+     *         refusal is an artefact of the harness and nothing is wrong. Return quietly.
+     *   WEB — output before a session start is a BUG IN THE CALLER, and a serious one: without a
+     *         cookie the session does not persist, so the operator cannot sign in and every CSRF
+     *         check fails, with nothing on screen to explain it. It is logged with the file and
+     *         line that sent the output first, which is the only fact that makes it fixable.
+     *
+     * It does not die: killing the render would turn a header-ordering mistake into a blank 500
+     * and hide the very diagnosis being logged. It returns false, the caller's writes to $_SESSION
+     * go to a superglobal that is never persisted, and the authentication fails closed.
+     *
+     * @return bool Whether a session is active when this returns.
+     */
+    public static function startSession(): bool
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            return true;
+        }
+
+        $file = '';
+        $line = 0;
+        if (headers_sent($file, $line)) {
+            if (PHP_SAPI !== 'cli') {
+                error_log(
+                    'Loghound: a session was needed after output had already been sent from '
+                    . $file . ':' . $line . '. The session cookie cannot be set, so sign-in and '
+                    . 'CSRF will fail. Nothing may be echoed before Security::startSession().'
+                );
+            }
+            return false;
+        }
+
+        @session_cache_limiter('');
+        session_start();
+
+        return session_status() === PHP_SESSION_ACTIVE;
     }
 
     /**
@@ -238,6 +341,15 @@ final class Security
      *
      * Fails closed: any request that is not a GET/HEAD must present a matching token or
      * the process is terminated with 403 before the handler runs.
+     *
+     * ONE CASE IS REPORTED DIFFERENTLY, AND NOT ACCEPTED. When this request's session was just
+     * re-established from a persistent-login token, the session that issued the submitted token
+     * no longer exists — PHP's garbage collector deleted it — so there is nothing to compare
+     * against and no way for any token to be valid. That is not the operator doing anything
+     * wrong, and answering it with "CSRF token mismatch" is the same misleading page this whole
+     * area was fixed to stop producing: they are signed in, the panel works, and the message
+     * describes an attack. So it is answered with 409 and the actual remedy. The request is
+     * still refused, no token is accepted, and the guard is not relaxed by a single byte.
      */
     public static function requireCsrf(): void
     {
@@ -245,12 +357,32 @@ final class Security
         if ($method === 'GET' || $method === 'HEAD') {
             return;
         }
+
         $given = $_POST['csrf'] ?? ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
-        if (!is_string($given) || !self::equals(self::csrfToken(), $given)) {
-            http_response_code(403);
-            header('Content-Type: text/plain; charset=utf-8');
-            exit("CSRF token mismatch\n");
+        if (is_string($given) && self::equals(self::csrfToken(), $given)) {
+            return;
         }
+
+        if (self::$resumedFromToken) {
+            http_response_code(409);
+            $api = $_GET['api'] ?? null;
+            if (is_string($api) && $api !== '') {
+                header('Content-Type: application/json; charset=utf-8');
+                exit((string) json_encode([
+                    'error' => 'Your session was re-established, so this page is out of date. '
+                        . 'Reload it and try again.',
+                ]));
+            }
+            header('Content-Type: text/plain; charset=utf-8');
+            exit(
+                "You are signed in, but this page was loaded under a session the server has since\n" .
+                "cleaned up, so the form it carried is out of date. Reload the page and do it again.\n"
+            );
+        }
+
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        exit("CSRF token mismatch\n");
     }
 
     /**
@@ -457,23 +589,40 @@ final class Security
     }
 
     /**
+     * Is the client actually presenting a session, rather than merely arriving?
+     *
+     * THE PRECONDITION sessionResume() AND sessionSignOut() SHARE, and the reason neither of
+     * them can simply call startSession(). The panel is on the public internet and is crawled
+     * and probed constantly; starting a session for every anonymous request would write a
+     * session file per probe. A session is touched only when the client presents one — a
+     * cookie, or an id set explicitly by a caller such as the test harness. Anything else is
+     * "not signed in", which is the same answer with none of the disk churn.
+     *
+     * It is a named test rather than a condition written twice, because it was written twice
+     * and the two copies sat four hundred lines apart.
+     */
+    private static function sessionPresented(): bool
+    {
+        return session_id() !== '' || isset($_COOKIE[session_name()]);
+    }
+
+    /**
      * Resume an existing session without creating one.
      *
-     * The panel is on the public internet and is crawled and probed constantly. Starting
-     * a session for every anonymous request would write a session file per probe, so a
-     * session is only started when the client actually presents one — a cookie, or an id
-     * set explicitly by a caller such as the test harness. Anything else is simply "not
-     * signed in", which is the same answer with none of the disk churn.
+     * The precondition is sessionPresented(); everything after it — the active-session check,
+     * the headers_sent guard and the empty cache limiter — is startSession()'s, and is
+     * delegated rather than repeated. This used to repeat the limiter line, which is how
+     * sessionSignOut() below came to be missing it: one of the two copies was simply forgotten.
      */
     public static function sessionResume(): bool
     {
         if (session_status() === PHP_SESSION_ACTIVE) {
             return true;
         }
-        if (session_id() === '' && !isset($_COOKIE[session_name()])) {
+        if (!self::sessionPresented()) {
             return false;
         }
-        return session_start();
+        return self::startSession();
     }
 
     /**
@@ -488,20 +637,90 @@ final class Security
      * Only a username and two timestamps are stored. The password is not kept, the hash is
      * not kept, and nothing derived from either is kept: the session file is readable by
      * whoever can read the filesystem, and it must not be worth reading.
+     *
+     * $persistent records that this session took the "stay signed in" option, which is the
+     * only thing that exempts it from the two timeouts. It is set by the sign-in form when the
+     * operator ticks the box, and by the persistent-token path when a token recreates a
+     * session that PHP's garbage collector deleted — that session has to be exempt too, or the
+     * token would be resurrecting sessions only to have them expire again.
      */
-    public static function sessionSignIn(string $user): void
+    public static function sessionSignIn(string $user, bool $persistent = false): void
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            session_start();
-        }
+        self::startSession();
         session_regenerate_id(true);
+
+        self::clearPending();
 
         $now = time();
         $_SESSION[self::S_USER]     = $user;
         $_SESSION[self::S_LOGIN_AT] = $now;
         $_SESSION[self::S_SEEN_AT]  = $now;
+        $_SESSION[self::S_PERSIST]  = $persistent;
 
         self::rotateCsrf();
+    }
+
+    /**
+     * Record that a password was correct but the second factor is still outstanding.
+     *
+     * THE SESSION THIS LEAVES BEHIND IS NOT AUTHENTICATED. It carries no lh_user, so
+     * authenticate() reports it as anonymous and every panel view refuses it exactly as it
+     * refuses a stranger. All it holds is "this username's password was right, recently, and
+     * whether they asked to be remembered" — enough to know what to do when a valid code
+     * arrives, and not enough to be worth stealing.
+     *
+     * The id is regenerated here as well as at sign-in, and the session emptied first. An
+     * attacker who planted an id gets it invalidated at the first step rather than the second,
+     * and nothing from the anonymous session — a CSRF token somebody else chose included —
+     * carries into the half-authenticated one.
+     */
+    public static function sessionPending(string $user, bool $remember): void
+    {
+        self::startSession();
+
+        $_SESSION = [];
+        session_regenerate_id(true);
+
+        $_SESSION[self::S_2FA_USER]     = $user;
+        $_SESSION[self::S_2FA_AT]       = time();
+        $_SESSION[self::S_2FA_REMEMBER] = $remember;
+
+        self::rotateCsrf();
+    }
+
+    /**
+     * The username waiting on a second factor, or '' when none is (still) waiting.
+     *
+     * A pending stage older than PENDING_TTL is treated as absent. The check is here rather
+     * than in the caller so that no caller can forget it.
+     */
+    public static function pendingUser(): string
+    {
+        $user = is_string($_SESSION[self::S_2FA_USER] ?? null) ? $_SESSION[self::S_2FA_USER] : '';
+        $at   = (int) ($_SESSION[self::S_2FA_AT] ?? 0);
+
+        if ($user === '' || $at <= 0 || (time() - $at) > self::PENDING_TTL) {
+            return '';
+        }
+        return $user;
+    }
+
+    /** Did the pending sign-in ask to be remembered? */
+    public static function pendingRemember(): bool
+    {
+        return ($_SESSION[self::S_2FA_REMEMBER] ?? false) === true;
+    }
+
+    /** Forget any half-finished sign-in. */
+    public static function clearPending(): void
+    {
+        unset($_SESSION[self::S_2FA_USER], $_SESSION[self::S_2FA_AT], $_SESSION[self::S_2FA_REMEMBER]);
+    }
+
+    /** Did this session take the "stay signed in" option? */
+    public static function sessionIsPersistent(): bool
+    {
+        return ($_SESSION[self::S_PERSIST] ?? false) === true;
     }
 
     /**
@@ -511,17 +730,39 @@ final class Security
      * who kept the id, so the order is: empty the array, expire the cookie, then
      * session_destroy() to delete the server-side record. After this the old id is
      * worthless even when replayed.
+     *
+     * WHAT IS THIS CALLER'S AND WHAT IS SHARED. The precondition is sessionPresented(), the
+     * same one sessionResume() uses: nothing to sign out of unless the client presented
+     * something. The starting is startSession()'s — this used to call session_start() bare,
+     * without the empty cache limiter, which is the exact defect that wrapper exists to
+     * prevent, two functions from a sibling that got it right. A sign-out response carrying
+     * `private, max-age=10800` instead of the application's `no-store` is a sign-out page a
+     * browser may re-present from cache.
+     *
+     * SIGN-OUT DIVERGES IN ONE PLACE, DELIBERATELY. When no session can be started — output
+     * has already gone out, so the cookie header cannot be set — the old code called
+     * session_start() anyway, wrote to a $_SESSION that would never be persisted, and then
+     * called session_destroy() with no active session, which warns and destroys nothing. The
+     * cookie expiry is the half that still works and still matters, because it is what stops
+     * the browser presenting the id again, so it is attempted regardless; the server-side
+     * destroy is skipped, because there is nothing to destroy and pretending otherwise is how
+     * a sign-out comes to report success it did not achieve. The session file is then left to
+     * PHP's garbage collector, which is the same fate as a browser that simply never returns.
      */
     public static function sessionSignOut(): void
     {
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            if (session_id() === '' && !isset($_COOKIE[session_name()])) {
+        $active = session_status() === PHP_SESSION_ACTIVE;
+
+        if (!$active) {
+            if (!self::sessionPresented()) {
                 return;
             }
-            session_start();
+            $active = self::startSession();
         }
 
-        $_SESSION = [];
+        if ($active) {
+            $_SESSION = [];
+        }
 
         if (ini_get('session.use_cookies')) {
             $params = session_get_cookie_params();
@@ -535,7 +776,9 @@ final class Security
             ]);
         }
 
-        session_destroy();
+        if ($active) {
+            session_destroy();
+        }
     }
 
     /** The signed-in operator's username, or an empty string when nobody is signed in. */
@@ -582,7 +825,7 @@ final class Security
         }
 
         if ($mode === 'session') {
-            return self::authenticateSession($auth);
+            return self::authenticateSession($auth, $varDir, $trustedProxies);
         }
 
         $ip = self::clientIp($trustedProxies);
@@ -620,18 +863,34 @@ final class Security
      * The idle anchor is only moved forward for a request that was already authenticated,
      * so a stream of anonymous requests cannot keep somebody else's session alive.
      *
+     * NEITHER TIMEOUT APPLIES TO A SESSION THAT TOOK THE "STAY SIGNED IN" OPTION. That is what
+     * the option is. Every other session is governed by them unchanged, which is the point:
+     * the feature adds a choice, it does not relax the default.
+     *
+     * When no session is signed in, a persistent-login cookie gets its chance before the
+     * operator is sent to the form. That path is where a session deleted by PHP's garbage
+     * collector comes back, and it is rate limited like any other sign-in.
+     *
      * @param array<string,mixed> $auth
+     * @param string[]            $trustedProxies
      * @return array{state:string,user:string,retry:int}
      */
-    private static function authenticateSession(array $auth): array
-    {
-        if (!self::sessionResume()) {
-            return ['state' => 'login', 'user' => '', 'retry' => 0];
+    private static function authenticateSession(
+        array $auth,
+        ?string $varDir = null,
+        array $trustedProxies = []
+    ): array {
+        $user = self::sessionResume() ? self::sessionUser() : '';
+
+        if ($user === '') {
+            return self::resumeRemembered($auth, $varDir, $trustedProxies);
         }
 
-        $user = self::sessionUser();
-        if ($user === '') {
-            return ['state' => 'login', 'user' => '', 'retry' => 0];
+        TwoFactor::sweepEphemeral();
+
+        if (self::sessionIsPersistent()) {
+            $_SESSION[self::S_SEEN_AT] = time();
+            return ['state' => 'ok', 'user' => $user, 'retry' => 0];
         }
 
         $limits = self::authLimits($auth);
@@ -650,6 +909,69 @@ final class Security
 
         $_SESSION[self::S_SEEN_AT] = $now;
         return ['state' => 'ok', 'user' => $user, 'retry' => 0];
+    }
+
+    /**
+     * Try the "stay signed in" cookie, and sign the operator in when it checks out.
+     *
+     * THE RATE LIMITER AND THE LOCKOUT APPLY HERE TOO, and that is not decoration. Without it
+     * this path would be a second front door with no counter on it: an attacker holding a
+     * cookie of unknown freshness, or fishing for a selector, would get unlimited attempts at
+     * a credential while the password form next to it allowed eight. The gate is consulted
+     * before the token is looked at, a failed verifier is recorded as a failed sign-in, and an
+     * unreadable ledger refuses the attempt — the same three rules the password path follows.
+     *
+     * THEFT IS REPORTED AS AN ORDINARY REFUSAL. The operator is sent to the sign-in form, where
+     * Panel\Login shows them what happened. Saying anything here would mean saying it to
+     * whoever presented the cookie, which on the theory that it was stolen is the thief.
+     *
+     * THE TOKEN IS CHECKED AGAINST THE ACCOUNT THAT ACTUALLY EXISTS. A token naming a username
+     * the config no longer has is destroyed rather than honoured, so renaming the account —
+     * or any future change that makes an old identity meaningless — cannot be undone by a
+     * cookie from before it.
+     *
+     * @param array<string,mixed> $auth
+     * @param string[]            $trustedProxies
+     * @return array{state:string,user:string,retry:int}
+     */
+    private static function resumeRemembered(array $auth, ?string $varDir, array $trustedProxies): array
+    {
+        if (!Persistence::present()) {
+            return ['state' => 'login', 'user' => '', 'retry' => 0];
+        }
+
+        $ip = self::clientIp($trustedProxies);
+        $gate = self::loginGate($ip, $auth, $varDir);
+
+        if (!$gate['available']) {
+            return ['state' => 'store', 'user' => '', 'retry' => 0];
+        }
+        if (!$gate['allowed']) {
+            return ['state' => 'locked', 'user' => '', 'retry' => $gate['retry']];
+        }
+
+        $result = Persistence::consume($varDir, Persistence::lifetime($auth));
+
+        if ($result['state'] === 'theft') {
+            self::loginFailure($ip, $auth, $varDir);
+            return ['state' => 'login', 'user' => '', 'retry' => 0];
+        }
+        if ($result['state'] !== 'ok' || $result['user'] === '') {
+            return ['state' => 'login', 'user' => '', 'retry' => 0];
+        }
+        if (!self::equals((string) ($auth['user'] ?? ''), $result['user'])) {
+            Persistence::revokeAll($varDir);
+            return ['state' => 'login', 'user' => '', 'retry' => 0];
+        }
+
+        self::sessionSignIn($result['user'], true);
+        self::$resumedFromToken = true;
+
+        if ($gate['count'] > 0) {
+            self::loginSuccess($ip, $auth, $varDir);
+        }
+
+        return ['state' => 'ok', 'user' => $result['user'], 'retry' => 0];
     }
 
     /**

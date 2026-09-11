@@ -102,6 +102,63 @@ final class Rules
     ];
 
     /**
+     * The rules that read the TRANSPORT plane, silenced when there is no transport plane.
+     *
+     * A beacon-only session — a site on another machine, measured by the beacon alone — has no
+     * access log behind it anywhere in this installation. No status code, no bytes, no server
+     * timing, no conditional-request behaviour, no inter-request rhythm, no reverse DNS from a
+     * log line. bin/loghound-score writes NONE of those fields on such a document, which is
+     * half the guarantee; this is the other half, and both are needed. Without it,
+     * Signals::fromSession() would read the absent counters back as the zeros PHP hands out,
+     * and `assets == 0` and `pages == 1` are not neutral values here — they are two of the
+     * accusations in the ruleset. `no_assets` alone would fire on every single visitor of a
+     * standalone site, at 55 points, for fetching sub-resources that were never observable
+     * from here.
+     *
+     * A rule firing on evidence that was never collected is the exact failure this project
+     * exists to stop publishing, and it is worse than a missed detection: it is a finding
+     * manufactured out of an absence, reported with the same confidence as a real one.
+     *
+     * Why each of the five is here, and not one more:
+     *
+     *   no_js_on_html     asks whether HTML was served and no beacon followed. On a
+     *                     beacon-only session the beacon is the ONLY thing that happened.
+     *   no_assets         asks what else the client fetched. Nothing was logged, so nothing
+     *                     was fetched as far as this installation can see.
+     *   no_304_on_repeat  needs a repeated request and a validator, both log facts.
+     *   single_page_10s   counts pages and measures a log span. Neither exists.
+     *   periodic_timing   measures inter-request gaps from log lines. There are none, and an
+     *                     empty gap list must not read as a perfectly regular rhythm.
+     *
+     * `no_interaction` is deliberately NOT in this list, though it is in DEFERRED_CODES: it
+     * reads the beacon's own interaction count, which a beacon-only session has, and it is one
+     * of the few pieces of evidence that still means something on one plane.
+     *
+     * @var string[]
+     */
+    public const TRANSPORT_CODES = [
+        'no_js_on_html',
+        'no_assets',
+        'no_304_on_repeat',
+        'single_page_10s',
+        'periodic_timing',
+    ];
+
+    /**
+     * The reason recorded on a session that has only the execution plane behind it.
+     *
+     * Worth no points, like PROVISIONAL_REASON, and present for the same reason: SPEC §1
+     * requires a verdict to carry something a person can read, and somebody looking at a
+     * beacon-only session is owed the sentence "this rests on one plane, and one plane can be
+     * faked" rather than a verdict that looks exactly like a three-plane one.
+     *
+     * It rides in `bot_reasons_ss`, so "how many of my sessions were scored on one plane" is a
+     * facet question on a field the panel already lists, in the same place an operator looks to
+     * see why a session was called what it was called.
+     */
+    public const SINGLE_PLANE_REASON = 'beacon_only_session';
+
+    /**
      * The verdict a provisional session may not be better than.
      *
      * A session that has tripped nothing scores 0 and would be called `human`. On one request,
@@ -219,6 +276,153 @@ final class Rules
     }
 
     /**
+     * The reason code recorded when a session was fully tested and tripped nothing.
+     *
+     * Worth no points, and the wording of its label matters more than most: it is the ABSENCE
+     * of evidence. A session carrying only this one has not been shown to be human; it has
+     * been shown not to be caught. Anything in the interface that reads it as a positive
+     * finding is a fabricated conclusion.
+     */
+    public const CLEAN_REASON = 'no_bot_signals';
+
+    /**
+     * Every reason code the scorer can emit, with the words a person reads instead of the slug.
+     *
+     * THE ONE SOURCE OF TRUTH FOR THIS WORDING. `bot_reasons_ss` holds slugs —
+     * `fp_cluster_proxy_fleet`, `hosting_asn_browser_ua`, `no_bot_signals` — and a slug is the
+     * right thing to store, to filter on, to put in a URL and to grep for in a log. It is the
+     * wrong thing to show somebody who has never read this file, and it was being shown in
+     * every facet, table, dialog and chart label in the panel.
+     *
+     * So each entry carries three things:
+     *
+     *   label     Two or three plain words. The primary text everywhere the dimension appears.
+     *   why       One sentence saying what the rule actually TESTS, for a tooltip or the value
+     *             browser, where there is room for it.
+     *   severity  How much the rule can do alone: `high` reaches a bot verdict unaided, `med`
+     *             is designed to be corroborated, `low` is meant to stack, `info` is not an
+     *             accusation at all.
+     *
+     * EVERY LABEL IS DERIVED FROM THE IMPLEMENTATION BELOW, NOT FROM THE SLUG, and two of them
+     * are deliberately longer than the slug suggests because the short reading would overstate
+     * the finding:
+     *
+     *   ua_declared_bot   is honest traffic. It produces the verdict `bot` because the thing
+     *                     IS a bot, and it produces no threat whatsoever; severity `info`.
+     *   no_bot_signals    is the absence of evidence, never evidence of a person.
+     *   provisional_session  means the session had not ended when it was scored, so five rules
+     *                     were not evaluated. Nothing was detected.
+     *
+     * A code with no entry here renders as its own slug — never as a wrong-but-plausible
+     * label, never as blank — and tests/test_facets.php fails if a code the scorer can emit is
+     * missing one, so a rule added later cannot reach the interface as a slug by accident.
+     *
+     * @var array<string,array{label:string,why:string,severity:string}>
+     */
+    public const REASONS = [
+        'automation_marker' => [
+            'label' => 'Automation marker',
+            'severity' => 'high',
+            'why' => 'The page exposed a definitive driver artefact — navigator.webdriver, a chromedriver global, Puppeteer/Playwright/Selenium hooks. Browsers do not have these; drivers do.',
+        ],
+        'ua_declared_bot' => [
+            'label' => 'Declared crawler',
+            'severity' => 'info',
+            'why' => 'It said it was a bot and it was telling the truth. Verdict bot, threat none.',
+        ],
+        'rdns_claim_failed' => [
+            'label' => 'rDNS claim failed',
+            'severity' => 'high',
+            'why' => 'It declared itself Googlebot or Bingbot and forward-confirmed reverse DNS did not back that up. Impersonating a crawler is not a mistake anyone makes by accident.',
+        ],
+        'headless_renderer' => [
+            'label' => 'Headless renderer',
+            'severity' => 'high',
+            'why' => 'WebGL reported SwiftShader, llvmpipe, Mesa OffScreen or Microsoft Basic Render: software rasterisation, which is what you get when there is no screen.',
+        ],
+        'beacon_forged' => [
+            'label' => 'Forged beacon timing',
+            'severity' => 'high',
+            'why' => 'The claimed dwell time is impossible against the issue time of its own token. The lie is recorded rather than discarded, because the lie is the evidence.',
+        ],
+        'ua_claim_failed' => [
+            'label' => 'UA claim failed',
+            'severity' => 'high',
+            'why' => 'The User-Agent claimed a Chrome version whose engine features the page does not actually have. A spoofed UA string cannot retrofit V8.',
+        ],
+        'fp_cluster_proxy_fleet' => [
+            'label' => 'Proxy fleet fingerprint',
+            'severity' => 'high',
+            'why' => 'Five or more distinct IPs shared this exact header fingerprint within 24 hours on non-mobile networks. One client, many exits.',
+        ],
+        'ua_secch_mismatch' => [
+            'label' => 'Sec-CH-UA mismatch',
+            'severity' => 'high',
+            'why' => 'A Chrome User-Agent arrived without Sec-CH-UA, or with one that contradicts it. Chrome always sends its own client hints.',
+        ],
+        'platform_mismatch' => [
+            'label' => 'Platform mismatch',
+            'severity' => 'med',
+            'why' => 'Sec-CH-UA-Platform disagrees with the operating system the User-Agent claims.',
+        ],
+        'no_js_on_html' => [
+            'label' => 'No JS on HTML',
+            'severity' => 'med',
+            'why' => 'An HTML page was served with a 200 and no beacon ever arrived, while the User-Agent claimed a real browser. Real browsers run scripts.',
+        ],
+        'hosting_asn_browser_ua' => [
+            'label' => 'Datacentre + browser UA',
+            'severity' => 'low',
+            'why' => 'A consumer browser User-Agent arriving from a hosting ASN. Weak alone — VPNs and corporate egress look like this — meaningful when stacked.',
+        ],
+        'periodic_timing' => [
+            'label' => 'Periodic timing',
+            'severity' => 'med',
+            'why' => 'The gaps between requests are too regular across four or more requests. People are not metronomes.',
+        ],
+        'no_interaction' => [
+            'label' => 'No interaction',
+            'severity' => 'med',
+            'why' => 'The beacon ran, the session ended, and not one scroll, click or keypress ever happened.',
+        ],
+        'tz_mismatch' => [
+            'label' => 'Timezone mismatch',
+            'severity' => 'low',
+            'why' => 'The browser timezone disagrees with the timezone of the IP geolocation.',
+        ],
+        'no_304_on_repeat' => [
+            'label' => 'No conditional requests',
+            'severity' => 'low',
+            'why' => 'The same assets were fetched again with no If-None-Match or If-Modified-Since. A browser cache would have asked.',
+        ],
+        'no_assets' => [
+            'label' => 'No sub-resources',
+            'severity' => 'med',
+            'why' => 'HTML was fetched and not a single stylesheet, script, font or image followed it.',
+        ],
+        'single_page_10s' => [
+            'label' => 'Single page, under 10s',
+            'severity' => 'low',
+            'why' => 'One page, gone in under ten seconds. Very weak on its own; a bounce looks the same.',
+        ],
+        self::PROVISIONAL_REASON => [
+            'label' => 'Session still open',
+            'severity' => 'info',
+            'why' => 'The session had not ended when it was scored, so the five signals that can only be read after it ends were not evaluated and the verdict is held at unknown. Nothing was detected.',
+        ],
+        self::SINGLE_PLANE_REASON => [
+            'label' => 'One plane only',
+            'severity' => 'info',
+            'why' => 'This site has no access log in this installation, so the session was measured by the beacon alone and the five signals that read the request log were not evaluated. Nothing was detected — but the evidence that remains is the plane a determined client controls, so treat the verdict as weaker than the same verdict on a session with a log behind it.',
+        ],
+        self::CLEAN_REASON => [
+            'label' => 'Nothing fired',
+            'severity' => 'info',
+            'why' => 'Every rule was evaluated and none of them fired. This is the absence of evidence, not evidence that a person was driving.',
+        ],
+    ];
+
+    /**
      * Every rule code, in evaluation order.
      *
      * Order does not affect the score (addition commutes) but it does affect the order
@@ -229,6 +433,42 @@ final class Rules
     public static function codes(): array
     {
         return array_keys(self::WEIGHTS);
+    }
+
+    /**
+     * Every code that can appear in `bot_reasons_ss`, weighted rules plus the synthetic ones.
+     *
+     * The synthetic three are not rules and carry no weight, but they are reason codes on real
+     * documents and therefore real facet values, so anything enumerating what the dimension can
+     * hold has to include them. Leaving them out is why "Signal fired" showed
+     * `provisional_session` raw.
+     *
+     * @return string[]
+     */
+    public static function reasonCodes(): array
+    {
+        return array_merge(
+            array_keys(self::WEIGHTS),
+            [self::PROVISIONAL_REASON, self::SINGLE_PLANE_REASON, self::CLEAN_REASON]
+        );
+    }
+
+    /**
+     * The label, explanation and severity for one reason code.
+     *
+     * An unknown code answers with itself as the label and says so, rather than guessing. A
+     * value from an index written by a newer Loghound, or a rule an operator added, must read
+     * as the thing it is.
+     *
+     * @return array{label:string,why:string,severity:string}
+     */
+    public static function reason(string $code): array
+    {
+        return self::REASONS[$code] ?? [
+            'label'    => $code,
+            'severity' => 'med',
+            'why'      => 'This panel version has no description for the rule code "' . $code . '".',
+        ];
     }
 
     /**
@@ -251,6 +491,9 @@ final class Rules
     public function fired(string $code, array $s, array $ctx = []): ?string
     {
         if (!empty($ctx['provisional']) && in_array($code, self::DEFERRED_CODES, true)) {
+            return null;
+        }
+        if (!empty($ctx['no_transport']) && in_array($code, self::TRANSPORT_CODES, true)) {
             return null;
         }
 
@@ -349,11 +592,22 @@ final class Rules
             ];
         }
 
+        if (!empty($ctx['no_transport'])) {
+            $reasons[] = self::SINGLE_PLANE_REASON;
+            $detail[self::SINGLE_PLANE_REASON] = [
+                'weight' => 0,
+                'why'    => 'This site has no access log in this installation, so the session was measured by '
+                    . 'the beacon alone. The ' . count(self::TRANSPORT_CODES) . ' signals that read the request '
+                    . 'log were not evaluated, and the evidence that remains comes from one plane, which is the '
+                    . 'plane a determined client controls.',
+            ];
+        }
+
         $class = $this->classify($s, $reasons, $verdict);
 
         if ($reasons === []) {
-            $reasons[] = 'no_bot_signals';
-            $detail['no_bot_signals'] = [
+            $reasons[] = self::CLEAN_REASON;
+            $detail[self::CLEAN_REASON] = [
                 'weight' => 0,
                 'why'    => 'No bot signal fired on this session.',
             ];
@@ -362,7 +616,7 @@ final class Rules
         if ($score > 0 && $detail === []) {
             throw new \LogicException('Rules: scored ' . $score . ' with no reasons. This is a bug.');
         }
-        if ($verdict !== 'human' && $reasons === ['no_bot_signals']) {
+        if ($verdict !== 'human' && $reasons === [self::CLEAN_REASON]) {
             throw new \LogicException('Rules: verdict ' . $verdict . ' with no supporting reason. This is a bug.');
         }
 

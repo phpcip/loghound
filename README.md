@@ -236,6 +236,23 @@ And add one line to your site — anywhere in the page, `<head>` earliest:
 The panel's Settings page hands you that snippet with your own URL and a `?v=` taken from
 the file's modification time, so an upgrade reaches returning visitors on its own.
 
+**The site does not have to be on this machine.** That same line is the whole install on a
+host with no Loghound and no shared access log — a hosted search page, a marketing site,
+anything on another server. The page reports its own hostname, the collector cross-checks it
+against the browser-set `Origin` and against `beacon.allowed_hosts`, and the session is
+created from the beacon alone and **marked as single-plane**, because one plane is the plane
+a determined client controls.
+
+**It can carry more than a URL.** Six attributes, two globals and one function:
+`data-ident` and `data-signed-in` attach an identity your site already has — the templated
+email from WordPress's or Drupal's own user object, not a literal — `data-params` names the
+query parameters to keep as search terms, and `window.loghound.identify()` covers a
+single-page app that signs somebody in after load. Whether Loghound *stores* what they send
+is a separate, server-side decision (`beacon.store_identity` is **off** by default). The
+panel's Settings → Beacon card renders the full option table with a column saying what your
+installation will actually keep; the same table, with the platform snippets, is
+**[docs/BEACON.md §1.1](docs/BEACON.md)**.
+
 No Composer. No npm. No build step. `git clone` and `install.sh` on a bare box.
 
 Full details, including the `LogFormat` block that makes detection substantially
@@ -354,6 +371,20 @@ beacon is independent of whatever other analytics you run.
   data before the account reaches its disk limit, so it keeps running on the free tier and
   simply holds less history. More disk buys more history. Setup asks for the account email
   and the API key from **Account** in the control panel, and provisions both indexes itself.
+
+  Everything settled during installation can be changed afterwards in **Settings**, without
+  reinstalling: the Opensolr account and API key, which pair of indexes this installation uses,
+  which log files are read, the panel username and password, and how much data is kept. There is
+  also a **Reinstall** button that walks you back through setup without deleting a single
+  document.
+
+  **Two indexes, however many sites.** A plan also limits how many indexes an account may
+  hold, so setup counts what the account has *before* it creates anything and, when there is
+  no room, says so in plain numbers rather than failing halfway with one index created. It
+  also offers you any pair of Loghound indexes the account already holds: joining one creates
+  nothing, and several sites reporting into a single pair stay separable in the panel by the
+  hostname on every record. Joining never clears, reshapes or overwrites what is already
+  there.
 - systemd, for the daemon and the two timers.
 - Read access to your access logs. The installer puts the service user in `adm`.
 

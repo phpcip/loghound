@@ -421,6 +421,7 @@ final class Sessionizer
                 'uris'          => [],
                 'repeat_assets' => 0,
                 'gaps'       => [],
+                'terms'      => [],
                 'first'      => self::identityOf($hit),
         ];
     }
@@ -443,7 +444,11 @@ final class Sessionizer
      * an If-None-Match or an If-Modified-Since. Real browsers with a warm cache do this
      * constantly; most scripted clients never do.
      *
-     * The distinct-path counter saturates rather than growing without bound.
+     * The distinct-path counter saturates rather than growing without bound, and so does the
+     * distinct-search-term set. Terms are a UNION across the session rather than a first-hit
+     * copy, because a visitor who searches three times searched three times and the session is
+     * the thing that did it; taking only the first would answer "what did people search for"
+     * with the entry query and call it the visit.
      *
      * Repeat-request detection, which feeds the no_304_on_repeat rule, involves two decisions
      * that were made against the real human fixture rather than from first principles. It
@@ -519,6 +524,16 @@ final class Sessionizer
             } else {
                 $agg['paths_saturated'] = true;
             }
+        }
+
+        foreach ((array) ($hit['search_terms_ss'] ?? []) as $term) {
+            if (!is_string($term) || $term === '' || isset($agg['terms'][$term])) {
+                continue;
+            }
+            if (count($agg['terms'] ?? []) >= Beacon::MAX_SESSION_TERMS) {
+                break;
+            }
+            $agg['terms'][$term] = 1;
         }
 
         $uri = $path . (isset($hit['query_s']) && $hit['query_s'] !== '' ? '?' . $hit['query_s'] : '');
@@ -656,6 +671,7 @@ final class Sessionizer
 
             'repeat_assets' => (int) ($agg['repeat_assets'] ?? 0),
             'gaps'         => $gaps,
+            'terms'        => self::sortedTerms($agg['terms'] ?? []),
             'first'        => (array) ($agg['first'] ?? []),
         ];
 
@@ -667,5 +683,31 @@ final class Sessionizer
         $out['gap_stddev_ms'] = Signals::stddev($gaps);
 
         return $out;
+    }
+
+    /**
+     * The session's distinct search terms, in a stable order.
+     *
+     * Accumulated as a term => 1 map for the same reason paths are — membership is the
+     * question, a hash lookup answers it, and the map bounds itself at
+     * Beacon::MAX_SESSION_TERMS. Sorted on the way out because an open session is republished
+     * on every scorer run and a set whose order drifted would rewrite the document with
+     * different content for input that had not changed.
+     *
+     * @param mixed $terms
+     * @return array<int,string>
+     */
+    private static function sortedTerms($terms): array
+    {
+        if (!is_array($terms) || $terms === []) {
+            return [];
+        }
+        $list = array_values(array_filter(
+            array_map('strval', array_keys($terms)),
+            static fn (string $t): bool => $t !== ''
+        ));
+        sort($list);
+
+        return array_slice($list, 0, Beacon::MAX_SESSION_TERMS);
     }
 }

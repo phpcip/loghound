@@ -156,6 +156,19 @@
          `hits`. That duplication is the point: one query against a core with 20x fewer
          documents answers "bots by ASN" without touching the hit stream at all. -->
 
+    <!-- Which Loghound installation wrote this session. The counterpart on the hits core
+         carries the full reasoning: a pair of indexes may be shared by several installations
+         on different machines, this is what scopes a destructive operation to the documents
+         one of them actually wrote, and it is NOT how the panel separates sites — `host_s` is.
+
+         The daily rollup deliberately has no `install_s`: every installation sharing a pair
+         recomputes the same day from the same documents and writes an identical document at
+         the same id, so a writer stamp would flap between runs and mean nothing.
+
+         ABSENT on every session indexed before this field existed, which reads as "written
+         when there was only one installation". No default, ever. -->
+    <field name="install_s" type="string" indexed="true" stored="false" docValues="true"/>
+
     <field name="host_s"  type="string" indexed="true" stored="false" docValues="true"/>
     <field name="src_s"   type="string" indexed="true" stored="false" docValues="true"/>
 
@@ -246,6 +259,48 @@
     <field name="ident_s"     type="string"  indexed="true" stored="true"  docValues="true"/>
     <field name="signed_in_b" type="boolean" indexed="true" stored="false" docValues="true"/>
 
+    <!-- ==================== WHAT THEY SEARCHED FOR ====================
+         The union, across the session, of the values of the query parameters the operator
+         NAMED in `beacon.query_params`. Two sources, and the field is the same either way:
+         the log parser pulls them out of the request line for a host whose access log this
+         installation reads, and the beacon reports them for a host it does not.
+
+         The counterpart on the hits core carries the full reasoning, including why a
+         whitelist of parameter names is the only shape this may take. STORED here as well as
+         indexed, because the session dialog shows a visit's searches back, and capped at
+         Beacon::MAX_SESSION_TERMS values per session the way paths_ss is capped at 50: a
+         visitor who ran four hundred searches must not make one document four hundred values
+         wide.
+
+         ABSENT, never empty, on a session that searched for nothing and on every session
+         indexed before this field existed. -->
+    <field name="search_terms_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+
+    <!-- ==================== WHICH PLANES ARE BEHIND THIS SESSION ====================
+         `log_only`, `log_beacon` or `beacon_only`. The product's entire argument is that one
+         plane can be faked and that agreement between planes is what makes a verdict worth
+         something, so a panel that presented a single-plane session beside a three-plane one
+         without saying which was which would be contradicting the claim it is built on.
+
+         `beacon_only` is a session from a host whose access log is NOT one of this
+         installation's sources — a site on another machine, measured by the beacon alone. It
+         has no transport plane at all: no status code, no bytes, no server timing, no
+         conditional-request behaviour, no reverse DNS from a log line. bin/loghound-score
+         silences the rules that read those, because a rule firing on evidence that was never
+         collected is an accusation manufactured out of an absence.
+
+         NO DEFAULT, and the reason is the one provisional_b is written only-as-true for.
+         Every session indexed before this field existed came from a log, so it is `log_only`
+         or `log_beacon` — but nothing may write that claim onto documents that never made it.
+         Absence means "this installation had not started recording which planes it had", and
+         the correct way to ask for sessions that have a transport plane is
+         `-planes_s:beacon_only`, which includes all of that history. `planes_s:log_only`
+         would silently exclude it.
+
+         STORED as well as faceted: the session dialog names the planes in words, and a
+         one-value-per-document string costs nothing to store. -->
+    <field name="planes_s" type="string" indexed="true" stored="true" docValues="true"/>
+
 
     <!-- ==================== TIMING — THE DIFFERENTIATOR ====================
          Four numbers that every other tool conflates into one. They are separate fields
@@ -275,11 +330,6 @@
     <!-- Did ANY beacon arrive. Every timing aggregate in the UI must be scoped by this, and
          the chart must say so. -->
     <field name="beacon_b" type="boolean" indexed="true" stored="false" docValues="true"/>
-
-    <!-- A beacon arrived that matched no open log session. Suspicious in itself (a forged
-         or replayed token, or a page served from a cache we never logged), so it is surfaced
-         rather than silently dropped. SPEC §6.4. -->
-    <field name="beacon_orphan_b" type="boolean" indexed="true" stored="false" docValues="true"/>
 
 
     <!-- ==================== BEHAVIOURAL ==================== -->

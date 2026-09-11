@@ -583,20 +583,20 @@ final class State
 
         if ($sessionId !== null && $clientKey !== null) {
             $rows = $this->all(
-                'SELECT id, received_at, payload FROM beacon_staging
+                'SELECT id, session_id, received_at, payload FROM beacon_staging
                   WHERE merged = 0 AND (session_id = :sid OR client_key = :ck)
                   ORDER BY id ASC LIMIT :lim',
                 [':sid' => $sessionId, ':ck' => $clientKey, ':lim' => $limit]
             );
         } elseif ($sessionId !== null) {
             $rows = $this->all(
-                'SELECT id, received_at, payload FROM beacon_staging
+                'SELECT id, session_id, received_at, payload FROM beacon_staging
                   WHERE merged = 0 AND session_id = :sid ORDER BY id ASC LIMIT :lim',
                 [':sid' => $sessionId, ':lim' => $limit]
             );
         } elseif ($clientKey !== null) {
             $rows = $this->all(
-                'SELECT id, received_at, payload FROM beacon_staging
+                'SELECT id, session_id, received_at, payload FROM beacon_staging
                   WHERE merged = 0 AND client_key = :ck ORDER BY id ASC LIMIT :lim',
                 [':ck' => $clientKey, ':lim' => $limit]
             );
@@ -609,8 +609,60 @@ final class State
             $payload = json_decode((string) $row['payload'], true);
             $out[] = [
                 'id'          => (int) $row['id'],
+                'session_id'  => (string) ($row['session_id'] ?? ''),
                 'received_at' => (int) $row['received_at'],
                 'payload'     => is_array($payload) ? $payload : [],
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * The unmerged beacon groups that no log session has claimed, newest activity last.
+     *
+     * This is what the scorer walks to find STANDALONE sessions — beacons from a host whose
+     * access log is not one of this installation's sources, so there is no log line coming
+     * and nothing will ever claim them by client key. One row per staged session id, with the
+     * client key and the timestamps of the group, so the caller can decide whether the group
+     * has gone quiet without reading every payload first.
+     *
+     * Only rows the collector minted an id for are returned. A row with no session id at all
+     * cannot be grouped into a visit and has nothing to be published as.
+     *
+     * The MIN(client_key) is not an arbitrary pick: every row of one beacon-minted session id
+     * carries the same client key, because the collector derives it from the connection and
+     * the id is bound to that connection's first call. SQLite has no ANY_VALUE, and MIN over
+     * one distinct value is that value.
+     *
+     * @param int $limit Bound on one run's work, like every other batch in this class.
+     * @return array<int,array{session_id:string,client_key:string,rows:int,first_ts:int,last_ts:int}>
+     */
+    public function unmergedBeaconGroups(int $limit = 500): array
+    {
+        $limit = Security::clampInt($limit, 1, 5000, 500);
+
+        $rows = $this->all(
+            'SELECT session_id,
+                    MIN(client_key) AS client_key,
+                    COUNT(*)        AS n,
+                    MIN(received_at) AS first_ts,
+                    MAX(received_at) AS last_ts
+               FROM beacon_staging
+              WHERE merged = 0 AND session_id IS NOT NULL AND session_id <> \'\'
+              GROUP BY session_id
+              ORDER BY last_ts ASC
+              LIMIT :lim',
+            [':lim' => $limit]
+        );
+
+        $out = [];
+        foreach ($rows as $row) {
+            $out[] = [
+                'session_id' => (string) $row['session_id'],
+                'client_key' => (string) ($row['client_key'] ?? ''),
+                'rows'       => (int) $row['n'],
+                'first_ts'   => (int) $row['first_ts'],
+                'last_ts'    => (int) $row['last_ts'],
             ];
         }
         return $out;

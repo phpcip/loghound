@@ -147,18 +147,84 @@ configuration still says `solr.mode: custom`, see
 [An older configuration on `solr.mode: custom`](#an-older-configuration-on-solrmode-custom).
 
 **Let Opensolr host it.** You do not need to run Solr. Enter your account email and API key
-(in the Opensolr control panel, under Account) and the installer:
+(in the Opensolr control panel, under Account). The installer then reads your account once and
+shows you three things before you choose anything:
 
-1. checks the credentials by listing the regions your account can use;
-2. lets you pick one of those regions — nothing is hardcoded;
-3. creates both indexes with generated names;
+* **how many indexes the account holds**, and — once it knows — how many your plan allows;
+* **the pairs of Loghound indexes already on the account**, which you can join instead of
+  creating new ones;
+* **anything left over from a setup run that stopped half way**, named individually, because
+  it still counts against your plan.
+
+#### Use indexes this account already has
+
+One pair of indexes can serve several sites. Every record Loghound writes carries the virtual
+host it came from, so a pair collecting traffic from six machines stays separable in the panel
+by its **Virtual host** dimension. If you run Loghound on more than one site, this is usually
+what you want: two indexes and six hostnames, rather than twelve indexes.
+
+Pairs are listed as pairs — `loghound_<id>_hits` with its matching `loghound_<id>_sessions` —
+and are chosen as pairs. Choosing one:
+
+1. confirms the pair is still on the account (the list is an offer, never evidence);
+2. reads the connection details;
+3. **checks the indexes have the shape this version of Loghound writes**, by comparing their
+   live schema against the one in this release, field by field;
+4. queries both to prove Loghound can reach and authenticate to them.
+
+**Reusing joins; it never overwrites.** Nothing is cleared, reshaped or reloaded. What this
+installation records is added to what is already in there, and the two are told apart by the
+hostname on every document.
+
+If the indexes were made by an **older Loghound** and are missing fields this version writes,
+the run stops and names the missing fields, having changed nothing. Tick *"add the fields this
+version writes"* before you press the button to have them added instead — that only ever adds
+fields, and it does not alter or remove a single document already in the index.
+
+An **unmatched half** — a `_hits` with no `_sessions`, or the reverse — is what a setup run
+that died between the two creates leaves behind. It is shown as exactly that. It cannot be
+joined, because half a pair is not somewhere Loghound can work, and it holds no usable data on
+its own; delete it in your Opensolr account, or leave it and create a new pair. Loghound will
+not touch it either way.
+
+#### Or create a new pair
+
+1. Pick one of the regions your account can use — nothing is hardcoded;
+2. Loghound checks your plan has room for two more indexes;
+3. it creates both with generated names;
 4. uploads the schema and solrconfig to each and reloads them;
-5. queries each one to prove Loghound can reach and authenticate to it.
+5. queries each one to prove it can reach and authenticate to it.
 
 Every one of those is a separate step with its own result, so a failure names the step it
 failed on. The index names are generated rather than chosen because an Opensolr index name
 is unique across the whole platform and permanent once created — a fixed `loghound_hits`
 would work for exactly one person.
+
+#### Starting over later
+
+Settings has a **Reinstall** card that clears the log sources, the index names and the sign-in
+and brings you back to these screens. Your indexes and everything in them are untouched — it is
+not an uninstall — and because you pressed it while signed in, that browser is carried straight
+into setup instead of being asked for the token file. Anyone else still has to read it.
+
+#### When the plan has no room
+
+Opensolr plans limit how many indexes an account may hold. Loghound checks **before** it
+creates anything, and when the plan is full it says so in plain numbers — how many the plan
+allows, how many are in use, how many it needs — and withholds the *Create my indexes* button
+rather than letting you press something that can only fail. The ways forward it offers are the
+ones that genuinely exist for your account: join a pair you already have, delete an index you
+no longer need, or move to a larger plan, each linking to your Opensolr account.
+
+The numbers come from Opensolr's own account summary — how many the plan allows, how many
+exist, how many more can be created — read fresh every time rather than remembered, because a
+plan can change. Asking costs an existing index, since that endpoint is scoped to one core you
+own, so an account with no indexes at all has no readable allowance and the screen says so
+rather than assuming there is room.
+
+A check is a check, not a promise: another machine can take the last slot in between. If the
+*second* index is the one refused, the first is deleted and you are told that nothing was left
+behind.
 
 A generated name that is already taken is handled in one of two ways, and which one depends
 on **who holds it**:

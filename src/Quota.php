@@ -722,11 +722,12 @@ final class Quota
                 . self::days($plan) . ', and Loghound keeps the window at about that by deleting '
                 . 'the oldest data before it writes new data.';
         } elseif ($limitedBy === 'time' && $time !== null) {
-            $parts[] = 'Your retention setting keeps ' . self::days($time) . ', which is what limits the window'
+            $parts[] = 'Your age limit keeps ' . self::days($time) . ', which is what limits the window'
                 . ($plan !== null ? ' — the plan itself would hold roughly ' . self::days($plan) . '.' : '.');
         } elseif ($limitedBy === 'none') {
-            $parts[] = 'Nothing currently limits how far back the data goes: retention is disabled and '
-                . 'no plan limit has been read for this index.';
+            $parts[] = 'Nothing currently limits how far back the data goes: no age limit is set, and '
+                . 'no plan disk quota has been read for this index, so nothing is being deleted for '
+                . 'either reason.';
         }
 
         if ($rate !== null) {

@@ -234,6 +234,28 @@ function lh_inst_cli(string $root, array $extra = []): string
     return $out;
 }
 
+/**
+ * Mark the storage step already done, so a CLI run reaches the steps after it.
+ *
+ * The wizard stops at storage when storage fails, which is the point of that step — an
+ * operator whose API key is wrong must not be asked for a password before being told. Tests
+ * about the steps AFTER storage therefore have to arrive with storage settled, exactly as a
+ * re-run on a working installation does, instead of relying on the wizard marching past a
+ * failure. Nothing here touches the network: `storageIsProvisioned()` reads these three keys
+ * and the wizard's default answer to "re-run provisioning?" is no.
+ */
+function lh_inst_storage_done(string $root): void
+{
+    $cfg = Config::load($root . '/config/loghound.php');
+    $cfg->set('solr.install_id', 'a1b2c3d4');
+    $cfg->set('solr.hits_core', 'loghound_a1b2c3d4_hits');
+    $cfg->set('solr.sessions_core', 'loghound_a1b2c3d4_sessions');
+    $cfg->set('solr.base_url', 'http://127.0.0.1:1/solr');
+    $cfg->set('opensolr.email', 'someone@example.com');
+    $cfg->set('opensolr.api_key', 'SENTINEL-APIKEY-1234');
+    $cfg->save();
+}
+
 /** Read the configuration back from disk as a plain array. */
 function lh_inst_stored(string $root): array
 {
@@ -1150,6 +1172,7 @@ return [
     'the shell wizard does not ask about privacy, and still honours both variables'
         => static function (): void {
         [$plainRoot] = lh_inst_scaffold();
+        lh_inst_storage_done($plainRoot);
 
         $out = lh_inst_cli($plainRoot);
         if (!is_file($plainRoot . '/config/loghound.php')) {
@@ -1171,6 +1194,7 @@ return [
         lh_rmtree($plainRoot);
 
         [$envRoot] = lh_inst_scaffold();
+        lh_inst_storage_done($envRoot);
 
         $out = lh_inst_cli($envRoot, [
             'LOGHOUND_IP_MODE'        => 'truncate',
@@ -1186,6 +1210,7 @@ return [
         lh_rmtree($envRoot);
 
         [$oneRoot] = lh_inst_scaffold();
+        lh_inst_storage_done($oneRoot);
 
         $out = lh_inst_cli($oneRoot, ['LOGHOUND_RETENTION_DAYS' => '7']);
         if (!is_file($oneRoot . '/config/loghound.php')) {
@@ -1204,6 +1229,7 @@ return [
 
     'the shell wizard can reach the sign-in page, not only Basic' => static function (): void {
         [$root] = lh_inst_scaffold();
+        lh_inst_storage_done($root);
 
         $out = lh_inst_cli($root, ['LOGHOUND_AUTH_MODE' => 'session']);
 
@@ -1227,6 +1253,7 @@ return [
 
     'the shell wizard still defaults to Basic when nobody chooses' => static function (): void {
         [$root] = lh_inst_scaffold();
+        lh_inst_storage_done($root);
 
         $out = lh_inst_cli($root, []);
 
@@ -1432,8 +1459,11 @@ return [
             lh_same(1, count($deletes), 'exactly one orphan must be removed');
 
             $firstName = null;
-            if (preg_match('/index_name=([A-Za-z0-9_]+)/', $calls[1], $m)) {
-                $firstName = $m[1];
+            foreach ($calls as $url) {
+                if (str_contains($url, '/create_index') && preg_match('/index_name=([A-Za-z0-9_]+)/', $url, $m)) {
+                    $firstName = $m[1];
+                    break;
+                }
             }
             $stored = lh_inst_stored($root);
             lh_true($firstName !== null, 'the first attempt named an index');

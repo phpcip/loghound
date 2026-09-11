@@ -150,7 +150,16 @@ return [
             [$code, $out] = lh_ret_run($path);
 
             lh_same(0, $code, 'exit code: ' . $out);
-            lh_contains($out, 'Time-based retention is disabled', 'it says the first pass was skipped');
+            lh_contains(
+                $out,
+                'Nothing is deleted for being old',
+                'it says the first pass was skipped, and says it forwards: "retention is disabled" '
+                . 'reads as "we do not keep your data", which is the opposite of what it meant'
+            );
+            lh_false(
+                str_contains($out, 'retention is disabled'),
+                'and the backwards phrasing must not come back'
+            );
             lh_contains($out, 'Local state:', 'and that it still tidied up');
 
             lh_same(0, lh_ret_rows($dir, 'cache_geo'), 'expired geo cache rows');
@@ -187,7 +196,17 @@ return [
             [$code, $out] = lh_ret_run($path);
 
             lh_same(0, $code, 'exit code: ' . $out);
-            lh_contains($out, 'Size-based retention is switched off', 'it says so rather than trying');
+            lh_contains(
+                $out,
+                'Nothing is deleted for size either',
+                'it says so rather than trying, and says what the state of the DATA is rather than '
+                . 'the state of a switch'
+            );
+            lh_contains(
+                $out,
+                'quota.enabled = false',
+                'while still naming the setting, so the sentence is actionable'
+            );
         } finally {
             lh_rmtree($dir);
         }

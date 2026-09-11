@@ -92,17 +92,22 @@ final class Networks extends Controller
         $f = $this->gw->facet('net.totals', $this->gw->sessionsCore(), [
             'q'  => '*:*',
             'fq' => $this->sessionFqs(),
-        ], [
+        ], array_merge([
             'uniq_asns' => 'unique(asn_i)',
             'uniq_ips'  => 'unique(ip_s)',
             'hosting'   => ['type' => 'query', 'q' => 'as_type_s:(hosting OR vpn)'],
-        ]);
+        ], $this->pivotDef(8, 5)));
 
         return $this->envelope([
             'total'     => (int) ($f['count'] ?? 0),
             'uniq_asns' => (int) (self::num($f, 'uniq_asns') ?? 0),
             'uniq_ips'  => (int) (self::num($f, 'uniq_ips') ?? 0),
             'hosting'   => self::qcount($f, 'hosting'),
+
+            /* Network type crossed with verdict, on this request. It is the question behind
+               "should I rate-limit this address space": a type carrying mostly people and a type
+               carrying mostly automation look identical in two separate facets. */
+            'pivot'     => $this->pivotRows($f),
         ]);
     }
 
@@ -267,7 +272,7 @@ final class Networks extends Controller
             'net-types',
             '03',
             'Sessions by network type',
-            'All sessions in range, grouped by as_type_s.',
+            'All sessions in range, grouped by the kind of network they came from.',
             300,
             'Faceting network types'
         );
@@ -283,6 +288,7 @@ final class Networks extends Controller
 
         $this->netnamesCard();
         $this->countriesCard();
+        $this->pivotCard('net-pivot', '07');
     }
 
     /** Headline network counters. */
@@ -322,19 +328,14 @@ final class Networks extends Controller
         echo '<div id="net-asns-legend" class="controls"></div>';
         echo '<div class="chart" id="net-treemap" style="height:420px"></div>';
         echo '<div class="table-wrap"><table id="net-asns-table" class="table-fixed"><colgroup>'
-            . '<col style="width:11ch"><col><col style="width:10ch"><col style="width:9ch">'
-            . '<col style="width:7ch"><col style="width:9ch"><col style="width:8ch">'
-            . '<col style="width:8ch"><col style="width:130px">'
+            . '<col style="width:34%"><col style="width:12%"><col style="width:11%">'
+            . '<col style="width:12%"><col style="width:31%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">ASN</th>'
-            . '<th scope="col">Organisation</th>'
-            . '<th scope="col">Type</th>'
+            . '<th scope="col">Network</th>'
             . '<th scope="col" class="num">Sessions</th>'
             . '<th scope="col" class="num">IPs</th>'
             . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">Human</th>'
-            . '<th scope="col" class="num">Evasive</th>'
-            . '<th scope="col" class="bar-col">Mix</th>'
+            . '<th scope="col">Mix</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('net-asns');
@@ -353,19 +354,14 @@ final class Networks extends Controller
         self::skeleton('net-netnames', 'rows', 0, 'Faceting netblocks');
 
         echo '<div class="table-wrap"><table id="net-netnames-table" class="table-fixed"><colgroup>'
-            . '<col style="width:22ch"><col><col style="width:10ch"><col style="width:9ch">'
-            . '<col style="width:7ch"><col style="width:12ch"><col style="width:8ch">'
-            . '<col style="width:8ch"><col style="width:130px">'
+            . '<col style="width:34%"><col style="width:12%"><col style="width:11%">'
+            . '<col style="width:12%"><col style="width:31%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Netname</th>'
-            . '<th scope="col">Organisation</th>'
-            . '<th scope="col">Type</th>'
+            . '<th scope="col">Netblock</th>'
             . '<th scope="col" class="num">Sessions</th>'
             . '<th scope="col" class="num">IPs</th>'
-            . '<th scope="col" class="num">Fingerprints</th>'
-            . '<th scope="col" class="num">Human</th>'
-            . '<th scope="col" class="num">Evasive</th>'
-            . '<th scope="col" class="bar-col">Mix</th>'
+            . '<th scope="col" class="num">Prints</th>'
+            . '<th scope="col">Mix</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('net-netnames');
@@ -378,14 +374,14 @@ final class Networks extends Controller
             'net-countries',
             '06',
             'Countries',
-            'All sessions in range, grouped by country_s from IP geolocation. Geolocating a datacentre address '
+            'All sessions in range, grouped by the country the IP geolocates to. Geolocating a datacentre address '
             . 'tells you where the machine is, not where its operator is.'
         );
         self::skeleton('net-countries', 'rows', 0, 'Faceting countries');
 
         echo '<div class="table-wrap"><table id="net-countries-table" class="table-fixed"><colgroup>'
-            . '<col style="width:26ch"><col style="width:9ch"><col style="width:7ch">'
-            . '<col style="width:8ch"><col style="width:8ch"><col>'
+            . '<col style="width:24%"><col style="width:12%"><col style="width:10%">'
+            . '<col style="width:11%"><col style="width:11%"><col style="width:32%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Country</th>'
             . '<th scope="col" class="num">Sessions</th>'

@@ -50,7 +50,8 @@ export function tokens() {
         mid:  get('--mid', '#8a8279'),
         warn: get('--warn', '#6b6560'),
         bad:  get('--bad', '#c05520'),
-        mono: get('--font-mono', 'monospace')
+        mono: get('--font-mono', 'monospace'),
+        ui:   get('--font-ui', 'system-ui, sans-serif')
     };
 }
 
@@ -138,17 +139,27 @@ function awayFromCursor(point, params, dom, rect, size) {
 /**
  * Shared defaults applied to every option.
  *
- * Flat: no shadows anywhere, no gradients, no rounded bars. Monospace on every axis and
- * tooltip so figures line up vertically.
+ * Flat: no shadows anywhere, no gradients, no rounded bars.
+ *
+ * TYPEFACE PER ROLE, not per chart. The body face is the default here and monospace is set
+ * explicitly on the three things that earn it: a value axis, a time axis and a category axis
+ * of identifiers, all of which are read as columns of figures or as strings whose characters
+ * have to line up. A legend entry and a tooltip sentence are prose and were being set in
+ * monospace only because everything was.
+ *
+ * ONE ROW OF LEGEND, ALWAYS. `type: 'scroll'` on every legend, because the alternative is
+ * wrapping: five entries that fit on one line at 1200px take two at 380px, the second row is
+ * drawn over the plot, and nothing reserves room for it — `grid.top` is a constant. A legend
+ * that pages is a legend whose height is known.
  *
  * The tooltip placement is here rather than on each chart because a box that covers the mark
  * it describes is wrong on every one of them, and a per-chart fix is a fix that the next
- * chart does not get.
+ * chart does not get. The emphasis state is here for exactly the same reason.
  */
 function withDefaults(option, t) {
     const base = {
         animationDuration: 260,
-        textStyle: { fontFamily: t.mono, fontSize: 14, color: t.muted },
+        textStyle: { fontFamily: t.ui, fontSize: 14, color: t.muted },
         grid: { left: 8, right: 14, top: 28, bottom: 6, containLabel: true },
         tooltip: {
             backgroundColor: t.card,
@@ -157,24 +168,63 @@ function withDefaults(option, t) {
             padding: [8, 10],
             confine: true,
             position: awayFromCursor,
-            textStyle: { color: t.text, fontFamily: t.mono, fontSize: 14 },
-            extraCssText: 'box-shadow:none;border-radius:3px;'
+            textStyle: { color: t.text, fontFamily: t.ui, fontSize: 14 },
+            extraCssText: 'box-shadow:none;border-radius:2px;'
         },
         legend: {
             top: 0,
             left: 0,
+            type: 'scroll',
             itemWidth: 10,
             itemHeight: 10,
             itemGap: 14,
             icon: 'rect',
-            textStyle: { color: t.muted, fontFamily: t.mono, fontSize: 14 }
+            textStyle: { color: t.muted, fontFamily: t.ui, fontSize: 14 }
         }
     };
-    return Object.assign({}, base, option, {
+
+    const merged = Object.assign({}, base, option, {
         textStyle: Object.assign({}, base.textStyle, option.textStyle),
         grid: option.grid === null ? undefined : Object.assign({}, base.grid, option.grid),
         tooltip: option.tooltip === false ? undefined : Object.assign({}, base.tooltip, option.tooltip),
         legend: option.legend === false ? undefined : (option.legend ? Object.assign({}, base.legend, option.legend) : undefined)
+    });
+
+    if (Array.isArray(merged.series)) {
+        merged.series = merged.series.map((s) => Object.assign({}, s, { emphasis: emphasis(t, s.emphasis) }));
+    }
+    return merged;
+}
+
+/**
+ * What a mark looks like while it is the one being pointed at.
+ *
+ * THE DEFECT THIS FIXES. No series declared an emphasis state, so every chart inherited
+ * ECharts' own: it LIGHTENS the mark's fill. Three of the five population colours are already
+ * pale by design — `--c-human` is #d9d4cc on a #ffffff page — so lightening them lands on the
+ * page colour and the hovered bar disappears. The reader's cursor erased the only bar they
+ * were looking at, and the tooltip then described something that was no longer on screen.
+ *
+ * The replacement keeps the fill exactly as it was (`color: 'inherit'`) and states the
+ * emphasis as a ring of ink around the mark. That is the editorial system's own device — a
+ * rule, not a tint — it is a step in tone rather than toward the ground, and it reads on both
+ * themes because --ink is the maximum contrast the palette has on either. `scale: false`
+ * keeps a pie segment from growing into its neighbours, and the label is left alone so a
+ * donut's centre figure does not change under the cursor.
+ *
+ * A series that declares its own emphasis keeps it, merged over this, so `focus: 'series'` on
+ * the stacked traffic chart still works.
+ */
+function emphasis(t, own) {
+    const base = {
+        scale: false,
+        itemStyle: { color: 'inherit', borderColor: t.text, borderWidth: 2, opacity: 1 }
+    };
+    if (!own) {
+        return base;
+    }
+    return Object.assign({}, base, own, {
+        itemStyle: Object.assign({}, base.itemStyle, own.itemStyle)
     });
 }
 
@@ -232,6 +282,7 @@ function categoryAxis(t, labels, room) {
         axisTick: { show: false },
         axisLabel: {
             color: t.text,
+            fontFamily: t.mono,
             fontSize: 14,
             width: room,
             overflow: 'truncate',
@@ -288,6 +339,7 @@ export function timeAxis(t, times) {
         axisTick: { show: false },
         axisLabel: {
             color: t.axis,
+            fontFamily: t.mono,
             fontSize: 14,
             hideOverlap: true,
             formatter: (value) => clockOnly(value)
@@ -311,6 +363,7 @@ export function valueAxis(t, formatter) {
         splitLine: { lineStyle: { color: t.grid, type: 'dashed' } },
         axisLabel: {
             color: t.axis,
+            fontFamily: t.mono,
             fontSize: 14,
             hideOverlap: true,
             formatter: formatter || ((v) => num(v))
@@ -482,14 +535,79 @@ export function barsHStacked(id, rows) {
  * A donut and not a pie so the total can sit in the middle, and so the eye compares arc
  * length rather than trying to judge area from the centre.
  */
+/**
+ * Where the ring goes and how big it is, given the room the legend actually needs.
+ *
+ * THE DEFECT THIS FIXES. The ring was placed at a percentage of the container and the legend
+ * was placed at the opposite edge, and neither knew about the other. Two things went wrong at
+ * once. The legend asked for `right: 0` but the shared defaults contribute `left: 0`, and a
+ * legend given both is anchored LEFT and stretched — so it rendered underneath the ring
+ * rather than beside it, and `likely_human` and `likely_bot` read through the arcs. Even
+ * anchored correctly, five entries of that length beside a ring whose radius is 82% of half
+ * the container's SHORTER side do not fit at the widths the panel is used at.
+ *
+ * So the space is divided before anything is placed. The legend's width is estimated the same
+ * way the horizontal bar chart's label column is — longest label, body-face advance, rounded
+ * up — and capped at 44% of the container; the ring is then centred in what remains and given
+ * the largest radius that fits inside it with a margin. Both are pixels, not percentages, so
+ * the arithmetic is checkable and cannot drift with the container's aspect ratio.
+ *
+ * Under 360px of container there is no arrangement in which a ring and five labels sit side by
+ * side and stay legible, so the layout stacks: the legend goes to the bottom as a scrolling
+ * horizontal row and the ring takes the height that is left. That is the case every phone
+ * width lands in.
+ *
+ * @param {string} id Element id of the chart container.
+ * @param {Array<string>} labels
+ * @returns {{stack:boolean, center:Array, radius:number}}
+ */
+function donutPlan(id, labels) {
+    const node = document.getElementById(id);
+    const width = (node && node.clientWidth) || 480;
+    const height = (node && node.clientHeight) || 300;
+
+    let longest = 0;
+    for (const label of labels) {
+        longest = Math.max(longest, String(label === null || label === undefined ? '' : label).length);
+    }
+
+    const wanted = Math.ceil(longest * 7.8) + 26;
+    const legend = Math.min(wanted, Math.floor(width * 0.44));
+
+    if (width < 360 || width - legend < 170) {
+        const room = Math.max(120, height - 44);
+        return { stack: true, center: ['50%', Math.round(room / 2) + 4], radius: Math.round(Math.min(room, width) / 2) - 10 };
+    }
+
+    const plot = width - legend;
+    return {
+        stack: false,
+        center: [Math.round(plot / 2), '50%'],
+        radius: Math.max(48, Math.round(Math.min(plot, height) / 2) - 12)
+    };
+}
+
 export function donut(id, rows, centreLabel, centreValue) {
+    const plan = donutPlan(id, rows.map((r) => r.label));
+
     draw(id, (t) => ({
-        legend: {
-            orient: 'vertical',
-            right: 0,
-            top: 'middle',
-            data: rows.map((r) => r.label)
-        },
+        legend: plan.stack
+            ? {
+                orient: 'horizontal',
+                type: 'scroll',
+                left: 'center',
+                right: 'auto',
+                top: 'auto',
+                bottom: 0,
+                data: rows.map((r) => r.label)
+            }
+            : {
+                orient: 'vertical',
+                left: 'auto',
+                right: 4,
+                top: 'middle',
+                data: rows.map((r) => r.label)
+            },
         tooltip: {
             trigger: 'item',
             formatter: (p) => '<strong>' + esc(p.name) + '</strong><br>' + num(p.value) + ' (' + p.percent + '%)'
@@ -497,8 +615,8 @@ export function donut(id, rows, centreLabel, centreValue) {
         grid: null,
         series: [{
             type: 'pie',
-            radius: ['58%', '82%'],
-            center: ['32%', '52%'],
+            radius: [Math.round(plan.radius * 0.62), plan.radius],
+            center: plan.center,
             avoidLabelOverlap: true,
             itemStyle: { borderColor: t.card, borderWidth: 2 },
             label: {
@@ -547,7 +665,7 @@ export function histogram(id, rows, colorFor, opts) {
             data: rows.map((r) => r.label),
             axisLine: { lineStyle: { color: t.border } },
             axisTick: { show: false },
-            axisLabel: { color: t.axis, fontSize: 14, interval: interval }
+            axisLabel: { color: t.axis, fontFamily: t.mono, fontSize: 14, interval: interval }
         },
         yAxis: valueAxis(t),
         series: [{
@@ -556,6 +674,36 @@ export function histogram(id, rows, colorFor, opts) {
             data: rows.map((r) => ({ value: r.value, itemStyle: { color: colorFor(r) } }))
         }]
     }));
+}
+
+/**
+ * Ink or page, whichever can actually be read on a given fill.
+ *
+ * THE DEFECT THIS FIXES. The treemap drew every tile label in a hardcoded white. Three of the
+ * five network-type colours are pale by design — `--c-human` is #d9d4cc — so on a light theme
+ * those tiles carried white text on near-white, which is not a faint label, it is no label.
+ * The hex was also the one place in this file that duplicated a colour instead of reading a
+ * token, which is what let it drift in the first place.
+ *
+ * Relative luminance by the WCAG definition, then the darker or lighter of the two text
+ * colours the theme already has. It is computed per tile rather than per theme because the
+ * tiles are coloured by network type and a dark theme still has pale tiles in it.
+ *
+ * @param {string} fill Any #rgb or #rrggbb the tokens resolve to.
+ * @param {Object} t    Tokens.
+ */
+function readableOn(fill, t) {
+    const hex = String(fill || '').trim().replace('#', '');
+    const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+    if (full.length !== 6) {
+        return t.text;
+    }
+    const channel = (i) => {
+        const v = parseInt(full.slice(i, i + 2), 16) / 255;
+        return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    const luminance = 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+    return luminance > 0.42 ? t.text : t.card;
 }
 
 /**
@@ -584,16 +732,13 @@ export function treemap(id, nodes, colorForType, legend) {
             roam: false,
             nodeClick: false,
             breadcrumb: { show: false },
-            width: '100%',
-            height: '100%',
-            top: legend ? 24 : 0,
+            top: legend ? 26 : 0,
             left: 0,
             right: 0,
             bottom: 0,
             itemStyle: { borderColor: t.card, borderWidth: 1, gapWidth: 1 },
             label: {
                 show: true,
-                color: '#ffffff',
                 fontFamily: t.mono,
                 fontSize: 14,
                 overflow: 'truncate',
@@ -609,7 +754,8 @@ export function treemap(id, nodes, colorForType, legend) {
                 uniqIps: n.uniqIps,
                 human: n.human,
                 evasive: n.evasive,
-                itemStyle: { color: colorForType(n.astype) }
+                itemStyle: { color: colorForType(n.astype) },
+                label: { color: readableOn(colorForType(n.astype), t) }
             }))
         }]
     }));
@@ -681,9 +827,11 @@ export function stackedBars(id, times, series) {
  * this coming from" and is honest about its own resolution.
  */
 export function geoScatter(id, points) {
+    const mapped = hasWorld();
+
     draw(id, (t) => ({
         legend: false,
-        grid: { left: 6, right: 6, top: 10, bottom: 6, containLabel: false },
+        grid: mapped ? null : { left: 6, right: 6, top: 10, bottom: 6, containLabel: false },
         tooltip: {
             trigger: 'item',
             formatter: (p) => '<strong>' + esc(p.data.name) + '</strong><br>' +
@@ -691,13 +839,26 @@ export function geoScatter(id, points) {
                 '<span style="color:' + t.muted + '">' + num(p.data.human) + ' human · ' +
                 num(p.data.evasive) + ' evasive</span>'
         },
-        xAxis: {
+        geo: mapped ? {
+            map: WORLD,
+            roam: false,
+            silent: true,
+            top: 6,
+            bottom: 6,
+            left: 6,
+            right: 6,
+            boundingCoords: [[-180, 84], [180, -58]],
+            itemStyle: { areaColor: t.sunken, borderColor: t.border, borderWidth: 0.6 },
+            emphasis: { disabled: true },
+            select: { disabled: true }
+        } : undefined,
+        xAxis: mapped ? undefined : {
             type: 'value', min: -180, max: 180,
             axisLine: { show: false }, axisTick: { show: false }, axisLabel: { show: false },
             splitLine: { lineStyle: { color: t.grid, type: 'dotted' } },
             interval: 30
         },
-        yAxis: {
+        yAxis: mapped ? undefined : {
             type: 'value', min: -60, max: 85,
             axisLine: { show: false }, axisTick: { show: false }, axisLabel: { show: false },
             splitLine: { lineStyle: { color: t.grid, type: 'dotted' } },
@@ -705,16 +866,65 @@ export function geoScatter(id, points) {
         },
         series: [{
             type: 'scatter',
+            coordinateSystem: mapped ? 'geo' : undefined,
             symbolSize: (v, p) => p.data.size,
             itemStyle: {
                 color: (p) => (p.data.evasiveRate > 0.5 ? t.pop.evasive : t.accent),
-                opacity: 0.72,
+                opacity: 0.78,
                 borderColor: t.card,
                 borderWidth: 1
             },
             data: points
         }]
     }));
+}
+
+/** The name the world outline is registered under. */
+const WORLD = 'lh-world';
+
+/** Has the basemap been registered yet? */
+function hasWorld() {
+    return !!(window.echarts && window.echarts.getMap && window.echarts.getMap(WORLD));
+}
+
+/**
+ * Load the world outline and register it, once.
+ *
+ * WHY THERE IS AN ASSET AT ALL. The map plotted country centroids as bubbles on a bare
+ * longitude/latitude grid: dots and no map, and nobody reconstructs a world from a scatter.
+ * A `geo` component gives the bubbles a real projection, the land a shape, and country
+ * hit-testing for free.
+ *
+ * WHY IT IS A LOCAL FILE. The panel must work air-gapped behind a CSP that allows no outside
+ * origin, and a basemap is exactly the dependency that quietly breaks that. The outline is
+ * committed to the repository — Natural Earth 110m, public domain, see the note beside it —
+ * simplified to the ISO code of each country and nothing else.
+ *
+ * WHY IT IS FETCHED RATHER THAN BUNDLED. 155 KB of coordinates on every page, for one card on
+ * one view, is not a trade worth making. The caller asks for it; every other view never sees
+ * it. A failed load is not an error either: the map falls back to the grid it had, which is
+ * worse but honest, rather than showing an empty card.
+ *
+ * @param {string} base Path prefix the panel is served from.
+ * @returns {Promise<boolean>} Whether a basemap is available.
+ */
+export async function loadWorld(base) {
+    if (!window.echarts) {
+        return false;
+    }
+    if (hasWorld()) {
+        return true;
+    }
+    try {
+        const res = await fetch((base || '') + 'assets/geo/world.json', { credentials: 'same-origin' });
+        if (!res.ok) {
+            return false;
+        }
+        window.echarts.registerMap(WORLD, await res.json());
+        return true;
+    } catch (err) {
+        return false;
+    }
 }
 
 /**
