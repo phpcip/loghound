@@ -30,6 +30,18 @@ use Loghound\Security;
 
 final class Networks extends Controller
 {
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * All five queries run under sessionFqs().
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+    }
+
     public function slug(): string
     {
         return 'networks';
@@ -43,6 +55,110 @@ final class Networks extends Controller
     public function subtitle(): string
     {
         return 'Autonomous systems, leased netblocks, and where in the world they answer from.';
+    }
+
+    /**
+     * The three tables on this view, plus the cross-tab.
+     *
+     * Every one of them carries its own human/declared/evasive mix, which is the whole reason
+     * these tables exist: a row of a hundred sessions from consumer broadband and a row of a
+     * hundred from a datacentre look identical until the mix is beside them, and a CSV that
+     * dropped those three columns would lose the finding and keep the number.
+     *
+     * The network-type donut and the world map are not here. Both are drawn from `types` and
+     * `geo`, and both of those datasets ARE exportable — the type breakdown through the
+     * cross-tab below, the country breakdown through the countries table — so adding a control
+     * to a chart would offer the same rows a second time under a different name.
+     *
+     * No `total` path is declared on any of them. Each payload's `total` counts SESSIONS while a
+     * row is a network, a netblock or a country, so using it as a denominator would print a
+     * coverage line that is arithmetic nonsense; the export falls back to stating its own limit.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        $mix = [
+            ['Sessions', 'sessions', 'number'],
+            ['Distinct IPs', 'uniq_ips', 'number'],
+            ['Requests', 'hits', 'number'],
+            ['Bytes', 'bytes', 'number'],
+            ['Average bot score', 'score', 'number'],
+            ['Human sessions', 'human', 'number'],
+            ['Declared crawler sessions', 'declared', 'number'],
+            ['Evasive bot sessions', 'evasive', 'number'],
+        ];
+
+        $caveat = 'Distinct-IP counts come from Solr\'s unique(), which is exact for small counts and '
+            . 'approximate for large ones. The three population columns are counted separately and do '
+            . 'not have to sum to the session total: Unknown sessions are in neither.';
+
+        return [
+            'asns' => [
+                'label'   => 'Autonomous systems',
+                'action'  => 'asns',
+                'key'     => 'asns',
+                'unit'    => 'autonomous systems',
+                'ranked'  => 'ranked by session count',
+                'cap'     => 200,
+                'params'  => ['limit' => 200],
+                'note'    => $caveat,
+                'columns' => array_merge([
+                    ['Network', 'org', 'text'],
+                    ['ASN', 'asn', 'id'],
+                    ['Network type', 'as_type', 'vocab', 'as_type_s'],
+                    ['Network type code', 'as_type', 'id'],
+                    ['Country', 'country', 'id'],
+                ], $mix),
+            ],
+
+            'netnames' => [
+                'label'   => 'Netblocks',
+                'action'  => 'netnames',
+                'key'     => 'netnames',
+                'unit'    => 'netblocks',
+                'ranked'  => 'ranked by session count',
+                'cap'     => 200,
+                'params'  => ['limit' => 200],
+                'note'    => $caveat,
+                'columns' => array_merge([
+                    ['Netblock', 'netname', 'id'],
+                    ['Network', 'org', 'text'],
+                    ['ASN', 'asn', 'id'],
+                    ['Network type', 'as_type', 'vocab', 'as_type_s'],
+                ], $mix, [
+                    ['Distinct fingerprints', 'uniq_fps', 'number'],
+                ]),
+            ],
+
+            'countries' => [
+                'label'   => 'Countries',
+                'action'  => 'geo',
+                'key'     => 'countries',
+                'unit'    => 'countries',
+                'ranked'  => 'ranked by session count',
+                'cap'     => 250,
+                'note'    => $caveat . ' Geolocating a datacentre address says where the machine is, not '
+                    . 'where its operator is. The cities column is the five busiest per country, not all '
+                    . 'of them.',
+                'columns' => array_merge([
+                    ['Country', 'country', 'id'],
+                ], $mix, [
+                    ['Busiest cities', 'cities', 'pairs', 'city'],
+                ]),
+            ],
+
+            'pivot' => [
+                'label'  => 'Network type by verdict',
+                'action' => 'totals',
+                'shape'  => 'pivot',
+                'key'    => 'pivot',
+                'unit'   => 'network type and verdict pairs',
+                'cap'    => 200,
+                'note'   => 'One record per pair. The verdict breakdown of a network type is a LIMITED '
+                    . 'facet, so its rows do not add up to that type\'s session total.',
+            ],
+        ];
     }
 
     /**
@@ -321,7 +437,8 @@ final class Networks extends Controller
             '02',
             'Autonomous systems',
             'All sessions in range. Box area is sessions, colour is network type — a large hosting box and a large '
-            . 'consumer-ISP box are opposite findings.'
+            . 'consumer-ISP box are opposite findings.',
+            $this->exportTool('asns')
         );
         self::skeleton('net-asns', 'chart', 420, 'Faceting autonomous systems');
 
@@ -349,7 +466,8 @@ final class Networks extends Controller
             '05',
             'Netblocks',
             'All sessions in range, grouped by RIR netname. The netname is the level that exposes a leased range: '
-            . 'the ASN says "Amazon", the netname says which customer.'
+            . 'the ASN says "Amazon", the netname says which customer.',
+            $this->exportTool('netnames')
         );
         self::skeleton('net-netnames', 'rows', 0, 'Faceting netblocks');
 
@@ -375,7 +493,8 @@ final class Networks extends Controller
             '06',
             'Countries',
             'All sessions in range, grouped by the country the IP geolocates to. Geolocating a datacentre address '
-            . 'tells you where the machine is, not where its operator is.'
+            . 'tells you where the machine is, not where its operator is.',
+            $this->exportTool('countries')
         );
         self::skeleton('net-countries', 'rows', 0, 'Faceting countries');
 

@@ -30,6 +30,20 @@ use Loghound\Security;
 
 final class Performance extends Controller
 {
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * hitFqs() carries all three. The facet set is the hits-core subset, and the six
+     * session-only dimensions it cannot honour are already reported to the reader through
+     * envelope()'s `filters_ignored` rather than silently dropped.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+    }
+
     public function slug(): string
     {
         return 'performance';
@@ -43,6 +57,82 @@ final class Performance extends Controller
     public function subtitle(): string
     {
         return 'Latency percentiles per path, and what the server was answering with.';
+    }
+
+    /**
+     * The two tables on this view.
+     *
+     * BOTH CARRY THE TWO SCOPE SELECTS, and that is the load-bearing part. `kind` and `who` live
+     * only in the page, and they are not cosmetic: the default is HTML pages only, so a file
+     * exported without them would hold the percentiles of every static asset on the site under a
+     * name that said otherwise — a 3 ms PNG averaged into the same number as a rendered page.
+     *
+     * BOTH ALSO REPORT WHAT THIS PLANE COULD NOT HONOUR. A verdict, a bot class and a fired
+     * signal are conclusions about a whole session and exist only on the sessions core, so a
+     * filter on one of them is dropped from a hits query. The view already tells the reader
+     * through `filters_ignored`; the file has to as well, or it would be scoped differently from
+     * its own preamble without saying so.
+     *
+     * The latency chart and the status heatmap are not exportable. Both are the same numbers
+     * these two tables carry, bucketed over time for the eye rather than for arithmetic.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        $scope = [
+            'filters_ignored' => ['Filters this plane could not honour', static function ($v): string {
+                return is_array($v) && $v !== [] ? implode('; ', $v) : 'None';
+            }],
+        ];
+
+        return [
+            'paths' => [
+                'label'   => 'Path latency',
+                'action'  => 'paths',
+                'key'     => 'paths',
+                'unit'    => 'paths',
+                'ranked'  => 'ranked by request count',
+                'cap'     => 100,
+                'params'  => ['limit' => 100],
+                'carry'   => ['kind', 'who'],
+                'note'    => 'Durations are MICROSECONDS, as the access log records them. Percentiles cover '
+                    . 'the requests on that path that carry a duration, which is the timed column — a server '
+                    . 'not logging %D leaves it at zero and the percentiles empty. Unlike a Top pages export, '
+                    . 'this reads the hits index, so Loghound\'s own beacon and collector requests are present.',
+                'scope'   => $scope + ['timed' => 'Matched requests carrying a duration'],
+                'columns' => [
+                    ['Path', 'path', 'text'],
+                    ['Virtual host', 'host', 'text'],
+                    ['Distinct hosts serving this path', 'hosts', 'number'],
+                    ['Requests', 'requests', 'number'],
+                    ['Requests with a duration', 'timed', 'number'],
+                    ['p50 (microseconds)', 'p50', 'number'],
+                    ['p95 (microseconds)', 'p95', 'number'],
+                    ['p99 (microseconds)', 'p99', 'number'],
+                    ['Mean (microseconds)', 'avg', 'number'],
+                    ['Slowest (microseconds)', 'max', 'number'],
+                    ['Mean bytes', 'bytes', 'number'],
+                    ['5xx responses', 'errors', 'number'],
+                    ['404 responses', 'notfound', 'number'],
+                ],
+            ],
+
+            'statuses' => [
+                'label'   => 'Status codes',
+                'action'  => 'status',
+                'key'     => 'statuses',
+                'unit'    => 'status codes',
+                'ranked'  => 'ranked by request count',
+                'cap'     => 20,
+                'carry'   => ['kind', 'who'],
+                'scope'   => $scope,
+                'columns' => [
+                    ['Status', 'status', 'number'],
+                    ['Requests', 'count', 'number'],
+                ],
+            ],
+        ];
     }
 
     /**
@@ -231,6 +321,12 @@ final class Performance extends Controller
     /**
      * Per-path percentiles for the busiest paths.
      *
+     * A `host_s` sub-facet rides along inside the path facet so every row knows which site its
+     * path belongs to — one host and the panel links the full URL, several and it says how many
+     * rather than guessing between them. It is nested rather than fetched separately: no second
+     * round trip, and the sub-facet inherits this query's filters, so scoping the dashboard to
+     * one host resolves every row on the table at once.
+     *
      * @return array<string,mixed>
      */
     private function paths(): array
@@ -253,7 +349,7 @@ final class Performance extends Controller
                 'field' => 'path_s',
                 'limit' => Security::clampInt($_GET['limit'] ?? null, 5, 100, 25),
                 'sort'  => 'count desc',
-                'facet' => $percentiles + [
+                'facet' => $percentiles + SiteUrl::hostSubFacet() + [
                     'bytes'    => 'avg(bytes_l)',
                     'errors'   => ['type' => 'query', 'q' => 'status_i:[500 TO 599]'],
                     'notfound' => ['type' => 'query', 'q' => 'status_i:[400 TO 499]'],
@@ -266,8 +362,11 @@ final class Performance extends Controller
         $f = self::unscope($raw, $scope['scope']);
         $rows = [];
         foreach (self::buckets($f, 'paths') as $bucket) {
+            $site = SiteUrl::resolve($bucket);
             $rows[] = [
                 'path'     => (string) ($bucket['val'] ?? ''),
+                'host'     => $site['host'],
+                'hosts'    => $site['hosts'],
                 'requests' => (int) ($bucket['count'] ?? 0),
                 'timed'    => self::qcount($bucket, 'timed'),
                 'p50'      => self::num($bucket, 'p50'),
@@ -410,7 +509,8 @@ final class Performance extends Controller
             '03',
             'Slowest paths',
             'The busiest paths in this range, with their latency percentiles. The bar compares p50 to p99 on a '
-            . 'shared scale — a long bar means the median visitor and the unlucky one percent had different days.'
+            . 'shared scale — a long bar means the median visitor and the unlucky one percent had different days.',
+            $this->exportTool('paths')
         );
         self::skeleton('pf-paths', 'rows', 0, 'Computing per-path percentiles');
 
@@ -435,7 +535,8 @@ final class Performance extends Controller
             'pf-status',
             '04',
             'Status codes',
-            'All matched requests in the selected range, grouped into 2xx / 3xx / 4xx / 5xx.'
+            'All matched requests in the selected range, grouped into 2xx / 3xx / 4xx / 5xx.',
+            $this->exportTool('statuses')
         );
         self::skeleton('pf-status', 'chart', 320, 'Faceting response codes');
 

@@ -120,6 +120,58 @@ final class Sessions extends Controller
     /** Dimensions rendered in a monospace list, because the value is an identifier. */
     private const MONO_FIELDS = ['netname_s', 'fp_hash_s', 'host_s', 'sec_ch_ua_s', 'tls_proto_s', 'paths_ss'];
 
+    /**
+     * The words the sort selector shows, keyed by the token Query::sorts() accepts.
+     *
+     * Here rather than only in the <select> above, because the CSV export has to name the
+     * ordering in the file: which two thousand sessions a capped export contains is decided
+     * entirely by the sort, so a file that did not say which one was in force would not be
+     * reproducible. Panel\Query owns the Solr sort strings; this owns how they are spoken.
+     *
+     * @var array<string,string>
+     */
+    private const SORT_LABELS = [
+        'recent'  => 'Most recent first',
+        'oldest'  => 'Oldest first',
+        'score'   => 'Highest bot score first',
+        'hits'    => 'Most requests first',
+        'engaged' => 'Most engaged time first',
+        'span'    => 'Longest log span first',
+    ];
+
+    /**
+     * Rows per Solr call while a session export is being streamed.
+     *
+     * Larger than the table's own page because a table is read and a file is not: four calls of
+     * five hundred is a bounded amount of work for the node, where twenty calls of a hundred is
+     * the same rows at five times the round trips. Still clamped by Security::MAX_ROWS.
+     */
+    private const EXPORT_PAGE = 500;
+
+    /**
+     * The most sessions one export may contain.
+     *
+     * A DELIBERATE CLAMP, and the file states it. This view can match every session a site has
+     * ever had, and a GET that streamed all of them would be a cheap way to make a Solr node
+     * work very hard from a URL — so the export takes the first two thousand IN THE SORT ORDER
+     * ON SCREEN and says so, which is a bounded amount of work and an answer somebody can
+     * reproduce. Narrowing the range or adding a filter is how you get the rest.
+     */
+    private const EXPORT_SESSIONS = 2000;
+
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * sessionFqs() and hitFqs() throughout. This view also SERVES the facet panel the bar
+     * opens, so a page without the bar would leave every other view unable to filter.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+    }
+
     public function slug(): string
     {
         return 'sessions';
@@ -133,6 +185,149 @@ final class Sessions extends Controller
     public function subtitle(): string
     {
         return 'Search every session, then open one and watch it happen request by request.';
+    }
+
+    /**
+     * The two datasets on this view.
+     *
+     * `sessions` is the only PAGED export in the panel, and it is paged for the reason the file
+     * itself states: the table on screen is twenty-five rows of a result set that can run to
+     * hundreds of thousands, so "export what is on screen" would produce a file named after the
+     * whole population containing its first page. It walks the result set instead, echoing each
+     * page as it arrives, and stops at EXPORT_SESSIONS with the coverage line naming both the
+     * number taken and the number matched.
+     *
+     * `values` is the facet value browser — one dimension's values with their counts, which is
+     * the answer to "give me every country/path/netblock in this slice". It is capped at the
+     * same two thousand buckets the dialog itself asks for, and the dimension is read through
+     * the SAME allowlist the dialog uses, so `field` cannot name anything the panel would not
+     * facet on.
+     *
+     * The drill-down dialogs are not exportable. A single session's request timeline and a
+     * single dimension's breakdown are both views of ONE row the reader already opened, and
+     * both are reachable as a filtered export of one of the tables above.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'sessions' => [
+                'label'   => 'Sessions',
+                'shape'   => 'paged',
+                'pager'   => fn (int $start, int $rows): array => $this->exportSessionPage($start, $rows),
+                'page'    => self::EXPORT_PAGE,
+                'cap'     => self::EXPORT_SESSIONS,
+                'unit'    => 'sessions',
+                'ranked'  => 'in the sort order named above',
+                'carry'   => ['q', 'sort'],
+                'note'    => 'Durations are milliseconds. A session still OPEN carries partial counts and a '
+                    . 'provisional verdict, and is included — filter by Planes or narrow the range to exclude '
+                    . 'it. The three beacon clocks are empty for sessions where no beacon ran; they are not '
+                    . 'zero, and averaging them as zero would understate time on site.',
+                'scope'   => [
+                    'sort_label' => 'Sort order',
+                    'q'          => 'Search text',
+                ],
+                'columns' => [
+                    ['Session', 'id', 'id'],
+                    ['Started', 'ts_start', 'date'],
+                    ['Ended', 'ts_end', 'date'],
+                    ['Virtual host', 'host', 'text'],
+                    ['Verdict', 'verdict', 'vocab', 'bot_verdict_s'],
+                    ['Verdict code', 'verdict', 'id'],
+                    ['Bot score', 'score', 'number'],
+                    ['Bot class', 'class', 'vocab', 'bot_class_s'],
+                    ['Signals fired', 'reasons', 'text'],
+                    ['Requests', 'hits', 'number'],
+                    ['Pageviews', 'pages', 'number'],
+                    ['Asset requests', 'assets', 'number'],
+                    ['Distinct paths', 'uniq_paths', 'number'],
+                    ['Bytes', 'bytes', 'number'],
+                    ['Entry path', 'entry', 'text'],
+                    ['Exit path', 'exit', 'text'],
+                    ['2xx responses', 'status.2xx', 'number'],
+                    ['3xx responses', 'status.3xx', 'number'],
+                    ['4xx responses', 'status.4xx', 'number'],
+                    ['5xx responses', 'status.5xx', 'number'],
+                    ['Log span (ms)', 'log_span_ms', 'number'],
+                    ['Wall clock (ms)', 'wall_ms', 'number'],
+                    ['Visible time (ms)', 'visible_ms', 'number'],
+                    ['Engaged time (ms)', 'engaged_ms', 'number'],
+                    ['Beacon reported', 'beacon', 'bool'],
+                    ['Interactions', 'interactions', 'number'],
+                    ['Max scroll (percent)', 'max_scroll', 'number'],
+                    ['Asset ratio', 'asset_ratio', 'number'],
+                    ['Median gap between requests (ms)', 'gap_p50_ms', 'number'],
+                    ['Gap standard deviation (ms)', 'gap_stddev_ms', 'number'],
+                    ['IP', 'ip', 'id'],
+                    ['Netblock', 'ip_net', 'id'],
+                    ['ASN', 'asn', 'id'],
+                    ['AS organisation', 'as_org', 'text'],
+                    ['Network type', 'as_type', 'vocab', 'as_type_s'],
+                    ['Netname', 'netname', 'id'],
+                    ['Reverse DNS', 'rdns', 'text'],
+                    ['Reverse DNS confirmed', 'rdns_ok', 'bool'],
+                    ['Country', 'country', 'id'],
+                    ['Region', 'region', 'text'],
+                    ['City', 'city', 'text'],
+                    ['User-Agent', 'ua', 'text'],
+                    ['Browser', 'browser', 'text'],
+                    ['Browser version', 'browser_ver', 'text'],
+                    ['OS', 'os', 'text'],
+                    ['Device', 'device', 'text'],
+                    ['Declared crawler', 'ua_bot_name', 'text'],
+                    ['Declared bot category', 'ua_bot_cat', 'vocab', 'ua_bot_cat_s'],
+                    ['AI crawler', 'ai_crawler', 'bool'],
+                    ['Referrer', 'referer', 'text'],
+                    ['Referrer host', 'referer_host', 'text'],
+                    ['Referrer type', 'referer_type', 'vocab', 'referer_type_s'],
+                    ['Fingerprint', 'fp', 'id'],
+                    ['Addresses sharing this fingerprint (24h)', 'fp_ips_24h', 'number'],
+                    ['Signed in', 'signed_in', 'bool'],
+                    ['Identity reported by the site', 'ident', 'text'],
+                    ['Transport planes', 'planes', 'vocab', 'planes_s'],
+                    ['Search terms', 'search_terms', 'text'],
+                    ['JavaScript ran', 'js', 'bool'],
+                    ['Headless', 'headless', 'bool'],
+                    ['Automation markers', 'automation', 'text'],
+                    ['User-Agent claim held up', 'ua_claim_ok', 'bool'],
+                    ['Timezone matched the address', 'tz_match', 'bool'],
+                    ['Still open (provisional)', 'provisional', 'bool'],
+                    ['Rule version', 'rule_version', 'number'],
+                ],
+            ],
+
+            'values' => [
+                'label'   => 'Dimension values',
+                'action'  => 'values',
+                'key'     => 'group.buckets',
+                'unit'    => 'values',
+                'ranked'  => 'ranked by session count',
+                'cap'     => self::ALL_BUCKETS,
+                'carry'   => ['field', 'q', 'vq'],
+                'note'    => 'The dimension\'s OWN filter is lifted, exactly as it is in the dialog, so this '
+                    . 'lists every value that would be selectable rather than only the ones already chosen. '
+                    . 'Every other filter applies. On a dimension with a closed vocabulary the listing also '
+                    . 'carries values with NO traffic, at a count of zero, which is why it can hold more rows '
+                    . 'than the distinct count above.',
+                'scope'   => [
+                    'group.label' => 'Dimension',
+                    'group.field' => 'Stored field name',
+                    'group.op'    => ['Operator in force on this dimension', static fn ($op): string =>
+                        is_string($op) && $op !== '' ? Facets::operatorLabel($op) : ''],
+                    'matched'     => 'Sessions matched by the rest of the scope',
+                    'group.distinct' => 'Distinct values Solr found traffic for',
+                ],
+                'columns' => [
+                    ['Value', 'label', 'text'],
+                    ['Stored value', 'value', 'id'],
+                    ['Sessions', 'count', 'number'],
+                    ['What it means', 'why', 'text'],
+                    ['Selected', 'state', 'text'],
+                ],
+            ],
+        ];
     }
 
     /**
@@ -163,10 +358,29 @@ final class Sessions extends Controller
      */
     private function list(): array
     {
+        return $this->listPage(self::start(), self::rows(self::MAX_ROWS, 25));
+    }
+
+    /**
+     * One page of the session list, at an offset and size the CALLER decides.
+     *
+     * Split out of list() so the CSV export can walk the whole result set through exactly the
+     * query the table runs — the same free text bound as `uq`, the same sessionFqs(), the same
+     * allowlisted sort, the same explicit field list. A second query built beside it would be a
+     * second place for a filter to go missing, and the export's whole claim is that the file is
+     * scoped the way the page was.
+     *
+     * Both arguments are clamped here rather than trusted: the export passes its own page size
+     * and a computed offset, and this method is the boundary that decides what Solr is asked for.
+     *
+     * @return array<string,mixed>
+     */
+    private function listPage(int $start, int $rows): array
+    {
         $text = self::text('q', 200);
         $sortKey = self::param('sort', array_keys(Query::sorts()), 'recent');
-        $rows = self::rows(self::MAX_ROWS, 25);
-        $start = self::start();
+        $rows = Security::clampInt($rows, 1, Security::MAX_ROWS, 25);
+        $start = Security::clampInt($start, 0, Security::MAX_START, 0);
 
         $res = $this->gw->search('sessions.list', $this->gw->sessionsCore(), $text, [
             'fq'    => $this->sessionFqs(),
@@ -179,12 +393,29 @@ final class Sessions extends Controller
         return $this->envelope([
             'q'        => $text,
             'sort'     => $sortKey,
+            'sort_label' => self::SORT_LABELS[$sortKey] ?? $sortKey,
             'rows'     => $rows,
             'start'    => $start,
             'numFound' => $res['numFound'],
             'docs'     => array_map([$this, 'shapeSession'], $res['docs']),
             'active'   => $this->filters,
         ]);
+    }
+
+    /**
+     * One page of sessions, in the shape Controller::exportPaged() walks.
+     *
+     * @return array{rows:array<int,array<string,mixed>>,total:int,payload:array<string,mixed>}
+     */
+    private function exportSessionPage(int $start, int $rows): array
+    {
+        $payload = $this->listPage($start, $rows);
+
+        return [
+            'rows'    => (array) ($payload['docs'] ?? []),
+            'total'   => (int) ($payload['numFound'] ?? 0),
+            'payload' => $payload,
+        ];
     }
 
     /**
@@ -647,6 +878,11 @@ final class Sessions extends Controller
      * — flag, network, client, time, page — and shipping sixty fields per row for a twelve-row
      * sample inside a dialog would be wasteful. The whole record is one click further on.
      *
+     * `host` is the one addition that is not about who the visitor is. The row shows an entry
+     * path, and a path with no site in front of it is not a URL and cannot be opened; the field
+     * was already in sessionFl() and simply never mapped through, so the panel had the host and
+     * could not use it.
+     *
      * @param array<string,mixed> $d
      * @return array<string,mixed>
      */
@@ -672,6 +908,7 @@ final class Sessions extends Controller
             'ua_bot_name' => $str('ua_bot_name_s'),
             'ua_bot_cat'  => $str('ua_bot_cat_s'),
             'ai_crawler'  => array_key_exists('ai_crawler_b', $d) ? (bool) $d['ai_crawler_b'] : null,
+            'host'        => $str('host_s'),
             'entry'       => $str('entry_path_s'),
             'hits'        => $int('hits_i'),
             'verdict'     => $str('bot_verdict_s'),
@@ -685,6 +922,11 @@ final class Sessions extends Controller
 
     /**
      * One session, with its hit timeline and the beacon overlay.
+     *
+     * Each hit carries its own `host`. It was in Query::hitFl() all along and was never mapped
+     * through, so the trail rendered a column of bare paths that could not be opened — and a
+     * session can legitimately cross virtual hosts, so the session's own host is the fallback
+     * for a hit that has none rather than the answer for all of them.
      *
      * @return array<string,mixed>
      */
@@ -723,6 +965,7 @@ final class Sessions extends Controller
                 'ts'      => (string) ($h['ts'] ?? ''),
                 'seq'     => isset($h['session_seq_i']) ? (int) $h['session_seq_i'] : null,
                 'method'  => (string) ($h['method_s'] ?? ''),
+                'host'    => isset($h['host_s']) && is_scalar($h['host_s']) ? (string) $h['host_s'] : null,
                 'path'    => (string) ($h['path_s'] ?? ''),
                 'query'   => isset($h['query_s']) ? (string) $h['query_s'] : null,
                 'status'  => isset($h['status_i']) ? (int) $h['status_i'] : null,
@@ -962,7 +1205,13 @@ final class Sessions extends Controller
     private function resultsCard(): void
     {
         echo '<div class="results">';
-        self::cardOpen('se-results', '', 'Recent visitors', '', '<span class="job-meta" id="se-count"></span>');
+        self::cardOpen(
+            'se-results',
+            '',
+            'Recent visitors',
+            '',
+            '<span class="job-meta" id="se-count"></span>' . $this->exportTool('sessions')
+        );
         self::skeleton('se-results', 'rows', 0, 'Searching sessions');
 
         echo '<div class="table-wrap"><table id="se-table" class="table-fixed"><colgroup>'

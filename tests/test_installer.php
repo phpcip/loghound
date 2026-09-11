@@ -113,8 +113,16 @@ function lh_inst_valid_config(string $root): Config
  * A fixed session id is used so a POST and the render that follows it share a session,
  * which is how the CSRF token and the unlock survive between calls.
  *
+ * THE CONTROL PLANE CAN BE SCRIPTED ACROSS THE PROCESS BOUNDARY. Storage::useTestTransport()
+ * takes a closure, which cannot travel through an environment variable, so `$transport` names a
+ * PHP file the runner requires before the installer starts — the file installs the closure. It
+ * is what lets a whole storage step be driven for real, against a control plane made of fixtures,
+ * without SPEC §12's ban on network access being anywhere near it. LOGHOUND_TEST=1 is set for
+ * the same reason it is set in tests/run.php: the seam is inert without it.
+ *
  * @param array<string,mixed> $get
  * @param array<string,mixed> $post
+ * @param string              $transport Path to a PHP file that installs a test transport.
  * @return array{out:string,code:int}
  */
 function lh_inst_request(
@@ -123,7 +131,8 @@ function lh_inst_request(
     array $post = [],
     string $method = 'GET',
     bool $unlocked = false,
-    bool $withCsrf = true
+    bool $withCsrf = true,
+    string $transport = ''
 ): array {
     $runner = $root . '/runner.php';
     $repo = lh_inst_root();
@@ -132,6 +141,11 @@ function lh_inst_request(
 <?php
 declare(strict_types=1);
 require getenv('LH_REPO') . '/src/autoload.php';
+
+$lhTransport = (string) getenv('LH_TRANSPORT');
+if ($lhTransport !== '' && is_file($lhTransport)) {
+    require $lhTransport;
+}
 
 ini_set('session.use_cookies', '0');
 ini_set('session.save_path', getenv('LH_ROOT') . '/var');
@@ -162,14 +176,18 @@ PHP;
     }
 
     $env = [
-        'LH_REPO'     => $repo,
-        'LH_ROOT'     => $root,
-        'LH_GET'      => (string) json_encode($get),
-        'LH_POST'     => (string) json_encode($post),
-        'LH_METHOD'   => $method,
-        'LH_UNLOCKED' => $unlocked ? '1' : '0',
-        'PATH'        => (string) getenv('PATH'),
+        'LH_REPO'      => $repo,
+        'LH_ROOT'      => $root,
+        'LH_GET'       => (string) json_encode($get),
+        'LH_POST'      => (string) json_encode($post),
+        'LH_METHOD'    => $method,
+        'LH_UNLOCKED'  => $unlocked ? '1' : '0',
+        'LH_TRANSPORT' => $transport,
+        'PATH'         => (string) getenv('PATH'),
     ];
+    if ($transport !== '') {
+        $env['LOGHOUND_TEST'] = '1';
+    }
 
     $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' 2>&1';
     $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $root, $env);
@@ -254,6 +272,44 @@ function lh_inst_storage_done(string $root): void
     $cfg->set('opensolr.email', 'someone@example.com');
     $cfg->set('opensolr.api_key', 'SENTINEL-APIKEY-1234');
     $cfg->save();
+}
+
+/**
+ * Drive a job the browser installer has just started, the way the browser drives it.
+ *
+ * startJob() only creates the job and redirects; every step after that is a `?setup=job` POST
+ * with action `run`, one step per request, which is the design that keeps any single request
+ * far below the execution limit. A test that asserts on the OUTCOME of a storage choice has to
+ * do the same thing rather than reaching into the job runner, or it is not testing the path an
+ * operator takes.
+ *
+ * The id comes from the job directory rather than from the session, because the session lives
+ * in the subprocess and the id is on disk either way.
+ */
+function lh_inst_run_job(string $root, string $kind, string $transport, int $limit = 20): void
+{
+    $job = Job::findRunning($root . '/var/setup', $kind);
+    if ($job === null) {
+        lh_fail('no ' . $kind . ' job was started');
+    }
+
+    for ($i = 0; $i < $limit; $i++) {
+        $res = lh_inst_request(
+            $root,
+            ['setup' => 'job'],
+            ['action' => 'run', 'id' => $job->id()],
+            'POST',
+            true,
+            true,
+            $transport
+        );
+        $status = json_decode($res['out'], true);
+        if (!is_array($status) || (string) ($status['state'] ?? '') !== 'running') {
+            return;
+        }
+    }
+
+    lh_fail('the ' . $kind . ' job never finished');
 }
 
 /** Read the configuration back from disk as a plain array. */
@@ -1161,6 +1217,200 @@ return [
         lh_rmtree($cliRoot);
         lh_rmtree($webRoot);
     },
+
+    /**
+     * The same two steps, through the panel and through the browser installer, must land the
+     * same configuration.
+     *
+     * WHY SETTINGS IS IN THIS TEST AT ALL. The parity test above covers the two INSTALLERS, and
+     * for a long time that was the whole population: a panel could not change an account or move
+     * an installation onto different indexes, so there was nothing to drift. Both are now
+     * ordinary panel operations, and Settings is the surface being edited most — which makes it
+     * the one most likely to grow a second idea of what "choose your indexes" means.
+     *
+     * Both sides do exactly the same two things: save an account that does NOT hold the pair
+     * currently configured, then pick the pair that account does hold. Both are driven through
+     * the real handlers — the browser installer in a subprocess, because its refusals are exits
+     * — against the same scripted control plane, so the comparison is of two real runs rather
+     * than of two intentions.
+     *
+     * What is stripped from the comparison is only what is random or machine-specific by design.
+     * `solr.install_id` is the important one and it is stripped for a reason worth stating: it
+     * must NOT be copied from the adopted pair, because it is the salt in every document id and
+     * two machines sharing it would silently overwrite each other. Each side therefore keeps its
+     * own, and they are legitimately different.
+     */
+    'saving an account and choosing a pair lands the same configuration on either surface'
+        => static function (): void {
+            require_once __DIR__ . '/support/opensolr_plane.php';
+
+            $key   = 'SENTINEL-PARITY-KEY-0001';
+            $email = 'parity@example.com';
+            $held  = ['loghound_bbbb2222_hits', 'loghound_bbbb2222_sessions'];
+
+            $seed = static function (Config $cfg): void {
+                $cfg->set('solr.mode', 'opensolr');
+                $cfg->set('solr.install_id', 'aaaa1111');
+                $cfg->set('solr.hits_core', 'loghound_aaaa1111_hits');
+                $cfg->set('solr.sessions_core', 'loghound_aaaa1111_sessions');
+                $cfg->set('solr.base_url', 'https://fi.solrcluster.com/solr');
+                $cfg->set('base_url', 'https://shop.example.com');
+                $cfg->set('opensolr.email', 'previous@example.com');
+                $cfg->set('opensolr.api_key', 'SENTINEL-PARITY-OLD-0000');
+                $cfg->set('opensolr.region', 'FINLAND9');
+                $cfg->set('auth.user', 'admin');
+                $cfg->set('auth.mode', 'basic');
+                $cfg->set('auth.password_hash', password_hash('a-long-enough-password', PASSWORD_DEFAULT));
+                $cfg->set('beacon.secret', str_repeat('b', 64));
+                $cfg->set('privacy.ip_salt', str_repeat('s', 32));
+                $cfg->save();
+            };
+
+            [$webRoot, $webCfg] = lh_inst_scaffold();
+            $webCfg->set('sources', [['path' => $webRoot . '/logs/access.log', 'format' => 'apache_combined']]);
+            $seed($webCfg);
+            $stub = lh_opensolr_plane_stub($webRoot . '/plane.php', $held, $key);
+
+            lh_inst_request(
+                $webRoot,
+                [],
+                ['step' => 'storage', 'action' => 'credentials', 'email' => $email, 'api_key' => $key],
+                'POST',
+                true,
+                true,
+                $stub
+            );
+            lh_inst_request(
+                $webRoot,
+                [],
+                ['step' => 'storage', 'action' => 'indexes', 'install_id' => 'bbbb2222'],
+                'POST',
+                true,
+                true,
+                $stub
+            );
+            lh_inst_run_job($webRoot, Job::KIND_REUSE, $stub);
+
+            [$panelRoot, $panelCfg] = lh_inst_scaffold();
+            $panelCfg->set('sources', [['path' => $panelRoot . '/logs/access.log', 'format' => 'apache_combined']]);
+            $seed($panelCfg);
+
+            $panelHeld = $held;
+            Storage::useTestTransport(lh_opensolr_plane($panelHeld, $key));
+            try {
+                $_POST = [
+                    'action'           => 'opensolr_credentials',
+                    'csrf'             => lh_csrf(),
+                    'opensolr_email'   => $email,
+                    'opensolr_api_key' => $key,
+                    'opensolr_region'  => 'FINLAND9',
+                ];
+                $_SERVER['REQUEST_METHOD'] = 'POST';
+                (new \Loghound\Panel\Settings(
+                    $panelCfg,
+                    new \Loghound\Panel\Gateway($panelCfg, null, false)
+                ))->post();
+
+                $_POST = [
+                    'action'     => 'opensolr_indexes',
+                    'csrf'       => lh_csrf(),
+                    'install_id' => 'bbbb2222',
+                ];
+                (new \Loghound\Panel\Settings(
+                    $panelCfg,
+                    new \Loghound\Panel\Gateway($panelCfg, null, false)
+                ))->post();
+                $_POST = [];
+            } finally {
+                Storage::useTestTransport(null);
+            }
+
+            $web   = lh_inst_stored($webRoot);
+            $panel = lh_inst_stored($panelRoot);
+
+            lh_same(
+                'loghound_bbbb2222_hits',
+                (string) $web['solr']['hits_core'],
+                'the browser installer adopted the pair that was picked'
+            );
+            lh_same(
+                'loghound_bbbb2222_hits',
+                (string) $panel['solr']['hits_core'],
+                'and so did Settings'
+            );
+
+            $compare = static function (array $c): array {
+                unset(
+                    $c['solr']['install_id'],
+                    $c['auth']['password_hash'],
+                    $c['discover'],
+                    $c['allowed_log_roots'],
+                    $c['sources']
+                );
+                return $c;
+            };
+
+            lh_same(
+                $compare($web),
+                $compare($panel),
+                'the panel and the browser installer must produce the same configuration from the '
+                . 'same two answers'
+            );
+
+            lh_false(
+                str_contains((string) file_get_contents($webRoot . '/config/loghound.php'), 'aaaa1111_hits'),
+                'and neither is left pointing at the previous account\'s indexes'
+            );
+
+            lh_rmtree($webRoot);
+            lh_rmtree($panelRoot);
+        },
+
+    /**
+     * The same condition has to produce the same refusal, whichever surface met it.
+     *
+     * A plan with no room and no pair to join is the worst state an operator can be in here, and
+     * it is exactly the one where two front ends drifting would matter: one saying "your plan is
+     * full" and the other quoting numbers is how a support thread starts. Both read the sentence
+     * out of the same function, and this is what says so.
+     */
+    'a plan with nothing to join and no room says the same thing everywhere'
+        => static function (): void {
+            require_once __DIR__ . '/support/opensolr_plane.php';
+
+            [$root, $cfg] = lh_inst_scaffold();
+            $cfg->set('solr.mode', 'opensolr');
+            $cfg->set('opensolr.email', 'full@example.com');
+            $cfg->set('opensolr.api_key', 'SENTINEL-FULL-KEY-0001');
+            $cfg->set('sources', [['path' => $root . '/logs/access.log', 'format' => 'apache_combined']]);
+            $cfg->save();
+
+            $held = ['someone_elses_index', 'another_one'];
+            Storage::useTestTransport(lh_opensolr_plane($held, 'SENTINEL-FULL-KEY-0001', 2));
+            try {
+                $account = Storage::account($cfg);
+            } finally {
+                Storage::useTestTransport(null);
+            }
+
+            $step = \Loghound\Setup\Pairs::decide($cfg, $account);
+
+            $stub = lh_opensolr_plane_stub($root . '/plane.php', $held, 'SENTINEL-FULL-KEY-0001', 2);
+            $res  = lh_inst_request($root, ['setup' => 'storage'], [], 'GET', true, true, $stub);
+
+            lh_contains(
+                $res['out'],
+                htmlspecialchars($step['dead_end'], ENT_QUOTES),
+                'the browser installer renders the shared sentence, not one of its own'
+            );
+            lh_contains($res['out'], htmlspecialchars($step['ways_heading'], ENT_QUOTES), 'and the counted heading');
+            lh_false(
+                str_contains($res['out'], 'value="' . \Loghound\Setup\Pairs::CHOICE_NEW . '"'),
+                'with no option that could only fail'
+            );
+
+            lh_rmtree($root);
+        },
 
     /**
      * The shell wizard stopped asking about privacy but kept both variables.

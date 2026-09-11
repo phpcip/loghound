@@ -1262,10 +1262,23 @@ final class Security
      * The CSP is deliberately strict and the panel is written to live within it: no inline
      * event handlers, no eval, no third-party origins. ECharts is served from our own
      * assets directory precisely so this policy can stay closed.
+     *
+     * THE ONE INLINE SCRIPT IS THE IMPORT MAP, and it is admitted by hash rather than by
+     * loosening anything. Assets::importMap() is what versions the panel's ES module graph —
+     * see that file for why an unversioned `import './core.js'` is a release that half-lands —
+     * and an import map has no interoperable external form, so it must be inline. A
+     * `'sha256-…'` source expression permits exactly that one generated string: 'unsafe-inline'
+     * is never introduced, and a tampered or mistyped map is refused rather than run.
+     *
+     * The hash is emitted on every response, including the ones that carry no import map. It
+     * costs a header token and it removes the failure this whole mechanism exists to prevent —
+     * a shell that emits a map, forgets to ask for the hash, and silently goes back to serving
+     * a year-old module graph with no error anywhere to say so.
      */
     public static function sendSecurityHeaders(): void
     {
-        header("Content-Security-Policy: default-src 'self'; script-src 'self'; "
+        header('Content-Security-Policy: '
+            . "default-src 'self'; script-src 'self' " . Assets::importMapCspHash() . '; '
             . "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             . "connect-src 'self'; font-src 'self'; object-src 'none'; "
             . "base-uri 'none'; frame-ancestors 'none'; form-action 'self'");

@@ -27,6 +27,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Cache;
 use Loghound\Config;
 use Loghound\Security;
 
@@ -46,17 +47,47 @@ final class Gateway
     /** @var string|null Last transport/Solr error, surfaced in the panel banner. */
     private ?string $error = null;
 
-    /** @var array<int,array{tag:string,core:string,ms:float}> Query log for the debug footer. */
+    /** @var array<int,array{tag:string,core:string,ms:float,cached:bool}> Query log for the debug footer. */
     private array $log = [];
 
     /**
-     * @param bool $demo When true, no network call is ever made and Fixtures answers.
+     * The answer cache. Never null: an install with no memcached gets a disabled one.
      */
-    public function __construct(Config $cfg, ?object $solr, bool $demo)
+    private Cache $cache;
+
+    /**
+     * May this request read from and write to the cache at all?
+     *
+     * ONLY A GET MAY BE CACHED, and that single rule is what keeps the cache out of the way of
+     * every operation where a stale number would be a wrong answer rather than an old one. The
+     * panel's background jobs — the retention count, the freshness probe, the pre-delete
+     * document count — all run as POST steps, and an operator who has just deleted documents
+     * and is watching a count must see the count now, not the one from before the delete. A
+     * job step therefore always computes, with no opt-in needed from the job code and no way
+     * for a new job to forget.
+     *
+     * Demo mode is excluded for the opposite reason: Fixtures already answer in microseconds,
+     * so there is nothing to save and a cache would only add a way for fabricated data to
+     * outlive the fixture that made it.
+     *
+     * WHETHER THE CACHE IS REACHABLE IS NOT ASKED HERE. Confirming that costs a round trip, and
+     * a page render makes no Solr call at all — so the question is left to the first read that
+     * would use an entry, and a page that needs nothing connects to nothing.
+     */
+    private bool $cacheable;
+
+    /**
+     * @param bool       $demo  When true, no network call is ever made and Fixtures answers.
+     * @param Cache|null $cache Injected by tests; defaults to a disabled cache so that every
+     *                          existing caller keeps the behaviour it had before there was one.
+     */
+    public function __construct(Config $cfg, ?object $solr, bool $demo, ?Cache $cache = null)
     {
         $this->cfg  = $cfg;
         $this->solr = $solr;
         $this->demo = $demo;
+        $this->cache = $cache ?? Cache::disabled('no cache was supplied to this gateway');
+        $this->cacheable = !$demo && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET';
     }
 
     /**
@@ -81,7 +112,9 @@ final class Gateway
             }
         }
 
-        return new self($cfg, $solr, $demo);
+        $cache = $demo ? Cache::disabled('demo mode answers from fixtures') : Cache::fromConfig($cfg);
+
+        return new self($cfg, $solr, $demo, $cache);
     }
 
     /**
@@ -110,10 +143,115 @@ final class Gateway
         return $this->error;
     }
 
-    /** @return array<int,array{tag:string,core:string,ms:float}> */
+    /** @return array<int,array{tag:string,core:string,ms:float,cached:bool}> */
     public function queryLog(): array
     {
         return $this->log;
+    }
+
+    /** The answer cache, for the Settings system check and for the Clear control. */
+    public function cache(): Cache
+    {
+        return $this->cache;
+    }
+
+    /**
+     * Bandwidth the cache has saved, for the Settings card and the bandwidth readout.
+     *
+     * A pass-through so no view needs to reach through the gateway into the cache, and so the
+     * one place that decides whether this figure can be stated honestly is the cache itself.
+     *
+     * @return array{available:bool,requests:int,bytes:int,since:int,partial:bool,
+     *               request_requests:int,request_bytes:int}
+     */
+    public function cacheSavings(): array
+    {
+        return $this->cache->savings();
+    }
+
+    /**
+     * Provenance for every number this request produced.
+     *
+     * Put into the `cache` key of every JSON payload the panel answers, so that a card built
+     * from a cached answer can say when it was computed. A number that does not say what it
+     * counts is a lie, and a number computed four minutes ago while presented as live is the
+     * same lie with a timestamp available and withheld.
+     *
+     * @return array{enabled:bool,cached:bool,hits:int,misses:int,computed_at:string,age:int,ttl:int,expires:int}
+     */
+    public function cacheStamp(): array
+    {
+        return $this->cache->stamp();
+    }
+
+    /**
+     * Build the cache key for one read, or '' when this request may not use the cache.
+     *
+     * An empty key is the single signal that caching is off for this call, so the read and
+     * write helpers below need no second condition and no caller needs to know why.
+     *
+     * @param array<string,mixed> $parts The whole Solr request, so nothing that changes the
+     *                                   answer can be left out of the key by omission.
+     */
+    private function cacheKey(string $tag, string $core, array $parts): string
+    {
+        if (!$this->cacheable || !$this->cache->isEnabled()) {
+            return '';
+        }
+        return $this->cache->key($tag, $core, $parts);
+    }
+
+    /**
+     * Read a cached answer, recording it in the query log as a cache hit.
+     *
+     * The log entry is kept because the debug footer's whole job is to say what this page cost,
+     * and a page that cost nothing because six answers were already computed is exactly what a
+     * reader needs to be told. A hit is logged at 0 ms, which is what it took.
+     *
+     * @return mixed|null The cached value, or null when there is nothing usable.
+     */
+    private function cacheRead(string $key, string $tag, string $core)
+    {
+        if ($key === '') {
+            return null;
+        }
+
+        $hit = $this->cache->get($key);
+        if ($hit === null || !is_array($hit['value'])) {
+            return null;
+        }
+
+        $this->log[] = ['tag' => $tag, 'core' => $core, 'ms' => 0.0, 'cached' => true];
+        return $hit['value'];
+    }
+
+    /**
+     * Store one answer.
+     *
+     * ONLY EVER CALLED FROM A SUCCESS PATH. The failure paths in this class all return a usable
+     * empty structure so the panel can render a banner instead of an exception, and caching one
+     * of those would turn a single bad minute into a TTL of a dashboard confidently reporting
+     * that nothing is happening on the site.
+     *
+     * WHAT THE ANSWER COST comes from the client that just fetched it, so a later hit can report
+     * a saving it measured rather than one it guessed. A client too old to report a size, or a
+     * transport injected by a test, yields zero — which the cache records as "unknown" and never
+     * as free.
+     *
+     * @param mixed $value
+     */
+    private function cacheWrite(string $key, $value): void
+    {
+        if ($key === '') {
+            return;
+        }
+
+        $bytes = 0;
+        if ($this->solr !== null && method_exists($this->solr, 'lastBytes')) {
+            $bytes = (int) $this->solr->lastBytes();
+        }
+
+        $this->cache->put($key, $value, null, $bytes);
     }
 
     /** Name of the sessions core, from config. */
@@ -181,16 +319,24 @@ final class Gateway
             return ['docs' => [], 'numFound' => 0];
         }
 
+        $key = $this->cacheKey($tag, $core, ['op' => 'search', 'text' => $text, 'params' => $params]);
+        $hit = $this->cacheRead($key, $tag, $core);
+        if ($hit !== null) {
+            return $hit;
+        }
+
         $started = microtime(true);
         try {
             $resp = method_exists($this->solr, 'queryText')
                 ? $this->solr->queryText($core, $text, $params)
                 : $this->solr->query($core, array_merge($params, Query::textSearch($text)));
             $this->note($tag, $core, $started);
-            return [
+            $out = [
                 'docs'     => (array) ($resp['response']['docs'] ?? []),
                 'numFound' => (int) ($resp['response']['numFound'] ?? 0),
             ];
+            $this->cacheWrite($key, $out);
+            return $out;
         } catch (\Throwable $e) {
             $this->error = self::explain($tag, $e);
             return ['docs' => [], 'numFound' => 0];
@@ -220,6 +366,17 @@ final class Gateway
             return ['count' => 0];
         }
 
+        $key = $this->cacheKey($tag, $core, [
+            'op'     => 'searchFacet',
+            'text'   => $text,
+            'params' => $params,
+            'facet'  => $facet,
+        ]);
+        $hit = $this->cacheRead($key, $tag, $core);
+        if ($hit !== null) {
+            return $hit;
+        }
+
         $started = microtime(true);
         try {
             $resp = $this->solr->jsonFacet($core, array_merge($params, [
@@ -229,7 +386,9 @@ final class Gateway
                 'mm' => '100%',
             ]), $facet);
             $this->note($tag, $core, $started);
-            return $this->normaliseFacets($resp);
+            $out = $this->normaliseFacets($resp);
+            $this->cacheWrite($key, $out);
+            return $out;
         } catch (\Throwable $e) {
             $this->error = self::explain($tag, $e);
             return ['count' => 0];
@@ -264,10 +423,18 @@ final class Gateway
             return ['count' => 0];
         }
 
+        $key = $this->cacheKey($tag, $core, ['op' => 'facet', 'query' => $query, 'facet' => $facet]);
+        $hit = $this->cacheRead($key, $tag, $core);
+        if ($hit !== null) {
+            return $hit;
+        }
+
         try {
             $resp = $this->solr->jsonFacet($core, $query, $facet);
             $this->note($tag, $core, $started);
-            return $this->normaliseFacets($resp);
+            $out = $this->normaliseFacets($resp);
+            $this->cacheWrite($key, $out);
+            return $out;
         } catch (\Throwable $e) {
             $this->error = self::explain($tag, $e);
             return ['count' => 0];
@@ -314,10 +481,25 @@ final class Gateway
             return ['buckets' => []];
         }
 
+        $key = $this->cacheKey($tag, $core, [
+            'op'       => 'facetSearch',
+            'field'    => $field,
+            'contains' => $contains,
+            'params'   => $params,
+            'exclude'  => $excludeTags,
+            'limit'    => $limit,
+        ]);
+        $hit = $this->cacheRead($key, $tag, $core);
+        if ($hit !== null) {
+            return $hit;
+        }
+
         try {
             $out = $this->solr->facetContains($core, $field, $contains, $params, $excludeTags, $limit);
             $this->note($tag, $core, $started);
-            return ['buckets' => (array) ($out['buckets'] ?? [])];
+            $out = ['buckets' => (array) ($out['buckets'] ?? [])];
+            $this->cacheWrite($key, $out);
+            return $out;
         } catch (\Throwable $e) {
             $this->error = self::explain($tag, $e);
             return ['buckets' => []];
@@ -348,13 +530,21 @@ final class Gateway
             return ['docs' => [], 'numFound' => 0];
         }
 
+        $key = $this->cacheKey($tag, $core, ['op' => 'select', 'params' => $params]);
+        $hit = $this->cacheRead($key, $tag, $core);
+        if ($hit !== null) {
+            return $hit;
+        }
+
         try {
             $resp = $this->solr->query($core, $params);
             $this->note($tag, $core, $started);
-            return [
+            $out = [
                 'docs'     => (array) ($resp['response']['docs'] ?? []),
                 'numFound' => (int) ($resp['response']['numFound'] ?? 0),
             ];
+            $this->cacheWrite($key, $out);
+            return $out;
         } catch (\Throwable $e) {
             $this->error = self::explain($tag, $e);
             return ['docs' => [], 'numFound' => 0];
@@ -449,6 +639,11 @@ final class Gateway
             'tag'  => $tag,
             'core' => $core,
             'ms'   => round((microtime(true) - $started) * 1000, 1),
+
+            /* Says whether this number was computed now or reused. The footer prints both, and
+               a page whose every row says "cached" with no timing is a page whose reader can
+               see immediately why it was instant. */
+            'cached' => false,
         ];
     }
 }

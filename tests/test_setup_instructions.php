@@ -502,7 +502,7 @@ return [
                 . 'file is the honest answer');
             lh_false(str_contains($panel, 'Public URL'));
 
-            $cfg->set('base_url', 'https://user:secret@example.com');
+            $cfg->set('base_url', 'https://user:secret@example.com'); // lh-scanner-fixture
             lh_contains(Steps::beaconSnippet($cfg, true)[1], 'Public URL', 'and the same for a bad one');
             lh_contains(Steps::beaconSnippet($cfg, false)[1], 'config/loghound.php');
 

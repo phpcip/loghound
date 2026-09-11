@@ -240,7 +240,11 @@ final class Signals
      * direction (it makes a session look MORE human, never less).
      *
      * The tests run in a deliberate order. Loghound's own collector comes first, when the
-     * operator has told us where it lives, then the generic analytics-beacon heuristic.
+     * operator has told us where it lives — `_beacon_path` is set by Sessionizer from
+     * Config::selfEndpoints(), and it matters: the shipped collector is `collect.php`, so
+     * without it the extension test below would classify the collector as an HTML pageview,
+     * which is precisely the miscount the paragraph above describes. Then the generic
+     * analytics-beacon heuristic.
      * API-ish paths are checked AFTER the beacon test, because a beacon endpoint often lives
      * under /api/ too and "beacon" is the more specific answer. A path with no extension at
      * all is a page — the common case for modern URLs, and the reason extension-based
@@ -338,7 +342,10 @@ final class Signals
      *
      * Session shape. Sub-resources are assets plus favicon — everything the renderer went and
      * fetched — and that, not `assets`, is what the no_assets rule asks about. The repeat
-     * counter is distinct sub-resource URIs fetched more than once in this session.
+     * counter is distinct sub-resource URIs fetched more than once in this session. `own_assets`
+     * is the sub-resources the session fetched from LOGHOUND itself, which Sessionizer counts
+     * apart and excludes from every other number here; it exists so no_assets can tell "fetched
+     * nothing" from "fetched only our own beacon script", and nothing else reads it.
      *
      * Fingerprint cluster. NULL when the scorer could not reach Solr. A rule reading null
      * must not treat it as 1: "we could not check" is not "this fingerprint is unique".
@@ -396,6 +403,7 @@ final class Signals
         $s['assets']       = (int) ($session['assets'] ?? 0);
         $s['favicons']     = (int) ($session['favicons'] ?? 0);
         $s['sub_resources'] = (int) ($session['sub_resources'] ?? ($s['assets'] + $s['favicons']));
+        $s['own_assets']   = (int) ($session['own_assets'] ?? 0);
         $s['uniq_paths']   = (int) ($session['uniq_paths'] ?? 0);
         $s['log_span_ms']  = (int) ($session['log_span_ms'] ?? 0);
         $s['asset_ratio']  = (float) ($session['asset_ratio'] ?? 0.0);

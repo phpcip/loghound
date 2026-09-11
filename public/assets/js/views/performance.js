@@ -21,6 +21,7 @@ import {
     showEmpty, snippet, tbody
 } from '../core.js';
 import { lines, stackedBars, tokens } from '../charts.js';
+import { pathCell } from '../url.js';
 
 /** Plain-English meaning for the status codes that actually turn up in web logs. */
 const STATUS_MEANING = {
@@ -178,7 +179,12 @@ function renderPaths(data) {
 
     tbody(byId('pf-paths-table'), data.paths.map((row) => ({
         cells: [
-            { text: row.path, mono: true, clip: true, sort: row.path },
+            {
+                node: pathCell(row.path, { host: row.host, hosts: row.hosts }),
+                class: 'clip urlcell',
+                title: row.path,
+                sort: row.path
+            },
             { text: num(row.requests), num: true, sort: row.requests },
             { text: durUs(row.p50), num: true, sort: row.p50 === null ? '' : row.p50 },
             { text: durUs(row.p95), num: true, sort: row.p95 === null ? '' : row.p95 },

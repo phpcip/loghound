@@ -55,6 +55,20 @@ final class Indexes extends OpensolrView
         ['ix-nodes', 'Nodes'],
     ];
 
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * The range bounds the request log through logFqs(). The host selector and the
+     * `f[...]` facet bar read the Loghound sessions plane and have no effect on the
+     * Opensolr request log at all — this view has its own `lf[...]` filters instead.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE];
+    }
+
     public function slug(): string
     {
         return 'indexes';
@@ -68,6 +82,76 @@ final class Indexes extends OpensolrView
     public function subtitle(): string
     {
         return 'What your Opensolr search indexes are being asked, and how well they answer.';
+    }
+
+    /**
+     * The three facet tables on this view.
+     *
+     * All three are CLASSIC facets — `value => count` maps, because the platform's request-log
+     * endpoint offers classic faceting only and cannot nest — so each exports as two columns and
+     * nothing is lost in the flattening.
+     *
+     * The headline counters and the QTime histogram are not exportable. The counters are four
+     * numbers, and the histogram is a hundred fixed-width buckets whose meaning is the shape they
+     * make: exported as rows it would invite somebody to average the bucket index.
+     *
+     * `core` is carried on all three because the index picker lives only in the page. An export
+     * that lost it would silently read whichever index the account happens to list first, under a
+     * filename that named the view and not the index — and the index IS the scope on this view.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'handlers' => [
+                'label'    => 'Handlers',
+                'action'   => 'handlers',
+                'shape'    => 'map',
+                'key'      => 'paths',
+                'key_head' => 'Handler',
+                'val_head' => 'Requests',
+                'control'  => 'Handlers CSV',
+                'unit'     => 'handlers',
+                'ranked'   => 'ranked by request count',
+                'cap'      => 30,
+                'carry'    => ['core', 'outcome'],
+                'scope'    => $this->logExportScope(),
+            ],
+
+            'statuses' => [
+                'label'    => 'Status codes',
+                'action'   => 'handlers',
+                'shape'    => 'map',
+                'key'      => 'statuses',
+                'key_head' => 'Status',
+                'val_head' => 'Requests',
+                'control'  => 'Statuses CSV',
+                'unit'     => 'status codes',
+                'ranked'   => 'ranked by request count',
+                'cap'      => 30,
+                'carry'    => ['core', 'outcome'],
+                'note'     => 'Anything other than 200 is the index refusing or failing.',
+                'scope'    => $this->logExportScope(),
+            ],
+
+            'nodes' => [
+                'label'    => 'Cluster nodes',
+                'action'   => 'nodes',
+                'shape'    => 'map',
+                'key'      => 'nodes',
+                'key_head' => 'Node',
+                'val_head' => 'Requests',
+                'unit'     => 'cluster nodes',
+                'ranked'   => 'ranked by request count',
+                'cap'      => 30,
+                'carry'    => ['core', 'outcome'],
+                'note'     => 'A cluster is one master and N read-only replicas, so an even split across '
+                    . 'the replicas is the healthy shape and a node MISSING from this file is a node that '
+                    . 'stopped taking traffic — an absence the file cannot show you directly.',
+                'scope'    => $this->logExportScope(),
+            ],
+        ];
     }
 
     /**
@@ -260,7 +344,8 @@ final class Indexes extends OpensolrView
             $this->cardNumber('ix-handlers'),
             'Handlers and status codes',
             'All logged requests for this index under the current filters, grouped by the handler that '
-            . 'served them and by the status the platform recorded.'
+            . 'served them and by the status the platform recorded.',
+            $this->exportTool('handlers') . $this->exportTool('statuses')
         );
         self::skeleton('ix-handlers', 'rows', 0, 'Faceting handlers and status codes');
 
@@ -292,7 +377,8 @@ final class Indexes extends OpensolrView
             $this->cardNumber('ix-nodes'),
             'Which node answered',
             'All logged requests for this index under the current filters, grouped by the cluster node '
-            . 'that served them.'
+            . 'that served them.',
+            $this->exportTool('nodes')
         );
         self::skeleton('ix-nodes', 'rows', 0, 'Faceting cluster nodes');
 

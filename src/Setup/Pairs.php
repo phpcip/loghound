@@ -52,6 +52,28 @@ final class Pairs
     public const ROLES = ['hits', 'sessions'];
 
     /**
+     * The option value meaning "provision a new pair for me", on every surface.
+     *
+     * It sits in the same list as the pairs and is submitted through the same field, because
+     * the operator is making ONE choice. A separate control would be a second decision, and
+     * the one thing every front end has to agree on is that there is only one.
+     */
+    public const CHOICE_NEW = 'new';
+
+    /**
+     * Config key recording that an account is set and its indexes have not been chosen yet.
+     *
+     * WHY IT IS RECORDED RATHER THAN DETECTED. Saving an account and choosing indexes are two
+     * steps, so between them the configuration legitimately names indexes the account does not
+     * hold. Noticing that costs a control-plane call, and the panel is not allowed to make one
+     * per page: a momentary outage would then read as "your indexes are gone". So the fact is
+     * written down at the one moment it is known for certain — when the account was saved and
+     * the platform had just listed what it holds — and cleared at the one moment it stops being
+     * true, when the platform confirms the newly chosen pair.
+     */
+    public const PENDING_KEY = 'opensolr.pair_pending';
+
+    /**
      * Split a core name into the installation id and role it encodes.
      *
      * The shape is Config::coreName()'s, and it is matched rather than reimplemented loosely:
@@ -319,5 +341,292 @@ final class Pairs
         }
         $host = (string) parse_url($base, PHP_URL_HOST);
         return $host;
+    }
+
+    /**
+     * Does the account that is configured NOW hold the pair this installation is pointed at?
+     *
+     * Answered from a snapshot the caller already has, so nothing here touches the network and
+     * no front end pays a second read to learn something it was just told. The verdict is also
+     * written into PENDING_KEY, which is what makes the interim state survive a redirect, a page
+     * reload and a new sign-in.
+     *
+     * The four answers lead to four different sentences, and collapsing any two of them would
+     * be a lie an operator acts on:
+     *
+     *   'unset'   — no pair is configured at all. A fresh install; there is nothing to be wrong.
+     *   'owned'   — the account holds it. Normal running.
+     *   'missing' — the account authenticates and does not hold it. The interim state.
+     *   'unknown' — the account could not be read, so the question was not answered. A network
+     *               hiccup must never be recorded as "your indexes are gone", so the flag is
+     *               left exactly as it was rather than set or cleared on no evidence.
+     *
+     * @param array<string,mixed> $account A Storage::account() snapshot.
+     * @return string One of 'unset', 'owned', 'missing', 'unknown'.
+     */
+    public static function settleOwnership(Config $cfg, array $account): string
+    {
+        $hits     = (string) $cfg->get('solr.hits_core', '');
+        $sessions = (string) $cfg->get('solr.sessions_core', '');
+
+        if ($hits === '' || $sessions === '') {
+            self::clearPending($cfg);
+            return 'unset';
+        }
+
+        if (empty($account['ok'])) {
+            return 'unknown';
+        }
+
+        foreach ((array) ($account['pairs'] ?? []) as $pair) {
+            if (self::isCurrent($cfg, (array) $pair)) {
+                self::clearPending($cfg);
+                return 'owned';
+            }
+        }
+
+        $cfg->set(self::PENDING_KEY, true);
+        return 'missing';
+    }
+
+    /** Forget that indexes were outstanding, because they are not any more. */
+    public static function clearPending(Config $cfg): void
+    {
+        $cfg->set(self::PENDING_KEY, false);
+    }
+
+    /** Is an account set with its indexes still unchosen? */
+    public static function isPending(Config $cfg): bool
+    {
+        return (bool) $cfg->get(self::PENDING_KEY, false);
+    }
+
+    /** The interim state in one line, for a banner that has room for one. */
+    public static function pendingHeadline(): string
+    {
+        return 'An Opensolr account is set and its indexes have not been chosen yet.';
+    }
+
+    /**
+     * The interim state, in full, ending in the choice that resolves it.
+     *
+     * It names the two indexes because the operator is about to go looking for them in an
+     * account page, and it says what the panel will do meanwhile — stay empty — because an
+     * empty dashboard with no explanation is the failure this sentence exists to prevent.
+     */
+    public static function pendingDetail(Config $cfg): string
+    {
+        $hits     = (string) $cfg->get('solr.hits_core', '');
+        $sessions = (string) $cfg->get('solr.sessions_core', '');
+
+        $named = $hits !== '' && $sessions !== ''
+            ? ' — ' . $hits . ' and ' . $sessions . ' — '
+            : ' ';
+
+        return 'The two indexes this configuration names' . $named . 'belong to the account that '
+            . 'was set before this one, so this account can neither read them nor write to them '
+            . 'and every number in the panel stays empty until you say which indexes to use. '
+            . 'Pick a pair this account already holds, or have Loghound make a new one.';
+    }
+
+    /** The heading step two carries, identically, wherever it is rendered. */
+    public static function choiceHeading(): string
+    {
+        return 'Which indexes this installation uses';
+    }
+
+    /**
+     * The line above the list, which depends only on how many pairs there are to offer.
+     *
+     * ONE PAIR IS STILL A CHOICE. It is listed and picked exactly like five would be, because
+     * the operator has said which account to use and has not yet said anything about indexes —
+     * adopting the only pair on their behalf would be Loghound deciding where their traffic
+     * lands and calling it a convenience.
+     */
+    public static function choiceIntro(int $pairCount): string
+    {
+        if ($pairCount <= 0) {
+            return self::noPairsReason();
+        }
+
+        if ($pairCount === 1) {
+            return 'This account holds one pair of Loghound indexes. Pick it and this site records '
+                . 'into it alongside whatever is already there, or have Loghound make a pair of its '
+                . 'own for this site.';
+        }
+
+        return 'This account holds ' . $pairCount . ' pairs of Loghound indexes. Pick the one this '
+            . 'site records into, or have Loghound make a pair of its own for it.';
+    }
+
+    /**
+     * Why the list is empty, said instead of showing an empty list.
+     *
+     * An empty list with no explanation reads as a failure — the operator wonders whether the
+     * read worked — and the honest answer is that a new account simply has nothing on it yet.
+     */
+    public static function noPairsReason(): string
+    {
+        return 'This account holds no Loghound indexes yet, so there is nothing on the list to pick '
+            . 'from. Have Loghound make the first pair and it appears here from then on.';
+    }
+
+    /** The label on the option that provisions, in the same words on every surface. */
+    public static function provisionLabel(): string
+    {
+        return 'Make a new pair for this site';
+    }
+
+    /**
+     * What picking "make a new pair" commits the operator to.
+     *
+     * The generated names are explained rather than apologised for: an operator who was not
+     * told why they cannot choose the name assumes Loghound is being unhelpful, when in fact an
+     * Opensolr index name is unique across the whole platform and any fixed name would collide.
+     */
+    public static function provisionDetail(string $region): string
+    {
+        return 'Two indexes are created' . ($region !== '' ? ' in ' . $region : '')
+            . ' under names generated for you, because an Opensolr index name has to be unique '
+            . 'across the whole platform. They count against your plan, and nothing already on '
+            . 'the account is touched.';
+    }
+
+    /**
+     * Why "make a new pair" is not on the list, when the plan has no room for one.
+     *
+     * The numbers come from capacity() rather than being described, because "your plan is full"
+     * is not something an operator can act on and "5 allowed, 5 in use, 2 needed" is.
+     *
+     * @param array{sentence:string} $capacity
+     */
+    public static function noRoomNote(array $capacity): string
+    {
+        return 'Making a new pair is not offered here because there is no room for one. '
+            . (string) ($capacity['sentence'] ?? '');
+    }
+
+    /**
+     * An unmatched half, named for what it is, in the same words on every surface.
+     *
+     * It is listed rather than hidden because it is billable, and it is not selectable because
+     * half a pair is not somewhere Loghound can work — hits and sessions are two different
+     * shapes and adopting one without the other leaves a step of setup no screen can finish.
+     *
+     * @param array{name:string,missing:string} $half
+     */
+    public static function halfNotice(array $half): string
+    {
+        return (string) $half['name'] . ' is on this account without its matching '
+            . (string) $half['missing'] . ', which is what a setup run that stopped half way leaves '
+            . 'behind. It cannot be picked here, because half a pair is not somewhere Loghound can '
+            . 'work; it holds nothing useful on its own, and it still counts against your plan. '
+            . 'Delete it in your Opensolr account when you want the slot back — Loghound will not '
+            . 'touch it either way.';
+    }
+
+    /**
+     * Neither option is available: nothing to reuse, and no room to create.
+     *
+     * This is the one state with no way forward inside Loghound, so it says so with the real
+     * numbers and hands over to waysForward(), which lists only the routes that genuinely exist.
+     *
+     * @param array{sentence:string} $capacity
+     */
+    public static function deadEnd(array $capacity): string
+    {
+        return 'There is nothing to pick here yet: this account holds no pair of Loghound indexes, '
+            . 'and there is no room to create one. ' . (string) ($capacity['sentence'] ?? '');
+    }
+
+    /**
+     * The line introducing the ways forward, counting the ones there actually are.
+     *
+     * It used to say "Three ways on from here" above a list that held two whenever there was no
+     * pair to reuse, which is the kind of detail that teaches an operator to stop trusting the
+     * screen.
+     *
+     * @param array<int,array<string,mixed>> $ways
+     */
+    public static function waysHeading(array $ways): string
+    {
+        $count = count($ways);
+        $word  = [1 => 'One way', 2 => 'Two ways', 3 => 'Three ways'][$count] ?? ($count . ' ways');
+
+        return $word . ' on from here:';
+    }
+
+    /**
+     * STEP TWO, DECIDED ONCE: what the operator may pick, and every sentence around it.
+     *
+     * This is the whole of the decision the four front ends share. They differ in how they draw
+     * a list — a shell cannot render a radio and a browser cannot read a TTY — and in nothing
+     * else: the options, their order, the labels, the consequences, the refusals and the numbers
+     * in them all come from here. The repository has been bitten twice by the alternative, most
+     * recently by a shell wizard and a browser installer that had drifted on prerequisites and
+     * error wording, which is why the installer rework exists at all.
+     *
+     * Nothing here touches the network. It is a pure function of a Storage::account() snapshot
+     * and the configuration, so a front end can render it, test it, or print it without a
+     * control-plane call of its own.
+     *
+     * WHATEVER IS PICKED, THE OUTCOME IS TWO VALID INDEXES. `pairs` are offered only when the
+     * platform has just confirmed the account holds them, `can_new` only when the plan has room,
+     * and when neither holds, `dead_end` says so with the numbers instead of offering a control
+     * that cannot succeed.
+     *
+     * @param array<string,mixed> $account A Storage::account() snapshot.
+     * @return array{ok:bool,error:string,heading:string,intro:string,
+     *               pairs:array<int,array{install_id:string,hits:string,sessions:string,current:bool}>,
+     *               halves:array<int,string>,can_new:bool,new_label:string,new_detail:string,
+     *               new_blocked:string,consequence:string,dead_end:string,
+     *               ways:array<int,array{key:string,text:string,url:string}>,ways_heading:string,
+     *               capacity:array<string,mixed>}
+     */
+    public static function decide(Config $cfg, array $account): array
+    {
+        $ok       = !empty($account['ok']);
+        $capacity = (array) ($account['capacity'] ?? []);
+        $blocked  = !empty($capacity['blocked']);
+
+        $pairs = [];
+        foreach ((array) ($account['pairs'] ?? []) as $pair) {
+            $pair = (array) $pair;
+            $pairs[] = [
+                'install_id' => (string) $pair['install_id'],
+                'hits'       => (string) $pair['hits'],
+                'sessions'   => (string) $pair['sessions'],
+                'current'    => self::isCurrent($cfg, $pair),
+            ];
+        }
+
+        $halves = [];
+        foreach ((array) ($account['halves'] ?? []) as $half) {
+            $halves[] = self::halfNotice((array) $half);
+        }
+
+        $canNew   = $ok && !$blocked;
+        $deadEnd  = $ok && $pairs === [] && $blocked ? self::deadEnd($capacity) : '';
+        $ways     = $ok && $blocked ? self::waysForward($pairs !== []) : [];
+
+        return [
+            'ok'           => $ok,
+            'error'        => (string) ($account['error'] ?? ''),
+            'heading'      => self::choiceHeading(),
+            'intro'        => $ok && $deadEnd === '' ? self::choiceIntro(count($pairs)) : '',
+            'pairs'        => $pairs,
+            'halves'       => $halves,
+            'can_new'      => $canNew,
+            'new_label'    => self::provisionLabel(),
+            'new_detail'   => self::provisionDetail((string) $cfg->get('opensolr.region', '')),
+            'new_blocked'  => $ok && $blocked && $pairs !== [] ? self::noRoomNote($capacity) : '',
+            'consequence'  => $pairs !== []
+                ? self::reuseConsequence($pairs[0], self::siteHost($cfg))
+                : '',
+            'dead_end'     => $deadEnd,
+            'ways'         => $ways,
+            'ways_heading' => self::waysHeading($ways),
+            'capacity'     => $capacity,
+        ];
     }
 }

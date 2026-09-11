@@ -51,6 +51,8 @@
 import { api, el, fill, num } from './core.js';
 import { closeDialog, dialogFail, isCurrent, openDialog } from './dialog.js';
 import { dimValue } from './identity.js';
+import { isPathField, urlMark } from './url.js';
+import { exportLink } from './export.js';
 
 /** The query-string prefix for Loghound's own dimensions. The Opensolr log plane uses 'lf'. */
 const NS = 'f';
@@ -706,12 +708,21 @@ function restore(list) {
     }
 }
 
-/** One value of a dimension, as a row in a narrowed list. */
+/**
+ * One value of a dimension, as a row in a narrowed list.
+ *
+ * A path value gets the same second control the sidebar facet gets, as a sibling of the row and
+ * not a child of it: the row is an <a> already, and an anchor cannot contain an anchor.
+ */
 function valueRow(group, bucket, ns) {
     const value = String(bucket.value || '');
     const on = bucket.state === 'on' || bucket.state === 'excluded';
+    const path = isPathField(group.field);
 
-    return el('li', { class: 'facet-li', dataset: { value: value.toLowerCase() } }, [
+    return el('li', {
+        class: 'facet-li' + (path ? ' facet-li-url' : ''),
+        dataset: { value: value.toLowerCase() }
+    }, [
         el('a', {
             class: 'facet-opt' + (bucket.state === 'on' ? ' is-on' : '') + (bucket.state === 'excluded' ? ' is-excluded' : ''),
             href: toggleUrl(group.field, value, ns),
@@ -720,7 +731,8 @@ function valueRow(group, bucket, ns) {
             el('span', { class: 'facet-mark', 'aria-hidden': 'true', text: on ? (bucket.state === 'excluded' ? '−' : '✓') : '' }),
             el('span', { class: 'facet-val' + (group.mono ? ' mono' : ''), text: String(bucket.label || value) }),
             el('span', { class: 'facet-n', text: bucket.count === null ? '—' : num(bucket.count) })
-        ])
+        ]),
+        path ? urlMark(value) : null
     ]);
 }
 
@@ -780,7 +792,16 @@ export function openValueBrowser(field, label, ns) {
     });
 }
 
-/** Build the dialog's contents. */
+/**
+ * Build the dialog's contents.
+ *
+ * THE VALUE LISTING IS A DATASET, so it gets the same discreet CSV control every table on every
+ * view gets — built here rather than server-side because this card is a dialog and the dimension
+ * it is showing is not known until it opens. It covers the LISTING, not whatever is currently
+ * typed into the box, and the accessible name says so: a file holding the top values by count is
+ * a different question from a substring search, and naming it the wrong one is how an export
+ * becomes a wrong number somebody builds a report on.
+ */
 function renderBrowser(body, group, generation) {
     const search = el('input', {
         type: 'search',
@@ -795,10 +816,20 @@ function renderBrowser(body, group, generation) {
     const footer = el('div', { class: 'fb-foot' });
     const notes = el('div', { class: 'fb-notes' });
 
+    const csv = exportLink(
+        'sessions',
+        'values',
+        'Download every value of ' + String(group.label) + ' as CSV: the value listing with its '
+            + 'session counts, carrying the time range, virtual host and filters in force. It covers '
+            + 'the listing, not the search box.',
+        { field: String(group.field || '') }
+    );
+
     fill(body, [
         el('div', { class: 'fb-head' }, [
             el('label', { class: 'sr-only', for: 'fb-search', text: 'Search ' + String(group.label) + ' values' }),
-            search
+            search,
+            csv
         ]),
         letters,
         notes,
@@ -1009,8 +1040,12 @@ function browserRow(bucket, group) {
     const value = String(bucket.value || '');
     const on = staged && staged.has(value);
     const label = String(bucket.label || value);
+    const path = isPathField(group.field);
 
-    return el('div', { class: 'fb-value' + (on ? ' is-on' : ''), dataset: { value: value } }, [
+    return el('div', {
+        class: 'fb-value' + (on ? ' is-on' : '') + (path ? ' fb-value-url' : ''),
+        dataset: { value: value }
+    }, [
         el('a', {
             href: stagedUrl(group, value),
             title: bucket.why || value,
@@ -1019,7 +1054,8 @@ function browserRow(bucket, group) {
             el('span', { class: 'fb-mark', 'aria-hidden': 'true', text: on ? '✓' : '' }),
             el('span', { class: 'fb-name' + (group.mono ? ' mono' : ''), text: label }),
             el('span', { class: 'fb-count', text: bucket.count === null ? '' : '(' + num(bucket.count) + ')' })
-        ])
+        ]),
+        path ? urlMark(value) : null
     ]);
 }
 

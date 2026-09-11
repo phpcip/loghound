@@ -40,6 +40,22 @@ final class Hosts extends Controller
     /** Hosts compared in the table. Beyond this the page stops being readable. */
     private const MAX_HOSTS = 50;
 
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * The range and every other facet bound the comparison. The host selector is kept
+     * deliberately: this is the page it belongs to, it shows its own current value, and
+     * choosing a host here scopes the rest of the dashboard. Only the host DIMENSION is
+     * lifted from this view's own queries, by fqsWithoutHost(), so the table can still
+     * compare every host side by side rather than collapsing to the one just picked.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+    }
+
     public function slug(): string
     {
         return 'hosts';
@@ -53,6 +69,56 @@ final class Hosts extends Controller
     public function subtitle(): string
     {
         return 'Which of the sites on this machine gets what kind of traffic.';
+    }
+
+    /**
+     * The comparison table, as CSV.
+     *
+     * The five population columns are the point of the file, and they are exported as five
+     * separate numbers rather than as one "bot share", because the five partition the scored
+     * sessions exactly and a reader can therefore check the arithmetic on every row. The two
+     * derived shares come along as well so a spreadsheet does not have to re-derive them and
+     * get a different answer from the panel.
+     *
+     * THE HOST DIMENSION IS LIFTED FROM THIS VIEW'S OWN QUERIES, by fqsWithoutHost(), so this
+     * table compares every host even when one is selected in the header. The preamble therefore
+     * names the selected host and this note says the table ignores it — otherwise the file would
+     * look like it disagreed with its own scope line.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'hosts' => [
+                'label'   => 'Traffic by virtual host',
+                'action'  => 'compare',
+                'unit'    => 'virtual hosts',
+                'ranked'  => 'ranked by session count',
+                'cap'     => self::MAX_HOSTS,
+                'note'    => 'The host selector is deliberately NOT applied to this table: it compares '
+                    . 'every host side by side, which is what the view is for. Every other filter and the '
+                    . 'time range are applied. The five population columns are mutually exclusive and add '
+                    . 'up to the session count on each row.',
+                'columns' => [
+                    ['Host', 'host', 'id'],
+                    ['Sessions', 'sessions', 'number'],
+                    ['Humans', 'counts.human', 'number'],
+                    ['Unknown', 'counts.unknown', 'number'],
+                    ['Declared crawlers', 'counts.declared', 'number'],
+                    ['AI crawlers', 'counts.ai', 'number'],
+                    ['Evasive bots', 'counts.evasive', 'number'],
+                    ['Automation share (percent)', 'bot_share', 'number'],
+                    ['Evasive share (percent)', 'evasive_share', 'number'],
+                    ['Requests', 'hits', 'number'],
+                    ['Pageviews', 'pages', 'number'],
+                    ['Bytes', 'bytes', 'number'],
+                    ['Beacon-only sessions', 'beacon_only', 'number'],
+                    ['Seen on one transport plane only', 'single_plane', 'bool'],
+                    ['Seen on both transport planes', 'mixed_planes', 'bool'],
+                ],
+            ],
+        ];
     }
 
     /**
@@ -82,9 +148,14 @@ final class Hosts extends Controller
      */
     private function hostList(): array
     {
+        /* THE DOC-TYPE CLAUSE IS NOT OPTIONAL HERE. The sessions core holds daily rollup
+           documents alongside session documents, so a facet without it counts up to one extra
+           document per day in range against every host. The comparison table below has always
+           prepended it; this list did not, which is why the per-host counts in the header
+           selector read higher than the same host's row in the table underneath. */
         $f = $this->gw->facet('hosts.list', $this->gw->sessionsCore(), [
             'q'  => '*:*',
-            'fq' => $this->fqsWithoutHost(),
+            'fq' => array_merge([Query::SESSION_DOCS], $this->fqsWithoutHost()),
         ], Query::hostFacet(self::MAX_HOSTS));
 
         $hosts = [];
@@ -247,7 +318,8 @@ final class Hosts extends Controller
             'hosts-table',
             '01',
             'Traffic by virtual host',
-            'All scored sessions in the selected range, grouped by the host the request arrived on.'
+            'All scored sessions in the selected range, grouped by the host the request arrived on.',
+            $this->exportTool('hosts')
         );
         self::skeleton('hosts-table', 'rows', 0, 'Grouping sessions by virtual host');
 
@@ -286,9 +358,19 @@ final class Hosts extends Controller
      */
     private function explainCard(): void
     {
-        echo '<section class="card" id="hosts-none" hidden>';
+        /* WRITTEN OUT RATHER THAN THROUGH cardOpen(), for two reasons that are both load
+           bearing. It starts `hidden` and the front end reveals it only when the range really
+           holds no host at all, which cardOpen() has no way to express; and the front end finds
+           it by the exact id `hosts-none`, which cardOpen() would have rewritten to
+           `hosts-none-card`.
+
+           `data-card` is set by hand for the same reason every other card gets one: it is the
+           key the accordion stores this section's open state under, and a card without one
+           silently forgets whether the operator folded it. */
+        echo '<section class="card" id="hosts-none" data-card="hosts-none" hidden>';
         echo '<div class="card-head"><h2><span class="card-num">03</span>'
             . '<span>No virtual host is being recorded</span></h2></div>';
+        echo '<p class="pop" id="hosts-none-pop" hidden></p>';
         echo '<div class="explain">';
         echo '<p>None of the sessions in this range records which virtual host served the request, which '
             . 'means the log format in use does not carry it. Everything else in '

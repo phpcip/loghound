@@ -42,6 +42,17 @@ import { icon } from './icons.js';
 const NARROW = 900;
 const STACK_ATTR = 'data-lh-col';
 const RAIL_KEY = 'lh.rail';
+const TIP_SELECTOR = 'nav.side li a, nav.side .lh-railbtn, nav.side .theme-toggle';
+const TIP_HOVERED = 'nav.side li a:hover, nav.side .lh-railbtn:hover, nav.side .theme-toggle:hover';
+const HINT_ATTR = 'data-lh-hint';
+
+/* The section bar's tooltip may be as wide as this and must keep this much clear of the window
+   edge. Both numbers are the stylesheet's, repeated here because the clamp that stops the box
+   running off the right has to know how wide it may get BEFORE it is drawn — see
+   --lh-sectiontip-w and --lh-sectiontip-edge in panel.css, which are the same two values. */
+const SECTION_TIP_MAX = 360;
+const SECTION_TIP_EDGE = 12;
+
 const FOLD_KEY = 'lh.fold.';
 const CARD_KEY = 'lh.card.';
 
@@ -52,6 +63,7 @@ let scrim = null;
 let lastFocus = null;
 let applyFolds = null;
 let recheckTrouble = null;
+let remeasureTips = null;
 
 /**
  * Is the viewport in the range the phone layout is written for?
@@ -527,8 +539,15 @@ function setUpRail() {
         if (mark) {
             link.insertBefore(mark, link.firstChild);
         }
+        /* THE NAME IS THE LABEL, NOT EVERY WORD IN THE LINK. addNavHints() has already
+           appended the view's one-sentence hint as a second element, so `link.textContent`
+           was label and hint run together with no separator — "OverviewWho came, and how
+           long they really stayed" — and that string was what a screen reader announced for
+           the panel's primary navigation. The label element is the name; the hint stays
+           where it is, for the drawer to render and for the tooltip never to repeat. */
         if (!link.getAttribute('aria-label')) {
-            link.setAttribute('aria-label', (link.textContent || '').trim());
+            const label = link.querySelector('.navlabel');
+            link.setAttribute('aria-label', ((label || link).textContent || '').trim());
         }
     }
 
@@ -569,8 +588,228 @@ function setUpRail() {
 
     button.addEventListener('click', () => setRail(!isRailCollapsed()));
 
+    watchRailTips(side);
+
     document.documentElement.classList.add('lh-rail');
     applyRail(isRailCollapsed());
+}
+
+/**
+ * Tell the collapsed rail's tooltip where the control it belongs to is.
+ *
+ * THE TOOLTIP IS DRAWN IN CSS AND POSITIONED IN CSS; this supplies the one number CSS cannot
+ * work out. The box has to be `position: fixed` to escape the rail's own overflow — see the
+ * stylesheet for why — and a fixed box is placed against the viewport, so its vertical
+ * position has to come from a measurement of the control rather than from a percentage.
+ *
+ * MEASURED WHEN IT IS REACHED, not once at load. The rail scrolls inside itself on a short
+ * window, and a number taken at layout time would then point the tooltip at a mark the reader
+ * is not on — which is worse than no tooltip, because it is confidently wrong.
+ *
+ * Nothing here decides whether the tooltip is visible. That is `:hover` and `:focus-visible`
+ * in the stylesheet, so the affordance survives this module failing to load.
+ */
+function publishTipY(node) {
+    if (!node || !document.documentElement.classList.contains('lh-rail-collapsed')) {
+        return;
+    }
+    const box = node.getBoundingClientRect();
+    node.style.setProperty('--lh-navtip-y', (box.top + box.height / 2) + 'px');
+}
+
+/**
+ * Watch the rail for a control being pointed at, focused, or scrolled away from.
+ *
+ * Delegated from the rail rather than bound per control: `pointerover` and `focusin` both
+ * bubble, so one pair of listeners covers every link, the collapse button and the theme
+ * control, and covers any of them being added later. Both fire before the frame in which the
+ * tooltip is painted, so the position is in place by the time it appears.
+ *
+ * The scroll pass is the case the hover pass cannot see: the pointer sits still on a mark
+ * while the wheel moves the rail underneath it. Passive, because nothing here cancels it.
+ */
+function watchRailTips(side) {
+    const publish = (event) => {
+        const target = event.target;
+        if (target && typeof target.closest === 'function') {
+            publishTipY(target.closest(TIP_SELECTOR));
+        }
+    };
+
+    side.addEventListener('pointerover', publish);
+    side.addEventListener('focusin', publish);
+    side.addEventListener('scroll', () => {
+        publishTipY(document.querySelector(TIP_HOVERED));
+        const active = document.activeElement;
+        if (active && typeof active.closest === 'function' && side.contains(active)) {
+            publishTipY(active.closest(TIP_SELECTOR));
+        }
+    }, { passive: true });
+}
+
+/**
+ * The same tooltip, for the section bar at the top of a page.
+ *
+ * THE DEFECT. The bar is one row that never wraps, so its labels are short by contract — and
+ * for a view that has not declared its own sections the label is a heading CUT to 22 characters
+ * by Layout::cardsIn(). "01 Declared versus evasi…" is not a label, it is the first half of one,
+ * and there was no way to read the rest: the bar sets no `title`, and even if it did, that is
+ * the bubble this work exists to replace.
+ *
+ * WHERE THE FULL TEXT COMES FROM. `data-full` on the anchor, which Layout emits alongside the
+ * trimmed label. WITHOUT IT NOTHING HAPPENS — no attribute, no tooltip — because the one thing
+ * this must never do is repeat the truncated string that is already on screen, which is a
+ * tooltip that tells the reader what they can see and still withholds what they cannot.
+ *
+ * WHEN IT SHOWS. Only when the label really is short of its full text, which is TWO different
+ * conditions and both are measured rather than assumed: the rendered text differs from
+ * `data-full` (the server's cut), or the label overflows its own box (a cut the browser made).
+ * Re-measured on resize, because the bar scrolls horizontally and the same entry crosses that
+ * line as the window changes.
+ *
+ * THE NAME IS THE WHOLE TEXT. `aria-label` carries the untruncated label, so a screen reader
+ * reads all of it whether or not the tooltip is on screen and whether or not it is hovered.
+ */
+function markSectionTips(bar) {
+    for (const link of bar.querySelectorAll('a[data-full]')) {
+        const label = link.querySelector('.set-nav-label');
+        const full = (link.getAttribute('data-full') || '').trim();
+        if (!label || full === '') {
+            continue;
+        }
+
+        const shown = (label.textContent || '').trim();
+        const cut = shown !== full || label.scrollWidth > label.clientWidth;
+
+        if (cut) {
+            link.setAttribute('data-lh-tip', '1');
+            link.setAttribute('aria-label', full);
+        } else {
+            link.removeAttribute('data-lh-tip');
+        }
+    }
+}
+
+/**
+ * Put the section bar's tooltip under the entry it belongs to.
+ *
+ * Two numbers rather than the rail's one, because this bar scrolls sideways: neither coordinate
+ * can be derived from a fixed edge the way the rail's `left` is. The horizontal one is clamped
+ * so a box opened from the last entry on the row cannot run off the right of the window — the
+ * clamp uses the same maximum width the stylesheet gives the box, which is why that number is a
+ * token both of them read.
+ */
+function publishSectionTip(node) {
+    if (!node) {
+        return;
+    }
+    const box = node.getBoundingClientRect();
+    const room = document.documentElement.clientWidth;
+    const widest = Math.min(SECTION_TIP_MAX, room - SECTION_TIP_EDGE * 2);
+    const x = Math.max(SECTION_TIP_EDGE, Math.min(box.left, room - SECTION_TIP_EDGE - widest));
+
+    node.style.setProperty('--lh-navtip-x', x + 'px');
+    node.style.setProperty('--lh-navtip-y', box.bottom + 6 + 'px');
+}
+
+/**
+ * Wire the section bar's tooltips, if there is a bar and anything in it was cut.
+ *
+ * Delegated and passive for the same reasons the rail's are, and re-measured on the same
+ * animation-frame pass everything else in this module uses, so a resize costs one layout read
+ * per entry rather than one per frame of the drag.
+ */
+function setUpSectionTips() {
+    const bar = document.getElementById('lh-section-nav');
+    if (!bar || bar.dataset.lhTips === '1') {
+        return null;
+    }
+    bar.dataset.lhTips = '1';
+
+    const publish = (event) => {
+        const target = event.target;
+        if (target && typeof target.closest === 'function') {
+            publishSectionTip(target.closest('#lh-section-nav a[data-lh-tip]'));
+        }
+    };
+
+    bar.addEventListener('pointerover', publish);
+    bar.addEventListener('focusin', publish);
+    bar.addEventListener('scroll', () => {
+        publishSectionTip(bar.querySelector('a[data-lh-tip]:hover'));
+    }, { passive: true });
+
+    markSectionTips(bar);
+    return () => markSectionTips(bar);
+}
+
+/**
+ * The two icon-only controls that live in the page rather than in a bar.
+ *
+ * The card head's refresh mark, and the row opener that ends every drillable table row. Both
+ * are a drawn glyph with no words, both keep their `aria-label` — the accessible name is on the
+ * control whatever draws the hint — and both now take the panel's own tooltip instead of
+ * `title`, which is the bubble the rail and the section bar already replaced for exactly the
+ * three marks beside them.
+ */
+const CONTROL_TIP_SELECTOR = '.card-refresh[data-lh-tip], .rowopen[data-lh-tip]';
+
+/**
+ * Put that tooltip under whichever of them has just been reached.
+ *
+ * DELEGATED FROM THE DOCUMENT, not from a container. core.js creates the refresh controls as
+ * each card loads and the views rebuild their tables on every sort and every filter, so there
+ * is no set of elements to bind to at start-up — and `pointerover` and `focusin` both bubble
+ * all the way up. The row opener also sits inside a table that scrolls sideways, which is the
+ * same reason the section bar's box is `position: fixed` and measured when it is reached.
+ *
+ * The coordinates are the section bar's: a fixed box under the control, clamped so one at the
+ * right-hand edge cannot open a box that runs off the window.
+ */
+function setUpControlTips() {
+    if (document.body.dataset.lhControlTips === '1') {
+        return;
+    }
+    document.body.dataset.lhControlTips = '1';
+
+    const publish = (event) => {
+        const target = event.target;
+        if (target && typeof target.closest === 'function') {
+            publishSectionTip(target.closest(CONTROL_TIP_SELECTOR));
+        }
+    };
+
+    document.addEventListener('pointerover', publish);
+    document.addEventListener('focusin', publish);
+}
+
+/**
+ * Park a control's `title` while the rail is collapsed, and hand it back when it expands.
+ *
+ * TWO TOOLTIPS ARE WORSE THAN ONE. The collapsed rail now draws the panel's own tooltip beside
+ * the mark, immediately and in the panel's own type; leaving `title` in place meant the
+ * browser's bubble arrived a second later, in a different place, saying something else. The
+ * attribute is held in a data attribute instead of being thrown away, so the expanded rail —
+ * where the label is on screen and there is no tooltip of ours — keeps the hover hint it has
+ * always had, unchanged.
+ */
+function parkTitle(node, collapsed) {
+    if (!node) {
+        return;
+    }
+    if (collapsed) {
+        const title = node.getAttribute('title');
+        if (title !== null) {
+            node.setAttribute(HINT_ATTR, title);
+            node.removeAttribute('title');
+        }
+        return;
+    }
+    const parked = node.getAttribute(HINT_ATTR);
+    if (parked !== null) {
+        node.setAttribute('title', parked);
+        node.removeAttribute(HINT_ATTR);
+    }
 }
 
 /**
@@ -586,6 +825,7 @@ function mirrorThemeTitle(toggle, label) {
         const text = (label.textContent || 'Theme').trim();
         toggle.setAttribute('title', text);
         toggle.setAttribute('aria-label', text);
+        parkTitle(toggle, document.documentElement.classList.contains('lh-rail-collapsed'));
     };
     sync();
     if ('MutationObserver' in window) {
@@ -635,6 +875,11 @@ function applyRail(collapsed) {
         if (label) {
             label.textContent = collapsed ? 'Expand' : 'Collapse';
         }
+    }
+    /* AFTER the button's own title has been written, so the state that is parked is the state
+       this call just decided on rather than the one before it. */
+    for (const node of document.querySelectorAll(TIP_SELECTOR)) {
+        parkTitle(node, collapsed);
     }
     refresh();
 }
@@ -750,10 +995,189 @@ function rememberFold(key, open) {
  * rather than an aside — a row of the system check, a log source awaiting review — it is
  * listed with the context that makes it one, and a form still waiting for a decision is listed
  * outright.
+ *
+ * A BARE `.confirm-form` IS NOT THAT DECISION, and listing it was what made this feature look
+ * broken on Settings. `Panel\Settings` spells three unrelated things with that class: the
+ * "looks right, start ingesting" form, which IS a pending decision; `removeForm()`, which is a
+ * stop button; and the reinstall form, which is always on the page. The last two are
+ * unconditional, so `set-sources` and `set-reinstall` were force-opened on every render of
+ * every installation and could never show the operator what they had chosen — indistinguishable
+ * from the accordion having forgotten, and exactly what `Settings::problemBanner()` warns about
+ * one comment above itself: "a card that always carried the marker would be a card that never
+ * folds".
+ *
+ * It is matched as `.confirm-form.awaiting` instead, the class Settings is adding to the one
+ * form that is genuinely waiting. Nothing is uncovered in the meantime: a log source awaiting
+ * review already renders `.source-head .chip-warn` ("Awaiting review") beside its form, and a
+ * refusal already goes out through `problemBanner()` as `.check-row .chip-warn`, so both of the
+ * states that must hold `set-sources` open are held open by a selector already on this list.
  */
 const TROUBLE = '.banner-warn, .banner-bad, .card-error, .finish-bad, .beacon-stale,'
-    + ' .chip-bad, .state-bad, .callout-bad, .confirm-form, [aria-invalid="true"], .is-error,'
-    + ' .check-row .chip-warn, .source-head .chip-warn';
+    + ' .chip-bad, .state-bad, .callout-bad, .confirm-form.awaiting, [aria-invalid="true"],'
+    + ' .is-error, .check-row .chip-warn, .source-head .chip-warn';
+
+/**
+ * The page this is, for scoping a section's stored state to the view that owns it.
+ *
+ * `Panel\Layout::render()` stamps the view's slug on <body>, and it is the one identifier on
+ * the page that is the same on every render and the same across releases. Scoping by it means
+ * two views that happen to name a card the same thing can never share one stored choice, and
+ * it is what makes pruning safe: a stored key can only be judged stale against the page that
+ * owns it, never against whichever page the operator happens to be looking at.
+ *
+ * @returns {string}
+ */
+function viewSlug() {
+    const slug = document.body ? (document.body.getAttribute('data-view') || '') : '';
+    return /^[a-z0-9_-]+$/.test(slug) ? slug : 'panel';
+}
+
+/**
+ * The server's own name for a section — the half of the markup that is a literal in PHP.
+ *
+ * `Panel\Controller::cardOpen()` emits both `data-card="<id>"` and `id="<id>-card"` from the
+ * same string, and `<id>` is what a view writes by hand: it does not move when a card is
+ * renumbered, retitled or reordered, and it does not change if the id convention ever does.
+ * Stripping the suffix off the element id is the fallback, for the handful of cards still
+ * written without going through cardOpen().
+ *
+ * @returns {string} '' when the card carries no stable name at all.
+ */
+function cardName(card) {
+    const named = card.getAttribute('data-card');
+    if (named) {
+        return named;
+    }
+    const id = card.id || '';
+    return id.endsWith('-card') ? id.slice(0, -'-card'.length) : id;
+}
+
+/** Where one section's stored choice lives, or '' for a card with no stable name. */
+function cardStoreKey(card) {
+    const name = cardName(card);
+    return name === '' ? '' : CARD_KEY + viewSlug() + '.' + name;
+}
+
+/**
+ * Is this card a section the accordion owns?
+ *
+ * THE DEFECT THIS ANSWERS, and the reason some sections remembered and some did not. The set
+ * used to be `main .view > .card[id]`: a card had to be a DIRECT CHILD of the view to fold at
+ * all. Bot forensics and Networks each put two cards inside a `.grid-2`, and the session
+ * explorer puts two inside `.explorer`, so six cards across the panel were never registered —
+ * no toggle, no stored state, and nothing for Expand all to reach. On the explorer it took the
+ * whole feature down, because one registered card is fewer than the two setUpSections needs.
+ * Depth is not a property of a section; being a card with a heading is.
+ *
+ * Two kinds of card are deliberately left out. The facet rail, because setUpFacets() already
+ * gives it a disclosure of its own with its own label and its own open-when-filtered rule, and
+ * two controls on one card is the bug rather than the feature. And a card that arrives `hidden`:
+ * `Hosts::explainCard()` is revealed by views/hosts.js only when the range genuinely records no
+ * virtual host, so it is a card that exists BECAUSE something is wrong. Folding it would hand it
+ * a control nobody can press while it is hidden and then reveal it collapsed, which is the one
+ * outcome this whole feature is not allowed to produce.
+ */
+function isSection(card) {
+    return card.querySelector(':scope > .card-head > h2') !== null
+        && cardName(card) !== ''
+        && !card.hidden
+        && card.closest('.explorer .facets') === null
+        && (card.parentElement === null || card.parentElement.closest('.card') === null);
+}
+
+/**
+ * Has the operator ever chosen anything on THIS page?
+ *
+ * The first-section-open default is for somebody who has never touched the page, so it is
+ * asked once per view rather than once per card: a section added by a later release must open
+ * nothing and move nothing for an operator who already arranged the page to their liking.
+ *
+ * Asked after the stale keys are gone, so a release that renamed every section on a page
+ * leaves that page as one nobody has touched rather than one arranged into nothing.
+ */
+function viewHasChoices() {
+    const mine = CARD_KEY + viewSlug() + '.';
+    try {
+        for (let i = 0; i < window.localStorage.length; i++) {
+            const key = window.localStorage.key(i);
+            if (key !== null && key.startsWith(mine)) {
+                return true;
+            }
+        }
+    } catch (e) {
+        return false;
+    }
+    return false;
+}
+
+/**
+ * Every view the product still has, read off the navigation.
+ *
+ * The sidebar lists all of them and each link carries its own slug, which is where slugOf()
+ * already gets the icon rail's marks from. Reading it rather than hard-coding a list means a
+ * view added to `Panel\Layout::nav()` is known here with no second list to keep in step.
+ *
+ * @returns {string[]} Empty when the navigation is not on the page, which is the signal to
+ *                     retire nothing rather than to retire everything.
+ */
+function knownViews() {
+    const slugs = [];
+    for (const link of document.querySelectorAll('nav.side ul li a')) {
+        const slug = slugOf(link);
+        if (slug !== '' && slugs.indexOf(slug) === -1) {
+            slugs.push(slug);
+        }
+    }
+    return slugs;
+}
+
+/**
+ * Retire stored choices that cannot belong to any view this release has.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT DO, and the defect that taught it. It used to retire any key
+ * in this page's namespace naming a section that was not on the page — and a section being
+ * absent from ONE render does not mean it is gone. `Controller::pivotCard()` returns without
+ * emitting anything when a view has no pivot pairing; the three Opensolr views replace their
+ * whole set with one explainer when the account is not configured; a card can be conditional on
+ * the data or on the query string. Pruning against what happens to be on screen therefore
+ * deleted the operator's choice for a card that was merely not there this time, and the card
+ * came back at its default the next time it appeared. Measured on Overview: `ov-pivot` stored
+ * as open, one render without the card, and the choice was gone.
+ *
+ * So a key is retired only when it cannot be about a live section AT ALL:
+ *
+ *  - it has no view segment — `lh.card.set-solr-card`, the shape from before the choice was
+ *    scoped to a view, which this release cannot read; or
+ *  - its view segment names a view the product no longer has.
+ *
+ * A section renamed within a view that still exists therefore leaves one dead key behind. That
+ * is bounded by the number of names a view has ever had, and it is the cheap side of the trade:
+ * the other side deletes a choice the operator made and is still making use of.
+ */
+function pruneCardKeys() {
+    const views = knownViews();
+    try {
+        const stale = [];
+        for (let i = 0; i < window.localStorage.length; i++) {
+            const key = window.localStorage.key(i);
+            if (key === null || !key.startsWith(CARD_KEY)) {
+                continue;
+            }
+            const rest = key.slice(CARD_KEY.length);
+            const dot = rest.indexOf('.');
+            if (dot === -1) {
+                stale.push(key);
+            } else if (views.length > 0 && views.indexOf(rest.slice(0, dot)) === -1) {
+                stale.push(key);
+            }
+        }
+        for (const key of stale) {
+            window.localStorage.removeItem(key);
+        }
+    } catch (e) {
+        void e;
+    }
+}
 
 /**
  * Turn every card on the page into a section that can be collapsed, with the first one open.
@@ -770,49 +1194,52 @@ const TROUBLE = '.banner-warn, .banner-bad, .card-error, .finish-bad, .beacon-st
  * stay in the head and stay visible while the section is shut, because a collapsed section
  * should still be able to tell you whether it is worth opening.
  *
- * WHAT IS OPEN ON ARRIVAL. The first section, and any section with trouble in it. After that
- * it is whatever the operator last chose on this page, because a default is for somebody who
- * has never touched it, not a reset applied to somebody who has.
+ * WHAT IS OPEN ON ARRIVAL. Whatever the operator last chose on this page; failing that, the
+ * first section on a page they have never touched and nothing else; and, over the top of
+ * either, any section with trouble in it. The trouble rule changes what is on the screen for
+ * this render and never what is in storage — see setCard() and persistChoices().
+ *
+ * A CARD THAT FAILS OPENS ITSELF. Cards fetch their data after this runs, so the arrival check
+ * only ever saw a page that had loaded nothing yet. A card that failed while collapsed kept
+ * its error, its message and its retry button inside a region with `display: none`, and the
+ * operator saw a shut heading with no reason to open it. core.js announces the failure on
+ * `lh:card-trouble`; this is what acts on it.
+ *
+ * THE SECTION NAV MUST OPEN WHAT IT JUMPS TO, for the same reason: a bar that scrolls to a
+ * collapsed heading has moved the reader and shown them nothing. That listener is on the
+ * document so it survives the bar being re-rendered, and it does not preventDefault — the
+ * anchor still does the scrolling, this only makes sure there is something to scroll to.
  */
 function setUpSections() {
-    const cards = Array.from(document.querySelectorAll('main .view > .card[id]'))
-        .filter((card) => card.querySelector(':scope > .card-head > h2'));
+    const cards = Array.from(document.querySelectorAll('main .view .card')).filter(isSection);
     if (cards.length < 2) {
         return null;
     }
 
-    cards.forEach((card, index) => foldCard(card, index === 0));
+    pruneCardKeys();
+    const untouched = !viewHasChoices();
+    cards.forEach((card, index) => foldCard(cards, card, untouched && index === 0));
     document.documentElement.classList.add('lh-sections');
     addExpandAll(cards);
     openFromHash();
 
     window.addEventListener('hashchange', openFromHash);
 
-    /* A CARD THAT FAILS OPENS ITSELF. Cards fetch their data after this runs, so the trouble
-       check above only ever saw a page that had not loaded anything yet. A card that failed
-       while collapsed kept its error, its message and its retry button inside a region with
-       `display: none`: the operator saw a shut heading and no reason to open it. core.js
-       announces the failure; this is what acts on it. Not remembered — the card opening
-       because something broke is not the operator expressing a preference about it. */
     document.addEventListener('lh:card-trouble', (event) => {
         const id = event.detail && event.detail.id;
         if (id) {
-            setCard(document.getElementById(id + '-card'), true);
+            forceCard(document.getElementById(id + '-card'));
         }
     });
 
-    /* The section nav must OPEN what it jumps to. A nav that scrolls to a collapsed heading
-       has moved the reader somewhere and shown them nothing. The listener is on the document
-       so it survives the bar being re-rendered, and it does not preventDefault: the anchor
-       still does the scrolling, this only makes sure there is something to scroll to. */
     document.addEventListener('click', (event) => {
         const link = event.target.closest ? event.target.closest('.set-nav a[href^="#"]') : null;
         if (link) {
-            setCard(document.getElementById(link.getAttribute('href').slice(1)), true);
+            forceCard(document.getElementById(link.getAttribute('href').slice(1)));
         }
     });
 
-    return () => cards.forEach((card) => { if (hasTrouble(card)) { setCard(card, true); } });
+    return () => cards.forEach((card) => { if (hasTrouble(card)) { forceCard(card); } });
 }
 
 /**
@@ -821,8 +1248,17 @@ function setUpSections() {
  * Everything after the head becomes the region, so the pop line, the loading state, the
  * content and the empty state all travel together and a view that appends to the card later
  * still finds its own ids — nothing is cloned or rewritten, only moved one level down.
+ *
+ * The state the operator chose is written onto the element as `data-fold-chosen` and kept
+ * there. It is deliberately NOT the same thing as whether the section is open: a section held
+ * open by a warning is open on screen while its choice stays whatever they last pressed, which
+ * is what lets the section go back to that choice the moment the warning clears.
+ *
+ * @param {HTMLElement[]} cards Every section on the page, for the press handler.
+ * @param {HTMLElement}   card  The card to wire.
+ * @param {boolean}       first Whether this card gets the never-touched-this-page default.
  */
-function foldCard(card, first) {
+function foldCard(cards, card, first) {
     if (card.dataset.foldWired === '1') {
         return;
     }
@@ -830,7 +1266,7 @@ function foldCard(card, first) {
 
     const head = card.querySelector(':scope > .card-head');
     const heading = head.querySelector('h2');
-    const region = el('div', { class: 'card-region', id: card.id + '-region' });
+    const region = el('div', { class: 'card-region', id: (card.id || cardName(card)) + '-region' });
 
     let node = head.nextSibling;
     while (node) {
@@ -851,11 +1287,15 @@ function foldCard(card, first) {
     }
     heading.appendChild(button);
 
-    button.addEventListener('click', () => setCard(card, !isCardOpen(card), true));
+    button.addEventListener('click', () => {
+        const open = !isCardOpen(card);
+        chooseCards(cards, (other) => (other === card ? open : null));
+    });
 
-    const remembered = rememberedCard(card.id);
-    const open = hasTrouble(card) || (remembered === null ? first : remembered);
-    setCard(card, open);
+    const remembered = rememberedCard(card);
+    const chosen = remembered === null ? first : remembered;
+    card.dataset.foldChosen = chosen ? 'open' : 'shut';
+    setCard(card, hasTrouble(card) || chosen);
 }
 
 /** Is anything inside this card telling the operator something is wrong? */
@@ -875,15 +1315,22 @@ function isCardOpen(card) {
 }
 
 /**
- * Open or close one section.
+ * Open or close one section ON SCREEN, and nothing else.
  *
- * `remember` is only true for a press: opening a section because the nav jumped to it, or
- * because a failure appeared inside it, is not the operator expressing a preference about it.
+ * It writes no storage. That is the whole guard: every path that opens a section on the page's
+ * behalf rather than the operator's — a fetch that failed, a jump from the section nav, a deep
+ * link, a warning found on arrival — goes through here and therefore cannot leave a mark the
+ * operator never made. A choice reaches storage only through persistChoices().
+ *
+ * A call that would not change anything returns early, because setCard() asks for a layout
+ * pass and the layout pass re-checks for trouble: a section already open with a warning in it
+ * would otherwise re-open itself on every animation frame, for as long as the page was up.
+ *
  * Toggling re-runs the layout pass, because a table or a chart inside a section that was shut
  * measured zero and has to be measured again now that it has a width.
  */
-function setCard(card, open, remember) {
-    if (!card || card.dataset.foldWired !== '1') {
+function setCard(card, open) {
+    if (!card || card.dataset.foldWired !== '1' || isCardOpen(card) === open) {
         return;
     }
     card.classList.toggle('is-shut', !open);
@@ -891,26 +1338,72 @@ function setCard(card, open, remember) {
     if (button) {
         button.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
-    if (remember) {
-        rememberCard(card.id, open);
-    }
     refresh();
 }
 
-/** What the operator last chose for this section on this page, or null. */
-function rememberedCard(id) {
+/**
+ * Open a section because the page demands it, WITHOUT recording it as a choice.
+ *
+ * A section forced open because it holds a failure, or because a link pointed at it, is not
+ * the operator expressing a preference about that section. It is open for this render; the
+ * choice underneath it is untouched, and the section returns to it as soon as the reason goes.
+ */
+function forceCard(card) {
+    setCard(card, true);
+}
+
+/** What the operator last chose for this section on this page, or null if they never have. */
+function rememberedCard(card) {
+    const key = cardStoreKey(card);
+    if (key === '') {
+        return null;
+    }
     try {
-        const value = window.localStorage.getItem(CARD_KEY + id);
+        const value = window.localStorage.getItem(key);
         return value === null ? null : value === 'open';
     } catch (e) {
         return null;
     }
 }
 
-/** Record a press. */
-function rememberCard(id, open) {
+/**
+ * Apply a press, then write the page's shape to storage.
+ *
+ * Every section is written, not only the one pressed, which is what makes Expand all and
+ * Collapse all survive a reload and what pins a page the first time it is touched — after
+ * that, a section added by a later release is the only one without a stored choice, and it
+ * gets the shut default rather than shuffling the sections the operator arranged.
+ *
+ * @param {HTMLElement[]} cards Every section on the page.
+ * @param {function(HTMLElement): (boolean|null)} pick The new state for a card, or null to
+ *                                                     leave that one as it is.
+ */
+function chooseCards(cards, pick) {
+    for (const card of cards) {
+        const open = pick(card);
+        if (open !== null) {
+            card.dataset.foldChosen = open ? 'open' : 'shut';
+            setCard(card, open);
+        }
+    }
+    persistChoices(cards);
+}
+
+/**
+ * Write every section's CHOICE to storage — the only place in this module that writes one.
+ *
+ * The value comes off `data-fold-chosen`, which a press sets and nothing else does, rather
+ * than off the screen. That is what keeps a force-opened section out of storage: a card held
+ * open by a warning still records the state the operator last put it in.
+ */
+function persistChoices(cards) {
     try {
-        window.localStorage.setItem(CARD_KEY + id, open ? 'open' : 'shut');
+        for (const card of cards) {
+            const key = cardStoreKey(card);
+            if (key !== '') {
+                window.localStorage.setItem(key, card.dataset.foldChosen === 'open' ? 'open' : 'shut');
+            }
+        }
     } catch (e) {
         void e;
     }
@@ -931,7 +1424,7 @@ function openFromHash() {
     const target = document.getElementById(id);
     const card = target ? target.closest('.card[id]') : null;
     if (card) {
-        setCard(card, true);
+        forceCard(card);
         window.requestAnimationFrame(() => card.scrollIntoView({ block: 'start' }));
     }
 }
@@ -944,6 +1437,10 @@ function openFromHash() {
  * without it, collapsing sections would have quietly removed Ctrl-F from the longest page in
  * the panel. It sits in the section nav, which is the one piece of chrome every page with
  * more than one section already has, and it says which way it will go.
+ *
+ * It is a press like any other, so it goes through chooseCards() and every section it moved is
+ * in storage by the time the page is next loaded — including the ones a `.grid-2` or the
+ * session explorer used to keep out of the accordion's reach entirely.
  */
 function addExpandAll(cards) {
     const nav = document.getElementById('lh-section-nav');
@@ -953,7 +1450,7 @@ function addExpandAll(cards) {
     const button = el('button', { type: 'button', class: 'lh-expandall' }, 'Expand all');
     button.addEventListener('click', () => {
         const open = cards.some((card) => !isCardOpen(card));
-        cards.forEach((card) => setCard(card, open, true));
+        chooseCards(cards, () => open);
         button.textContent = open ? 'Collapse all' : 'Expand all';
     });
     nav.appendChild(button);
@@ -983,6 +1480,12 @@ function refresh() {
         }
         if (recheckTrouble) {
             recheckTrouble();
+        }
+        /* THE SAME ENTRY CROSSES THE LINE AS THE WINDOW CHANGES: the bar scrolls sideways and
+           its labels are not cut by a width, so whether one is short of its full text is a
+           measurement, and a measurement taken once at load is wrong by the first resize. */
+        if (remeasureTips) {
+            remeasureTips();
         }
         restack();
     });
@@ -1022,6 +1525,8 @@ function start() {
     watchFacetPanel();
     applyFolds = setUpFolds();
     recheckTrouble = setUpSections();
+    remeasureTips = setUpSectionTips();
+    setUpControlTips();
     restack();
     watch();
 

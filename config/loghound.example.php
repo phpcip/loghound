@@ -122,6 +122,29 @@ return [
         'api_key'  => '',
         /** One of GET /regions — the wizard lists them for you. */
         'region'   => '',
+
+        /**
+         * WRITTEN BY LOGHOUND, NOT BY YOU. Records that an account has been saved and its
+         * indexes have not been chosen yet.
+         *
+         * Choosing an account and choosing indexes are two separate steps, and the gap
+         * between them is a legal state rather than one to be prevented: the account is
+         * saved on its own, and the two indexes named above may still belong to whichever
+         * account was set before it. While that is true every panel query fails, and
+         * without this key the panel could only report the symptom — "a service is not
+         * answering" — which is accurate and useless. With it, every view says plainly
+         * that indexes have not been chosen and links to the list.
+         *
+         * It is a recorded verdict rather than a live check on purpose: it is written at
+         * the one moment the answer is known, when the account was just saved and the
+         * platform had just listed what it holds, and cleared at the one moment it stops
+         * being true, when a connection to the chosen pair is proved. No page spends a
+         * control-plane call on it, and a failed read changes it in neither direction.
+         *
+         * Remove it by hand and the banner goes; the next time either step runs, it comes
+         * back with the truth.
+         */
+        'pair_pending' => '',
     ],
 
     // =====================================================================
@@ -132,15 +155,28 @@ return [
      * What to ingest. Written by the wizard after you confirm the detected mapping;
      * you can add entries by hand and re-run the daemon.
      *
-     *   path   an absolute path or a glob. Globs are RE-EVALUATED ON EVERY POLL, so a
-     *          new vhost's log file is picked up without a daemon restart.
-     *   format a library format name ('apache_combined', 'apache_loghound',
-     *          'nginx_combined', ...) OR the literal LogFormat / log_format string
-     *          from your own webserver config.
-     *   host   optional vhost override, for a format that does not log %v.
+     *   path    an absolute path or a glob. Globs are RE-EVALUATED ON EVERY POLL, so a
+     *           new vhost's log file is picked up without a daemon restart.
+     *   format  a library format name ('apache_combined', 'apache_loghound',
+     *           'nginx_combined', ...) OR the literal LogFormat / log_format string
+     *           from your own webserver config.
+     *   host    optional vhost override, for a format that does not log %v.
+     *   enabled optional. FALSE STOPS THE FILE BEING READ. Absent means enabled, so
+     *           every existing configuration is unchanged; set it to false and the
+     *           entry stays configured, stays detected and stays visible in Settings,
+     *           and the daemon leaves it alone. The skip is written to the log when
+     *           the daemon starts, so a file nobody is reading says so.
      *
-     * DO NOT point Loghound at its own vhost's access log: it would ingest its own
-     * beacon traffic and inflate every number it reports.
+     * LOGHOUND'S OWN VHOST. Requests to Loghound's own beacon script and collector are
+     * recognised by host and path — derived from `base_url` — and are excluded from every
+     * session number, so a `/collect.php` of your own on a measured site is untouched and
+     * ours is never counted as a page somebody visited.
+     *
+     * That is not the same thing as excluding the PANEL. If Loghound's own access log is
+     * one of the sources below, every visit you make to the panel becomes a session in the
+     * data the panel shows you — real page views of a real site, which happens to be this
+     * one. Whether you want that is your call, not ours; `enabled => false` is how you say
+     * no, and leaving it out is how you say yes.
      */
     'sources' => [
         [
@@ -151,6 +187,12 @@ return [
         [
             'path'   => '/var/log/nginx/*access*.log',
             'format' => 'nginx_combined',
+        ],
+        [
+            'path'    => '/var/log/apache2/loghound_access.log',
+            'format'  => 'apache_combined',
+            'host'    => 'loghound.example.com',
+            'enabled' => false,
         ],
     ],
 
@@ -665,6 +707,75 @@ return [
     'trusted_proxies' => [
         // '10.0.0.0/8',
         // '172.16.0.0/12',
+    ],
+
+    // =====================================================================
+    // ANSWER CACHE (optional — memcached)
+    // =====================================================================
+
+    /**
+     * Cache the panel's Solr answers in memcached.
+     *
+     * IT SAVES TWO THINGS, AND THE SECOND ONE IS MONEY.
+     *
+     * The wait. Solr answers a panel facet in single-digit milliseconds. Getting the question
+     * there and the answer back is what costs: a panel in one country and an index in another
+     * measures around 240 ms per call, of which more than 110 ms is the TCP and TLS handshake,
+     * and a page drawing six cards pays it six times.
+     *
+     * The metered bandwidth. Opensolr meters OUTGOING traffic — the responses Solr sends back —
+     * so it is reads that consume a plan's bandwidth allowance, not writes. The tailer pushing
+     * log lines in uploads them and gets back a short acknowledgement, which is why ingestion
+     * costs almost nothing against that quota however busy the site is. The consequence is that
+     * the metered bandwidth on a Loghound installation is almost entirely the panel's own
+     * reads: leaving a view open, or reloading it a few times, spends plan allowance on
+     * identical queries, and a facet response over a large index is not small. The cache is
+     * therefore the only real lever on that bill, and the bandwidth figure the panel shows you
+     * on its own Storage & bandwidth page is, in practice, mostly the panel itself.
+     *
+     * BOTH OF THESE ARE ALSO CONTROLS IN SETTINGS, and Settings writes back to this file. Edit
+     * them here or there; they are the same two values.
+     *
+     * 'enabled'     Off by default. Turning it on changes what the numbers on the dashboard
+     *               mean — they become as old as `ttl_seconds` allows — so it is an explicit
+     *               decision rather than an inherited default. Off means every read goes
+     *               straight to Solr, which is how an install with no cache behaves.
+     *
+     * 'server'      `host:port`, a bare host (port 11211 assumed), `[::1]:11211`, or an
+     *               absolute path to a unix socket.
+     *
+     *               MEMCACHED HAS NO AUTHENTICATION AND NO ENCRYPTION. What lands in it is your
+     *               traffic data: paths, addresses, user agents, verdicts. Bind it to 127.0.0.1
+     *               or use a socket. Loghound derives its key prefix from an HMAC over this
+     *               installation's own secret material, so two Loghounds sharing one memcached
+     *               cannot address each other's entries and a co-tenant application cannot
+     *               guess one of ours — but no key scheme makes a memcached listening on a
+     *               public interface safe, and nothing in Loghound can fix that for you.
+     *
+     * 'ttl_seconds' How long one answer may be reused. Default 7200 (two hours), which suits
+     *               checking the panel once or twice a day. Clamped to 60 seconds at the low
+     *               end — below that a cache is storing answers nothing lives to read, and the
+     *               honest way to want fresh numbers is 'enabled' => false — and to 86400
+     *               (twenty-four hours) at the high end.
+     *
+     *               A long duration is comfortable because of two things that always work:
+     *               every card says when its numbers were computed, and the Clear cache button
+     *               at the top of every page throws the whole lot away at once without waiting
+     *               for anything to expire.
+     *
+     * NOT REQUIRED. No memcached extension, no server, or a server that stops answering, all
+     * degrade to exactly the behaviour of an install with no cache — never to an error on a
+     * page. Settings > System check reports which of those you have.
+     *
+     * NEVER CACHED, whatever these are set to: background job steps (a count you are watching
+     * after a delete must be the count now), the liveness check, and anything that failed. A
+     * failed read is not stored, so one bad minute cannot become two hours of a dashboard
+     * confidently reporting that nothing is happening.
+     */
+    'cache' => [
+        'enabled'     => false,
+        'server'      => '127.0.0.1:11211',
+        'ttl_seconds' => 7200,
     ],
 
     // =====================================================================

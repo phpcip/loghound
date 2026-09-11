@@ -138,10 +138,29 @@ final class Sessionizer
     /** privacy.ip_salt. */
     private string $ipSalt;
 
+    /** The hostname this installation's panel is published at; '' before setup. */
+    private string $selfHost;
+
+    /**
+     * The paths under that hostname that belong to Loghound itself.
+     *
+     * @var array<int,string>
+     */
+    private array $selfPaths;
+
+    /** This installation's collector path, handed to Signals::classifyRequest(); '' before setup. */
+    private string $selfCollector;
+
     /**
      * The idle timeout is SPEC §5's 30 minutes, configurable, and clamped to something sane
      * at both ends: a 5-second timeout would turn every page load into its own session, and
      * a 24-hour one would merge a week of a NAT's traffic into a single unusable document.
+     *
+     * `base_url` is read for one reason: the session aggregate must be able to tell Loghound's
+     * own beacon script and collector apart from the traffic it is measuring, and it has to be
+     * able to do so for a hit that did not come through Parser. Config::selfEndpoints() is the
+     * single derivation, shared with bin/loghound-tail, so the two cannot disagree about what
+     * "ours" means.
      *
      * @param object              $state The State instance (src/State.php).
      * @param array<string,mixed> $cfg   Full config array, or at least the ingest/privacy
@@ -160,6 +179,36 @@ final class Sessionizer
 
         $this->ipMode = (string) ($cfg['privacy']['ip_mode'] ?? 'full');
         $this->ipSalt = (string) ($cfg['privacy']['ip_salt'] ?? '');
+
+        $own = Config::selfEndpoints((string) ($cfg['base_url'] ?? ''));
+        $this->selfHost      = (string) $own['host'];
+        $this->selfPaths     = (array) $own['paths'];
+        $this->selfCollector = (string) $own['collector'];
+    }
+
+    /**
+     * Is this hit Loghound's own instrumentation rather than the measured site's traffic?
+     *
+     * Parser has usually answered this already and left `_self_b` on the hit, and its answer is
+     * taken as final — it had the source's vhost override in hand at the time. The fallback
+     * re-runs the SAME comparison, Parser::isOwnRequest(), for a hit that reached the sessioniser
+     * by another route: a replay tool, or the test harness, neither of which goes through Parser.
+     * One implementation, two entry points, so there is nothing to drift.
+     *
+     * @param array<string,mixed> $hit
+     */
+    private function isSelfRequest(array $hit): bool
+    {
+        if (array_key_exists('_self_b', $hit)) {
+            return (bool) $hit['_self_b'];
+        }
+
+        return Parser::isOwnRequest(
+            isset($hit['host_s']) ? (string) $hit['host_s'] : null,
+            (string) ($hit['path_s'] ?? ''),
+            $this->selfHost,
+            $this->selfPaths
+        );
     }
 
     /**
@@ -188,6 +237,24 @@ final class Sessionizer
      * with the aggregate's, and last_ts is advanced with MAX() inside State, so an
      * out-of-order line cannot rewind a session.
      *
+     * LOGHOUND'S OWN BEACON AND COLLECTOR TAKE A SEPARATE PATH THROUGH HERE, and it differs in
+     * three ways. They never OPEN a session: a session built out of nothing but instrumentation
+     * would carry hits_i 0, pages_i 0 and no entry path, and publishing that would be inventing
+     * a visit out of the act of measuring one. They join a session that is already open, and
+     * outside one they are simply a hit document with no session_id_s. They are folded by
+     * accumulateSelf(), which counts none of the traffic metrics — that method carries the full
+     * reasoning, including why the hit is still indexed. And they pass hitsDelta 0 to State, so
+     * its counter stays in step with the aggregate's, while still advancing last_ts: the client
+     * demonstrably was still there, and the gap series is protected separately, by measuring
+     * from the previous COUNTED hit. They carry no session_seq_i, because there is no position
+     * among the counted hits to give them.
+     *
+     * The classification fallback is handed `_beacon_path` for a related reason. It has always
+     * been able to honour a configured collector and has never been told one, so a hit that
+     * skipped Parser was classified by extension — and the shipped collector ends in `.php`,
+     * which made it an HTML PAGEVIEW. The path comes from Config::selfEndpoints(), like
+     * everything else here, and is set on a copy so the key never travels on the returned hit.
+     *
      * @param array<string,mixed> $hit A normalised hit from Parser.php.
      * @return array<string,mixed>
      */
@@ -206,7 +273,11 @@ final class Sessionizer
         }
 
         if (!isset($hit['kind_s'])) {
-            $classified = Signals::classifyRequest($hit);
+            $probe = $hit;
+            if (!isset($probe['_beacon_path']) && $this->selfCollector !== '') {
+                $probe['_beacon_path'] = $this->selfCollector;
+            }
+            $classified = Signals::classifyRequest($probe);
             $hit['kind_s'] = $classified['kind_s'];
             if (isset($classified['asset_kind_s'])) {
                 $hit['asset_kind_s'] = $classified['asset_kind_s'];
@@ -214,8 +285,13 @@ final class Sessionizer
         }
 
         $clientKey = self::clientKey($hit);
+        $isSelf    = $this->isSelfRequest($hit);
 
         $row = $this->state->findOpenSession($clientKey, $this->idleSeconds, $tsMs);
+
+        if ($row === null && $isSelf) {
+            return $hit;
+        }
 
         if ($row === null) {
             $agg = $this->newAggregate($hit);
@@ -233,6 +309,15 @@ final class Sessionizer
                 'hits'       => 0,
                 'data'       => $agg,
             ];
+        }
+
+        if ($isSelf) {
+            $agg = self::accumulateSelf((array) $row['data'], $hit);
+            $this->state->updateSession((string) $row['session_id'], $tsMs, 0, $agg);
+
+            $hit['session_id_s'] = (string) $row['session_id'];
+
+            return $hit;
         }
 
         $agg = $this->accumulate((array) $row['data'], $hit, $tsMs, (int) $row['last_ts']);
@@ -412,7 +497,17 @@ final class Sessionizer
      * were fetched more than once. Sub-resources only: re-navigating to the same page is
      * completely normal behaviour and says nothing about the client's HTTP cache.
      *
-     * Inter-request gaps are accumulated in milliseconds.
+     * Inter-request gaps are accumulated in milliseconds, measured between COUNTED hits, which
+     * is what `last_counted_ms` is for: a beacon heartbeat lands in the middle of a visit and
+     * must not become the point the next real request's gap is measured from.
+     *
+     * `own_hits` and `own_assets` are the only trace Loghound's own instrumentation leaves in
+     * the aggregate. They are not traffic and are excluded from every count above. `own_assets`
+     * has one reader, Rules::ruleNoAssets(), which needs to tell "this client fetched nothing"
+     * from "this client fetched only the thing we told it to fetch" — opposite verdicts.
+     * `own_hits` is the total, and it is kept because `own_assets` alone cannot distinguish "no
+     * instrumentation fired in this session" from "it fired and none of it was a sub-resource":
+     * the collector is a POST, not an asset. Neither is a document field.
      *
      * The identity, network and client fields are lifted from the FIRST hit. The first is the
      * right choice rather than the last: it carries the external referer and the entry
@@ -445,9 +540,58 @@ final class Sessionizer
                 'uris_bytes'    => 0,
                 'repeat_assets' => 0,
                 'gaps'       => [],
+                'last_counted_ms' => 0,
+                'own_hits'   => 0,
+                'own_assets' => 0,
                 'terms'      => [],
                 'first'      => self::identityOf($hit),
         ];
+    }
+
+    /**
+     * Fold one of Loghound's OWN requests into the aggregate.
+     *
+     * KEEP AND EXCLUDE, NOT DROP AT INGEST — the decision this whole path exists to express,
+     * and the reasoning is worth stating once here rather than being rediscovered later.
+     *
+     * The hit document is still written to the `hits` core. It really was served, and the
+     * transport plane is the record of what the webserver did; erasing a request from it to
+     * tidy up a chart is the same class of dishonesty as inventing one. It is also the only
+     * answer to the first question every new installation asks — "is my beacon actually
+     * reaching the collector?" — which becomes unanswerable from the data the moment those
+     * lines are thrown away at ingest.
+     *
+     * What it is excluded from is the SESSION, because the session is where the numbers a
+     * person reads are computed, and Loghound's own instrumentation is not the measured site's
+     * traffic. So this counts nothing: not `hits`, so `asset_ratio` keeps an honest denominator
+     * and `hits_i` an honest total; not `pages`, `assets`, `favicons` or `beacons`; not `bytes`
+     * or the status classes; not `paths`, which is what Overview's Top pages facets and the
+     * defect that started this; not `uris`, so a repeated beacon cannot masquerade as a client
+     * with no HTTP cache; and not the inter-request gaps, which is why the gap is measured from
+     * `last_counted_ms` rather than from the session's last_ts.
+     *
+     * The two things it does record are `own_hits` and `own_assets`. They are aggregate-only —
+     * finalise() carries them to the scorer and bin/loghound-score puts neither on a document —
+     * and `own_assets` exists to defuse exactly one regression: `no_assets` fires on an HTML 200
+     * with no sub-resources, and a visitor whose only sub-resource was `/b.js` would newly score
+     * 25 bot points for having loaded the script Loghound itself asked their browser to load.
+     * Rules::ruleNoAssets() reads it and stays silent. Suppressing a rule is the conservative
+     * direction: it can only make a session look more human, never less.
+     *
+     * @param array<string,mixed> $agg
+     * @param array<string,mixed> $hit
+     * @return array<string,mixed>
+     */
+    private static function accumulateSelf(array $agg, array $hit): array
+    {
+        $agg['own_hits'] = (int) ($agg['own_hits'] ?? 0) + 1;
+
+        $kind = (string) ($hit['kind_s'] ?? 'other');
+        if ($kind === 'asset' || $kind === 'favicon') {
+            $agg['own_assets'] = (int) ($agg['own_assets'] ?? 0) + 1;
+        }
+
+        return $agg;
     }
 
     /**
@@ -487,6 +631,14 @@ final class Sessionizer
      * once however many times it repeats: three fetches of one file is one piece of evidence,
      * not two.
      *
+     * The gap is measured from the previous COUNTED hit, not from the session's last_ts. Those
+     * differ whenever Loghound's own beacon fired in between — accumulateSelf() records nothing
+     * but still lets the session's last_ts advance, because the client demonstrably was still
+     * there — and measuring from the beacon would replace the site's request rhythm, which is
+     * what periodic_timing reads, with Loghound's own heartbeat interval. `last_counted_ms`
+     * falls back to last_ts for an aggregate written before it existed, so a session that was
+     * open across an upgrade finishes correctly instead of producing one absurd gap.
+     *
      * @param array<string,mixed> $agg    The aggregate so far (State's `data` blob).
      * @param array<string,mixed> $hit
      * @param int                 $tsMs   This hit's instant, epoch milliseconds.
@@ -496,12 +648,14 @@ final class Sessionizer
     private function accumulate(array $agg, array $hit, int $tsMs, int $lastMs): array
     {
         if (($agg['hits'] ?? 0) > 0) {
-            $gapMs = max(0, $tsMs - $lastMs);
+            $prevMs = (int) ($agg['last_counted_ms'] ?? 0);
+            $gapMs  = max(0, $tsMs - ($prevMs > 0 ? $prevMs : $lastMs));
             if (count($agg['gaps']) < self::MAX_TRACKED_GAPS) {
                 $agg['gaps'][] = $gapMs;
             }
         }
 
+        $agg['last_counted_ms'] = $tsMs;
         $agg['hits']++;
 
         $kind   = (string) ($hit['kind_s'] ?? 'other');
@@ -644,6 +798,11 @@ final class Sessionizer
      * paths_ss at 50, and uniq_paths_i carries the real number, so nothing is lost except
      * the ability to enumerate — and the UI must label the list a sample.
      *
+     * `own_hits` and `own_assets` travel to the scorer and stop there. bin/loghound-score puts
+     * neither on a session document, deliberately: they are not facts about the visit, they are
+     * facts about Loghound's instrumentation of it, and the sessions schema has no field for
+     * them. `own_assets` has exactly one reader, Rules::ruleNoAssets().
+     *
      * Sub-resources are assets plus favicons. The favicon has its own kind_s in the schema
      * but it is still something the renderer went and fetched, so it belongs on this side of
      * the ratio. asset_ratio_f is then sub-resources as a fraction of ALL hits: a browser
@@ -700,6 +859,8 @@ final class Sessionizer
             'paths'        => array_slice($paths, 0, self::PATHS_ON_DOC),
 
             'repeat_assets' => (int) ($agg['repeat_assets'] ?? 0),
+            'own_hits'     => (int) ($agg['own_hits'] ?? 0),
+            'own_assets'   => (int) ($agg['own_assets'] ?? 0),
             'gaps'         => $gaps,
             'terms'        => self::sortedTerms($agg['terms'] ?? []),
             'first'        => (array) ($agg['first'] ?? []),

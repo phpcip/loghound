@@ -330,9 +330,16 @@ final class Storage
      * because that is the only place it is allowed to live — holding it in a session or a
      * hidden form field to "verify it first" would put it somewhere less safe.
      *
+     * THE REGION IS PART OF THE ACCOUNT, so it is recorded here with the other two. It used to
+     * be written by the Settings card directly while the installer set it inside a job, which
+     * meant two spellings of one operation and two chances for them to diverge. Only its SHAPE
+     * is checked here, because whether the account may use it is a question only the platform
+     * can answer — settleRegion() asks that, immediately afterwards, on every path.
+     *
+     * @param string $region Blank keeps whatever is stored.
      * @return string[] Human-readable problems; empty means accepted.
      */
-    public static function saveCredentials(Config $cfg, string $email, string $apiKey): array
+    public static function saveCredentials(Config $cfg, string $email, string $apiKey, string $region = ''): array
     {
         $errors = [];
 
@@ -353,6 +360,12 @@ final class Storage
                 . 'letters, digits, hyphens or underscores with no spaces.';
         }
 
+        $region = trim($region);
+        if ($region !== '' && !preg_match('/^[A-Z0-9_]{2,32}$/D', $region)) {
+            $errors[] = 'A region is a name like FINLAND9 — capital letters, digits and '
+                . 'underscores. Leave it blank to keep the one you have.';
+        }
+
         if ($errors !== []) {
             return $errors;
         }
@@ -362,8 +375,49 @@ final class Storage
         if ($apiKey !== '') {
             $cfg->set('opensolr.api_key', $apiKey);
         }
+        if ($region !== '') {
+            $cfg->set('opensolr.region', $region);
+        }
 
         return [];
+    }
+
+    /**
+     * Hold the stored region to the list the platform just returned for this account.
+     *
+     * A REGION THE OPERATOR TYPED IS REFUSED IF THE ACCOUNT CANNOT USE IT, and the refusal names
+     * the list. A region merely carried over from an earlier run is not refused: an account can
+     * legitimately stop being offered a region it once had, and turning that into a refusal would
+     * block the very credential edit that fixes the account. In that case it is cleared, and the
+     * caller says so.
+     *
+     * One implementation, because this is a refusal — and the brief every front end works to is
+     * that the same condition produces the same sentence wherever the operator meets it.
+     *
+     * @param string[] $regions What the platform offers this account.
+     * @param bool     $explicit Whether the operator typed or chose this value in THIS request.
+     * @return string|null The region to store, or null when it must be refused.
+     */
+    public static function settleRegion(Config $cfg, array $regions, bool $explicit): ?string
+    {
+        $wanted = (string) $cfg->get('opensolr.region', '');
+
+        if ($wanted === '' || in_array($wanted, $regions, true)) {
+            return $wanted;
+        }
+
+        return $explicit ? null : '';
+    }
+
+    /**
+     * The refusal for a region this account cannot use, naming the ones it can.
+     *
+     * @param string[] $regions
+     */
+    public static function regionRefusal(string $wanted, array $regions): string
+    {
+        return 'Opensolr does not offer the region "' . $wanted . '" to this account. '
+            . 'It offers: ' . implode(', ', $regions) . '.';
     }
 
     /**
@@ -814,10 +868,7 @@ final class Storage
         $job->setResult('regions', $regions);
 
         if ($region !== '' && !in_array($region, $regions, true)) {
-            throw new \RuntimeException(
-                'The region "' . $region . '" is not available on this account. '
-                . 'Available: ' . implode(', ', $regions) . '.'
-            );
+            throw new \RuntimeException(self::regionRefusal($region, $regions));
         }
 
         if ($region !== '') {
@@ -915,6 +966,13 @@ final class Storage
      * The returned progress line names the HOST only. The credentials that came back in
      * the same response are written to the configuration and never rendered.
      *
+     * THIS IS ALSO WHERE "INDEXES NOT CHOSEN YET" STOPS BEING TRUE, for both provisioning and
+     * reuse, and it is the only place that clears Pairs::PENDING_KEY. The flag is a claim about
+     * ownership, so it may only be dropped on proof of ownership — and the proof is right here:
+     * the control plane has just returned connection details for solr.hits_core, which it does
+     * not do for an index the account does not hold. Clearing it any earlier would be clearing
+     * it on an intention.
+     *
      * @throws \RuntimeException When the platform has no connection URL for the index.
      */
     private static function fetchConnection(Job $job, Config $cfg): string
@@ -948,6 +1006,7 @@ final class Storage
         $cfg->set('solr.base_url', $conn['base_url']);
         $cfg->set('solr.http_user', $conn['http_user']);
         $cfg->set('solr.http_pass', $conn['http_pass']);
+        Pairs::clearPending($cfg);
         self::persist($cfg);
 
         $host = (string) parse_url($conn['base_url'], PHP_URL_HOST);

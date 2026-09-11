@@ -404,6 +404,90 @@ return [
             lh_contains($php, '<span class="navlabel">', 'the label needs an element to be hidden by');
         },
 
+    'a mark in the collapsed rail says what it is, in a tooltip of the panel\'s own' =>
+        function (): void {
+            // THE DEFECT. The rail is collapsed by default, so twelve marks in a 60px column ARE
+            // the navigation, and the only way to read one was to expand the rail or to wait for
+            // the browser's `title` bubble — a second late, unstyleable, and wherever the pointer
+            // happens to be. That is now the primary way anybody reads this navigation.
+            $css = lh_rp_declarations('public/assets/css/panel.css');
+            $js = lh_rp_code('public/assets/js/responsive.js');
+
+            // NOT A SECOND LABEL. The span the expanded rail shows is the span the tooltip is,
+            // so there is one copy of every view's name in the document.
+            $rule = '/:root\.lh-rail-collapsed \.side li a \.navlabel,'
+                . '\s*:root\.lh-rail-collapsed \.lh-railbtn \.lh-railbtn-label,'
+                . '\s*:root\.lh-rail-collapsed \.theme-toggle \.lh-themelabel \{([^}]*)\}/s';
+            lh_true((bool) preg_match($rule, $css, $m), 'one rule covers all three lone marks in the rail');
+
+            // `.side` is overflow-y: auto, and an element scrollable on one axis clips the other,
+            // so an absolutely positioned box is cut off at the 60px edge of the rail — which is
+            // the one place it must not be. Fixed is positioned against the viewport instead.
+            lh_contains($m[1], 'position: fixed', 'no ancestor overflow may clip it');
+            lh_contains($m[1], 'left: calc(var(--side-w)', 'it sits clear of the rail, to the right');
+            lh_contains($m[1], 'pointer-events: none', 'moving towards a mark must not make it flicker');
+            lh_contains($m[1], 'visibility: hidden', 'and it is out of the accessibility tree until shown');
+            lh_false(str_contains($m[1], 'display: none'), 'a display:none box cannot be revealed by opacity');
+
+            // Keyboard is unconditional; hover is gated on there BEING a hover, so a tap on a
+            // touch screen opens the view rather than leaving a ghost label on top of it.
+            lh_contains($css, ':root.lh-rail-collapsed .side li a:focus-visible .navlabel',
+                'the rail is tab-navigable, so focus shows it too');
+            lh_contains($css, '@media (hover: hover) and (pointer: fine)',
+                'a synthesised hover on a touch screen must not strand the tooltip');
+
+            // The position is the one thing CSS cannot work out: a fixed box is placed against
+            // the viewport, and the rail scrolls inside itself on a short window.
+            lh_contains($js, '--lh-navtip-y', 'the vertical position is published from a measurement');
+            lh_contains($js, 'getBoundingClientRect()', 'measured, not assumed');
+            lh_contains($js, "addEventListener('focusin'", 'and measured for the keyboard as well as the pointer');
+
+            // A used-and-never-declared custom property makes every declaration reading it
+            // invalid, which is a silent defect unless it is the designed fallback — so it is
+            // declared, empty, with the reason beside it.
+            lh_contains($css, '--lh-navtip-y: ;', 'the property is declared even while it has no value');
+
+            // TWO TOOLTIPS ARE WORSE THAN ONE: the browser's bubble is parked while the rail is
+            // collapsed and handed straight back when it expands, so the expanded rail is
+            // unchanged.
+            lh_contains($js, 'function parkTitle', 'the native title cannot be left to arrive on top');
+            lh_contains($js, "removeAttribute('title')", 'parked while collapsed');
+            lh_contains($js, "setAttribute('title', parked)", 'and given back when the words are visible');
+        },
+
+    'the section bar names a heading it had to cut, and only one it cut' =>
+        function (): void {
+            // "01 Declared versus evasi…" is the first half of a label with no way to reach the
+            // other half: Layout::cardsIn() trims a heading to 22 characters for a bar that is
+            // one row and never wraps, and the bar sets no title.
+            $css = lh_rp_declarations('public/assets/css/panel.css');
+            $js = lh_rp_code('public/assets/js/responsive.js');
+
+            lh_true(
+                (bool) preg_match('/\.set-nav a\[data-lh-tip\]::after \{([^}]*)\}/s', $css, $m),
+                'the bar needs a tooltip of the same kind as the rail\'s'
+            );
+            lh_contains($m[1], 'content: attr(data-full)', 'it shows the untruncated label, never the cut one');
+            lh_contains($m[1], 'position: fixed', '.set-nav is overflow-x: auto and would clip it');
+            lh_contains($m[1], 'pointer-events: none', 'it must not intercept the pointer');
+            lh_contains($m[1], 'visibility: hidden', 'hidden until it is asked for');
+
+            lh_contains($css, '.set-nav a[data-lh-tip]:focus-visible::after', 'the bar is tab-navigable');
+
+            // MEASURED, in both senses: the server may have cut the label, and the browser may be
+            // cutting it as well — and the second one changes as the window changes.
+            lh_contains($js, 'label.scrollWidth > label.clientWidth', 'overflow is measured, not guessed');
+            lh_contains($js, 'shown !== full', 'and so is the cut the server made');
+            lh_contains($js, 'remeasureTips', 'the same entry crosses that line when the window resizes');
+
+            // The tooltip is a visual affordance; the name is on the control either way.
+            lh_contains($js, "link.setAttribute('aria-label', full)", 'a screen reader gets the whole label');
+
+            // Nothing at all when there is no full text to show, because a tooltip repeating the
+            // truncated string tells the reader what they can already see.
+            lh_contains($js, "bar.querySelectorAll('a[data-full]')", 'no attribute, no tooltip');
+        },
+
     'facets are a column beside the results, never a block above them' =>
         function (): void {
             $css = lh_rp_declarations('public/assets/css/panel.css');
@@ -501,9 +585,23 @@ return [
 
             // A HIDDEN PROBLEM IS THE WORST OUTCOME OF THE WHOLE CHANGE.
             lh_contains($js, 'const TROUBLE', 'trouble opens a section regardless of the default');
-            foreach (['.banner-warn', '.card-error', '.check-row .chip-warn', '.confirm-form'] as $sel) {
+            foreach (['.banner-warn', '.card-error', '.check-row .chip-warn'] as $sel) {
                 lh_contains($js, $sel, $sel . ' must hold its section open');
             }
+
+            /* A CONFIRMATION FORM ONLY COUNTS AS TROUBLE WHILE SOMETHING IS ACTUALLY PENDING.
+               A bare `.confirm-form` was in this list, and Settings emits that class from three
+               unrelated places — the pending "start ingesting" form, the remove button and the
+               reinstall form, the last two unconditionally. So `set-sources` and `set-reinstall`
+               were force-opened on every render of every installation and could never show the
+               operator's own choice, which is most of what "the accordion does not remember"
+               turned out to mean. Only the pending form carries `awaiting`. */
+            lh_contains($js, '.confirm-form.awaiting', 'a PENDING confirmation must hold its section open');
+            lh_false(
+                (bool) preg_match("/TROUBLE = [^;]*\\.confirm-form(?!\\.awaiting)/s", $js),
+                'a bare .confirm-form must not hold a section open: two of the three forms that carry '
+                    . 'that class are always present, so listing it pins those cards open for ever'
+            );
             lh_false(
                 (bool) preg_match("/TROUBLE = [^;]*'\\.chip-warn'/s", $js),
                 'a bare warning chip is also the word "Note" in a sentence; it must not hold a section open'

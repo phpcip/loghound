@@ -33,6 +33,7 @@ declare(strict_types=1);
 
 namespace Loghound\Setup;
 
+use Loghound\Cache;
 use Loghound\Config;
 
 final class Requirements
@@ -103,11 +104,71 @@ final class Requirements
         }
 
         $rows[] = $this->webserverConfigs();
+        $rows[] = $this->cache();
         foreach ($this->logFiles() as $row) {
             $rows[] = $row;
         }
 
         return $rows;
+    }
+
+    /**
+     * The query cache: configured, working, or configured and not reachable.
+     *
+     * THE THREE STATES ARE NOT TWO. `Cache::status()` reports the operator's INTENT and the
+     * OBSERVED reality separately on purpose, because "off" and "on but the server is not
+     * answering" look identical from a row that prints only a verdict, and they need opposite
+     * actions: one is a choice, the other is a fault. Collapsing them is how an operator spends
+     * an afternoon wondering why an installation they switched the cache on for is still slow.
+     *
+     * Never a `fail`. The panel is entirely correct with no cache — every answer is simply
+     * fetched again — so an unreachable cache must not block an installation. It is a `warn`
+     * when it was asked for and is not there, and a `pass` when it is off, because off is a
+     * supported configuration and the default one.
+     *
+     * @return array{id:string,label:string,state:string,detail:string,fix:array<int,string>}
+     */
+    private function cache(): array
+    {
+        $status = Cache::fromConfig($this->cfg)->status();
+
+        if (empty($status['configured'])) {
+            return [
+                'id'     => 'cache',
+                'label'  => 'Query cache',
+                'state'  => 'pass',
+                'detail' => 'Off, which is the default. The panel fetches every answer from Solr as it '
+                    . 'is asked for. Turning it on under Settings makes the panel faster and cuts the '
+                    . 'plan bandwidth it spends, because it is the panel\'s own reads that are metered.',
+                'fix'    => [],
+            ];
+        }
+
+        if (!empty($status['working'])) {
+            return [
+                'id'     => 'cache',
+                'label'  => 'Query cache',
+                'state'  => 'pass',
+                'detail' => 'On and answering at ' . (string) $status['server'] . ', holding each answer for '
+                    . (string) $status['ttl'] . ' seconds.',
+                'fix'    => [],
+            ];
+        }
+
+        return [
+            'id'     => 'cache',
+            'label'  => 'Query cache',
+            'state'  => 'warn',
+            'detail' => 'Switched on in the configuration, but ' . (string) $status['server'] . ' is not '
+                . 'answering (' . (string) $status['reason'] . '). Nothing is broken — every answer is '
+                . 'fetched from Solr instead — but the panel is slower than you asked for and spends '
+                . 'more of your plan bandwidth than it needs to.',
+            'fix'    => [
+                '# Install and start a memcached on this machine:',
+                'sudo apt-get install -y memcached && sudo systemctl enable --now memcached',
+                '# or switch the cache off under Settings if you did not mean to turn it on.',
+            ],
+        ];
     }
 
     /**

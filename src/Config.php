@@ -107,7 +107,11 @@ final class Config
      * goes stale the moment a plan changes and it goes stale silently. See Setup\Pairs.
      *
      * Log sources. Each entry is ['path' => glob, 'format' => name|regex-id, 'host' =>
-     * optional override]. `allowed_log_roots` are the roots a configured log path must
+     * optional override, 'enabled' => optional false]. `enabled` is an OPT-OUT and absent means
+     * enabled: it is how an operator stops a configured file being read without deleting it,
+     * which is what the panel's own virtual host needs — browsing Loghound on the machine that
+     * serves it would otherwise put those visits in the data Loghound reports.
+     * `allowed_log_roots` are the roots a configured log path must
      * resolve inside; anything outside them is refused, which is what stops the log-path
      * setting from becoming an arbitrary-file-read primitive. `discover` is where to look
      * when auto-detecting on first run.
@@ -206,6 +210,7 @@ final class Config
                 'email'    => '',
                 'api_key'  => '',
                 'region'   => '',
+                'pair_pending' => '',
             ],
 
             'sources' => [],
@@ -323,6 +328,16 @@ final class Config
                 'upgrade_url'       => 'https://opensolr.com/pricing',
             ],
 
+            /* The panel's answer cache. Off until the operator turns it on in Settings, because
+               switching a live dashboard into a cached one changes what its numbers mean and
+               that is their decision to make, not a default to inherit. Bounds and the reason
+               for each are in \Loghound\Cache. */
+            'cache' => [
+                'enabled'     => false,
+                'server'      => '127.0.0.1:11211',
+                'ttl_seconds' => Cache::TTL_DEFAULT,
+            ],
+
             'trusted_proxies' => [],
 
             'ui' => [
@@ -416,6 +431,82 @@ final class Config
             throw new \InvalidArgumentException('Unknown core role: ' . $role);
         }
         return 'loghound_' . $installId . '_' . $role;
+    }
+
+    /**
+     * The panel's OWN instrumentation endpoints, derived from `base_url`.
+     *
+     * Loghound serves its beacon script and its collector from its own public URL, so a request
+     * to either of them is Loghound measuring rather than the measured site being visited. The
+     * pair is derived here, once, because two callers need the identical answer: bin/loghound-tail
+     * hands it to Parser so a hit is marked as ours at parse time, and Sessionizer has to reach
+     * the same verdict for a hit that never went through Parser (a replay, a test harness).
+     *
+     * THE HOST COMES BACK ALONGSIDE THE PATHS AND EVERY CALLER MUST MATCH BOTH. A measured site
+     * is entirely entitled to its own /collect.php, and filtering somebody's real page out of
+     * their own analytics is a far worse bug than counting ours; a path-only match would do
+     * exactly that. Parser::isOwnRequest() is the one place that comparison is written.
+     *
+     * A `base_url` carrying a path prefix (https://example.com/loghound) is honoured, because
+     * that is where Beacon\Doc::src() points the script tag it hands the operator.
+     *
+     * An empty `base_url` yields an empty host and no paths, which every caller reads as
+     * "nothing here is ours". That is the pre-setup state, and excluding anything from it would
+     * be a guess.
+     *
+     * `script` and `collector` are named as well as listed, because one caller needs the pair
+     * and another needs the collector specifically; picking it out of `paths` by index would be
+     * a fact about the order of this return value rather than about the installation.
+     *
+     * @return array{host:string,script:string,collector:string,paths:array<int,string>}
+     */
+    public static function selfEndpoints(string $baseUrl): array
+    {
+        $base = trim($baseUrl);
+        $host = $base === '' ? null : parse_url($base, PHP_URL_HOST);
+        if (!is_string($host) || $host === '') {
+            return ['host' => '', 'script' => '', 'collector' => '', 'paths' => []];
+        }
+
+        $prefix    = rtrim((string) (parse_url($base, PHP_URL_PATH) ?: ''), '/');
+        $script    = $prefix . '/' . \Loghound\Beacon\Doc::FILE;
+        $collector = $prefix . '/' . \Loghound\Beacon\Doc::COLLECTOR;
+
+        return [
+            'host'      => strtolower($host),
+            'script'    => $script,
+            'collector' => $collector,
+            'paths'     => [$script, $collector],
+        ];
+    }
+
+    /**
+     * May this log source be read?
+     *
+     * THE OPT-OUT, AND IT IS AN OPT-OUT RATHER THAN A DEFAULT. The panel's own virtual host is
+     * a log source like any other on the machine that serves it, so browsing Loghound creates
+     * sessions in the data Loghound displays. Before this there was no way to say no — only
+     * prose in config/loghound.example.php, docs/INSTALL.md and docs/SECURITY.md advising
+     * against a setup the software would happily run.
+     *
+     * Absent means enabled, which is every configuration written so far, so nothing changes for
+     * anyone who does not ask. The entry stays in `sources`, stays detected, stays visible in
+     * Settings: it is a decision an operator made and can see, not a file that quietly vanished.
+     *
+     * The value is read forgivingly — 'false', 'no', '0' and 0 all mean false, because a form
+     * post and a hand-edited file spell a boolean differently — but NOT loosely: validate()
+     * refuses anything filter_var cannot read as a boolean, so a typo is an error rather than a
+     * silently disabled source.
+     *
+     * @param array<string,mixed> $source One entry from `sources`.
+     */
+    public static function sourceEnabled(array $source): bool
+    {
+        if (!array_key_exists('enabled', $source)) {
+            return true;
+        }
+
+        return filter_var($source['enabled'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) !== false;
     }
 
     /**
@@ -715,6 +806,14 @@ final class Config
      * Every configured source must resolve inside an allowed root. A glob is expanded at read
      * time, so what is validated now is the literal directory part of it.
      *
+     * A SOURCE MUST NEVER GO QUIET BECAUSE OF A TYPO. `enabled` is the switch that stops a log
+     * file being read, so a value filter_var cannot read as a boolean is refused here rather
+     * than passed through and coming out false — which is what `'enabled' => 'maybe'` would do,
+     * silently, and a log file nobody is reading is the most expensive misconfiguration this
+     * product has. sourceEnabled() is correspondingly forgiving about the spellings that ARE
+     * booleans and treats an unreadable one as enabled, so the two cannot combine into a
+     * silently dead source.
+     *
      * A directory that cannot be resolved at all is NOT an error here, and the distinction
      * matters more than it looks. Security::safePath() returns null for two different facts —
      * "resolved outside the allowed roots" and "could not be resolved" — and the panel process
@@ -792,6 +891,12 @@ final class Config
                 $errors[] = "sources[$i].path is missing.";
                 continue;
             }
+            if (array_key_exists('enabled', $src)
+                && filter_var($src['enabled'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) === null
+            ) {
+                $errors[] = "sources[$i].enabled must be true or false.";
+            }
+
             $dir = dirname((string) $src['path']);
             if (@realpath($dir) === false) {
                 continue;

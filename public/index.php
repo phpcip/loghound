@@ -177,6 +177,24 @@ if (!is_string($slug) || !isset($routes[$slug])) {
 $view = new $routes[$slug]($cfg, $gw);
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    /* CLEAR CACHE, handled here rather than in a view because it belongs to no view. The
+       control is in the page header of every page that reads cached data, so its POST can
+       arrive with any `v=`, and the thing it clears is one installation-wide keyspace. It is a
+       POST for the ordinary reason — it changes server state — and it has therefore already
+       passed Security::requireCsrf() above and the authentication step before that.
+
+       The outcome travels in the redirect rather than in a rendered response, so the browser
+       follows POST/Redirect/GET and a refresh cannot clear the cache a second time. `cleared`
+       is a count and `v` is re-validated against the route table, so nothing an attacker can
+       put in the form reaches the Location header as text. */
+    if (isset($_POST['clear_cache'])) {
+        $outcome = $gw->cache()->clear();
+        $target = Layout::urlWith(['v' => $slug])
+            . '&cleared=' . ($outcome['cleared'] ? (string) $outcome['entries'] : 'no');
+        header('Location: ' . $target, true, 303);
+        exit;
+    }
+
     if ($view instanceof JobHost) {
         try {
             $target = $view->post();
@@ -195,6 +213,45 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     exit("This view does not accept POST.\n");
 }
 
+/* The CSV export path: `?v=<view>&export=<dataset>`.
+ *
+ * A READ, on a GET, behind exactly the same Security::requireAuth() gate as the JSON path
+ * above — which is why it sits here rather than in a file of its own: a second entry point is a
+ * second place for the authentication step to be forgotten, and this product has one door.
+ * There is no CSRF token because there is nothing to protect: the request changes no state, and
+ * a GET that changed state would be the defect, not the missing token.
+ *
+ * The slug is checked to be a bare identifier here and matched against the view's OWN declared
+ * datasets in Controller::export(); an unknown one is a 404 with no list of what does exist. No
+ * field list, no filter, no core name and no sort order reaches Solr from this request except
+ * through the view's existing `api()` action and its allowlists.
+ *
+ * The response streams, so a throw after the first byte cannot become a 500 — the status is
+ * already committed. It is logged, redacted, and the stream stops where it stopped; the
+ * alternative is buffering the whole file to keep the option of an error page, which is the
+ * memory footprint this endpoint is written to avoid. */
+$export = $_GET['export'] ?? null;
+if (is_string($export) && $export !== '') {
+    if (!preg_match('/^[a-z0-9_-]{1,32}$/D', $export)) {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Cache-Control: no-store, private');
+        exit("This view has no such export.\n");
+    }
+
+    try {
+        $view->export($export);
+    } catch (Throwable $e) {
+        error_log('[loghound-panel] export: ' . Jobs::redact($e->getMessage()));
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: text/plain; charset=utf-8');
+            exit("The export could not be produced. See the server error log.\n");
+        }
+    }
+    exit;
+}
+
 $action = $_GET['api'] ?? null;
 if (is_string($action) && $action !== '') {
     if (!preg_match('/^[a-z_]{1,32}$/D', $action)) {
@@ -207,6 +264,18 @@ if (is_string($action) && $action !== '') {
         error_log('[loghound-panel] ' . Jobs::redact($e->getMessage()));
         json_out(['error' => 'The panel could not complete that request. See the server error log.'], 500);
     }
+
+    /* WHEN THESE NUMBERS WERE COMPUTED, on every payload without exception. Attached here
+       rather than by each view because every card is entitled to it and a view that forgot
+       would be presenting a two-hour-old figure as a live one — which is the same defect as a
+       number that does not say what it counts, and this project already refuses that one. An
+       uncached read reports `cached: false` and the current time, so the front end has one
+       shape to render and no branch for installs with no cache.
+
+       The key cannot collide with a view's own data: `cache` is set after api() has returned,
+       so if a view ever used that name for something of its own the provenance would win, which
+       is the right way round. */
+    $payload['cache'] = $gw->cacheStamp();
 
     json_out($payload, isset($payload['error']) ? 400 : 200);
 }
@@ -241,6 +310,31 @@ $boot = [
        fourth copy of the reading rules and knew nothing about the operator. */
     'filters' => $view->facetLayer()->payload(),
     'dimensions' => Query::filterFields(),
+
+    /* Which page-toolbar controls this view actually honours, straight from the view
+       itself. The host selector and the filter bar are injected by the front end, so the
+       decision Controller::toolbar() makes has to reach the browser; without this the
+       two JS-injected controls would still appear on pages that ignore them, which is
+       half the defect fixed and the visible half left in place. */
+    'toolbar' => $view->toolbar(),
+
+    /* What the page needs to render the Clear cache control and the line that follows a press.
+       Only three facts travel: whether the cache is actually working (so a page with nothing to
+       clear does not advertise a button that would do nothing), how long an entry lives (so the
+       control can say what it is undoing), and the outcome of the press that just redirected
+       here. The server address and the failure reason stay out of the boot payload — they are
+       the Settings page's business, and the fewer places a hostname appears the better. */
+    'cache' => [
+        'enabled' => $gw->cache()->isEnabled(),
+        'ttl'     => $gw->cache()->ttl(),
+        'cleared' => (static function () {
+            $v = $_GET['cleared'] ?? null;
+            if ($v === 'no') {
+                return -1;
+            }
+            return is_string($v) && preg_match('/^\d{1,9}$/D', $v) === 1 ? (int) $v : null;
+        })(),
+    ],
 ];
 
 header('Content-Type: text/html; charset=utf-8');

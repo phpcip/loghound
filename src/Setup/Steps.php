@@ -18,6 +18,7 @@ declare(strict_types=1);
 namespace Loghound\Setup;
 
 use Loghound\Auth\Persistence;
+use Loghound\Beacon\Doc;
 use Loghound\Config;
 use Loghound\Security;
 
@@ -482,12 +483,20 @@ final class Steps
      * unset or unusable: a snippet pointing at a guessed host is pasted into a template,
      * collects nothing, and reads as the product being broken.
      *
+     * THE BEACON IS THREE GROUPS RATHER THAN ONE, and the two extra ones are the material an
+     * operator used to have to go and find. The moment somebody is pasting the tag into their
+     * template is the moment attaching an identity costs nothing, and it is the moment a
+     * Content-Security-Policy will quietly stop the whole thing from working. Both are a single
+     * paste, built from this installation's own address, so neither has to be adapted first.
+     *
      * @return array<int,array{key:string,title:string,lines:string[],problem:string}>
      */
     public static function nextSteps(Config $cfg, string $root, bool $mayUseRequestHost = false): array
     {
         [$snippet, $problem] = self::beaconSnippet($cfg, $mayUseRequestHost);
         $ingestProblem = self::ingestProblem($cfg);
+        $base = $problem === '' ? self::effectiveBaseUrl($cfg, $mayUseRequestHost) : '';
+        $origin = $base === '' ? '' : Doc::cspOrigin($base);
 
         return [
             [
@@ -510,7 +519,39 @@ final class Steps
                 'lines'   => $snippet === '' ? [] : [$snippet],
                 'problem' => $problem,
             ],
+            [
+                'key'     => 'beacon-identity',
+                'title'   => 'Optional: tell Loghound who the visitor is',
+                'lines'   => $base === '' ? [] : [self::beaconIdentitySnippet($cfg, $base)],
+                'problem' => $problem,
+            ],
+            [
+                'key'     => 'beacon-csp',
+                'title'   => 'If the measured site sends a Content-Security-Policy',
+                'lines'   => $origin === '' ? [] : [Doc::cspDirectives($origin)],
+                'problem' => $problem,
+            ],
         ];
+    }
+
+    /**
+     * The beacon tag with an identity on it, written the way somebody would actually paste it.
+     *
+     * The address comes out of the template's own user object rather than being a literal,
+     * because a literal is the one form nobody can use unedited — and because the two values
+     * have to change per request or a page cache will serve the first visitor's identity to
+     * everyone else. The escaping is in the snippet for the same reason: an address with a
+     * quote in it would otherwise break the tag.
+     *
+     * `data-params` rides along when this installation has configured parameters to collect, so
+     * the identity snippet and the plain one never disagree about what the page sends.
+     */
+    private static function beaconIdentitySnippet(Config $cfg, string $base): string
+    {
+        return Doc::snippet($base, array_merge(Doc::configuredAttrs($cfg), [
+            'data-ident'     => '<?= htmlspecialchars($user->email, ENT_QUOTES) ?>',
+            'data-signed-in' => '<?= $user->isSignedIn() ? \'1\' : \'0\' ?>',
+        ]));
     }
 
     /**
@@ -749,6 +790,12 @@ final class Steps
      * they will do it, and the form will overwrite it when they press the button. After setup
      * the flag is off, there is no such field on the page, and the file is the honest answer.
      *
+     * THE TAG ITSELF IS BUILT BY Beacon\Doc AND NOWHERE ELSE. This method used to write out
+     * `b.js?v=1`, hardcoded, while the panel built the same tag from the beacon file's own
+     * modification time — so the snippet handed out at the end of setup pinned every visitor of
+     * that site to the first version of the script for good, because `b.js` is served
+     * `immutable` for a week and a fixed URL is never re-fetched.
+     *
      * @return array{0:string,1:string} [snippet, problem] — exactly one is ever non-empty.
      */
     public static function beaconSnippet(Config $cfg, bool $mayUseRequestHost = false): array
@@ -780,7 +827,7 @@ final class Steps
                 . 'snippet can be built from it. ' . $correctIt];
         }
 
-        return ['<script src="' . $base . '/b.js?v=1" defer></script>', ''];
+        return [Doc::snippet($base, Doc::configuredAttrs($cfg)), ''];
     }
 
     /**
@@ -868,42 +915,32 @@ final class Steps
     }
 
     /**
-     * Why the beacon is worth the one line of HTML, in the words the panel uses elsewhere.
+     * Why the beacon is worth the one line of HTML, in the words every surface uses.
+     *
+     * One paragraph, from Beacon\Doc, so the installer's last screen, the panel's finish card
+     * and the shell wizard say the same thing. Plain sentences with no markup, because all
+     * three render it as escaped prose.
      */
     public static function beaconRationale(): string
     {
-        return 'If your site sends a Content-Security-Policy, the browser will refuse this script '
-            . 'until you allow it: add this panel\'s origin to script-src and to connect-src, '
-            . 'because the tag loads from there and the beacon posts back to the same place. '
-            . 'Without the beacon Loghound still works, but the execution plane is blind — '
-            . 'headless automation is inferred rather than proven, and time-on-site falls back '
-            . 'to the weak log-derived number every other log analyser reports.';
+        return Doc::rationale();
     }
 
     /**
-     * The two optional attributes that let a site put a name against a visit.
+     * Every option the beacon reads, in the one paragraph the installer screen has room for.
      *
-     * Shown next to the snippet during setup, because the moment somebody is pasting the tag into
-     * their template is the moment adding two attributes costs nothing — and the moment they
-     * should be told that one of the two stores personal data and is switched off until they say
-     * otherwise. A capability documented only in docs/BEACON.md is a capability nobody uses.
+     * KEPT UNDER THIS NAME BECAUSE THE INSTALLER'S LAST SCREEN CALLS IT, and because the
+     * identity attributes are still what it leads with — they are the ones that cost nothing to
+     * add while somebody is already pasting the tag, and the ones with a storage consequence
+     * they have not consented to unless they were told. It now carries the rest of the option
+     * list too: that screen has two prose slots and this is the one that answers "what else can
+     * this tag do", which used to be answerable only by opening a JavaScript file.
      *
-     * Deliberately states the storage consequence rather than only the syntax: an operator who
-     * pastes `data-ident` without knowing that it writes an email address into the search index
-     * has not consented to anything.
+     * The text itself is Beacon\Doc::optionsNote(), so the panel's beacon card and this screen
+     * cannot drift.
      */
     public static function beaconIdentityNote(): string
     {
-        return 'Optional, and only your site can supply them: add data-signed-in="1" or "0" to '
-            . 'record whether the visitor was signed in, and data-ident="..." to attach an '
-            . 'identity — an email address, a customer number, whatever you call the person. '
-            . 'Omit an attribute and Loghound stores nothing for it; it never guesses either, '
-            . 'reads no cookie and scrapes no form. The signed-in flag is a boolean that '
-            . 'identifies nobody and is stored by default, and it is the more useful of the two: '
-            . 'it splits engaged time, paths and bot verdicts between signed-in and anonymous '
-            . 'traffic. The identity string is personal data — it is written to the session '
-            . 'document, shows in the panel, lives in the search index and is in every backup of '
-            . 'it until retention deletes the session — so beacon.store_identity is false until '
-            . 'you set it to true, and the two switches are independent.';
+        return Doc::optionsNote();
     }
 }

@@ -70,6 +70,19 @@ final class Callers extends OpensolrView
         ['cl-explain', 'Why both halves'],
     ];
 
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * The range bounds both planes this view reads. Neither the host selector nor the
+     * `f[...]` bar reaches either of them, so neither is offered.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE, self::SCOPE_CACHE];
+    }
+
     public function slug(): string
     {
         return 'callers';
@@ -83,6 +96,83 @@ final class Callers extends OpensolrView
     public function subtitle(): string
     {
         return 'The addresses hitting your search indexes, lined up against your web traffic.';
+    }
+
+    /**
+     * The two facet maps and the correlation table.
+     *
+     * The correlation is the one worth having: one record per address, with the search requests it
+     * sent on one side and what Loghound's own sessions index knows about it on the other. It is
+     * the only place in the product where the two planes meet, and a spreadsheet is exactly where
+     * somebody continues that work — cost per scraper, per netblock, per week.
+     *
+     * EVERY WEB-SIDE COLUMN CAN BE EMPTY, and empty means "this address is nowhere in your web
+     * logs", not zero. That is a finding on this view rather than a gap, so the columns are left
+     * blank instead of zero-filled and the note says what blank means. Zero-filling would turn "we
+     * have never seen this caller as a visitor" into "we saw it and it was not a person".
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'addresses' => [
+                'label'    => 'Busiest addresses',
+                'action'   => 'who',
+                'shape'    => 'map',
+                'key'      => 'addresses',
+                'key_head' => 'Address',
+                'val_head' => 'Search requests',
+                'control'  => 'Addresses CSV',
+                'unit'     => 'addresses',
+                'ranked'   => 'ranked by request count',
+                'cap'      => self::IP_FACET_LIMIT,
+                'carry'    => ['core', 'outcome'],
+                'scope'    => $this->logExportScope() + ['covered' => 'Requests these addresses account for'],
+            ],
+
+            'handlers' => [
+                'label'    => 'Handlers they called',
+                'action'   => 'who',
+                'shape'    => 'map',
+                'key'      => 'handlers',
+                'key_head' => 'Handler',
+                'val_head' => 'Search requests',
+                'control'  => 'Handlers CSV',
+                'unit'     => 'handlers',
+                'ranked'   => 'ranked by request count',
+                'cap'      => self::IP_FACET_LIMIT,
+                'carry'    => ['core', 'outcome'],
+                'scope'    => $this->logExportScope(),
+            ],
+
+            'cross' => [
+                'label'   => 'Search callers cross-referenced with web traffic',
+                'action'  => 'cross',
+                'unit'    => 'addresses',
+                'ranked'  => 'ranked by search request count',
+                'cap'     => self::IP_FACET_LIMIT,
+                'carry'   => ['core', 'outcome'],
+                'note'    => 'An EMPTY web-side cell means the address appears nowhere in your web logs for '
+                    . 'this range — it is not a zero. The classification column says which case a row is: '
+                    . 'unseen for that one, and bot / human / unknown for an address Loghound has scored.',
+                'scope'   => $this->logExportScope() + [
+                    'web_state'    => 'Web-side lookup',
+                    'web_sessions' => 'Web sessions in range to compare against',
+                    'covered'      => 'Search requests these addresses account for',
+                ],
+                'columns' => [
+                    ['Address', 'ip', 'id'],
+                    ['Search requests', 'requests', 'number'],
+                    ['Classification', 'class', 'text'],
+                    ['Web sessions', 'sessions', 'number'],
+                    ['Web sessions scored as automation', 'botlike', 'number'],
+                    ['Web sessions scored human', 'human', 'number'],
+                    ['Web sessions from declared crawlers', 'declared', 'number'],
+                    ['Web requests', 'webhits', 'number'],
+                ],
+            ],
+        ];
     }
 
     /**
@@ -341,7 +431,13 @@ final class Callers extends OpensolrView
     /** Top addresses and handlers on the search side. */
     private function whoCard(): void
     {
-        self::cardOpen('cl-who', $this->cardNumber('cl-who'), 'Busiest addresses', '');
+        self::cardOpen(
+            'cl-who',
+            $this->cardNumber('cl-who'),
+            'Busiest addresses',
+            '',
+            $this->exportTool('addresses') . $this->exportTool('handlers')
+        );
         self::skeleton('cl-who', 'rows', 0, 'Faceting client addresses');
 
         echo '<div class="split-card">';
@@ -367,7 +463,13 @@ final class Callers extends OpensolrView
     /** The correlation itself. */
     private function crossCard(): void
     {
-        self::cardOpen('cl-cross', $this->cardNumber('cl-cross'), 'Cross-referenced with your web traffic', '');
+        self::cardOpen(
+            'cl-cross',
+            $this->cardNumber('cl-cross'),
+            'Cross-referenced with your web traffic',
+            '',
+            $this->exportTool('cross')
+        );
         self::skeleton('cl-cross', 'stats', 0, 'Matching search clients against web sessions');
 
         self::statRow([

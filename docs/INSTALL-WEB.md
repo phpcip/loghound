@@ -146,9 +146,24 @@ the schema right, so the option promised something the product cannot deliver. I
 configuration still says `solr.mode: custom`, see
 [An older configuration on `solr.mode: custom`](#an-older-configuration-on-solrmode-custom).
 
-**Let Opensolr host it.** You do not need to run Solr. Enter your account email and API key
-(in the Opensolr control panel, under Account). The installer then reads your account once and
-shows you three things before you choose anything:
+**Let Opensolr host it.** You do not need to run Solr. The storage step is **two steps, always
+in that order**: which account, then which indexes.
+
+#### Step one — which Opensolr account
+
+Enter your account email and API key (in the Opensolr control panel, under Account) and save
+them. That is the whole of step one: nothing is asked about indexes and nothing is refused
+because of what the account does or does not hold, because you are saying which account to use
+and have not yet said anything about where your traffic should land.
+
+Between saving an account and choosing indexes there is a moment where the configuration names
+indexes the new account does not hold. That is normal and it is not an error. The screen — and
+**Settings → Solr connection**, if you got here from a running installation — says exactly that,
+with the list to pick from right beside the sentence. It survives closing the tab.
+
+#### Step two — which indexes
+
+The installer reads your account once and shows you three things before you choose anything:
 
 * **how many indexes the account holds**, and — once it knows — how many your plan allows;
 * **the pairs of Loghound indexes already on the account**, which you can join instead of
@@ -156,7 +171,18 @@ shows you three things before you choose anything:
 * **anything left over from a setup run that stopped half way**, named individually, because
   it still counts against your plan.
 
-#### Use indexes this account already has
+Then it offers **one list**: every pair the account holds, plus one more option meaning *make a
+new pair for this site*. You pick one row and confirm. There is no separate "create" form and no
+checkbox qualifying a different decision — the list and that last option carry the whole meaning.
+
+A single pair is still something you pick. Loghound does not adopt the only pair on the account
+on your behalf.
+
+The same list, the same options in the same order and the same sentences appear in
+`bin/loghound-setup` and in **Settings → Solr connection**, because all three render one decision
+rather than three descriptions of it.
+
+##### Picking a pair the account already has
 
 One pair of indexes can serve several sites. Every record Loghound writes carries the virtual
 host it came from, so a pair collecting traffic from six machines stays separable in the panel
@@ -184,10 +210,10 @@ fields, and it does not alter or remove a single document already in the index.
 An **unmatched half** — a `_hits` with no `_sessions`, or the reverse — is what a setup run
 that died between the two creates leaves behind. It is shown as exactly that. It cannot be
 joined, because half a pair is not somewhere Loghound can work, and it holds no usable data on
-its own; delete it in your Opensolr account, or leave it and create a new pair. Loghound will
-not touch it either way.
+its own; delete it in your Opensolr account when you want the slot back, or leave it. Loghound
+will not touch it either way.
 
-#### Or create a new pair
+##### Picking "make a new pair for this site"
 
 1. Pick one of the regions your account can use — nothing is hardcoded;
 2. Loghound checks your plan has room for two more indexes;
@@ -211,10 +237,14 @@ into setup instead of being asked for the token file. Anyone else still has to r
 
 Opensolr plans limit how many indexes an account may hold. Loghound checks **before** it
 creates anything, and when the plan is full it says so in plain numbers — how many the plan
-allows, how many are in use, how many it needs — and withholds the *Create my indexes* button
-rather than letting you press something that can only fail. The ways forward it offers are the
-ones that genuinely exist for your account: join a pair you already have, delete an index you
-no longer need, or move to a larger plan, each linking to your Opensolr account.
+allows, how many are in use, how many it needs — and withholds the *make a new pair* option
+rather than letting you press something that can only fail. Any pair the account already holds
+stays on the list, because joining one creates nothing and the limit does not apply to it.
+
+When there is nothing to join **and** no room to create, that is the one dead end, and the screen
+says so with the numbers and lists only the ways forward that genuinely exist for your account:
+delete an index you no longer need, or move to a larger plan, each linking to your Opensolr
+account. The count in the heading is the number of routes actually shown.
 
 The numbers come from Opensolr's own account summary — how many the plan allows, how many
 exist, how many more can be created — read fresh every time rather than remembered, because a

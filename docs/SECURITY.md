@@ -298,8 +298,13 @@ Things worth doing that the installer cannot decide for you.
 - [ ] **Keep `keep_raw` on only if you need retroactive rescoring.** It roughly doubles
       the index size and it stores the complete original log line, including any secret
       that ended up in a query string.
-- [ ] **Never point Loghound at its own vhost's access log.** It would ingest its own
-      beacon traffic and inflate every number.
+- [ ] **Decide whether the panel's own vhost is traffic you want to measure.** Loghound's
+      own beacon script and collector are never counted wherever their log comes from —
+      they are matched on host *and* path, from `base_url`, so a site's own
+      `/collect.php` is left alone — so pointing Loghound at its own access log no longer
+      inflates anything with its own instrumentation. What remains is real visits to a
+      real site: your own. Keep them to measure the panel like any other site, or set
+      `'enabled' => false` on that source in `config/loghound.php` to leave them out.
 - [ ] **Check `<prefix>/config` is not readable by the web server user.** The installer
       verifies this; verify it again after any change:
       `sudo -u www-data test -r <prefix>/config && echo EXPOSED`.

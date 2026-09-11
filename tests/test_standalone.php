@@ -124,16 +124,15 @@ function lh_sa_schema(string $core): string
 }
 
 /**
- * Render the Settings card and hand back its HTML.
+ * A configuration whose `beacon` section is the one under test.
  *
  * Self-contained rather than reusing tests/test_panel.php's helpers: the runner requires each
  * test file separately, so depending on a function another file happens to define makes this
- * file's result depend on glob order. The transport returns canned JSON and nothing leaves the
- * machine.
+ * file's result depend on glob order.
  *
- * @param array<string,mixed> $beacon The `beacon` section to render against.
+ * @param array<string,mixed> $beacon The `beacon` section to build it with.
  */
-function lh_sa_settings_html(array $beacon): string
+function lh_sa_config(array $beacon): Config
 {
     $path = lh_sa_dir() . '/panel_' . md5(serialize($beacon)) . '.php';
     if (!is_file($path)) {
@@ -150,7 +149,20 @@ function lh_sa_settings_html(array $beacon): string
         file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
     }
 
-    $cfg = Config::load($path);
+    return Config::load($path);
+}
+
+/**
+ * Render the Settings card and hand back its HTML.
+ *
+ * The Solr transport returns canned JSON, so nothing leaves the machine and the card is judged
+ * on what it renders rather than on what a backend replied.
+ *
+ * @param array<string,mixed> $beacon The `beacon` section to render against.
+ */
+function lh_sa_settings_html(array $beacon): string
+{
+    $cfg = lh_sa_config($beacon);
 
     $transport = static fn (array $request): array => [
         'status' => 200,
@@ -176,6 +188,38 @@ function lh_sa_settings_html(array $beacon): string
     }
 
     return $html;
+}
+
+/**
+ * A source file with its comments taken out.
+ *
+ * So that a docblock recounting a defect — the beacon snippet that was pinned to `?v=1` — is
+ * not read as a fresh instance of it. PHP is tokenised rather than regexed, because a `#` or a
+ * `/*` inside a string literal is exactly the case a regex gets wrong.
+ */
+function lh_sa_code(string $path): string
+{
+    $body = (string) file_get_contents($path);
+
+    if (!str_ends_with($path, '.php') && !str_contains($body, '<?php')) {
+        $lines = [];
+        foreach (explode("\n", $body) as $line) {
+            if (!str_starts_with(ltrim($line), '#')) {
+                $lines[] = $line;
+            }
+        }
+        return implode("\n", $lines);
+    }
+
+    $out = '';
+    foreach (token_get_all($body) as $token) {
+        if (is_array($token) && ($token[0] === T_COMMENT || $token[0] === T_DOC_COMMENT)) {
+            continue;
+        }
+        $out .= is_array($token) ? $token[1] : $token;
+    }
+
+    return $out;
 }
 
 /** A staged beacon row in the shape State::beaconsFor() returns. */
@@ -980,25 +1024,38 @@ return [
 
     'the snippet the panel prints carries the parameters this installation actually collects'
         => static function (): void {
-            $src = (string) file_get_contents(__DIR__ . '/../src/Panel/Settings.php');
-
-            lh_contains(
-                $src,
-                "\$paramsAttr = \$collected === [] ? '' : ' data-params=\"' . implode(',', \$collected) . '\"';",
-                'the attribute is built from the live configuration, so a snippet never advertises an '
-                . 'attribute the collector would discard'
+            $cfg = lh_sa_config(['query_params' => ['q', 'search']]);
+            lh_same(
+                ['data-params' => 'q,search'],
+                \Loghound\Beacon\Doc::configuredAttrs($cfg),
+                'the attribute is built from the live configuration, so a snippet never '
+                . 'advertises an attribute the collector would discard'
             );
-            lh_contains($src, '$htmlSnippet = \'<script src="\' . $src . \'"\' . $paramsAttr', 'and it is in the snippet');
+            lh_same([], \Loghound\Beacon\Doc::configuredAttrs(lh_sa_config([])), 'and none when none is set');
+
+            $html = lh_sa_settings_html(['query_params' => ['q', 'search']]);
+            lh_contains($html, Security::esc(' data-params="q,search"'), 'and it is in the snippet on the page');
+
+            $src = (string) file_get_contents(__DIR__ . '/../src/Panel/Settings.php');
+            lh_contains($src, 'Doc::configuredAttrs', 'through the same builder every other surface uses');
             lh_contains($src, 'Beacon::normaliseParamNames', 'through the same normaliser the server uses');
         },
 
     'the panel tells an operator both CSP directives, including the one people miss'
         => static function (): void {
-            $src = (string) file_get_contents(__DIR__ . '/../src/Panel/Settings.php');
+            $html = lh_sa_settings_html([]);
 
-            lh_contains($src, 'script-src', 'the script directive');
-            lh_contains($src, 'connect-src', 'and the collector directive, which is the one that is forgotten');
+            lh_contains($html, 'script-src', 'the script directive is on the page');
+            lh_contains($html, 'connect-src', 'and the collector directive, which is the one that is forgotten');
+            lh_contains($html, 'blocks the POST silently', 'with the symptom named, because there is no error to find');
+
+            $src = (string) file_get_contents(__DIR__ . '/../src/Panel/Settings.php');
             lh_contains($src, 'function cspOrigin(', 'built as an origin, since a CSP source with a path does not match');
+            lh_same(
+                'https://logs.example.org',
+                \Loghound\Beacon\Doc::cspOrigin('https://logs.example.org/panel/'),
+                'and the origin drops the path, since a CSP source carrying one silently does not match'
+            );
 
             $doc = (string) file_get_contents(__DIR__ . '/../docs/BEACON.md');
             lh_contains($doc, 'connect-src https://loghound.example.com', 'and the docs carry it too');
@@ -1007,26 +1064,32 @@ return [
 
     'the panel says plainly what the allowlist does not protect against'
         => static function (): void {
-            $src = (string) file_get_contents(__DIR__ . '/../src/Panel/Settings.php');
+            $html = lh_sa_settings_html(['allowed_hosts' => ['search.example.com']]);
 
-            lh_contains($src, 'cannot forge the', 'it says a browser cannot forge Origin');
+            lh_contains($html, 'cannot forge the', 'it says a browser cannot forge Origin');
             lh_contains(
-                $src,
+                $html,
                 'fabricate sessions attributed to it',
                 'and it says, in the interface and not only in a document, that anything which is not '
                 . 'a browser can. Presenting the allowlist as authentication would be making exactly '
                 . 'the claim this product exists to argue against'
             );
-            lh_contains($src, 'permission, not as a password', 'in those words');
+            lh_contains($html, 'permission, not as a password', 'in those words');
         },
 
     'every option b.js reads is documented in the application and in the reference'
         => static function (): void {
             /* MECHANICAL, on purpose. The option list is derivable from the source — every
                attr('data-…'), every attrInt('data-…') and every w.Loghound… — so this test
-               fails the day the script grows an option the documentation does not carry,
-               which is worth more than a proof-read that was accurate on the day it was done.
-               b.js is the truth; the table and the document follow it. */
+               fails the day the script grows an option one of the surfaces below does not
+               carry, which is worth more than a proof-read that was accurate on the day it was
+               done. b.js is the truth; every surface follows it.
+
+               EVERY SURFACE, NOT A SAMPLE. The reason the snippet drifted to ?v=1 in the
+               installer while the panel built a real version is that two surfaces each carried
+               their own copy. An option cannot now appear in one place and be missing from
+               five: the list is held against the panel, the installer's finish card, the plain
+               text install.sh and bin/loghound-setup print, and docs/BEACON.md. */
             $js = lh_sa_bjs();
 
             $found = [];
@@ -1053,7 +1116,22 @@ return [
             foreach (\Loghound\Panel\Settings::beaconOptions() as $opt) {
                 $table[] = $opt['name'];
             }
-            $doc = (string) file_get_contents(__DIR__ . '/../docs/BEACON.md');
+
+            $cfg = lh_sa_config([]);
+            $steps = '';
+            foreach (\Loghound\Setup\Steps::nextSteps($cfg, '/opt/loghound') as $group) {
+                $steps .= $group['title'] . "\n" . implode("\n", $group['lines']) . "\n" . $group['problem'] . "\n";
+            }
+            $steps .= \Loghound\Setup\Steps::beaconRationale() . "\n"
+                . \Loghound\Setup\Steps::beaconIdentityNote();
+
+            $surfaces = [
+                'the panel, rendered (Settings → Beacon)'        => lh_sa_settings_html([]),
+                'the installer and panel finish card, rendered'  => $steps,
+                'the plain text install.sh and bin/loghound-setup print'
+                    => \Loghound\Beacon\Doc::renderText($cfg, 'https://loghound.example.com'),
+                'docs/BEACON.md'                                => (string) file_get_contents(__DIR__ . '/../docs/BEACON.md'),
+            ];
 
             foreach ($options as $name) {
                 $inTable = false;
@@ -1065,12 +1143,17 @@ return [
                 }
                 lh_true(
                     $inTable,
-                    $name . ' is read by b.js and is missing from Settings::beaconOptions(). The '
-                    . 'application is where somebody installing the beacon looks; an option that '
-                    . 'exists only in a JavaScript docblock is undocumented for the person who '
-                    . 'needs it'
+                    $name . ' is read by b.js and is missing from Beacon\Doc::options(). That array is '
+                    . 'the one source every surface renders; an option that is not in it is documented '
+                    . 'nowhere a person installing the beacon will look'
                 );
-                lh_contains($doc, $name, $name . ' is read by b.js and is missing from docs/BEACON.md');
+
+                foreach ($surfaces as $where => $body) {
+                    lh_true(
+                        str_contains($body, $name) || str_contains($body, Security::esc($name)),
+                        $name . ' is read by b.js and is missing from: ' . $where
+                    );
+                }
             }
 
             foreach ($table as $documented) {
@@ -1084,17 +1167,83 @@ return [
             }
         },
 
+    'the reference table in docs/BEACON.md is the rendered one, not a second copy of it'
+        => static function (): void {
+            $doc = (string) file_get_contents(__DIR__ . '/../docs/BEACON.md');
+
+            lh_contains(
+                $doc,
+                \Loghound\Beacon\Doc::markdownOptions(),
+                'docs/BEACON.md must carry Beacon\Doc::markdownOptions() verbatim. There is no build '
+                . 'step in this project, so the document is written by hand — and this is what stops '
+                . 'it from becoming a hand-maintained second copy that disagrees with the panel. '
+                . 'Regenerate it with: php -r \'require "src/autoload.php"; '
+                . 'echo \Loghound\Beacon\Doc::markdownOptions();\''
+            );
+        },
+
+    'no surface builds a beacon tag of its own, and none pins a version'
+        => static function (): void {
+            /* THE DEFECT THIS FILE'S SNIPPET TESTS EXIST FOR. b.js is served immutable for a
+               week, so a snippet pinned to a fixed ?v= means no later fix to the beacon ever
+               reaches a returning visitor of that site. It happened because four surfaces each
+               assembled the tag; only Beacon\Doc::snippet() does now.
+
+               Comments are stripped first, so a docblock that recounts the defect is not read
+               as a fresh instance of it. */
+            foreach ([
+                'src/Setup/Steps.php',
+                'src/Panel/Settings.php',
+                'install/install.sh',
+                'bin/loghound-setup',
+            ] as $file) {
+                $code = lh_sa_code(__DIR__ . '/../' . $file);
+                lh_false(
+                    (bool) preg_match('~b\.js\?v=~', $code),
+                    $file . ' must not carry a beacon URL with a version written into it'
+                );
+            }
+
+            foreach (['src/Setup/Steps.php', 'src/Panel/Settings.php'] as $file) {
+                lh_false(
+                    str_contains(lh_sa_code(__DIR__ . '/../' . $file), '/b.js'),
+                    $file . ' must not build the beacon URL out of the file name itself. '
+                    . 'Beacon\Doc::src() is the one place that knows where b.js lives and which '
+                    . 'version it is at, and a second place that knows is a second place that can '
+                    . 'be wrong'
+                );
+            }
+
+            lh_contains(
+                (string) file_get_contents(__DIR__ . '/../install/install.sh'),
+                '--beacon-doc',
+                'install.sh is bash and cannot read a PHP array, so it shells out for the reference '
+                . 'rather than carrying a copy of the words'
+            );
+            lh_contains(
+                (string) file_get_contents(__DIR__ . '/../bin/loghound-setup'),
+                'Doc::renderText(',
+                'and the wizard renders the same one source in the same medium'
+            );
+        },
+
     'the option reference answers, per installation, whether a value will actually be stored'
         => static function (): void {
             $src = (string) file_get_contents(__DIR__ . '/../src/Panel/Settings.php');
 
             lh_contains($src, 'function beaconOptionsTable(', 'the table is rendered');
             lh_contains($src, 'function beaconOptionState(', 'with a live column');
-            lh_contains($src, "'beacon.store_identity'  => (bool) \$this->cfg->get('beacon.store_identity', false)",
-                'read from the live configuration, not from a fixed string');
-            lh_contains($src, 'discarded', 'and an option whose switch is off says so in as many words, because '
+            lh_contains($src, 'Doc::optionState($switch, $this->cfg)', 'read from the live configuration, '
+                . 'not from a fixed string');
+
+            $off = \Loghound\Beacon\Doc::optionState('beacon.store_identity', lh_sa_config([]));
+            lh_same('discarded', $off['state'], 'an option whose switch is off says so in as many words, because '
                 . 'the failure it warns about is completely silent: the snippet works, the collector '
                 . 'answers 204, and the value is dropped before anything is written');
+            $on = \Loghound\Beacon\Doc::optionState('beacon.store_identity', lh_sa_config(['store_identity' => true]));
+            lh_same('yes', $on['state'], 'and with the switch on it says that instead');
+
+            lh_contains(lh_sa_settings_html([]), 'discarded', 'and the word reaches the page');
 
             foreach (\Loghound\Panel\Settings::beaconOptions() as $opt) {
                 foreach (['name', 'kind', 'what', 'default', 'limits'] as $key) {
@@ -1107,6 +1256,14 @@ return [
                     $opt['switch'] === null || is_string($opt['switch']),
                     $opt['name'] . ' declares which configuration key governs it, or null for none'
                 );
+                foreach (['what', 'default', 'limits'] as $key) {
+                    lh_false(
+                        (bool) preg_match('~<[a-z/!]~i', $opt[$key]),
+                        $opt['name'] . '.' . $key . ' must carry no markup of its own. The same string is '
+                        . 'rendered into HTML, into a terminal and into Markdown, and a <code> tag in it '
+                        . 'would be printed literally on two of the three'
+                    );
+                }
             }
         },
 
@@ -1119,14 +1276,15 @@ return [
                 'the identity block reads as part of installing the snippet rather than as config '
                 . 'prose several screens above it'
             );
-
-            lh_contains($src, 'window.loghound.identify(ident, signedIn)', 'the after-load route is shown');
-            lh_contains($src, 'window.LoghoundIdent', 'and the globals route');
-            lh_contains($src, 'identity arrives after the page has loaded', 'each route says WHICH situation '
-                . 'it is for, rather than being listed as one of three equivalents');
-            lh_contains($src, 'already knows who it is at ', 'including the ordinary render-time one');
             lh_contains($src, 'Beacon::MAX_IDENT', 'and the cap is stated next to the field it caps, from the '
                 . 'constant rather than from a number typed twice');
+
+            $html = lh_sa_settings_html([]);
+            lh_contains($html, 'window.loghound.identify(ident, signedIn)', 'the after-load route is shown');
+            lh_contains($html, 'window.LoghoundIdent', 'and the globals route');
+            lh_contains($html, 'identity arrives after the page has loaded', 'each route says WHICH situation '
+                . 'it is for, rather than being listed as one of three equivalents');
+            lh_contains($html, 'already knows who it is at ', 'including the ordinary render-time one');
         },
 
     'each install tab shows that platform\'s real way of attaching an identity'

@@ -16,6 +16,7 @@ import {
 import { barsH, stackedTraffic, tokens } from '../charts.js';
 import { dimRow } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
+import { pathCell } from '../url.js';
 
 /** Stacking order, bottom to top: most human at the bottom. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -147,13 +148,18 @@ function renderSeries(data) {
 
 /**
  * Load the top-pages table for one population.
+ *
+ * The caption carries the server's `note` as well, because the path set on a session document
+ * deliberately excludes Loghound's own beacon script and collector (Sessionizer::accumulateSelf),
+ * and a count that quietly omits something has to say so.
  */
 function loadPages(population) {
     return loadCard('ov-pages', 'Faceting requested paths', async () => {
         const data = await api('overview', 'toppages', { pop: population });
 
         setPop('ov-pages', data.population_label + ' · ' + num(data.total) + ' sessions in range. Counted as ' +
-            'sessions that requested the path at least once, not as raw request count.');
+            'sessions that requested the path at least once, not as raw request count.' +
+            (data.note ? ' ' + data.note : ''));
 
         if (!data.rows.length) {
             tbody(byId('ov-pages-table'), []);
@@ -166,7 +172,12 @@ function loadPages(population) {
         tbody(byId('ov-pages-table'), data.rows.map((row) => ({
             attrs: dimRow('paths_ss', row.path),
             cells: [
-                { text: row.path, mono: true, clip: true, sort: row.path },
+                {
+                    node: pathCell(row.path, { host: row.host, hosts: row.hosts }),
+                    class: 'clip urlcell',
+                    title: row.path,
+                    sort: row.path
+                },
                 { text: num(row.sessions), num: true, sort: row.sessions },
                 {
                     node: el('span', { class: 'bar' }, [

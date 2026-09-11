@@ -46,9 +46,17 @@
  * Usage
  *   loghound-setup                    the full wizard
  *   loghound-setup --detect-only      run detection, print the result, change nothing
+ *   loghound-setup --beacon-doc       print the beacon reference as plain text and stop
+ *   loghound-setup --base-url=URL     the address the beacon reference builds its snippet from
  *   loghound-setup --non-interactive  answer every prompt from the environment
  *   loghound-setup --config=PATH      write somewhere other than config/loghound.php
  *   loghound-setup --no-color
+ *
+ * `--beacon-doc` exists because install.sh is a shell script and cannot read a PHP array. Its
+ * closing report calls this instead of carrying a copy of the beacon reference, which is how
+ * the snippet came to say `?v=1` in one place and a real version in another. It writes the
+ * reference to stdout, prompts for nothing and changes nothing, so it is also the fastest way
+ * to reread the option list on a box with no browser open.
  *
  * ENVIRONMENT OVERRIDES. Every prompt can be pre-answered by an environment variable,
  * which is what lets install.sh --non-interactive run the whole thing from Ansible or CI.
@@ -124,6 +132,7 @@ declare(strict_types=1);
 
 namespace Loghound\Bin;
 
+use Loghound\Beacon\Doc;
 use Loghound\Config;
 use Loghound\Setup\Detector;
 use Loghound\Setup\Job;
@@ -144,6 +153,8 @@ require_once $ROOT . '/src/autoload.php';
 $configPath = $ROOT . '/config/loghound.php';
 $detectOnly = false;
 $doReset    = false;
+$beaconDoc  = false;
+$beaconBase = '';
 $useColor   = function_exists('posix_isatty') && @posix_isatty(STDOUT) && getenv('NO_COLOR') === false;
 
 $nonInteractive = getenv('LOGHOUND_NONINTERACTIVE') === '1'
@@ -154,6 +165,10 @@ foreach (array_slice($argv, 1) as $a) {
         $configPath = substr($a, 9);
     } elseif ($a === '--detect-only') {
         $detectOnly = true;
+    } elseif ($a === '--beacon-doc') {
+        $beaconDoc = true;
+    } elseif (str_starts_with($a, '--base-url=')) {
+        $beaconBase = substr($a, 11);
     } elseif ($a === '--reset') {
         $doReset = true;
     } elseif ($a === '--no-color') {
@@ -175,6 +190,11 @@ $UI = new Ui($useColor, $nonInteractive);
 
 $cfg = Config::load($configPath);
 $isFirstRun = !is_file($configPath);
+
+if ($beaconDoc) {
+    echo Doc::renderText($cfg, $beaconBase !== '' ? $beaconBase : (string) $cfg->get('base_url', '')), "\n";
+    exit(0);
+}
 
 $UI->banner('Loghound setup');
 if (!$isFirstRun) {
@@ -366,8 +386,11 @@ foreach (Steps::nextSteps($cfg, $ROOT) as $group) {
 }
 
 $UI->nl();
-$UI->info(wordwrap(Steps::beaconRationale(), 76));
-$UI->info('See docs/DETECTION.md.');
+$UI->raw(Doc::renderText($cfg, (string) $cfg->get('base_url', '')));
+$UI->nl();
+$UI->info('See docs/BEACON.md for the long form, and docs/DETECTION.md for what each rule');
+$UI->info('fires on. This reference is also on the panel under Settings → Beacon, and');
+$UI->info('`loghound-setup --beacon-doc` prints it again at any time.');
 $UI->nl();
 
 exit(0);
@@ -438,6 +461,10 @@ loghound-setup — configure Loghound, from a terminal.
 
 Options
   --detect-only         find the access logs, print what would be asked, change nothing
+  --beacon-doc          print the beacon reference — the snippet, every option it reads, what
+                        this installation stores, and the two CSP directives — then stop
+  --base-url=URL        the address --beacon-doc builds its snippet from, when the
+                        configuration has no base_url yet
   --reset               start the installation over: forget the log sources, the index names
                         and the sign-in, then run setup. Your Opensolr indexes and everything
                         in them are NOT touched, and neither are your log files. This is the
@@ -896,6 +923,8 @@ function configureOpensolr(Config $cfg, Ui $UI, string $root): bool
         return false;
     }
 
+    $cfg->set('opensolr.region', (string) Storage::settleRegion($cfg, $regions, false));
+
     $UI->ok('Opensolr accepted the credentials.');
 
     $account = Storage::account($cfg);
@@ -907,45 +936,18 @@ function configureOpensolr(Config $cfg, Ui $UI, string $root): bool
         return false;
     }
 
+    $ownership = Pairs::settleOwnership($cfg, $account);
+    Storage::persist($cfg);
+
     reportAccount($account, $UI);
 
-    if (reuseExistingPair($cfg, $UI, $root, $account)) {
-        return true;
-    }
-
-    if ($account['capacity']['blocked']) {
+    if ($ownership === 'missing') {
         $UI->nl();
-        $UI->err('There is no room on this plan for the two indexes Loghound needs.');
-        foreach (Pairs::waysForward($account['pairs'] !== []) as $way) {
-            $UI->raw('      - ' . $way['text'] . ($way['url'] !== '' ? ' ' . $way['url'] : ''));
-        }
-        $UI->nl();
-        $UI->info('Nothing has been created. Run this wizard again once there is room.');
-
-        return false;
+        $UI->warn(Pairs::pendingHeadline());
+        $UI->raw(wordwrap('    ' . Pairs::pendingDetail($cfg), 76, "\n    "));
     }
 
-    $region = (string) $cfg->get('opensolr.region', '');
-    $region = $UI->choice(
-        'Region',
-        $regions,
-        in_array($region, $regions, true) ? $region : (string) ($regions[0] ?? ''),
-        'LOGHOUND_OPENSOLR_REGION'
-    );
-
-    $UI->nl();
-    $UI->info('Creating your indexes. The names are generated because an Opensolr index');
-    $UI->info('name has to be unique across the whole platform.');
-
-    if (!runJob($cfg, $UI, $root, Job::KIND_OPENSOLR, ['region' => $region])) {
-        return false;
-    }
-
-    $UI->nl();
-    $UI->info('Backups, downloads and restores for these indexes are available in your');
-    $UI->info('Opensolr control panel. You never need to touch a configset by hand.');
-
-    return true;
+    return chooseIndexes($cfg, $UI, $root, $account, $regions);
 }
 
 /**
@@ -963,68 +965,99 @@ function reportAccount(array $account, Ui $UI): void
     $UI->info($account['capacity']['sentence']);
 
     foreach ((array) $account['halves'] as $half) {
-        $UI->warn(
-            $half['name'] . ' is on this account without its matching ' . $half['missing'] . '.'
-        );
-        $UI->info('    That is what a setup run that stopped half way leaves behind. It holds no');
-        $UI->info('    usable data on its own, it cannot be joined as a pair, and it still counts');
-        $UI->info('    against your plan. Delete it at ' . Storage::URL_INDEXES . ' or leave it;');
-        $UI->info('    Loghound will not touch it either way.');
+        $UI->warn((string) $half['name'] . ' is on this account without its matching '
+            . (string) $half['missing'] . '.');
+        $UI->raw(wordwrap('    ' . Pairs::halfNotice((array) $half), 76, "\n    "));
     }
 }
 
 /**
- * Offer the Loghound index pairs this account already holds, and join one if asked.
+ * STEP TWO on the shell: the pairs this account holds, plus the option to make a new one.
  *
- * WHY REUSE IS OFFERED FIRST, and offered at all. One pair of indexes can serve many sites:
- * every document Loghound writes carries the virtual host it came from, so several
- * installations reporting into one pair stay separable in the panel by its Virtual host
- * dimension. An operator running Loghound on six machines wants two indexes and six
- * hostnames, not twelve indexes — and on a plan whose index limit is small, reuse is the only
- * way the sixth machine gets set up at all.
+ * ONE PROMPT, ONE CHOICE, the same options in the same order as the browser installer and the
+ * Settings card, worded by Pairs::decide(). A terminal cannot draw a radio list, so it prints
+ * the rows and asks for one of their keys; that is the only difference there is meant to be.
  *
- * Pairs are listed as pairs and chosen as pairs. Half a pair is not somewhere Loghound can
- * work, and an unmatched half is reported by reportAccount() as the leftover it is rather than
- * appearing in this list as something adoptable.
+ * ONE PAIR CAN SERVE MANY SITES, which is why joining is offered at all: every document
+ * Loghound writes carries the virtual host it came from, so several installations reporting into
+ * one pair stay separable in the panel by its Virtual host dimension. An operator running
+ * Loghound on six machines wants two indexes and six hostnames, not twelve indexes — and on a
+ * plan whose index limit is small, joining is the only way the sixth machine gets set up at all.
  *
- * THE DEFAULT IS NO. An unattended re-run must not silently adopt indexes belonging to another
- * site because it happened to find some, so the prompt defaults to creating a new pair and
- * LOGHOUND_OPENSOLR_REUSE has to name what it wants.
+ * AN UNATTENDED RUN NEVER ADOPTS BY ACCIDENT. The default is a new pair, so a re-run from Ansible
+ * or CI that happens to find another site's indexes does not quietly start writing into them;
+ * LOGHOUND_OPENSOLR_REUSE has to name what it wants. When a new pair is NOT available the prompt
+ * has no safe default at all, so rather than let choice() fall through to the first pair this
+ * refuses and says why — an unattended install that adopts somebody else's indexes is worse than
+ * one that stops.
  *
  * @param array<string,mixed> $account
- * @return bool True when a pair was adopted and storage is now configured.
+ * @param array<int,mixed>    $regions
+ * @return bool True when storage is now configured.
  */
-function reuseExistingPair(Config $cfg, Ui $UI, string $root, array $account): bool
+function chooseIndexes(Config $cfg, Ui $UI, string $root, array $account, array $regions): bool
 {
-    $pairs = (array) $account['pairs'];
-    if ($pairs === []) {
+    $step = Pairs::decide($cfg, $account);
+
+    $UI->nl();
+    $UI->info($step['heading'] . ':');
+
+    if ($step['dead_end'] !== '') {
+        $UI->err($step['dead_end']);
+        $UI->info($step['ways_heading']);
+        foreach ($step['ways'] as $way) {
+            $UI->raw('      - ' . $way['text'] . ($way['url'] !== '' ? ' ' . $way['url'] : ''));
+        }
+        $UI->nl();
+        $UI->info('Nothing has been created. Run this wizard again once there is room.');
+
         return false;
     }
 
-    $host = Pairs::siteHost($cfg);
+    $UI->raw(wordwrap('    ' . $step['intro'], 76, "\n    "));
+    $UI->nl();
+
+    $choices = [];
+    foreach ($step['pairs'] as $pair) {
+        $UI->raw('      ' . $pair['install_id'] . '   ' . $pair['hits'] . ' + ' . $pair['sessions']
+            . ($pair['current'] ? '   (already in use here)' : ''));
+        $choices[] = $pair['install_id'];
+    }
+
+    if ($step['can_new']) {
+        $UI->raw('      ' . Pairs::CHOICE_NEW . str_repeat(' ', 9) . $step['new_label']);
+        $choices[] = Pairs::CHOICE_NEW;
+    }
 
     $UI->nl();
-    $UI->info('This account already has ' . count($pairs) . ' pair'
-        . (count($pairs) === 1 ? '' : 's') . ' of Loghound indexes:');
-    foreach ($pairs as $pair) {
-        $UI->raw('      ' . $pair['install_id'] . '   ' . $pair['hits']
-            . ' + ' . $pair['sessions']
-            . (Pairs::isCurrent($cfg, $pair) ? '   (already in use here)' : ''));
+    if ($step['pairs'] !== []) {
+        $UI->raw(wordwrap('    ' . $step['consequence'], 76, "\n    "));
+    }
+    if ($step['can_new']) {
+        $UI->raw(wordwrap('    ' . $step['new_detail'], 76, "\n    "));
+    } elseif ($step['new_blocked'] !== '') {
+        $UI->warn($step['new_blocked']);
     }
     $UI->nl();
-    $UI->info(wordwrap(Pairs::reuseConsequence($pairs[0], $host), 76, "\n"));
-    $UI->nl();
 
-    $choices = array_merge(['new'], array_column($pairs, 'install_id'));
+    if (!$step['can_new'] && $UI->isNonInteractive() && !$UI->answered('LOGHOUND_OPENSOLR_REUSE')) {
+        $UI->err('This run has nobody to ask, and the only options left are indexes that belong to '
+            . 'somebody else.');
+        $UI->info('Set LOGHOUND_OPENSOLR_REUSE to one of the ids above to join that pair on purpose,');
+        $UI->info('or free a slot so a new pair can be created. Nothing has been created.');
+
+        return false;
+    }
+
     $answer = $UI->choice(
-        'Join one of those, or create a new pair',
+        'Which indexes should this installation use',
         $choices,
-        'new',
+        $step['can_new'] ? Pairs::CHOICE_NEW : '',
         'LOGHOUND_OPENSOLR_REUSE'
     );
 
-    if ($answer === 'new') {
-        return false;
+    if ($answer === Pairs::CHOICE_NEW) {
+        return provisionNewPair($cfg, $UI, $root, $regions);
     }
 
     $upgrade = $UI->confirm(
@@ -1039,6 +1072,43 @@ function reuseExistingPair(Config $cfg, Ui $UI, string $root, array $account): b
         'install_id'     => $answer,
         'upgrade_schema' => $upgrade,
     ]);
+}
+
+/**
+ * The "make a new pair" arm of step two: pick a region, then run the provisioning job.
+ *
+ * The region is asked here rather than in step one because the list belongs to the account and
+ * is not knowable until the credentials have been checked — the browser installer puts its
+ * region menu inside the same option for the same reason.
+ *
+ * The capacity gate is not repeated here: it is step 2 of the job, ahead of the first create,
+ * and Pairs::decide() has already withheld this option when the plan is known to be full.
+ *
+ * @param array<int,mixed> $regions
+ */
+function provisionNewPair(Config $cfg, Ui $UI, string $root, array $regions): bool
+{
+    $stored = (string) $cfg->get('opensolr.region', '');
+    $region = $UI->choice(
+        'Region',
+        array_map('strval', $regions),
+        in_array($stored, $regions, true) ? $stored : (string) ($regions[0] ?? ''),
+        'LOGHOUND_OPENSOLR_REGION'
+    );
+
+    $UI->nl();
+    $UI->info('Creating your indexes. The names are generated because an Opensolr index');
+    $UI->info('name has to be unique across the whole platform.');
+
+    if (!runJob($cfg, $UI, $root, Job::KIND_OPENSOLR, ['region' => $region])) {
+        return false;
+    }
+
+    $UI->nl();
+    $UI->info('Backups, downloads and restores for these indexes are available in your');
+    $UI->info('Opensolr control panel. You never need to touch a configset by hand.');
+
+    return true;
 }
 
 /**
@@ -1131,6 +1201,19 @@ final class Ui
     public function isNonInteractive(): bool
     {
         return $this->nonInteractive;
+    }
+
+    /**
+     * Has this prompt been answered in the environment?
+     *
+     * Needed where an unattended run must not be allowed to fall through to the first option.
+     * choice() picks options[0] rather than hanging a CI job on an unusable default, which is
+     * right for a menu of equivalent answers and wrong for one where the first entry would
+     * silently adopt another site's indexes. A caller can ask this and refuse instead.
+     */
+    public function answered(string $env): bool
+    {
+        return $this->env($env) !== null;
     }
 
     /**

@@ -58,6 +58,20 @@ final class Usage extends Controller
         return $this->quota;
     }
 
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * Nothing here is scoped by anything. "How far back does my data go" and "what does
+     * the plan allow" are not questions about a time window, a host or a filter, and the
+     * single query on this page deliberately asks none of them.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_CACHE];
+    }
+
     public function slug(): string
     {
         return 'usage';
@@ -71,6 +85,68 @@ final class Usage extends Controller
     public function subtitle(): string
     {
         return 'Bandwidth against your plan, and how far back the data goes.';
+    }
+
+    /**
+     * One dataset: everything this page knows, per index.
+     *
+     * A ROW PER INDEX, not a row per card. The three cards on screen are three views of the same
+     * handful of facts — bandwidth against the plan, the span actually held, the projected window —
+     * and splitting them into three files would leave the reader joining them back together on the
+     * index name. Somebody exporting this is tracking plan usage over weeks, so what they want is
+     * one line per index per reading.
+     *
+     * THE MEASURED AND THE PROJECTED ARE SEPARATE COLUMNS and are labelled as such. The span held
+     * is a fact — newest timestamp minus oldest — while the plan window is arithmetic on an
+     * observed growth rate, and a spreadsheet that folded the two into one "retention" column
+     * would give the estimate a confidence nobody computed.
+     *
+     * Nothing on this view is scoped by a range, a host or a filter, and toolbar() says so; the
+     * preamble consequently carries no time range, which is correct rather than an omission.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'plan' => [
+                'label'   => 'Plan usage by index',
+                'action'  => 'plan',
+                'key'     => 'cores',
+                'unit'    => 'indexes',
+                'cap'     => 50,
+                'note'    => 'Bandwidth is the traffic served since the 1st and is the one limit that cannot '
+                    . 'be reclaimed by deleting anything. An empty figure means Opensolr has not reported '
+                    . 'usage for that index yet; it is not zero. The projected window is an estimate from '
+                    . 'observed growth and is a different kind of number from the span actually held.',
+                'scope'   => [
+                    'retention_days' => 'Age limit in days (privacy.retention_days)',
+                    'rollup_forever' => 'Daily rollups kept for ever',
+                    'managed'        => 'Indexes managed by Opensolr',
+                ],
+                'columns' => [
+                    ['Index', 'core', 'id'],
+                    ['Role', 'role', 'text'],
+                    ['Bandwidth used (MB)', 'bandwidth.used_mb', 'number'],
+                    ['Plan bandwidth (MB)', 'bandwidth.limit_mb', 'number'],
+                    ['Bandwidth used (percent)', 'bandwidth.percent', 'number'],
+                    ['Warning threshold (percent)', 'bandwidth.warn_at', 'number'],
+                    ['Bandwidth level', 'bandwidth.level', 'text'],
+                    ['Span held now (days, measured)', 'span.days', 'number'],
+                    ['Oldest document held', 'span.oldest', 'date'],
+                    ['Newest document held', 'span.newest', 'date'],
+                    ['Projected plan window (days, estimated)', 'window.plan_days', 'number'],
+                    ['Index size (MB)', 'window.size_mb', 'number'],
+                    ['Plan disk quota (MB)', 'window.max_size_mb', 'number'],
+                    ['Observed ingest (MB per day)', 'window.ingest_mb_day', 'number'],
+                    ['Index size is projected rather than reported', 'window.estimated', 'bool'],
+                    ['Deleting for size is switched on', 'window.enabled', 'bool'],
+                    ['Retention limit in effect', 'window.limited_by', 'text'],
+                    ['Quotas over limit (Opensolr is blocking this index)', 'blocked.over', 'text'],
+                    ['Disk used against the plan quota (ratio)', 'window.disk_ratio', 'number'],
+                ],
+            ],
+        ];
     }
 
     /**
@@ -364,21 +440,28 @@ final class Usage extends Controller
             '01',
             'Bandwidth this month',
             'Traffic served by your Opensolr indexes since the 1st, against the plan limit.',
-            $tools
+            $tools . $this->exportTool('plan')
         );
         self::skeleton('usage-bw', 'stats', 0, 'Reading plan usage from Opensolr');
 
         echo '<div class="meters" id="usage-bw-meters"></div>';
 
         echo '<div class="note note-hard">';
+        echo '<p><strong>Almost all of this is you, reading this dashboard.</strong> If the figure above is '
+            . 'climbing and you have not changed anything, the place to look is not your traffic &mdash; it is '
+            . 'how many panel pages are open and how often they are refreshed. Opensolr meters what your index '
+            . 'SENDS BACK, so a query that returns a facet block spends the allowance and the log lines going '
+            . 'the other way barely touch it: the tailer uploads a batch and gets a short acknowledgement, '
+            . 'which is why ingesting a busy site costs almost nothing and why one dashboard left open all day '
+            . 'on a small plan does not.</p>';
         echo '<p><strong>What happens if you go over.</strong> ' . Security::esc(Quota::CONSEQUENCE) . '</p>';
         echo '<p>Bandwidth is the one limit here that cannot be reclaimed by deleting anything. Disk can: '
             . 'Loghound deletes the oldest traffic before it writes new traffic, so the index stays inside '
             . 'its disk quota on its own.</p>';
-        echo '<p class="faint">This dashboard\'s own queries count towards the figure above. Each open page '
-            . 'refreshes it at most once every few minutes, and the refresh itself is a single call to the '
-            . 'Opensolr control plane rather than to your index &mdash; but on a small plan an auto-refreshing '
-            . 'dashboard left open all day is not free.</p>';
+        echo '<p class="faint">This dashboard\'s own queries count towards the figure above, and the reading '
+            . 'on this page is the cheap part of them: each open page refreshes it at most once every few '
+            . 'minutes, and the refresh is a single call to the Opensolr control plane rather than to your '
+            . 'index. It is the cards on every other view that do the spending.</p>';
         echo '</div>';
 
         self::cardClose('usage-bw');

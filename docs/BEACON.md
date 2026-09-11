@@ -18,7 +18,7 @@ unreachable the host page is completely unaffected.
 ## 1. Installation
 
 ```html
-<script src="https://loghound.example.com/b.js?v=1" defer></script>
+<script src="https://loghound.example.com/b.js?v=1757000000" defer></script>
 ```
 
 That is the whole installation, and it is the snippet the panel's Settings page
@@ -28,10 +28,22 @@ loaded; `async` works too and is marginally earlier, at the cost of a
 non-deterministic start point. The collector URL is derived from the script's own
 `src` (`.../b.js` → `.../collect.php`), so there is no second URL to keep in sync.
 
-The `?v=` query string is the cache buster: `b.js` is served with a long
-`Cache-Control`, so bumping the number makes an upgrade a new URL that visitors
-actually fetch. The Settings page fills it in from the file's own modification
-time.
+**The `?v=` is the cache buster, and it is not a number you choose.** `b.js` is
+served `max-age=604800, immutable`, so a browser that already has the file will not
+ask for it again for a week whatever changes on the server — the only thing that
+makes a beacon fix reach a returning visitor is a different URL. Loghound fills the
+slot in from the beacon file's own modification time, everywhere it prints a
+snippet: the panel, the installer's last screen, `install.sh`'s closing report and
+`bin/loghound-setup`. Copy the snippet you are given rather than the one above, and
+do not pin it to a number of your own.
+
+Every surface builds that tag from one place, `src/Beacon/Doc.php`, which is also
+what this section is rendered from. To read the whole reference on a machine with
+no browser open:
+
+```
+bin/loghound-setup --beacon-doc
+```
 
 ### 1.1 The complete option reference
 
@@ -41,27 +53,32 @@ globals, one function. Nothing else is looked at.
 The **Stored** column is the one to read first. An option can be set perfectly and
 still have its value discarded server-side, because storing a *declaration* is a
 policy decision the operator makes and storing a *measurement* is not. The panel's
-Settings → Beacon card renders this same table with that column filled in from
-**your** configuration, which is the only place it can be answered concretely.
+Settings → Beacon card renders this same table with that column answered from
+**your** configuration, and so does `--beacon-doc`; those are the only two places
+it can be answered concretely.
 
 | Option | Kind | What it does | Default | Accepted | Stored |
 |---|---|---|---|---|---|
-| `data-endpoint` | attribute | Collector URL, when it is not a sibling of `b.js` | the script's own `src` with `b.js` → `collect.php` | Any URL. Set it only for a CDN or a different path | always — the script uses it itself |
-| `data-hb` | attribute | Heartbeat interval, ms. A beat is sent only when engaged time actually advanced, so an idle tab produces one, not hundreds | `15000` | Integer, clamped to 2 000–300 000. Anything else is ignored and the default used | always |
-| `data-idle` | attribute | How long after a real interaction a visitor still counts as engaged, ms. This is the definition of the **Engaged** clock | `30000` | Integer, clamped to 1 000–600 000 | always |
-| `data-ident` | attribute | An identity **your site** attaches — an email, a customer number, whatever you call the person. Never guessed | absent, and absent is not empty | Free text, truncated to 128 bytes. Control characters stripped, invalid UTF-8 repaired | **`beacon.store_identity`** — `false` by default, so this is discarded until you turn it on |
-| `data-signed-in` | attribute | Whether the visitor was signed in. Splits every number in the panel into signed-in and anonymous | absent — meaning **not reported**, never "no" | `1`/`0` or `true`/`false`. Anything else, including an attribute a template rendered blank, is read as not reported | **`beacon.store_signed_in`** — `true` by default |
-| `data-params` | attribute | URL query parameter **names** whose values are kept as search terms. Nothing else in the query string is read | absent — no parameter is collected | Comma separated. At most 8 names, each ≤ 40 chars of `a-z 0-9 _ - . [ ]`. Each value capped at 96 characters, dropped not truncated if longer | **`beacon.query_params`** — empty by default, and the server's list is authoritative |
-| `window.LoghoundIdent` | global | The same value as `data-ident`, for a template where adding an attribute to the tag is awkward but setting a variable above it is not | unset | A string. Must be set **before** `b.js` executes — with `defer`, anywhere in the document. The attribute wins if both are present | **`beacon.store_identity`** |
-| `window.LoghoundSignedIn` | global | The same value as `data-signed-in` | unset — not reported | A real boolean, or the same strings the attribute accepts. Must be set before `b.js` executes | **`beacon.store_signed_in`** |
-| `window.loghound.identify(ident, signedIn)` | function | Attach either value **after** the page has loaded — a single-page application that signs somebody in without a navigation, which no attribute can express | never called | Both arguments optional and independent. **Makes no request of its own:** the values ride the heartbeat that is already scheduled. Safe to call with anything; it cannot throw into your code | **`beacon.store_identity`** / **`beacon.store_signed_in`** |
+| `data-endpoint` | attribute | Collector URL, when it is not a sibling of `b.js`. | the script’s own `src` with `b.js` → `collect.php` | Any URL. Set it only if you serve the script from a CDN or a different path. | always — the script uses it itself |
+| `data-hb` | attribute | Heartbeat interval, in milliseconds. A beat is sent only when engaged time actually advanced, so an idle tab produces one, not hundreds. | 15000 | Integer, clamped to 2 000–300 000. Anything else is ignored and the default is used. | always — the script uses it itself |
+| `data-idle` | attribute | How long after a real interaction a visitor still counts as engaged, in milliseconds. This is the definition of the **Engaged** clock. | 30000 | Integer, clamped to 1 000–600 000. | always — the script uses it itself |
+| `data-ident` | attribute | An identity **your site** attaches to the session — an email address, a customer number, whatever you call the person. Never guessed. | absent, and absent is not empty | Free text, truncated to 128 bytes. Control characters stripped, invalid UTF-8 repaired. | **`beacon.store_identity`** |
+| `data-signed-in` | attribute | Whether the visitor was signed in. Splits every number in the panel into signed-in and anonymous. | absent — which means **not reported**, never “no” | `1`/`0` or `true`/`false`. Anything else, including an empty attribute a template rendered blank, is read as not reported. | **`beacon.store_signed_in`** |
+| `data-params` | attribute | URL query parameter **names** whose values are kept as search terms. Nothing else in the query string is read. | absent — no parameter is collected | Comma separated. At most 8 names, each at most 40 characters of `a-z 0-9 _ - . [ ]`. Each value is capped at 96 characters and dropped, not truncated, if longer. | **`beacon.query_params`** |
+| `window.LoghoundIdent` | global | The same value as `data-ident`, for a template where adding an attribute to the tag is awkward but setting a variable above it is not. | unset | A string. Must be set **before** b.js executes — with `defer` that means anywhere in the document. The attribute wins if both are present. | **`beacon.store_identity`** |
+| `window.LoghoundSignedIn` | global | The same value as `data-signed-in`. | unset — not reported | A real boolean, or the same strings the attribute accepts. Must be set before b.js executes. | **`beacon.store_signed_in`** |
+| `window.loghound.identify(ident, signedIn)` | function | Attach either value **after** the page has loaded — a single-page application that signs somebody in without a navigation, which no attribute can express. | never called | Both arguments optional and independent. **Makes no request of its own:** the values ride the heartbeat that is already scheduled. Safe to call with anything — it cannot throw into your code. | **`beacon.store_identity`** / **`beacon.store_signed_in`** |
+
+`beacon.store_identity` is `false` in a new installation and `beacon.query_params`
+is empty, so a snippet carrying `data-ident` or `data-params` has those values
+dropped by the collector until you change that — the tag loads, the collector
+answers `204`, and nothing appears in the panel. `beacon.store_signed_in` is on.
+Section 3.1 covers the two identity switches and section 3.2 the parameter list.
 
 `data-hb` and `data-idle` mirror `beacon.heartbeat_ms` and `beacon.idle_timeout_ms`
-in `config/loghound.php`, and the Settings page renders the snippet with your
-configured values already in it. The rest have no configuration counterpart *on the
-page* — your template supplies them per request — but whether Loghound **stores**
-what they carry is decided entirely on the server, which is what the last column is
-about.
+in `config/loghound.php`. Those two settings govern what the **server** accepts;
+the attributes govern what the page does, and the snippet the Settings page prints
+leaves both out, so a page that says nothing gets the defaults in the table above.
 
 ### 1.2 Attaching an identity — three routes, three situations
 
@@ -73,7 +90,7 @@ time.** The normal case. The template that renders the page renders the tag, in 
 same response: no second request, no extra script, no ordering problem.
 
 ```html
-<script src="https://loghound.example.com/b.js?v=1"
+<script src="https://loghound.example.com/b.js?v=1757000000"
         data-ident="ada@example.com" data-signed-in="1" defer></script>
 ```
 
@@ -88,7 +105,7 @@ add_action('wp_head', static function (): void {
         $attrs = ' data-ident="' . esc_attr(wp_get_current_user()->user_email) . '"'
             . ' data-signed-in="1"';
     }
-    echo '<script src="https://loghound.example.com/b.js?v=1"' . $attrs . ' defer></script>' . "\n";
+    echo '<script src="https://loghound.example.com/b.js?v=1757000000"' . $attrs . ' defer></script>' . "\n";
 }, 99);
 ```
 
@@ -114,7 +131,7 @@ function your_theme_page_attachments(array &$attachments): void {
     '#type' => 'html_tag',
     '#tag' => 'script',
     '#attributes' => [
-      'src' => 'https://loghound.example.com/b.js?v=1',
+      'src' => 'https://loghound.example.com/b.js?v=1757000000',
       'defer' => TRUE,
       'data-signed-in' => $account->isAuthenticated() ? '1' : '0',
     ],
@@ -141,7 +158,7 @@ executes, which with `defer` means anywhere in the document.
 
 ```html
 <script>window.LoghoundIdent = "ada@example.com"; window.LoghoundSignedIn = true;</script>
-<script src="https://loghound.example.com/b.js?v=1" defer></script>
+<script src="https://loghound.example.com/b.js?v=1757000000" defer></script>
 ```
 
 In **Google Tag Manager**, that is a Custom HTML tag with Data Layer variables,
@@ -153,7 +170,7 @@ value has to reach it from your own page:
   window.LoghoundIdent = "{{Loghound Ident}}";
   window.LoghoundSignedIn = "{{Loghound Signed In}}";
 </script>
-<script src="https://loghound.example.com/b.js?v=1" defer></script>
+<script src="https://loghound.example.com/b.js?v=1757000000" defer></script>
 ```
 
 **3. `window.loghound.identify()` — when the identity arrives after the page
@@ -177,7 +194,7 @@ said one or the other, so a site that has not adopted the attribute cannot be re
 as a site full of anonymous visitors.
 
 **Serving `b.js`.** Serve it from the Loghound vhost with a long `Cache-Control`
-and a version query string (`b.js?v=3`) so an upgrade actually reaches visitors.
+and a version query string (`b.js?v=<mtime>`) so an upgrade actually reaches visitors.
 Both shipped vhost examples do that — `max-age=604800, immutable` — and they also
 set `Access-Control-Allow-Origin: *` and `Timing-Allow-Origin: *` on it, because
 the beacon is embedded on other origins by design.
@@ -349,7 +366,7 @@ template renders them in the same response as the page, so there is **no second
 request**, no extra script and no ordering problem:
 
 ```html
-<script src="https://loghound.example.com/b.js?v=1"
+<script src="https://loghound.example.com/b.js?v=1757000000"
         data-ident="ada@example.com" data-signed-in="1" defer></script>
 ```
 
@@ -482,7 +499,7 @@ and, on the measured page, the matching attribute — which the Settings page
 already fills in for you once the configuration is set:
 
 ```html
-<script src="https://loghound.example.com/b.js?v=1" data-params="q" defer></script>
+<script src="https://loghound.example.com/b.js?v=1757000000" data-params="q" defer></script>
 ```
 
 Both sides matter and they do different jobs:

@@ -112,6 +112,8 @@ final class Parser
      *   'src'            string  default source label
      *   'internal_hosts' string[] extra hostnames counted as `internal` referers
      *   'beacon_paths'   string[] request paths that ARE the beacon collector
+     *   'own_host'       string  the hostname THIS installation is served from (Config::selfEndpoints)
+     *   'own_paths'      string[] the paths under that host that are Loghound's own (ditto)
      */
     public function __construct(array $opts = [])
     {
@@ -123,6 +125,8 @@ final class Parser
             'src'            => '',
             'internal_hosts' => [],
             'beacon_paths'   => ['/collect.php', '/lh/collect', '/loghound/collect.php'],
+            'own_host'       => '',
+            'own_paths'      => [],
             'search_params'  => [],
             'install_id'     => '',
         ];
@@ -131,6 +135,68 @@ final class Parser
 
         $installId = (string) $this->opts['install_id'];
         $this->opts['install_id'] = preg_match('/^[a-f0-9]{4,32}$/D', $installId) === 1 ? $installId : '';
+
+        $this->opts['own_host'] = strtolower(trim((string) $this->opts['own_host']));
+    }
+
+    /**
+     * Point the parser at the source it is about to read a line from.
+     *
+     * `host` is the vhost override for a log format that carries no %v, and it is a property
+     * of the SOURCE, not of the installation — one daemon tails many files. bin/loghound-tail
+     * used to apply it AFTER parsing, which was too late for anything that has to compare the
+     * request's host against something: by then the classification was already done. Setting it
+     * here, before the line is handed over, means host_s is resolved while the parser can still
+     * act on it, which is what lets isOwnRequest() match on host AND path rather than on path
+     * alone.
+     *
+     * One parser instance serves every source because the daemon reads one line at a time; the
+     * call sits immediately before parseLine() so the two can never drift apart.
+     */
+    public function setSourceHost(?string $host): void
+    {
+        $this->opts['host'] = $host === null ? '' : trim($host);
+    }
+
+    /**
+     * Is this request Loghound's own instrumentation, served by THIS installation?
+     *
+     * The single implementation of the comparison, called from normalize() for a hit the parser
+     * produced and from Sessionizer for one that arrived some other way.
+     *
+     * BOTH HALVES MUST MATCH, and that is the whole point of the method existing. `/collect.php`
+     * and `/b.js` are ordinary filenames; a measured site may serve either of them for its own
+     * reasons, and quietly deleting a real page from its owner's analytics would be a worse
+     * defect than the double-count this exclusion exists to fix. So the request is ours only
+     * when it was made to the hostname this panel is published at, at one of the paths this
+     * panel publishes. An empty own-host, the pre-setup state, matches nothing at all.
+     *
+     * Hostnames are compared case-insensitively with any port stripped, exactly as normalize()
+     * stores host_s. Paths are compared case-insensitively too, matching classifyPath(), which
+     * is the conservative direction on a case-insensitive filesystem.
+     *
+     * @param string[] $ownPaths
+     */
+    public static function isOwnRequest(?string $host, string $path, string $ownHost, array $ownPaths): bool
+    {
+        $ownHost = strtolower(trim($ownHost));
+        if ($ownHost === '' || $ownPaths === []) {
+            return false;
+        }
+
+        $host = strtolower((string) preg_replace('/:\d+$/', '', trim((string) $host)));
+        if ($host === '' || $host !== $ownHost) {
+            return false;
+        }
+
+        $path = strtolower($path);
+        foreach ($ownPaths as $own) {
+            if ($path === strtolower((string) $own)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -314,6 +380,15 @@ final class Parser
      * address — HostnameLookups On, or a proxy that logs a name — is kept as it is: it is
      * still the client identity, it just is not an address.
      *
+     * Ours. `_self_b` marks a request to THIS installation's own beacon script or collector,
+     * decided by isOwnRequest() against the pair Config::selfEndpoints() derived from
+     * `base_url`. It is underscore-prefixed, so bin/loghound-tail strips it before the document
+     * reaches Solr: it is a handoff to Sessionizer, which excludes those requests from every
+     * session metric, not a field. The hit itself is still indexed — Sessionizer::accumulateSelf()
+     * carries the reasoning for keeping rather than dropping it — and `kind_s` is left exactly as
+     * classifyPath() decided it, because a request to a collector is a beacon request whoever
+     * the collector belongs to. Classification and ownership are different questions.
+     *
      * Response. Apache logs '-' for the status when the connection died before one was
      * chosen; that is genuinely unknown, so the field stays absent rather than becoming 0.
      * Apache's '-' for %b means something different — zero bytes of body — and is recorded
@@ -448,6 +523,15 @@ final class Parser
         [$kind, $assetKind] = $this->classifyPath($req['path']);
         $doc['kind_s'] = $kind;
         self::put($doc, 'asset_kind_s', $assetKind);
+
+        if (self::isOwnRequest(
+            $doc['host_s'] ?? null,
+            $req['path'],
+            (string) $this->opts['own_host'],
+            (array) $this->opts['own_paths']
+        )) {
+            $doc['_self_b'] = true;
+        }
 
         $referer = self::header($raw, 'referer');
         if ($referer !== null) {

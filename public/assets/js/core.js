@@ -30,6 +30,13 @@
 
 import { initCopyButtons } from './copy.js';
 
+/* The CSV export control, imported for its side effect: one delegated listener on the document
+   that keeps every export link's href in step with the controls that live only in the page. It is
+   wired here rather than from app.js because the control appears on ten views and inside a dialog,
+   so a per-view initialiser would be ten chances to forget one — and a forgotten one is silent,
+   producing a file scoped to the defaults with nothing on screen saying so. */
+import './export.js';
+
 /**
  * Read the JSON island the server rendered.
  *
@@ -726,7 +733,85 @@ export async function api(view, action, extra, signal) {
         err.transport = /solr|timed out|timeout|refused|resolve|unreachable|credentials/i.test(err.message);
         throw err;
     }
+    if (data && data.cache) {
+        lastStamp = data.cache;
+    }
     return data;
+}
+
+/**
+ * The provenance of the most recent answer: was it computed now, or read from the cache.
+ *
+ * Module-level rather than passed around, because the card that renders it is not the code that
+ * asked for the data — loadCard() wraps a loader it knows nothing about, and threading the stamp
+ * through every view module would be eleven places to forget it. `public/index.php` attaches it
+ * to every JSON response after the view has answered, so it is always the latest read's.
+ */
+let lastStamp = null;
+
+/**
+ * Say when a card's numbers were computed, on the card.
+ *
+ * WHY THIS IS NOT OPTIONAL WITH A CACHE IN FRONT OF SOLR. The default entry lives two hours, so
+ * "the dashboard says 41 evasive sessions" can mean forty-one right now or forty-one at half past
+ * one, and nothing on screen distinguishes them. A dashboard that presents a two-hour-old figure
+ * as a live one is the same defect as a number that does not say what it counts, which this
+ * product already refuses everywhere else.
+ *
+ * THREE STATES, and the third one is silence. A cached answer names the instant it was computed
+ * and how long ago that was — the age is what makes ten minutes readable next to an hour and
+ * fifty, which a bare timestamp does not. A live answer says so in one word. And on an install
+ * with the cache switched off there is nothing to disclose, so nothing is drawn: a permanent
+ * "Live" on every card is furniture that means nothing.
+ *
+ * The instant is rendered with when(), so it is mm/dd/yyyy hh:mm:ss in the panel's display
+ * timezone like every other date in this product, and never a bare toLocaleString().
+ */
+function renderStamp(id) {
+    const card = document.querySelector('[data-card="' + id + '"]');
+    const head = card ? card.querySelector('.card-head') : null;
+    if (!head) {
+        return;
+    }
+
+    const existing = head.querySelector('.card-stamp');
+    if (!lastStamp || !lastStamp.enabled) {
+        if (existing) {
+            existing.remove();
+        }
+        return;
+    }
+
+    const node = existing || head.appendChild(el('span', { class: 'card-stamp' }));
+    if (!lastStamp.cached) {
+        node.textContent = 'Live';
+        node.title = 'Computed for this request. Nothing was served from the query cache.';
+        return;
+    }
+
+    node.textContent = 'Computed ' + when(lastStamp.computed_at, true)
+        + ' \u00b7 ' + stampAge(Number(lastStamp.age) || 0) + ' old';
+    node.title = 'Read from the query cache. Press Clear cache in the page header to recompute it.';
+}
+
+/**
+ * An age in seconds, in the largest unit that still reads as a measurement.
+ *
+ * Its own formatter rather than dur(), which is built for a session duration and would render two
+ * hours of cache age as "2h 00m" beside a timestamp — accurate and unreadable at a glance. The
+ * question here is only "is this minutes or hours old", so that is what it answers.
+ */
+function stampAge(seconds) {
+    if (seconds < 60) {
+        return seconds + 's';
+    }
+    if (seconds < 3600) {
+        return Math.round(seconds / 60) + ' min';
+    }
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.round((seconds % 3600) / 60);
+
+    return minutes === 0 ? hours + 'h' : hours + 'h ' + minutes + ' min';
 }
 
 /**
@@ -843,6 +928,180 @@ function raiseConnectionBanner(message) {
     banner.hidden = false;
 }
 
+/* -------------------------------------------------------------------------
+ * Reloading one section
+ *
+ * A discreet control in every async card's head that re-runs THAT card and
+ * nothing else. It is deliberately not a second loading path: it re-enters
+ * loadCard() with the same three arguments the view last passed, so the card's
+ * own skeleton, worded progress line, failure box and retry all behave exactly
+ * as they do on the first load — including the query cache.
+ * ---------------------------------------------------------------------- */
+
+/**
+ * What each async card was last asked to load, keyed on the card's stable name.
+ *
+ * WHY THE LAST ONE AND NOT THE FIRST. A card is re-loaded whenever a filter, a range or an
+ * index choice changes, and each of those passes a loader closed over the choice that is on
+ * screen now. Keeping the most recent entry is what makes the refresh control reload what the
+ * reader is actually looking at rather than replaying the page's opening state.
+ */
+const cardLoaders = new Map();
+
+/**
+ * What the control says it is, and — the part that matters — what it is not.
+ *
+ * TWO CONTROLS ON ONE PAGE THAT BOTH SOUND LIKE "GET ME NEW NUMBERS". Clear cache in the page
+ * header discards the stored answers; this re-runs one card's fetch down the ordinary path,
+ * cache included, and will happily hand back the same cached figure it had a second ago. An
+ * operator who presses this expecting the other one has been misled by the product, so the
+ * difference is stated on the control rather than left to be discovered.
+ */
+const REFRESH_TIP = 'Reloads this section only, exactly the way it loaded the first time — '
+    + 'a cached answer is reused. Clear cache in the page header is what discards stored answers.';
+
+/** Where the SVG the reload mark is drawn in lives. */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * The reload mark, drawn here rather than fetched or pasted in as markup.
+ *
+ * The panel ships with a CSP that allows no outside origin and no markup sink, so an icon is
+ * built with createElementNS from two paths on the same 16x16 half-pixel grid icons.js uses:
+ * an arc three-quarters of the way round and the tick that turns its end into an arrowhead.
+ * `currentColor` at one stroke weight, so it follows the control's own tone in both themes and
+ * needs no second palette. `aria-hidden`, because the control's name is on the button.
+ */
+function refreshMark() {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+
+    for (const d of ['M13.5 8A5.5 5.5 0 1 1 11.9 4.1', 'M11.9 1.1V4.1H8.9']) {
+        const path = document.createElementNS(SVG_NS, 'path');
+        path.setAttribute('d', d);
+        svg.appendChild(path);
+    }
+    return svg;
+}
+
+/**
+ * This section's own name, for the control's accessible name.
+ *
+ * "Refresh" on eleven controls down one page is eleven identical names in a screen reader's
+ * control list, which is the same as having none. The heading's words are read off the card —
+ * without the section number, which is chrome — and the loader's label is the fallback for a
+ * card whose heading is not in the shape cardOpen() emits.
+ *
+ * It works before and after the accordion has run: responsive.js moves the h2's children into
+ * a `button.card-toggle` INSIDE the h2, so the words stay a descendant of the heading either
+ * way and a descendant selector finds them in both shapes.
+ */
+function cardHeadingText(card, fallback) {
+    const words = card.querySelector('.card-head h2 span:not(.card-num)');
+    const text = words ? (words.textContent || '').trim() : '';
+    return text === '' ? fallback : text;
+}
+
+/**
+ * Give one card its refresh control, once.
+ *
+ * WHERE IT GOES, and why it is not where it looks like it should go. The accordion turns the
+ * whole heading into `button.card-toggle` by moving every child of the h2 inside it, so a
+ * control placed in the heading would end up nested in that button: invalid HTML, and a nested
+ * button does not reliably get the press. It is therefore a SIBLING of the h2 in `.card-head`,
+ * inserted directly after it — the same row as the chevron and the same row as `.card-stamp`
+ * and the CSV export, but outside the element that folds the section. Pressing it cannot reach
+ * the toggle's listener, so it cannot collapse anything.
+ *
+ * WHICH CARDS GET ONE is not decided here and there is no list of them anywhere: this is called
+ * from loadCard(), so the set is exactly the cards whose data arrives through loadCard(), and a
+ * card added by a later release is covered without anybody remembering. A card rendered entirely
+ * server-side never calls it and therefore never grows a control that would have nothing to run.
+ */
+function ensureRefresh(id, label) {
+    const card = document.querySelector('[data-card="' + id + '"]');
+    const head = card ? card.querySelector('.card-head') : null;
+    if (!head || head.querySelector('.card-refresh')) {
+        return;
+    }
+
+    const button = el('button', {
+        type: 'button',
+        class: 'card-refresh',
+        'data-refresh': id,
+        'data-lh-tip': '1',
+        'data-full': REFRESH_TIP,
+        'aria-disabled': 'false',
+        'aria-label': 'Refresh ' + cardHeadingText(card, label)
+    }, [refreshMark()]);
+
+    const heading = head.querySelector('h2');
+    if (heading && heading.nextSibling) {
+        head.insertBefore(button, heading.nextSibling);
+    } else {
+        head.appendChild(button);
+    }
+}
+
+/**
+ * Say on the control whether its card is loading.
+ *
+ * `aria-disabled` rather than `disabled`: a disabled button is dropped from the tab order the
+ * instant it is pressed, so a keyboard operator who refreshed a section would lose their place
+ * on the page. The press is not merely styled as ignored — loadCard() returns early for a card
+ * that is already in flight — so the attribute states a fact the guard already enforces.
+ */
+function markRefreshBusy(id, busy) {
+    const card = document.querySelector('[data-card="' + id + '"]');
+    const button = card ? card.querySelector('.card-refresh') : null;
+    if (button) {
+        button.setAttribute('aria-disabled', busy ? 'true' : 'false');
+    }
+}
+
+/** Whether the one delegated press handler has been installed. */
+let refreshWired = false;
+
+/**
+ * Listen for a press on any refresh control, once, for the life of the page.
+ *
+ * Delegated because the controls are created as their cards load and because the CSP allows no
+ * inline handler and no `onclick`. `stopPropagation` is not decoration: the document also
+ * carries the section nav's and the accordion's own click listeners, and this press is about
+ * one card and must not be read as navigation or as a fold.
+ */
+function wireRefresh() {
+    if (refreshWired) {
+        return;
+    }
+    refreshWired = true;
+
+    document.addEventListener('click', (event) => {
+        const button = event.target && typeof event.target.closest === 'function'
+            ? event.target.closest('.card-refresh')
+            : null;
+        if (!button) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+
+        const entry = cardLoaders.get(button.getAttribute('data-refresh') || '');
+        if (entry) {
+            loadCard(entry.id, entry.label, entry.loader);
+        }
+    });
+}
+
 /**
  * Run a card's loader, showing progress and handling its failure locally.
  *
@@ -851,10 +1110,15 @@ function raiseConnectionBanner(message) {
  * @param {Function} loader async () => void — renders into the card's content element.
  */
 export async function loadCard(id, label, loader) {
+    cardLoaders.set(id, { id: id, label: label, loader: loader });
+    ensureRefresh(id, label);
+    wireRefresh();
+
     if (inFlight.has(id)) {
         return;
     }
     inFlight.add(id);
+    markRefreshBusy(id, true);
 
     const card = document.querySelector('[data-card="' + id + '"]');
     const status = byId(id + '-status');
@@ -903,6 +1167,7 @@ export async function loadCard(id, label, loader) {
         if (content) {
             content.hidden = false;
         }
+        renderStamp(id);
     } catch (err) {
         if (status) {
             status.hidden = true;
@@ -926,6 +1191,7 @@ export async function loadCard(id, label, loader) {
     } finally {
         window.clearInterval(ticker);
         inFlight.delete(id);
+        markRefreshBusy(id, false);
     }
 }
 

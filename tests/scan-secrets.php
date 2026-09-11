@@ -146,6 +146,24 @@ $allowLine = [
         '/fp_hash|fingerprint|ua_hash|_hash_s|\bfp\b|Fp\s*=/i',
         '/password_hash|auth\.password_hash|hash_hmac|random_bytes|bin2hex/',
     ],
+
+    /* THE SCANNER'S OWN FIXTURES, AND WHY THEY CANNOT BE EXCUSED BY VALUE. Two tests prove
+       this scanner still catches what it is for: one plants a credential-shaped string in a
+       temporary file and asserts it is REPORTED, the other feeds a URL carrying userinfo to
+       the code that must refuse it. Their planted values therefore have to stay detectable —
+       adding them to $allowValue would make the very tests that guard this file pass while
+       proving nothing.
+
+       So the SOURCE line carries a marker instead. The marker is a PHP comment sitting
+       outside the string literal, so the fixture text written to the temporary file is
+       byte-identical and is still caught there, where being caught is the point. Only the
+       tracked test file is excused, and only on the line that opts in. */
+    'basic auth in URL' => [
+        '/lh-scanner-fixture/',
+    ],
+    'GitHub token' => [
+        '/lh-scanner-fixture/',
+    ],
 ];
 
 /** @return string[] */

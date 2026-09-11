@@ -61,6 +61,18 @@ final class Bots extends Controller
         ];
     }
 
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * All six queries run under sessionFqs(), so all three controls reach them.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+    }
+
     public function slug(): string
     {
         return 'bots';
@@ -74,6 +86,102 @@ final class Bots extends Controller
     public function subtitle(): string
     {
         return 'Every verdict, and the evidence behind it.';
+    }
+
+    /**
+     * The three tables on this view worth taking out as CSV.
+     *
+     * The declared/evasive split above them is six headline numbers and is deliberately not
+     * exportable: the two halves are counted separately and must never be summed, and a
+     * spreadsheet is the first place somebody would sum them. The verdict histogram and the
+     * score distribution are charts over a continuous quantity, which a top-N CSV cannot
+     * represent honestly either.
+     *
+     * All three row limits are FIXED in the facet definitions rather than caller-settable, so
+     * each export carries its card's own limit and the coverage line says whether the facet came
+     * back short of it — which, for the closed signal and class vocabularies, it always does.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'signals' => [
+                'label'   => 'Signals fired',
+                'action'  => 'reasons',
+                'key'     => 'reasons',
+                'unit'    => 'signals',
+                'ranked'  => 'ranked by the number of sessions they fired on',
+                'cap'     => 25,
+                'note'    => 'A session fires several signals, so these counts sum to more than the '
+                    . 'session total. The population is sessions judged Bot or Likely bot.',
+                'scope'   => ['botlike' => 'Sessions judged Bot or Likely bot'],
+                'columns' => [
+                    ['Signal', 'label', 'text'],
+                    ['Signal code', 'code', 'id'],
+                    ['What it means', 'why', 'text'],
+                    ['Severity', 'severity', 'text'],
+                    ['Sessions', 'count', 'number'],
+                    ['Of which declared', 'declared', 'number'],
+                    ['Of which evasive', 'evasive', 'number'],
+                    ['Average bot score', 'avg_score', 'number'],
+                    ['Distinct IPs', 'uniq_ips', 'number'],
+                ],
+            ],
+
+            'classes' => [
+                'label'   => 'Bot classes',
+                'action'  => 'classes',
+                'key'     => 'classes',
+                'unit'    => 'bot classes',
+                'ranked'  => 'ranked by session count',
+                'cap'     => 20,
+                'scope'   => ['botlike' => 'Sessions judged Bot or Likely bot'],
+                'columns' => [
+                    ['Class', 'class', 'vocab', 'bot_class_s'],
+                    ['Class code', 'class', 'id'],
+                    ['Declared itself', 'declared', 'bool'],
+                    ['Sessions', 'count', 'number'],
+                    ['Distinct IPs', 'uniq_ips', 'number'],
+                    ['Requests', 'hits', 'number'],
+                    ['Average bot score', 'avg_score', 'number'],
+                ],
+            ],
+
+            'crawlers' => [
+                'label'   => 'Declared crawlers',
+                'action'  => 'crawlers',
+                'key'     => 'crawlers',
+                'unit'    => 'crawlers',
+                'ranked'  => 'ranked by session count',
+                'cap'     => 40,
+                'note'    => 'Verified counts the sessions whose crawler claim passed forward-confirmed '
+                    . 'reverse DNS. A name with sessions and no verified ones is an impersonator.',
+                'scope'   => ['declared' => 'Sessions that declared themselves'],
+                'columns' => [
+                    ['Crawler', 'name', 'text'],
+                    ['Category', 'category', 'vocab', 'ua_bot_cat_s'],
+                    ['Category code', 'category', 'id'],
+                    ['AI crawler', 'ai', 'bool'],
+                    ['Sessions', 'sessions', 'number'],
+                    ['Requests', 'hits', 'number'],
+                    ['Distinct IPs', 'uniq_ips', 'number'],
+                    ['Verified sessions', 'verified', 'number'],
+                    ['Last seen', 'last', 'date'],
+                ],
+            ],
+
+            'pivot' => [
+                'label'  => 'Bot class by network type',
+                'action' => 'split',
+                'shape'  => 'pivot',
+                'key'    => 'pivot',
+                'unit'   => 'class and network type pairs',
+                'cap'    => 200,
+                'note'   => 'One record per pair. The network-type breakdown of a class is a LIMITED '
+                    . 'facet, so its rows do not add up to that class\'s session total.',
+            ],
+        ];
     }
 
     /**
@@ -414,7 +522,8 @@ final class Bots extends Controller
             '02',
             'Why each session was scored',
             'Sessions judged Bot or Likely bot. A session fires several rules, so the bars sum to more than '
-            . 'the session count.'
+            . 'the session count.',
+            $this->exportTool('signals')
         );
         self::skeleton('bf-reasons', 'chart', 420, 'Faceting signal codes');
 
@@ -441,7 +550,8 @@ final class Bots extends Controller
             '05',
             'Bot classes',
             'Sessions judged Bot or Likely bot, grouped by what kind of automation they are. '
-            . 'Declared classes are marked.'
+            . 'Declared classes are marked.',
+            $this->exportTool('classes')
         );
         self::skeleton('bf-classes', 'rows', 0, 'Faceting bot classes');
 
@@ -468,7 +578,8 @@ final class Bots extends Controller
             '06',
             'Declared crawlers, by name',
             'Sessions whose User-Agent self-identifies as a bot. Verified means forward-confirmed reverse DNS '
-            . 'passed; an unverified Googlebot is an impersonator, not a crawler.'
+            . 'passed; an unverified Googlebot is an impersonator, not a crawler.',
+            $this->exportTool('crawlers')
         );
         self::skeleton('bf-crawlers', 'rows', 0, 'Faceting crawler names');
 

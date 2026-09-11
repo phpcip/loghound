@@ -110,6 +110,19 @@ final class Queries extends OpensolrView
      */
     private const QTIME_EDGES = [0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 30000];
 
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * As Index analytics: the range bounds logFqs() and is carried through the scan job,
+     * while `f[...]` and the host belong to a plane this view does not read.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE];
+    }
+
     public function slug(): string
     {
         return 'queries';
@@ -123,6 +136,163 @@ final class Queries extends OpensolrView
     public function subtitle(): string
     {
         return 'The shapes of query your indexes actually run — and which of them find nothing.';
+    }
+
+    /**
+     * The two datasets on this view, and they come from two different places.
+     *
+     * `slowest` is an ordinary server query: the slowest individual requests the platform holds
+     * for this index, under the page's filters. Straightforward.
+     *
+     * `shapes` is the other one, and it cannot be a query. A SHAPE CANNOT BE FACETED — that is the
+     * whole reason this view scans instead — so the shape table is produced by a stepped job whose
+     * per-shape aggregates live in the job's own context. The export therefore reads THE SCAN THAT
+     * ALREADY RAN rather than starting a new one: a GET that kicked off twenty paged reads of a
+     * customer's request log would be a very expensive thing to leave on the end of a link, and a
+     * second scan would also answer a slightly different question from the table on screen.
+     *
+     * The consequence is stated in the file: with no completed scan there are no rows, and the
+     * coverage line says how much of the log the scan that produced them actually read, whether it
+     * finished, and how many shapes it had to leave out when it hit its retention cap. The job
+     * store is scoped to the caller's own session, so this cannot read somebody else's scan.
+     *
+     * Percentiles are deliberately absent from the file. They are read off a log-scaled histogram
+     * merged bucket by bucket across pages, and a percentile is not a number that survives being
+     * put in a column next to a count — the mean and the worst single request are exact and are
+     * what is exported.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'shapes' => [
+                'label'  => 'Query shapes',
+                'shape'  => 'custom',
+                'source' => fn (): array => $this->exportShapes(),
+                'unit'   => 'query shapes',
+                'ranked' => 'ranked by request count',
+                'cap'    => self::SCAN_MAX_SHAPES,
+                'carry'  => ['core', 'outcome'],
+                'note'   => 'A shape is the query with its literals removed, so two requests share one '
+                    . 'when your application would have generated both. This file covers the most recent '
+                    . 'completed scan on this view, NOT the whole request log — the coverage line says how '
+                    . 'much of it the scan read. Mean QTime is over the requests that carried one.',
+            ],
+
+            'slowest' => [
+                'label'   => 'Slowest requests',
+                'action'  => 'slowest',
+                'unit'    => 'requests',
+                'ranked'  => 'the slowest by QTime',
+                'cap'     => 50,
+                'params'  => ['rows' => 50],
+                'carry'   => ['core', 'outcome'],
+                'note'    => 'Individual requests, not aggregates. QTime is Solr\'s own measure of the time '
+                    . 'it spent answering and excludes network time and time spent queued, so a slow page '
+                    . 'can have a fast QTime here.',
+                'scope'   => $this->logExportScope(),
+                'columns' => [
+                    ['When', 'date', 'date'],
+                    ['QTime (ms)', 'qtime', 'number'],
+                    ['Results found', 'hits', 'number'],
+                    ['Status', 'status', 'number'],
+                    ['Caller', 'ip', 'id'],
+                    ['Node', 'node', 'id'],
+                    ['Shape', 'shape', 'text'],
+                    ['Shape hash', 'hash', 'id'],
+                    ['Full request', 'request', 'text'],
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * The shape table of the most recent completed scan, shaped for the CSV writer.
+     *
+     * Reads the job store rather than the platform, for the reason exports() gives. A missing,
+     * running or failed job yields no rows and a coverage note that says which, because "no shapes"
+     * and "you have not run the scan yet" are different answers and only one of them is about the
+     * data.
+     *
+     * @return array<string,mixed>
+     */
+    private function exportShapes(): array
+    {
+        try {
+            $job = $this->jobs()->latest(self::KIND_ALL);
+        } catch (\Throwable $e) {
+            $job = null;
+        }
+
+        $ctx = is_array($job) ? (array) ($job['result'] ?? []) : [];
+        $shapes = is_array($ctx['shapes'] ?? null) ? $ctx['shapes'] : [];
+
+        $rows = [];
+        foreach ($shapes as $hash => $shape) {
+            if (!is_array($shape)) {
+                continue;
+            }
+            $timed = (int) ($shape['timed'] ?? 0);
+            $worst = is_array($shape['worst'] ?? null) ? $shape['worst'] : [];
+            $rows[] = [
+                'hash'    => (string) $hash,
+                'label'   => (string) ($shape['label'] ?? ''),
+                'handler' => (string) ($shape['handler'] ?? ''),
+                'count'   => (int) ($shape['count'] ?? 0),
+                'zero'    => (int) ($shape['zero'] ?? 0),
+                'timed'   => $timed,
+                'mean'    => $timed > 0 ? ((float) ($shape['qsum'] ?? 0)) / $timed : null,
+                'qmax'    => $shape['qmax'] ?? null,
+                'example' => (string) ($worst['request'] ?? ''),
+                'when'    => (string) ($worst['date'] ?? ''),
+            ];
+        }
+
+        usort($rows, static fn (array $a, array $b): int => $b['count'] <=> $a['count']);
+
+        $state = is_array($job) ? (string) ($job['state'] ?? '') : 'none';
+        $scanned = (int) ($ctx['scanned'] ?? 0);
+        $total = (int) ($ctx['total'] ?? 0);
+        $overflow = (int) ($ctx['overflow'] ?? 0);
+
+        return [
+            'rows'    => $rows,
+            'payload' => [],
+            'scope'   => [
+                'scan' => ['Scan this file covers', static function () use ($state, $scanned, $total, $rows, $overflow): string {
+                    if ($state === 'none' || $rows === []) {
+                        return $state === 'none'
+                            ? 'No shape scan has been run on this view yet, so this file has no rows. '
+                                . 'Press Scan on the Query shapes card and export again.'
+                            : 'The most recent scan produced no shapes (state: ' . $state . ').';
+                    }
+                    $say = number_format($scanned) . ' of ' . number_format($total) . ' logged requests read';
+                    if ($state !== 'done') {
+                        $say .= ', and the scan is ' . $state . ' rather than finished';
+                    } elseif ($scanned < $total) {
+                        $say .= ', and it stopped at its page limit rather than at the end of the log';
+                    }
+                    if ($overflow > 0) {
+                        $say .= '. ' . number_format($overflow) . ' further one-off shapes were counted '
+                            . 'and not retained';
+                    }
+                    return $say . '.';
+                }],
+            ],
+            'columns' => [
+                ['Shape', 'label', 'text'],
+                ['Shape hash', 'hash', 'id'],
+                ['Handler', 'handler', 'id'],
+                ['Requests', 'count', 'number'],
+                ['Requests that matched nothing', 'zero', 'number'],
+                ['Requests carrying a QTime', 'timed', 'number'],
+                ['Mean QTime (ms)', 'mean', 'number'],
+                ['Worst QTime (ms)', 'qmax', 'number'],
+                ['Worst request seen at', 'when', 'date'],
+                ['Worst request', 'example', 'text'],
+            ],
+        ];
     }
 
     /**
@@ -561,6 +731,8 @@ final class Queries extends OpensolrView
         }
         $tools .= '</select></div>';
 
+        $tools .= $this->exportTool('shapes');
+
         self::cardOpen('qy-shapes', $this->cardNumber('qy-shapes'), 'Query shapes', '', $tools);
         self::skeleton('qy-shapes', 'rows', 0, 'Scanning the request log');
 
@@ -650,7 +822,8 @@ final class Queries extends OpensolrView
             'qy-slow',
             $this->cardNumber('qy-slow'),
             'Slowest individual requests',
-            'The requests with the highest QTime under the current filters, exactly — not a sample.'
+            'The requests with the highest QTime under the current filters, exactly — not a sample.',
+            $this->exportTool('slowest')
         );
         self::skeleton('qy-slow', 'rows', 0, 'Asking the platform for the slowest requests');
 

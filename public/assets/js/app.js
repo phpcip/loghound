@@ -31,6 +31,22 @@ import callers from './views/callers.js';
 import usage, { initBandwidthStrip } from './views/usage.js';
 import hosts, { initHostPicker } from './views/hosts.js';
 
+/**
+ * Does the view on this page honour one of the page-toolbar controls?
+ *
+ * The list is declared in PHP by Controller::toolbar() and travels in the boot payload. It is
+ * asked here rather than guessed from the slug so that the server's answer and the browser's
+ * behaviour cannot disagree, and so a view added later cannot inherit a control it ignores.
+ *
+ * An absent list means no controls, matching the PHP default: on a page served without the
+ * payload the panel shows the data and leaves out the furniture, rather than offering
+ * controls whose effect nothing has confirmed.
+ */
+function honours(control) {
+    const declared = boot.toolbar;
+    return Array.isArray(declared) && declared.indexOf(control) !== -1;
+}
+
 /** View slug → initialiser. The only routing the front end does. */
 const VIEWS = {
     overview: overview,
@@ -76,8 +92,10 @@ function start() {
     initCharts();
     initBandwidthStrip();
     initHostPicker();
-    initFilterBar();
-    initFacetControls();
+    if (honours('facets')) {
+        initFilterBar();
+        initFacetControls();
+    }
     initDetail();
     initSortableTables();
 

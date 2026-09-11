@@ -26,6 +26,7 @@ declare(strict_types=1);
 namespace Loghound\Panel;
 
 use Loghound\Config;
+use Loghound\Csv;
 use Loghound\Security;
 
 abstract class Controller
@@ -79,6 +80,64 @@ abstract class Controller
     public function facetLayer(): Facets
     {
         return $this->facets;
+    }
+
+    /** The time-range picker scopes this view's queries. */
+    public const SCOPE_RANGE = 'range';
+
+    /** The virtual-host selector scopes this view's queries. */
+    public const SCOPE_HOST = 'host';
+
+    /** The "Filter by" facet bar scopes this view's queries. */
+    public const SCOPE_FACETS = 'facets';
+
+    /**
+     * This view reads cached Solr answers, so clearing the cache changes what it shows.
+     *
+     * The same rule as the other three, stated once: Index analytics and Query analysis make no
+     * Solr read at all — their cards come from the Opensolr request-log plane, which is not
+     * cached — so a Clear cache control there would discard nothing and refresh nothing. Who is
+     * querying makes two Solr reads alongside its request-log cards and keeps it.
+     */
+    public const SCOPE_CACHE = 'cache';
+
+    /**
+     * Which page-toolbar controls this view actually honours.
+     *
+     * THE TOOLBAR IS RENDERED FROM THIS AND NOTHING ELSE. It used to be rendered
+     * unconditionally on every page: Layout emitted the six range links, and app.js injected
+     * the host selector and the "Filter by" bar, whatever the view underneath them did with
+     * the values. On Settings that produced four controls of which not one had any effect —
+     * pressing 7D changed nothing, because the single Solr query on that page is deliberately
+     * pinned to 30 days and no card on it reads a facet or a host. A control that responds to
+     * being pressed by doing nothing is the defect this method exists to make impossible.
+     *
+     * It is answered per view rather than special-cased for Settings, because "hide it on
+     * Settings" would have left the same lie on Storage & bandwidth, where the picker is
+     * equally inert, and would have let the next view inherit whichever controls it forgot to
+     * think about.
+     *
+     * THE DEFAULT IS NOTHING. A view that does not declare gets no controls rather than all of
+     * them: an absent control is a missing affordance the operator can ask for, while a dead
+     * one is a wrong answer they cannot detect. tests/test_page_toolbar.php then requires every
+     * concrete view to declare its own, so the default is unreachable in a shipped release and
+     * a new view cannot quietly inherit either behaviour.
+     *
+     * Declaring a control here is a claim that the view's own queries honour it, and that claim
+     * is checked: a view that lists SCOPE_RANGE must bound its queries by `$this->range`, one
+     * that lists SCOPE_HOST or SCOPE_FACETS must pass the facet filters into its `fq`.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [];
+    }
+
+    /** Does this view honour one of the page-toolbar controls? */
+    public function honours(string $control): bool
+    {
+        return in_array($control, $this->toolbar(), true);
     }
 
     /** URL slug for this view, e.g. 'overview'. Used for routing and nav highlighting. */
@@ -317,7 +376,7 @@ abstract class Controller
         $outer = $labels[$pivot[0]] ?? $pivot[0];
         $inner = $labels[$pivot[1]] ?? $pivot[1];
 
-        self::cardOpen($id, $num, $outer . ' by ' . $inner, $pivot[2]);
+        self::cardOpen($id, $num, $outer . ' by ' . $inner, $pivot[2], $this->exportTool('pivot'));
         self::skeleton($id, 'rows', 0, 'Cross-tabulating ' . mb_strtolower($outer) . ' by ' . mb_strtolower($inner));
         echo '<div class="table-wrap"><table id="' . Security::esc($id) . '-table" class="table-fixed pivot">'
             . '<colgroup><col style="width:32%"><col style="width:12%"><col style="width:56%"></colgroup>'
@@ -626,6 +685,656 @@ abstract class Controller
     protected static function cardEnd(): void
     {
         echo '</section>';
+    }
+
+    /* ---------------------------------------------------------------------------------
+     * CSV export
+     * ------------------------------------------------------------------------------ */
+
+    /**
+     * The defaults every export dataset is merged over.
+     *
+     * A dataset that forgets a key gets the conservative answer rather than an undefined
+     * index: no columns, a hundred rows, nothing carried, and `rows` as the payload key.
+     *
+     * @var array<string,mixed>
+     */
+    private const EXPORT_DEFAULTS = [
+        'label'    => '',
+        'action'   => '',
+        'key'      => 'rows',
+        'shape'    => 'list',
+        'columns'  => [],
+        'cap'      => 100,
+        'params'   => [],
+        'unit'     => 'rows',
+        'ranked'   => '',
+        'total'    => '',
+        'scope'    => [],
+        'note'     => '',
+        'carry'    => [],
+        'key_head' => 'Value',
+        'val_head' => 'Requests',
+        'page'     => 500,
+        'control'  => 'CSV',
+    ];
+
+    /**
+     * The tables on this view that can be taken out as CSV, keyed by export slug.
+     *
+     * THE DEFAULT IS NOTHING, on the same reasoning as toolbar(): a view that has not thought
+     * about which of its tables are worth exporting offers no control, because an absent
+     * affordance is something an operator can ask for while a wrong file is something they
+     * cannot detect once it has left the product.
+     *
+     * A dataset is declared rather than implemented, and it names an EXISTING `api()` action
+     * instead of building a query of its own. That is the whole safety argument for this
+     * feature: the export runs the query the card runs, through the same allowlists, the same
+     * `fq` construction and the same clamps, so there is no second place where a filter could
+     * be dropped, an operator inverted, or a field name spliced into Solr syntax. The only
+     * parameters the export changes are the row limits, and the file states the limit it used.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [];
+    }
+
+    /**
+     * The facet layer whose selection describes this view's exports.
+     *
+     * The sessions/hits layer for Loghound's own views; Panel\OpensolrView overrides it with
+     * the request-log layer, because the two planes have disjoint field names and a preamble
+     * that reported the wrong one would name filters the file was never scoped by.
+     */
+    protected function exportFacets(): Facets
+    {
+        return $this->facets;
+    }
+
+    /**
+     * Stream one dataset as a CSV response.
+     *
+     * Called by the front controller AFTER authentication, on a GET, and it reads only. The
+     * row limits are clamped twice — by the dataset's own cap and by Csv::MAX_ROWS — because
+     * this is the one endpoint in the panel whose cost is proportional to a number in the
+     * URL, and the file says which limit was in force.
+     *
+     * A HEAD gets the headers and none of the work, which is not an optimisation: without that
+     * early return, asking for the headers alone would run every Solr query behind the file and
+     * throw the answer away, making HEAD the cheapest way to make this endpoint expensive.
+     */
+    public function export(string $key): void
+    {
+        $declared = $this->exports();
+        if (!isset($declared[$key]) || !is_array($declared[$key])) {
+            if (!headers_sent()) {
+                http_response_code(404);
+                header('Content-Type: text/plain; charset=utf-8');
+                header('Cache-Control: no-store, private');
+            }
+            echo "This view has no such export.\n";
+            return;
+        }
+
+        $set = $declared[$key] + self::EXPORT_DEFAULTS;
+        $cap = Security::clampInt($set['cap'], 1, Csv::MAX_ROWS, 100);
+        $tz  = $this->exportTimezone();
+
+        foreach ((array) $set['params'] as $name => $value) {
+            if (is_string($name) && (is_string($value) || is_int($value))) {
+                $_GET[$name] = (string) $value;
+            }
+        }
+
+        Csv::headers(Csv::filename($this->slug(), (string) $set['label'], (string) $this->range['key'], $tz));
+
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+            return;
+        }
+
+        Csv::unbuffer();
+
+        Csv::put(Csv::bom());
+
+        if ((string) $set['shape'] === 'paged') {
+            $this->exportPaged($set, $cap, $tz);
+            return;
+        }
+
+        $this->exportWhole($set, $cap, $tz);
+    }
+
+    /**
+     * The display timezone, which is what every instant in the file is rendered in.
+     *
+     * Validated against PHP's own database and defaulted to UTC, because an unknown name
+     * would make DateTimeZone throw in the middle of a response whose headers have already
+     * been sent — which reaches the operator as a truncated file rather than as an error.
+     */
+    protected function exportTimezone(): string
+    {
+        $tz = (string) $this->cfg->get('ui.timezone', 'UTC');
+        try {
+            new \DateTimeZone($tz);
+        } catch (\Throwable $e) {
+            return 'UTC';
+        }
+        return $tz;
+    }
+
+    /**
+     * Write a dataset that arrives in one payload: a facet list, a classic facet map, a pivot.
+     *
+     * A TERMS FACET THAT RETURNED FEWER BUCKETS THAN ITS LIMIT RETURNED ALL OF THEM, and that
+     * inference is what lets the file claim completeness without a second Solr call for
+     * `numBuckets`: short of the limit means the dimension had nothing more to give, while at the
+     * limit the honest answer is "there may be more", which is what the coverage line then says.
+     *
+     * @param array<string,mixed> $set
+     */
+    private function exportWhole(array $set, int $cap, string $tz): void
+    {
+        $payload = [];
+        $columns = (array) $set['columns'];
+        $rows = [];
+
+        switch ((string) $set['shape']) {
+            case 'custom':
+                $source = $set['source'] ?? null;
+                $out = is_callable($source) ? (array) $source() : [];
+                $payload = (array) ($out['payload'] ?? []);
+                $rows = array_values((array) ($out['rows'] ?? []));
+                if (isset($out['columns']) && is_array($out['columns']) && $out['columns'] !== []) {
+                    $columns = $out['columns'];
+                }
+                $set['total'] = '';
+                $set['scope'] = (array) ($out['scope'] ?? $set['scope']);
+                $knownTotal = isset($out['total']) && is_int($out['total']) ? $out['total'] : null;
+                break;
+
+            case 'map':
+                $payload = $this->api((string) $set['action']);
+                foreach ((array) self::exportPick($payload, (string) $set['key']) as $value => $count) {
+                    $rows[] = ['value' => (string) $value, 'count' => $count];
+                }
+                $columns = [
+                    [(string) $set['key_head'], 'value', 'id'],
+                    [(string) $set['val_head'], 'count', 'number'],
+                ];
+                $knownTotal = self::exportTotal($payload, (string) $set['total']);
+                break;
+
+            case 'pivot':
+                $payload = $this->api((string) $set['action']);
+                [$rows, $columns] = self::exportPivot((array) self::exportPick($payload, (string) $set['key']));
+                $knownTotal = null;
+                break;
+
+            default:
+                $payload = $this->api((string) $set['action']);
+                $rows = array_values((array) self::exportPick($payload, (string) $set['key']));
+                $knownTotal = self::exportTotal($payload, (string) $set['total']);
+        }
+
+        $capped = count($rows) > $cap;
+        $rows = array_slice($rows, 0, $cap);
+
+        $complete = !$capped && count($rows) < $cap;
+
+        Csv::put($this->exportPreamble($set, $payload, count($rows), $knownTotal, $complete, $cap, $tz));
+        Csv::put(Csv::row(self::exportHeaders($columns)));
+
+        foreach ($rows as $row) {
+            Csv::put(Csv::row(self::exportCells($columns, (array) $row, $tz)));
+        }
+    }
+
+    /**
+     * Write a dataset that has to be fetched a page at a time.
+     *
+     * ECHOED AS IT IS READ, so the memory footprint is one page whatever the total — the
+     * session explorer can match hundreds of thousands of documents and assembling them in
+     * PHP to write them out afterwards would be a way to exhaust a worker from a URL. The
+     * total comes from the first page's `numFound`, which is exact, so the coverage line can
+     * say "the 2,000 most recent of 284,193" rather than a guess.
+     *
+     * @param array<string,mixed> $set
+     */
+    private function exportPaged(array $set, int $cap, string $tz): void
+    {
+        $pager = $set['pager'] ?? null;
+        if (!is_callable($pager)) {
+            Csv::put(Csv::row(['This export is not available on this view.']));
+            return;
+        }
+
+        $page = Security::clampInt($set['page'], 1, Security::MAX_ROWS, 500);
+        $columns = (array) $set['columns'];
+
+        $first = (array) $pager(0, $page);
+        $total = isset($first['total']) ? max(0, (int) $first['total']) : null;
+        $wanted = $total === null ? $cap : min($cap, $total);
+
+        Csv::put($this->exportPreamble(
+            $set,
+            (array) ($first['payload'] ?? []),
+            $wanted,
+            $total,
+            $total !== null && $total <= $cap,
+            $cap,
+            $tz
+        ));
+        Csv::put(Csv::row(self::exportHeaders($columns)));
+
+        $rows = array_values((array) ($first['rows'] ?? []));
+        $written = 0;
+        $start = 0;
+
+        while ($rows !== [] && $written < $wanted) {
+            foreach ($rows as $row) {
+                if ($written >= $wanted) {
+                    break;
+                }
+                Csv::put(Csv::row(self::exportCells($columns, (array) $row, $tz)));
+                $written++;
+            }
+            if ($written >= $wanted) {
+                break;
+            }
+            $start += $page;
+            $next = (array) $pager($start, $page);
+            $rows = array_values((array) ($next['rows'] ?? []));
+        }
+    }
+
+    /**
+     * The provenance block: what this file is, what scoped it, and what it covers.
+     *
+     * Written as ordinary two-column records ahead of a blank line, so a reader that wants the
+     * table alone skips to the first empty record and a person who opens the file sees the
+     * scope before the numbers. The coverage line is the one that matters — see the header of
+     * \Loghound\Csv for why a capped export that does not say so is worse than no export.
+     *
+     * @param array<string,mixed> $set
+     * @param array<string,mixed> $payload
+     */
+    private function exportPreamble(
+        array $set,
+        array $payload,
+        int $rows,
+        ?int $total,
+        bool $complete,
+        int $cap,
+        string $tz
+    ): string {
+        $lines = [
+            ['Loghound export', (string) $set['label']],
+            ['Panel view', $this->title()],
+            ['Taken', Csv::moment(gmdate('c'), $tz)],
+            ['Timezone', $tz],
+        ];
+
+        if ($this->honours(self::SCOPE_RANGE)) {
+            $lines[] = ['Time range', (string) $this->range['label']];
+        }
+
+        $facets = $this->exportFacets();
+        $dimensions = $facets->fields();
+
+        if (isset($dimensions[Query::HOST_FIELD])) {
+            $hosts = $facets->values(Query::HOST_FIELD);
+            $lines[] = ['Virtual host', $hosts === [] ? 'All hosts' : implode('; ', $hosts)];
+        }
+
+        $filters = 0;
+        foreach ($facets->selected() as $field) {
+            if ($field === Query::HOST_FIELD) {
+                continue;
+            }
+            $values = [];
+            foreach ($facets->values($field) as $value) {
+                $values[] = Vocabulary::has($field)
+                    ? Vocabulary::label($field, $value) . ' [' . $value . ']'
+                    : $value;
+            }
+            $lines[] = ['Filter', ($dimensions[$field] ?? $field)
+                . ' — ' . Facets::operatorLabel($facets->op($field))
+                . ' — ' . implode('; ', $values)];
+            $filters++;
+        }
+        if ($filters === 0) {
+            $lines[] = ['Filter', 'None'];
+        }
+
+        foreach ((array) $set['scope'] as $path => $spec) {
+            $label = is_array($spec) ? (string) ($spec[0] ?? '') : (string) $spec;
+            $value = self::exportPick($payload, (string) $path);
+            if (is_array($spec) && isset($spec[1]) && is_callable($spec[1])) {
+                $value = $spec[1]($value);
+            }
+            if (is_array($value)) {
+                $value = implode('; ', array_map(static fn ($v): string => is_scalar($v) ? (string) $v : '', $value));
+            }
+            if ($label !== '' && $value !== null && $value !== '' && $value !== false) {
+                $lines[] = [$label, is_bool($value) ? 'yes' : (string) $value];
+            }
+        }
+
+        if ((string) $set['note'] !== '') {
+            $lines[] = ['Note', (string) $set['note']];
+        }
+
+        $lines[] = ['Coverage', self::exportCoverage($set, $rows, $total, $complete, $cap)];
+
+        $out = '';
+        foreach ($lines as $line) {
+            $out .= Csv::row([Csv::text($line[0]), Csv::text($line[1])]);
+        }
+
+        return $out . Csv::EOL;
+    }
+
+    /**
+     * The one sentence that says whether this file is the whole set.
+     *
+     * Four cases, and none of them is silence. A true total of the same unit is used when the
+     * payload carries one; otherwise the fact that a terms facet came back short of its limit is
+     * the evidence of completeness; otherwise the file admits it is a top-N list and names the N.
+     *
+     * AT THE LIMIT IS THE ONLY CASE THAT HAS TO SHOUT. A terms facet that came back short of its
+     * limit returned everything the dimension had, and a paged read that stopped before its clamp
+     * read everything that matched; either way nothing was left out by the export, and claiming
+     * otherwise would mislead in the opposite direction from the silence this replaces.
+     *
+     * @param array<string,mixed> $set
+     */
+    private static function exportCoverage(array $set, int $rows, ?int $total, bool $complete, int $cap): string
+    {
+        $unit = (string) $set['unit'];
+        $ranked = (string) $set['ranked'];
+        $tail = $ranked === '' ? '' : ', ' . $ranked;
+
+        if ($rows === 0) {
+            return 'This file has no data rows: nothing in scope produced any ' . $unit
+                . '. The lines above say what the scope was.';
+        }
+
+        if ($total !== null && $rows >= $total) {
+            return 'Complete. All ' . number_format($total) . ' ' . $unit . ' in scope are in this file.';
+        }
+
+        if ($rows >= $cap) {
+            $of = $total === null ? '' : ' of ' . number_format($total);
+            return number_format($rows) . $of . ' ' . $unit . $tail . '. That is this export\'s limit of '
+                . number_format($cap) . ' rows, so this is NOT the whole set.';
+        }
+
+        if ($total !== null) {
+            return 'Complete for this scope. All ' . number_format($rows) . ' ' . $unit
+                . ' this card lists are in this file. The selected range holds '
+                . number_format($total) . ' ' . $unit . ' in all; the difference is what this card\'s '
+                . 'own controls exclude.';
+        }
+
+        if ($complete) {
+            return 'Complete. Every one of the ' . number_format($rows) . ' ' . $unit
+                . ' in scope is in this file.';
+        }
+
+        return 'Complete for this scope: all ' . number_format($rows) . ' ' . $unit . ' this card lists '
+            . 'are in this file, short of the export\'s limit of ' . number_format($cap) . ' rows.';
+    }
+
+    /**
+     * A total from the payload, but only when it is a count of the SAME unit as the rows.
+     *
+     * Most of these payloads carry a `total` that counts SESSIONS while the rows are countries
+     * or netblocks, and printing that as the denominator would produce a coverage line that is
+     * arithmetically nonsense. A dataset therefore has to name the path explicitly, and an
+     * absent or non-integer value yields null rather than a number nobody computed.
+     *
+     * @param array<string,mixed> $payload
+     */
+    private static function exportTotal(array $payload, string $path): ?int
+    {
+        if ($path === '') {
+            return null;
+        }
+        $value = self::exportPick($payload, $path);
+
+        return is_int($value) || (is_string($value) && ctype_digit($value)) ? (int) $value : null;
+    }
+
+    /**
+     * Flatten a cross-tabulation into one record per cell.
+     *
+     * A pivot on screen is a row per outer value with its inner breakdown beside it; in a
+     * spreadsheet the useful shape is one row per pair, which pivots and groups without any
+     * unpacking. `covered` rides along per row because the inner facet is LIMITED, so the
+     * cells of one outer value do NOT sum to its total — presenting them as if they did is the
+     * wrong number the on-screen renderer already refuses to print.
+     *
+     * @param array<string,mixed> $node
+     * @return array{0:array<int,array<string,mixed>>,1:array<int,array<int,string>>}
+     */
+    private static function exportPivot(array $node): array
+    {
+        $outer = (string) ($node['outer_label'] ?? 'Value');
+        $inner = (string) ($node['inner_label'] ?? 'Breakdown');
+
+        $rows = [];
+        foreach ((array) ($node['rows'] ?? []) as $row) {
+            $row = (array) $row;
+            foreach ((array) ($row['cells'] ?? []) as $cell) {
+                $cell = (array) $cell;
+                $rows[] = [
+                    'outer'       => $row['value'] ?? '',
+                    'outer_label' => $row['label'] ?? '',
+                    'outer_total' => $row['count'] ?? null,
+                    'covered'     => $row['covered'] ?? null,
+                    'inner'       => $cell['value'] ?? '',
+                    'inner_label' => $cell['label'] ?? '',
+                    'count'       => $cell['count'] ?? null,
+                ];
+            }
+        }
+
+        return [$rows, [
+            [$outer, 'outer_label', 'text'],
+            [$outer . ' (stored value)', 'outer', 'id'],
+            [$outer . ' sessions', 'outer_total', 'number'],
+            [$inner, 'inner_label', 'text'],
+            [$inner . ' (stored value)', 'inner', 'id'],
+            ['Sessions', 'count', 'number'],
+            ['Sessions covered by the listed values', 'covered', 'number'],
+        ]];
+    }
+
+    /**
+     * The header record: the HUMAN label of each column and never a stored field name.
+     *
+     * The words are the ones the table on screen uses, which is a hard rule in this product
+     * (Panel\Vocabulary): a column headed `bot_verdict_s` is a column nobody who has not read
+     * src/Score/Rules.php can act on, and a file is read by more people than a dashboard is.
+     *
+     * @param array<int,array<int,string>> $columns
+     * @return array<int,string>
+     */
+    private static function exportHeaders(array $columns): array
+    {
+        $out = [];
+        foreach ($columns as $column) {
+            $out[] = Csv::text((string) ($column[0] ?? ''));
+        }
+        return $out;
+    }
+
+    /**
+     * One record's cells, each formatted for its declared kind.
+     *
+     * The kind is what decides whether formula neutralisation applies: text and identifiers
+     * are attacker-chosen and get it, numbers go through Csv::number() which cannot emit a
+     * formula, dates through Csv::moment() which cannot either.
+     *
+     * @param array<int,array<int,string>> $columns
+     * @param array<string,mixed>          $row
+     * @return array<int,string>
+     */
+    private static function exportCells(array $columns, array $row, string $tz): array
+    {
+        $out = [];
+        foreach ($columns as $column) {
+            $value = self::exportPick($row, (string) ($column[1] ?? ''));
+            $kind = (string) ($column[2] ?? 'text');
+            $field = (string) ($column[3] ?? '');
+
+            $out[] = match ($kind) {
+                'number' => Csv::number($value),
+                'date'   => Csv::moment($value, $tz),
+                'bool'   => Csv::flag($value),
+                'vocab'  => Csv::text(
+                    is_string($value) && $value !== '' && $field !== ''
+                        ? Vocabulary::label($field, $value)
+                        : $value
+                ),
+                'pairs'  => Csv::text(self::exportPairs($value, $field)),
+                default  => Csv::text($value),
+            };
+        }
+        return $out;
+    }
+
+    /**
+     * A nested "top five, with counts" list, flattened into one cell.
+     *
+     * The country table's cities column is the case: five `{city, count}` records that are on
+     * screen beside the row and would otherwise be silently dropped from the file. Rendered as
+     * `Chicago (26); Newark (18)` so the counts survive — a bare list of names would lose the
+     * only thing that makes the order meaningful. It is a top-N inside a top-N and the dataset's
+     * note says so.
+     *
+     * @param mixed $value
+     */
+    private static function exportPairs($value, string $labelKey): string
+    {
+        if (!is_array($value) || $value === []) {
+            return '';
+        }
+
+        $out = [];
+        foreach ($value as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $name = $entry[$labelKey] ?? null;
+            if (!is_scalar($name) || (string) $name === '') {
+                continue;
+            }
+            $count = $entry['count'] ?? null;
+            $out[] = is_numeric($count) ? (string) $name . ' (' . $count . ')' : (string) $name;
+        }
+
+        return implode('; ', $out);
+    }
+
+    /**
+     * Read a value out of a payload by dotted path, tolerating every absence.
+     *
+     * `status.4xx` and `pivot.rows` are both real paths in these payloads, and a missing
+     * segment has to be null rather than a PHP warning emitted into the middle of a CSV.
+     *
+     * @param array<string,mixed> $data
+     * @return mixed
+     */
+    private static function exportPick(array $data, string $path)
+    {
+        if ($path === '') {
+            return null;
+        }
+
+        $node = $data;
+        foreach (explode('.', $path) as $segment) {
+            if (!is_array($node) || !array_key_exists($segment, $node)) {
+                return null;
+            }
+            $node = $node[$segment];
+        }
+
+        return $node;
+    }
+
+    /**
+     * The discreet control that starts an export, for a card's `$tools` slot.
+     *
+     * A text link in the card head rather than a button: it belongs beside the sort chips and
+     * the population toggles, in their type and their tone, and it must not compete with the
+     * data for attention. The accessible name is a whole sentence naming what the file will
+     * contain and what scopes it, because a control that says only "CSV" leaves the reader to
+     * guess whether it covers the filtered view or everything. The visible text is "CSV" unless
+     * the dataset overrides it, which is what a card holding TWO tables needs: two links both
+     * reading "CSV" in one card head name neither of them.
+     *
+     * The href is built server-side by Layout::urlWith(), so the range, the host, every filter
+     * and its operator are already in it and the control works with JavaScript switched off.
+     * assets/js/export.js then keeps it in step with the controls that live only in the page.
+     */
+    protected function exportTool(string $key): string
+    {
+        $declared = $this->exports();
+        if (!isset($declared[$key]) || !is_array($declared[$key])) {
+            return '';
+        }
+
+        $set = $declared[$key] + self::EXPORT_DEFAULTS;
+        $cap = Security::clampInt($set['cap'], 1, Csv::MAX_ROWS, 100);
+        $href = Layout::urlWith(self::exportQuery($this->slug(), $key, (array) $set['carry']));
+
+        $hint = 'Download ' . $set['label'] . ' as CSV: up to ' . number_format($cap) . ' '
+            . $set['unit'] . ', carrying the time range, virtual host, filters and ordering in force.';
+
+        $carry = [];
+        foreach ((array) $set['carry'] as $name) {
+            if (is_string($name) && preg_match('/^[a-z_]{1,20}$/D', $name) === 1) {
+                $carry[] = $name;
+            }
+        }
+
+        return '<a class="export" href="' . Security::esc($href) . '"'
+            . ' data-export="' . Security::esc($key) . '"'
+            . ' data-export-carry="' . Security::esc(implode(',', $carry)) . '"'
+            . ' title="' . Security::esc($hint) . '"'
+            . ' aria-label="' . Security::esc($hint) . '">'
+            . Security::esc((string) $set['control']) . '</a>';
+    }
+
+    /**
+     * The query parameters an export link adds on top of the page's own state.
+     *
+     * `carry` names the page parameters the dataset's action reads — a population, a sort
+     * order, a search box, an index — so a bookmarked or JavaScript-free export is scoped the
+     * way the page was. Each one is re-validated by the action itself against its own
+     * allowlist, exactly as it is on the JSON path; this only decides whether it travels.
+     *
+     * @param array<int,string> $carry
+     * @return array<string,string>
+     */
+    private static function exportQuery(string $view, string $key, array $carry): array
+    {
+        $params = ['v' => $view, 'export' => $key];
+
+        foreach ($carry as $name) {
+            if (!is_string($name) || preg_match('/^[a-z_]{1,20}$/D', $name) !== 1) {
+                continue;
+            }
+            $value = $_GET[$name] ?? null;
+            if (is_string($value) && $value !== '') {
+                $params[$name] = mb_substr($value, 0, 200);
+            }
+        }
+
+        return $params;
     }
 
     /**

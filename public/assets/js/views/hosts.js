@@ -20,10 +20,11 @@
 'use strict';
 
 import {
-    api, byId, dec, el, hideEmpty, loadCard, noDataYet, num, pct, populationLabel, setPop, tbody
+    api, boot, byId, dec, el, hideEmpty, loadCard, noDataYet, num, pct, populationLabel, setPop, tbody
 } from '../core.js';
 import { barsH, tokens } from '../charts.js';
 import { dimRow, dimValue } from '../identity.js';
+import { noteHosts, outLink } from '../url.js';
 
 /** Population keys in the order the table and the bar use them. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -58,9 +59,49 @@ function hostUrl(host) {
  * Silent on failure for the same reason the bandwidth strip is: this runs on every view, and
  * a panel whose route is not wired up, or whose sessions core is briefly unreachable, must
  * not grow an error in its header on every page.
+ *
+ * IT ALSO ANSWERS A QUESTION EVERY OTHER VIEW HAS. A path facet bucket carries no host, so the
+ * panel cannot link a full URL for it unless it knows the installation serves exactly one site.
+ * This request already has that answer, and url.js is told it — including when the request
+ * fails, so nothing is left waiting on a list that is never coming.
  */
+/**
+ * Does the view on this page honour the host selector?
+ *
+ * THE FETCH IS NOT GATED, ONLY THE CONTROL. The request this function guards also answers a
+ * question every view needs — url.js cannot compose a full URL for a path facet bucket unless
+ * it knows whether the installation serves one site or several — so skipping the call to avoid
+ * drawing a selector would take the host out of every link on pages that have no selector.
+ *
+ * The declaration comes from Controller::toolbar() through the boot payload, so the selector
+ * appears exactly where the view's own queries are filtered by it. On Index analytics, Query
+ * analysis and Who is querying it is absent because `f[host_s][]` reaches a different plane and
+ * changes nothing there; on Storage & bandwidth and Settings nothing is scoped at all.
+ */
+function scopedByHost() {
+    const declared = boot.toolbar;
+    return Array.isArray(declared) && declared.indexOf('host') !== -1;
+}
+
 export function initHostPicker() {
+    /* THE REQUEST IS NOT MADE WHERE NOTHING NEEDS IT. This ran unconditionally, so every page
+       in the panel paid for one extra Solr facet — including the five views that neither draw
+       the selector nor render a single site path. The views that need the answer are exactly
+       the views that declare the host selector, because they are the ones that render paths
+       whose host has to be resolved before url.js can link them.
+
+       Where the call is skipped the list is still SETTLED, as empty rather than unknown. Any
+       mark waiting on it then resolves to "no host known" instead of waiting for a reply that
+       is never coming — there should be none on these views, and a stuck placeholder would be
+       a worse way to find out than an honest one. */
+    if (!scopedByHost()) {
+        noteHosts([]);
+        return;
+    }
+
     api('hosts', 'list').then((data) => {
+        noteHosts((data.hosts || []).map((row) => row.host));
+
         const tools = document.querySelector('.head-tools');
         if (!tools || !data.multi || byId('lh-host')) {
             return;
@@ -91,6 +132,7 @@ export function initHostPicker() {
            the page means. Still not a report — it does not take a card's failure state — but a
            multi-site operator who is quietly being shown all hosts at once has to be told the
            control they use to narrow that is missing, and given something to paste. */
+        noteHosts([]);
         window.console.error('loghound: the virtual-host selector could not load', err);
         const tools = document.querySelector('.head-tools');
         if (!tools || byId('lh-hostpick-failed')) {
@@ -187,6 +229,10 @@ function renderTable(data) {
 /**
  * The host cell, carrying a mark when the host has sessions with no transport plane.
  *
+ * The hostname itself gets the same two-affordance treatment every path in the panel gets: the
+ * name filters the dashboard to that host, and the small link beside it opens the site's front
+ * page in a new tab. A row naming a site nobody can reach from it is a row that stops halfway.
+ *
  * The mark is on the row rather than in a footnote because the table mixes the two kinds and a
  * reader comparing two rows has to be able to see which is which without leaving the row. Three
  * states, and they are genuinely different situations: every session single-plane (a site on
@@ -194,7 +240,10 @@ function renderTable(data) {
  * range), or none.
  */
 function planeName(row) {
-    const name = dimValue('host_s', row.host, { mono: true });
+    const name = el('span', { class: 'urlwrap' }, [
+        el('span', { class: 'urlpath' }, [dimValue('host_s', row.host, { mono: true })]),
+        outLink(row.host, '/')
+    ]);
     if (!row.beacon_only) {
         return name;
     }

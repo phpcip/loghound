@@ -450,16 +450,25 @@ export function drillRow(kind, data) {
  * same data-lh-open the row does, so dialog.js's single delegated listener dispatches it with
  * no extra wiring and a table replaced by a fetch needs none either.
  *
+ * THE HINT IS THE PANEL'S OWN TOOLTIP, NOT `title`. This is a bare chevron with no words, the
+ * fourth icon-only control in the product, and the other three \u2014 the collapsed rail's marks \u2014
+ * are already on the panel's tooltip. `title` arrives a second late, in a different place, in
+ * the browser's type, which beside three hints that do none of those things reads as a defect.
+ * The `aria-label` STAYS: the accessible name belongs on the control whatever draws the hint,
+ * and it is what a screen reader announces whether or not anything is hovered.
+ *
  * @param {string} kind Subject kind a view registered an opener for.
  * @param {Object} data Extra data- attributes, without the lh prefix.
  * @param {string} [label] What the control says it will open.
  */
 export function openButton(kind, data, label) {
+    const name = label || 'Open the full record';
     const attrs = {
         type: 'button',
         class: 'rowopen',
-        'aria-label': label || 'Open the full record',
-        title: label || 'Open the full record',
+        'aria-label': name,
+        'data-lh-tip': '1',
+        'data-full': name,
         dataset: Object.assign({ lhOpen: String(kind) }, data || {})
     };
     return el('button', attrs, [el('span', { 'aria-hidden': 'true', text: '\u203A' })]);

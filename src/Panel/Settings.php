@@ -40,6 +40,8 @@ namespace Loghound\Panel;
 use Loghound\Auth\Base32;
 use Loghound\Auth\Persistence;
 use Loghound\Auth\TwoFactor;
+use Loghound\Beacon\Doc;
+use Loghound\Cache;
 use Loghound\Config;
 use Loghound\LogDetect;
 use Loghound\Quota;
@@ -92,6 +94,21 @@ final class Settings extends Controller implements JobHost, Sections
     public function slug(): string
     {
         return 'settings';
+    }
+
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * None of them. The single Solr query on this page is deliberately pinned to thirty days
+     * rather than the selected range — the question is whether ingestion works at all, not what
+     * happened in the last hour — and no card here reads a facet or a virtual host. Declaring
+     * nothing is what stops the panel drawing four controls that answer a press with silence.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [];
     }
 
     public function title(): string
@@ -361,6 +378,12 @@ final class Settings extends Controller implements JobHost, Sections
             case 'ui':
                 return $this->saveUi();
 
+            case 'cache':
+                return $this->saveCache();
+
+            case 'source_ingest':
+                return $this->saveSourceIngest();
+
             case 'auth_mode':
                 return $this->saveAuthMode();
 
@@ -373,8 +396,8 @@ final class Settings extends Controller implements JobHost, Sections
             case 'panel_password':
                 return $this->savePanelPassword();
 
-            case 'opensolr_pair':
-                return $this->switchPair();
+            case 'opensolr_indexes':
+                return $this->chooseIndexes();
 
             case 'add_source':
                 return $this->addSource();
@@ -519,9 +542,15 @@ final class Settings extends Controller implements JobHost, Sections
      * NOTHING ACCOUNT-SCOPED IS CACHED, so there is nothing here to invalidate. The plan's index
      * allowance is read from get_account_summary at the moment it is needed rather than stored,
      * precisely because a number remembered against one account is silently wrong the moment the
-     * credentials point at another. What DOES survive a change of account is the pair of index
-     * names, and those may not belong to the new one — which is checked and reported rather than
-     * left to be discovered as an empty dashboard.
+     * credentials point at another.
+     *
+     * SAYING WHICH ACCOUNT IS NOT SAYING WHICH INDEXES, and this method no longer pretends
+     * otherwise. It used to refuse the whole change unless a checkbox was ticked, on the grounds
+     * that the new account might not hold the two indexes named in the configuration — which made
+     * the operator understand a guard before they could name an account. The state that guard was
+     * avoiding is real, so it is HANDLED instead: Pairs::settleOwnership() records it, the card
+     * says plainly that indexes have not been chosen yet, and step two below is where they get
+     * chosen. A refusal designed to keep a legitimate state from existing is the wrong solution.
      *
      * Nothing here is logged, and nothing reaches a job: the key travels from the form field
      * into Config and stops. The POST entry is unset as soon as it has been read, so a later
@@ -537,10 +566,11 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         $before = [
-            'email'  => (string) $this->cfg->get('opensolr.email', ''),
-            'key'    => (string) $this->cfg->get('opensolr.api_key', ''),
-            'region' => (string) $this->cfg->get('opensolr.region', ''),
-            'mode'   => (string) $this->cfg->get('solr.mode', Config::SOLR_MODE),
+            'email'   => (string) $this->cfg->get('opensolr.email', ''),
+            'key'     => (string) $this->cfg->get('opensolr.api_key', ''),
+            'region'  => (string) $this->cfg->get('opensolr.region', ''),
+            'mode'    => (string) $this->cfg->get('solr.mode', Config::SOLR_MODE),
+            'pending' => Pairs::isPending($this->cfg),
         ];
 
         $email  = is_string($_POST['opensolr_email'] ?? null) ? trim($_POST['opensolr_email']) : '';
@@ -549,7 +579,12 @@ final class Settings extends Controller implements JobHost, Sections
 
         unset($_POST['opensolr_api_key']);
 
-        $problems = Storage::saveCredentials($this->cfg, $email === '' ? $before['email'] : $email, $key);
+        $problems = Storage::saveCredentials(
+            $this->cfg,
+            $email === '' ? $before['email'] : $email,
+            $key,
+            $region
+        );
         if ($problems !== []) {
             $this->restoreOpensolr($before);
             return $this->refuseCredentials(implode(' ', $problems), $anchor);
@@ -562,31 +597,17 @@ final class Settings extends Controller implements JobHost, Sections
             return $this->refuseCredentials(Storage::explainApi($e->getMessage()), $anchor);
         }
 
-        $chosen = $this->settleRegion($region === '' ? $before['region'] : $region, $regions, $region !== '');
+        $chosen = Storage::settleRegion($this->cfg, $regions, $region !== '');
         if ($chosen === null) {
             $this->restoreOpensolr($before);
-            return $this->refuseCredentials(
-                'Opensolr does not offer the region "' . $region . '" to this account. '
-                . 'It offers: ' . implode(', ', $regions) . '.',
-                $anchor
-            );
+            return $this->refuseCredentials(Storage::regionRefusal($region, $regions), $anchor);
         }
         $this->cfg->set('opensolr.region', $chosen);
 
-        $moved = $this->accountMoved($before, $email, $key);
-        $orphaned = $moved ? $this->indexesNotOwned() : [];
-
-        if ($orphaned !== [] && ($_POST['accept_reindex'] ?? '') !== '1') {
-            $this->restoreOpensolr($before);
-            return $this->refuseCredentials(
-                'Those credentials work, but that account does not hold '
-                . implode(' or ', $orphaned) . ', which is where this installation\'s history is. '
-                . 'Changing to it would leave the panel pointing at indexes it cannot read. Tick '
-                . '"I will choose new indexes" to change accounts anyway and pick a pair from the '
-                . 'new one, or put the previous account back.',
-                $anchor
-            );
-        }
+        $moved     = $this->accountMoved($before, $email, $key);
+        $ownership = $moved
+            ? Pairs::settleOwnership($this->cfg, Storage::account($this->cfg))
+            : ($before['pending'] ? 'missing' : 'owned');
 
         $err = $this->persist();
         if ($err !== null) {
@@ -594,7 +615,10 @@ final class Settings extends Controller implements JobHost, Sections
             return '?v=settings&err=' . $err . $anchor;
         }
 
-        self::stashSolrNote('good', $this->credentialOutcome($before, $chosen, $moved));
+        self::stashSolrNote(
+            $ownership === 'missing' ? 'warn' : 'good',
+            $this->credentialOutcome($before, $chosen, $moved, $ownership)
+        );
 
         return '?v=settings&ok=opensolr_saved' . $anchor;
     }
@@ -917,26 +941,37 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
-     * Move this installation onto a different pair of Opensolr indexes, after installation.
+     * STEP TWO: point this installation at the indexes the operator just picked.
      *
-     * THE SAME WORK THE INSTALLER DOES, through the same steps. Storage::reuseSteps() is the
-     * one definition of what adopting a pair MEANS — confirm the account still holds it, read
-     * the connection details, compare the live schema against this release's, verify both cores
-     * answer — and running it here rather than reimplementing it is what stops the panel and the
-     * installer from drifting into two different ideas of the same operation.
+     * ONE HANDLER FOR BOTH OPTIONS, because the operator made one choice. A pair from the list
+     * and "make a new pair" used to be two unrelated things — the panel could only adopt, and the
+     * dead end where there was nothing to adopt read "A new pair is created by running setup."
+     * Nobody is forced into two new indexes and nobody is sent to a shell to get them, so both
+     * arms live here and both end the same way: two valid indexes this installation can read and
+     * write.
      *
-     * IT RUNS SYNCHRONOUSLY, which is safe only because none of those steps creates anything.
-     * The provisioning path is a browser-driven job precisely because creating two indexes and
-     * uploading four files takes longer than a gateway will hold a request; adopting a pair is a
-     * handful of reads and one optional upload, and a request that times out here has changed
-     * nothing that matters — the steps write the configuration as they go and the whole thing is
-     * re-runnable from the same screen.
+     * THE SAME WORK THE INSTALLER DOES, through the same steps. Storage::reuseSteps() and
+     * Storage::opensolrSteps() are the one definition of what each option MEANS, and running them
+     * here rather than reimplementing them is what stops the panel and the installer from drifting
+     * into two different ideas of the same operation.
      *
-     * NOTHING IN THE OLD PAIR IS TOUCHED. It is not cleared, not deleted, not reshaped; this
-     * installation simply stops reading and writing it. That is worth saying on the way out,
-     * because "switch" is a word that sounds like a move.
+     * THE CAPACITY CHECK COMES FIRST ON THE PROVISION ARM, twice over. The account is read here,
+     * before a job exists, and refused with Pairs::deadEnd()'s real numbers; and the job's own
+     * `capacity` step is still step 2 of 9, ahead of `create_hits`, for the race this check cannot
+     * win. The render withholds the option as well, so pressing a control that cannot succeed
+     * takes three separate failures of nerve.
+     *
+     * IT RUNS SYNCHRONOUSLY, as adopting always has. The steps write the configuration as they go
+     * and every one of them is idempotent, so a request that runs out of time has changed nothing
+     * that a second attempt does not simply redo — which is why the execution limit is lifted for
+     * the duration rather than the work being split across polls. Provisioning is the slower arm
+     * (two creates and four configset uploads), and it is the arm an operator runs once.
+     *
+     * NOTHING IN THE OLD PAIR IS TOUCHED either way. It is not cleared, not deleted, not
+     * reshaped; this installation simply stops reading and writing it. That is worth saying on
+     * the way out, because "switch" is a word that sounds like a move.
      */
-    private function switchPair(): string
+    private function chooseIndexes(): string
     {
         $anchor = '#set-solr';
 
@@ -950,8 +985,10 @@ final class Settings extends Controller implements JobHost, Sections
             return '?v=settings&err=' . $refused . $anchor;
         }
 
-        $installId = is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : '';
-        if (!preg_match('/^[a-f0-9]{4,32}$/D', $installId)) {
+        $choice = is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : '';
+        $new    = $choice === Pairs::CHOICE_NEW;
+
+        if (!$new && !preg_match('/^[a-f0-9]{4,32}$/D', $choice)) {
             return '?v=settings&err=pair_unknown' . $anchor;
         }
 
@@ -960,150 +997,198 @@ final class Settings extends Controller implements JobHost, Sections
             'sessions' => (string) $this->cfg->get('solr.sessions_core', ''),
         ];
 
-        try {
-            $job = Job::create($this->cfg->varDir() . '/setup', Job::KIND_REUSE, [
-                'install_id'     => $installId,
+        $params = $new
+            ? ['region' => (string) $this->cfg->get('opensolr.region', '')]
+            : [
+                'install_id'     => $choice,
                 'upgrade_schema' => ($_POST['upgrade_schema'] ?? '') === '1',
-            ]);
+            ];
+
+        if ($new) {
+            $blocked = $this->provisionRefusal();
+            if ($blocked !== '') {
+                self::stashSolrNote('bad', $blocked);
+                return '?v=settings&err=pair_failed' . $anchor;
+            }
+        }
+
+        try {
+            $job = Job::create(
+                $this->cfg->varDir() . '/setup',
+                $new ? Job::KIND_OPENSOLR : Job::KIND_REUSE,
+                $params
+            );
         } catch (\Throwable $e) {
             self::stashSolrNote('bad', 'The job store could not be opened: ' . Jobs::redact($e->getMessage()));
             return '?v=settings&err=pair_failed' . $anchor;
         }
+
+        @set_time_limit(0);
 
         if (!$job->runAll($this->cfg, self::root())) {
             self::stashSolrNote('bad', Jobs::redact($job->error()));
             return '?v=settings&err=pair_failed' . $anchor;
         }
 
-        $now = (string) $this->cfg->get('solr.hits_core', '');
-        self::stashSolrNote(
-            'good',
-            'This installation now reads and writes ' . $now . ' and '
-            . (string) $this->cfg->get('solr.sessions_core', '') . '. '
-            . ($was['hits'] === '' || $was['hits'] === $now
-                ? 'Nothing else changed.'
-                : 'Nothing in ' . $was['hits'] . ' or ' . $was['sessions'] . ' was deleted, cleared or '
-                    . 'moved — they are still on your account with everything in them, and this '
-                    . 'installation has simply stopped using them. The panel now shows what is in the '
-                    . 'new pair, which is not the same history.')
-        );
+        self::stashSolrNote('good', $this->chosenOutcome($was, $new));
 
-        return '?v=settings&ok=pair_switched' . $anchor;
+        return '?v=settings&ok=' . ($new ? 'pair_created' : 'pair_switched') . $anchor;
     }
 
     /**
-     * The pairs this account holds, offered as somewhere else to point this installation.
+     * Refuse "make a new pair" before a job exists, with the platform's own numbers.
      *
-     * One control-plane read per render of this card, which is the same cost the installer's
-     * storage step pays and for the same reason: a list of indexes that is a minute stale is a
-     * list that offers something already deleted. A failed read is reported and the rest of the
-     * card still renders.
+     * The render already withholds the option when the plan is full, so reaching this is either a
+     * stale page or a hand-made POST. Either way the answer has to be the numbers rather than a
+     * bare "no": a plan that filled up while the page sat open is the ordinary case, and
+     * Pairs::deadEnd() plus the ways forward is exactly what the installer says in the same spot.
      *
-     * An unmatched half is shown as what it is rather than hidden, exactly as in the installer —
-     * it is billable, and a leftover nobody mentions is a leftover nobody deletes.
+     * @return string The refusal, or '' when there is room to go ahead.
      */
-    private function pairSwitchPart(): void
+    private function provisionRefusal(): string
+    {
+        $account = Storage::account($this->cfg);
+        if (!$account['ok']) {
+            return $account['error'];
+        }
+
+        if (empty($account['capacity']['blocked'])) {
+            return '';
+        }
+
+        $ways = Pairs::waysForward($account['pairs'] !== []);
+        $text = Pairs::deadEnd($account['capacity']) . ' ' . Pairs::waysHeading($ways);
+        foreach ($ways as $way) {
+            $text .= ' ' . $way['text'] . ($way['url'] !== '' ? ' ' . $way['url'] : '');
+        }
+
+        return $text;
+    }
+
+    /**
+     * What just happened, said in terms of the operator's data rather than the operation.
+     *
+     * The line an operator needs most is the one that is easiest to get wrong: the pair they
+     * were using is still there, with everything in it, and the panel is now showing a different
+     * history. Saying "switched" and stopping leaves them wondering what became of the old one.
+     *
+     * @param array{hits:string,sessions:string} $was
+     */
+    private function chosenOutcome(array $was, bool $created): string
+    {
+        $now      = (string) $this->cfg->get('solr.hits_core', '');
+        $sessions = (string) $this->cfg->get('solr.sessions_core', '');
+
+        $text = $created
+            ? 'This installation has a new pair of its own, ' . $now . ' and ' . $sessions
+                . ', and reads and writes those from now on. They count against your plan.'
+            : 'This installation now reads and writes ' . $now . ' and ' . $sessions . '.';
+
+        if ($was['hits'] === '' || $was['hits'] === $now) {
+            return $text . ' Nothing else changed.';
+        }
+
+        return $text . ' Nothing in ' . $was['hits'] . ' or ' . $was['sessions'] . ' was deleted, '
+            . 'cleared or moved — they are still on your account with everything in them, and this '
+            . 'installation has simply stopped using them. The panel now shows what is in the new '
+            . 'pair, which is not the same history.';
+    }
+
+    /**
+     * STEP TWO, RENDERED: the pairs this account holds, plus the option to make a new one.
+     *
+     * THE LIST AND THE LAST OPTION CARRY THE WHOLE MEANING. There is no checkbox qualifying a
+     * different decision and no guard to understand before proceeding — the operator picks one
+     * row and confirms. A single pair is a row like any other, because they have said which
+     * account to use and have not yet said anything about indexes.
+     *
+     * Every sentence on this card comes from Pairs::decide(), which is also what the browser
+     * installer and both shell paths render. The rendering differs because a shell cannot draw a
+     * radio; the options, their order, the labels and the refusals do not.
+     *
+     * One control-plane read per render, which is the cost the installer's storage step pays and
+     * for the same reason: a list of indexes that is a minute stale is a list that offers
+     * something already deleted. A failed read is reported as a failed read and the rest of the
+     * card still renders.
+     */
+    private function indexChoicePart(): void
     {
         if ((string) $this->cfg->get('opensolr.api_key', '') === '') {
             return;
         }
 
-        $account = Storage::account($this->cfg);
+        $step = Pairs::decide($this->cfg, Storage::account($this->cfg));
 
-        echo '<h4>Use a different pair of indexes</h4>';
+        echo '<h4 id="set-solr-indexes">' . Security::esc($step['heading']) . '</h4>';
 
-        if (!$account['ok']) {
-            echo '<p class="muted">' . Security::esc($account['error']) . '</p>';
+        if (!$step['ok']) {
+            echo '<p class="muted">' . Security::esc($step['error']) . '</p>';
             return;
         }
 
-        echo '<p class="muted">' . Security::esc($account['capacity']['sentence']) . '</p>';
-
-        foreach ($account['halves'] as $half) {
-            echo '<p class="muted"><span class="mono">' . Security::esc((string) $half['name'])
-                . '</span> is on this account without its matching <span class="mono">'
-                . Security::esc((string) $half['missing']) . '</span> — what a setup run that stopped '
-                . 'half way leaves behind. It cannot be used as a pair and it still counts against '
-                . 'your plan.</p>';
-        }
-
-        $others = [];
-        foreach ($account['pairs'] as $pair) {
-            if (!Pairs::isCurrent($this->cfg, $pair)) {
-                $others[] = $pair;
+        if ($step['dead_end'] !== '') {
+            self::problemBanner($step['dead_end']);
+            echo '<p>' . Security::esc($step['ways_heading']) . '</p><ul>';
+            foreach ($step['ways'] as $way) {
+                echo '<li>' . Security::esc($way['text']);
+                if ($way['url'] !== '') {
+                    echo ' <a href="' . Security::safeUrl($way['url'])
+                        . '" target="_blank" rel="noopener noreferrer">Open your Opensolr account</a>';
+                }
+                echo '</li>';
             }
-        }
-
-        if ($others === []) {
-            echo '<p class="muted">This account has no other Loghound pair to move to. A new pair is '
-                . 'created by running setup.</p>';
+            echo '</ul>';
             return;
         }
 
-        echo '<p class="muted">Moving this installation onto another pair does not delete, clear or '
-            . 'move anything in the one it is using now — that pair stays on your account with '
-            . 'everything in it, and the panel simply starts showing the other one instead.</p>';
+        echo '<p>' . Security::esc($step['intro']) . '</p>';
+
+        foreach ($step['halves'] as $notice) {
+            echo '<p class="muted">' . Security::esc($notice) . '</p>';
+        }
 
         echo '<form method="post" action="?v=settings" class="setup-form">';
         self::csrfField();
-        echo '<input type="hidden" name="action" value="opensolr_pair">';
+        echo '<input type="hidden" name="action" value="opensolr_indexes">';
 
         $first = true;
-        foreach ($others as $pair) {
+        foreach ($step['pairs'] as $pair) {
             echo '<label class="radio">';
             echo '<input type="radio" name="install_id" value="'
-                . Security::esc((string) $pair['install_id']) . '"' . ($first ? ' checked' : '') . ' required>';
-            echo '<span><span class="mono">' . Security::esc((string) $pair['hits']) . '</span><br>'
-                . '<span class="mono">' . Security::esc((string) $pair['sessions']) . '</span></span>';
+                . Security::esc($pair['install_id']) . '"' . ($first ? ' checked' : '') . ' required>';
+            echo '<span><span class="mono">' . Security::esc($pair['hits']) . '</span><br>'
+                . '<span class="mono">' . Security::esc($pair['sessions']) . '</span>'
+                . ($pair['current'] ? ' <span class="chip chip-good">already in use here</span>' : '')
+                . '</span>';
             echo '</label>';
             $first = false;
         }
 
-        echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
-            . 'Add the fields this version writes, if that pair was made by an older Loghound</label>';
-        echo '<p class="muted">Unticked, the shape is checked first and the move stops if it does not '
-            . 'match, changing nothing.</p>';
+        if ($step['can_new']) {
+            echo '<label class="radio">';
+            echo '<input type="radio" name="install_id" value="' . Security::esc(Pairs::CHOICE_NEW) . '"'
+                . ($first ? ' checked' : '') . ' required>';
+            echo '<span>' . Security::esc($step['new_label']) . '</span>';
+            echo '</label>';
+            echo '<p class="muted">' . Security::esc($step['new_detail']) . '</p>';
+        } elseif ($step['new_blocked'] !== '') {
+            echo '<p class="muted">' . Security::esc($step['new_blocked']) . '</p>';
+        }
 
-        echo '<button type="submit" class="primary">Use this pair</button>';
+        if ($step['pairs'] !== []) {
+            echo '<p class="muted">' . Security::esc($step['consequence']) . '</p>';
+            echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
+                . 'If the pair you pick was made by an older Loghound, add the fields this version '
+                . 'writes</label>';
+            echo '<p class="muted">Left unticked, the shape is checked first and nothing changes if it '
+                . 'does not match. Ticked, the missing fields are added, which only ever adds and does '
+                . 'not alter or remove a single document already in there.</p>';
+        }
+
+        echo '<button type="submit" class="primary">Use these indexes</button>';
         echo '</form>';
-    }
-
-    /**
-     * Which of this installation's two indexes the CURRENTLY CONFIGURED account does not hold.
-     *
-     * A pair belongs to an account, so changing the account and keeping the pair is a
-     * combination that can be wrong — and it fails silently: the credentials authenticate, the
-     * configuration saves, and the panel then reads nothing because the platform refuses every
-     * query for an index this account does not own. Catching it here turns a mystery into a
-     * sentence at the moment the operator can still say no.
-     *
-     * Called with the candidate credentials already on the in-memory configuration, so the
-     * client it builds is the NEW account's.
-     *
-     * A read that fails returns nothing rather than everything: refusing a credential change
-     * because the network hiccuped would block the very edit that fixes a broken account, and
-     * the outcome line still reports that the check could not be made.
-     *
-     * @return string[] Index names the account does not hold.
-     */
-    private function indexesNotOwned(): array
-    {
-        $wanted = array_values(array_filter([
-            (string) $this->cfg->get('solr.hits_core', ''),
-            (string) $this->cfg->get('solr.sessions_core', ''),
-        ]));
-
-        if ($wanted === []) {
-            return [];
-        }
-
-        try {
-            $held = Storage::client($this->cfg)->listIndexes();
-        } catch (\Throwable $e) {
-            return [];
-        }
-
-        return array_values(array_diff($wanted, $held));
+        echo '<p class="muted">Whichever you pick, this runs the steps the installer runs and can take '
+            . 'a minute. Nothing on your account is deleted, cleared or moved by it.</p>';
     }
 
     /**
@@ -1144,7 +1229,10 @@ final class Settings extends Controller implements JobHost, Sections
      * — the redirect target included — describes what is actually stored rather than the
      * candidate that was just rejected.
      *
-     * @param array{email:string,key:string,region:string,mode:string} $before
+     * The pending marker is restored with them, because it describes the relationship between
+     * the account and the index names and a refusal has not changed either.
+     *
+     * @param array{email:string,key:string,region:string,mode:string,pending:bool} $before
      */
     private function restoreOpensolr(array $before): void
     {
@@ -1152,28 +1240,7 @@ final class Settings extends Controller implements JobHost, Sections
         $this->cfg->set('opensolr.api_key', $before['key']);
         $this->cfg->set('opensolr.region', $before['region']);
         $this->cfg->set('solr.mode', $before['mode']);
-    }
-
-    /**
-     * Which region the change should end up on, or null when the operator asked for a bad one.
-     *
-     * A region the operator TYPED is held to the platform's list and refused if it is not on
-     * it. A region merely carried over from before is not: an account can legitimately stop
-     * offering a region it once did, and refusing the whole credential change because of a
-     * stale value would block the very edit that fixes it. In that case the region is cleared
-     * and the outcome says so.
-     *
-     * @param string[] $regions
-     */
-    private function settleRegion(string $wanted, array $regions, bool $explicit): ?string
-    {
-        if ($wanted === '') {
-            return '';
-        }
-        if (in_array($wanted, $regions, true)) {
-            return $wanted;
-        }
-        return $explicit ? null : '';
+        $this->cfg->set(Pairs::PENDING_KEY, $before['pending']);
     }
 
     /**
@@ -1207,9 +1274,16 @@ final class Settings extends Controller implements JobHost, Sections
      * placed — because implying that changing it relocates an existing index would be a
      * confident lie about somebody's data.
      *
-     * @param array{email:string,key:string,region:string,mode:string} $before
+     * THE VERDICT IS PASSED IN, not looked up again. Pairs::settleOwnership() has already read
+     * the account, so asking the platform a second question it has answered would be a second
+     * chance to get a different answer as well as a second network call. Each of its four
+     * verdicts gets its own sentence, because "could not check" and "does not hold them" lead an
+     * operator to do opposite things.
+     *
+     * @param array{email:string,key:string,region:string,mode:string,pending:bool} $before
+     * @param string $ownership A Pairs::settleOwnership() verdict.
      */
-    private function credentialOutcome(array $before, string $region, bool $moved): string
+    private function credentialOutcome(array $before, string $region, bool $moved, string $ownership): string
     {
         $text = 'Opensolr accepted these credentials and they are stored.';
 
@@ -1219,34 +1293,23 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'have stay exactly where they were made.';
         }
 
-        if (!$moved) {
-            return $text;
+        if ($moved) {
+            $text .= ' This is a different account.';
         }
-
-        $text .= ' This is a different account.';
 
         $hits     = (string) $this->cfg->get('solr.hits_core', '');
         $sessions = (string) $this->cfg->get('solr.sessions_core', '');
-        if ($hits === '' || $sessions === '') {
-            return $text;
-        }
 
-        try {
-            $held = Storage::client($this->cfg)->listIndexes();
-        } catch (\Throwable $e) {
-            return $text . ' Whether this account holds ' . $hits . ' and ' . $sessions
-                . ' could not be checked just now — run the connection check below.';
-        }
-
-        if (in_array($hits, $held, true) && in_array($sessions, $held, true)) {
-            return $text . ' It holds both of the indexes this installation uses, so nothing else changes.';
-        }
-
-        return $text . ' WARNING: this account does not hold ' . $hits . ' and ' . $sessions
-            . ', which is where all of your history is. The panel will read nothing until you point '
-            . 'it at indexes this account owns — use "Use a different pair of indexes" below, or run '
-            . self::setupCommand() . ', either of which will offer you any Loghound pairs it has. '
-            . 'Or put the previous account back here.';
+        return match ($ownership) {
+            'missing' => $text . ' ' . Pairs::pendingDetail($this->cfg)
+                . ' The list is under "' . Pairs::choiceHeading() . '" on this card.',
+            'unknown' => $text . ' Whether it holds ' . $hits . ' and ' . $sessions
+                . ' could not be checked just now — run the connection check below.',
+            'owned'   => $moved
+                ? $text . ' It holds the pair this installation uses, so nothing else changes.'
+                : $text,
+            default   => $text,
+        };
     }
 
     /**
@@ -2175,6 +2238,81 @@ final class Settings extends Controller implements JobHost, Sections
         exit;
     }
 
+    /**
+     * Save whether answers are cached, and for how long.
+     *
+     * THE DURATION IS CLAMPED BY THE CACHE'S OWN FUNCTION, not by a pair of numbers written out
+     * again here. A form that validated independently would be a second opinion about what is
+     * allowed, and the moment the two drift the panel saves a value the cache silently
+     * substitutes — so the field advertises Cache::TTL_MIN and TTL_MAX, and the value it posts
+     * goes through Cache::clampTtl(), which is the same call Cache::fromConfig() makes.
+     *
+     * Out of range is brought back into range rather than refused. The number is a duration
+     * with no wrong answer inside its bounds and an obvious nearest one outside them, and a
+     * refusal here would cost the operator the checkbox they changed in the same submission.
+     *
+     * No second factor. Unlike the privacy card this changes nothing about what is stored
+     * about a visitor and nothing about who can reach the panel: the worst a stolen session
+     * achieves is a slower dashboard and a larger bandwidth bill, both of which are visible on
+     * this page and reversible from it.
+     */
+    private function saveCache(): string
+    {
+        $this->cfg->set('cache.enabled', isset($_POST['cache_enabled']));
+        $this->cfg->set('cache.ttl_seconds', Cache::clampTtl($_POST['cache_ttl_seconds'] ?? null));
+
+        $err = $this->persist();
+        return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=cache_saved#set-cache';
+    }
+
+    /**
+     * Turn one configured log source's ingestion on or off without removing it.
+     *
+     * THE SOURCE IS NAMED BY THE SAME OPAQUE ID removeSource() uses, and for the same reasons:
+     * a path would have to be trusted or re-derived, and a list position is rebuilt from disk on
+     * every render, so a stale tab could disable a row nobody was looking at. An id that
+     * resolves against nothing in this operator's configuration changes nothing at all.
+     *
+     * THE ENTRY STAYS IN `sources`. That is the whole difference between this and "stop
+     * ingesting this file": the file keeps its place in the list, its format, its confirmation
+     * and its row in this card, and only `enabled` changes. A decision an operator made must
+     * stay visible to them — Config::sourceEnabled() is the reader, and it treats an absent key
+     * as enabled so every configuration written before this existed is unaffected.
+     */
+    private function saveSourceIngest(): string
+    {
+        $id = is_string($_POST['source'] ?? null) ? $_POST['source'] : '';
+        if (!preg_match('/^[0-9a-f]{16}$/D', $id)) {
+            return '?v=settings&err=no_such_source';
+        }
+
+        $enabled = isset($_POST['source_enabled']);
+        $sources = (array) $this->cfg->get('sources', []);
+        $found = false;
+
+        foreach ($sources as $i => $source) {
+            $path = is_array($source) ? (string) ($source['path'] ?? '') : '';
+            if ($path === '' || !hash_equals(self::sourceId($path), $id)) {
+                continue;
+            }
+            $sources[$i]['enabled'] = $enabled;
+            $found = true;
+        }
+
+        if (!$found) {
+            return '?v=settings&err=no_such_source';
+        }
+
+        $this->cfg->set('sources', array_values($sources));
+
+        $err = $this->persist();
+        if ($err !== null) {
+            return '?v=settings&err=' . $err;
+        }
+
+        return '?v=settings&ok=' . ($enabled ? 'source_ingesting' : 'source_paused') . '#set-sources';
+    }
+
     /** Save display preferences: timezone used for rendering timestamps. */
     private function saveUi(): string
     {
@@ -2214,6 +2352,12 @@ final class Settings extends Controller implements JobHost, Sections
             'source_confirmed' => 'Log source confirmed. The tailer will pick it up on its next poll.',
             'source_removed'   => 'Log source removed. The tailer stops reading it on its next poll; '
                 . 'documents already indexed from it are untouched.',
+            'source_paused'    => 'That log is no longer being ingested. It stays configured and stays '
+                . 'on this card, and the tailer stops reading it on its next poll; documents already '
+                . 'indexed from it are untouched.',
+            'source_ingesting' => 'That log is being ingested again. The tailer picks it up on its next '
+                . 'poll and carries on from where it had got to.',
+            'cache_saved'      => 'Caching settings saved. They take effect on the next page you open.',
             'sources_rescanned' => 'The scan finished and the review below has been rebuilt. Nothing is '
                 . 'ingested from a newly found file until you confirm it.',
             'privacy_saved'    => 'Privacy settings saved.',
@@ -2235,6 +2379,8 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'so you will be asked for the new password on the next request.',
             'pair_switched'    => 'This installation now uses a different pair of indexes. What it was '
                 . 'using before is still on your account, untouched.',
+            'pair_created'     => 'A new pair of indexes was created and this installation uses them '
+                . 'from now on. Anything it was using before is still on your account, untouched.',
             'source_added'     => 'Log file added. The reader picks it up on its next reload, and starts '
                 . 'from the end of the file rather than replaying its history.',
         ];
@@ -2278,9 +2424,10 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'its own to take the panel over.',
             'password_refused' => 'The new sign-in was refused and nothing was changed. The reason is '
                 . 'on the sign-in card below.',
-            'pair_unknown'     => 'Choose which pair of indexes to move to.',
-            'pair_failed'      => 'The move did not finish, and nothing was changed at Opensolr. The '
-                . 'reason is on the Solr card below.',
+            'pair_unknown'     => 'Nothing was changed, because no choice arrived with that request. '
+                . 'Pick a pair of indexes, or the option that makes a new one, and submit again.',
+            'pair_failed'      => 'This installation is still using the indexes it was using before, '
+                . 'and nothing was left behind at Opensolr. The reason is on the Solr card below.',
             'source_refused'   => 'That log file was not added. The reason is on the log sources card below.',
         ];
 
@@ -2299,13 +2446,20 @@ final class Settings extends Controller implements JobHost, Sections
      *
      * THE ACCORDION MUST NOT BE ABLE TO HIDE A FAILURE. Sections fold shut by default and
      * remember the operator's choice, and responsive.js force-opens any section carrying
-     * `.check-row .chip-warn`, `.source-head .chip-warn` or a `.confirm-form`. A refusal
-     * rendered only as a banner would therefore be correct, escaped, and inside a collapsed
-     * card — which is the worst outcome the fold can produce.
+     * `.check-row .chip-warn`, `.source-head .chip-warn` or a `.confirm-form.awaiting`. A
+     * refusal rendered only as a banner would therefore be correct, escaped, and inside a
+     * collapsed card — which is the worst outcome the fold can produce.
      *
      * So every one-shot refusal on this page goes out through here, carrying the marker as
      * well as the sentence, and only when there IS something wrong: a card that always carried
      * the marker would be a card that never folds.
+     *
+     * `awaiting` IS WHY THE FORM CLASS IS NOT ENOUGH ON ITS OWN. Three unrelated forms on this
+     * page are a `.confirm-form` — the source that has not been confirmed yet, the button that
+     * stops ingesting a source, and the reinstall form — and only the first is a thing waiting
+     * on the operator. Keying the fold on the bare class force-opened the log sources and the
+     * reinstall card on every render of every installation, so neither could ever show the
+     * choice the operator had made.
      */
     private static function problemBanner(string $text): void
     {
@@ -2341,6 +2495,7 @@ final class Settings extends Controller implements JobHost, Sections
         ['set-check', 'System check', 'systemCheckSection'],
         ['set-sources', 'Log sources', 'sourcesSection'],
         ['set-solr', 'Solr', 'solrSection'],
+        ['set-cache', 'Cached queries', 'cacheSection'],
         ['set-beacon', 'Beacon', 'beaconSection'],
         ['set-privacy', 'Privacy', 'privacySection'],
         ['set-retention', 'Maintenance', 'retentionSection'],
@@ -2451,6 +2606,19 @@ final class Settings extends Controller implements JobHost, Sections
                 echo '<p class="muted">One command. <code>enable --now</code> starts the service and both '
                     . 'timers immediately and brings them back after a reboot; this panel reports whether '
                     . 'they are running, and cannot see whether they are enabled at boot.</p>';
+            }
+            if ($key === 'beacon-identity') {
+                echo '<p class="muted">The two values come out of the user object your template already '
+                    . 'has, never out of a literal, because they change per request — a page cache that '
+                    . 'stored the rendered tag would otherwise serve the first visitor&rsquo;s identity to '
+                    . 'everybody. <code class="mono">beacon.store_identity</code> is off in a new '
+                    . 'installation, so paste this only after turning it on; the Beacon card below says '
+                    . 'what this installation stores right now.</p>';
+            }
+            if ($key === 'beacon-csp') {
+                echo '<p class="muted">Only if the measured site sends a Content-Security-Policy. '
+                    . '<code>connect-src</code> is the one that gets forgotten, and missing it is silent: '
+                    . 'the script loads, the browser blocks the collector POST, and nothing arrives.</p>';
             }
             self::commandBlock('finish-cmd-' . $key, $group);
             echo '</div>';
@@ -2661,43 +2829,18 @@ final class Settings extends Controller implements JobHost, Sections
         }
         echo '</div>';
 
-        echo '<p class="muted">The two switches are independent, and that is the point rather than an '
-            . 'oversight. <code class="mono">beacon.store_signed_in</code> is a boolean that identifies nobody, '
-            . 'and the split it gives you — signed-in against anonymous — reads differently on engaged time, on '
-            . 'paths taken and on the bot verdict, which is the most useful cut this product can offer. '
-            . '<code class="mono">beacon.store_identity</code> is personal data. Plenty of sites want the first '
-            . 'and not the second.</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('storage', 'independent')) . '</p>';
 
         echo '<h4>Three ways to supply it, for three different situations</h4>';
         echo '<p class="muted">They are not alternatives to pick between on taste. Each one is the only one '
             . 'that works in its situation.</p>';
 
         echo '<dl class="kv">';
-
-        echo '<dt>Attributes on the script tag</dt><dd><strong>When your server already knows who it is at '
-            . 'render time.</strong> This is the normal case and the one every tab above shows: the template '
-            . 'that renders the page renders the tag, in the same response, so there is no second request, no '
-            . 'extra script and no ordering problem.<br>'
-            . '<code class="mono">' . Security::esc('<script src="…/b.js" data-ident="ada@example.com" '
-                . 'data-signed-in="1" defer></script>') . '</code></dd>';
-
-        echo '<dt><code class="mono">window.LoghoundIdent</code> / '
-            . '<code class="mono">window.LoghoundSignedIn</code></dt><dd><strong>When adding an attribute to '
-            . 'the tag is awkward but setting a variable above it is not</strong> — a tag manager, a templating '
-            . 'system that owns the <code>&lt;script&gt;</code> element, a CMS block you cannot edit. They must '
-            . 'be set <em>before</em> b.js executes, which with <code>defer</code> means anywhere in the '
-            . 'document.<br>'
-            . '<code class="mono">' . Security::esc('<script>window.LoghoundIdent="ada@example.com";'
-                . 'window.LoghoundSignedIn=true;</script>') . '</code></dd>';
-
-        echo '<dt><code class="mono">window.loghound.identify(ident, signedIn)</code></dt><dd><strong>When the '
-            . 'identity arrives after the page has loaded</strong> — a single-page application that signs '
-            . 'somebody in without a navigation, which no attribute can express. Both arguments are optional '
-            . 'and independent. <strong>It makes no request of its own:</strong> the values ride the heartbeat '
-            . 'that is already scheduled, so attaching an identity costs your site nothing extra.<br>'
-            . '<code class="mono">' . Security::esc('window.loghound.identify("ada@example.com", true);')
-            . '</code></dd>';
-
+        foreach (Doc::routes($this->baseUrl()[0]) as $route) {
+            echo '<dt>' . Doc::inlineHtml($route['title']) . '</dt>';
+            echo '<dd>' . Doc::inlineHtml($route['when']);
+            echo '<pre class="snippet mono">' . Security::esc($route['code']) . '</pre></dd>';
+        }
         echo '</dl>';
 
         echo '<p class="muted"><strong>An identity is capped at ' . Security::esc((string) \Loghound\Beacon::MAX_IDENT)
@@ -2710,131 +2853,25 @@ final class Settings extends Controller implements JobHost, Sections
             . 'is scraped, no meta tag is looked for and no <code>window</code> variable is hunted through. If '
             . 'your site does not say, the field does not exist.</p>';
 
-        echo '<p class="muted">A third state matters and is easy to lose: a site that never '
-            . 'answers is <strong>not reported</strong>, not anonymous. Loghound keeps those apart '
-            . 'and counts them separately — <code class="mono">signed_in_b</code> is written only when a page '
-            . 'actually said one or the other, so a site that has not adopted the attribute cannot be read as a '
-            . 'site full of anonymous visitors.</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('storage', 'third_state')) . '</p>';
     }
 
     /**
      * Every option `public/b.js` reads, as one table the interface can render.
      *
-     * THE COMPLETE LIST, AND IT LIVES HERE RATHER THAN ONLY IN A DOCBLOCK. The full set of
-     * attributes and globals used to exist in exactly two places — the header comment of
-     * `public/b.js` and `docs/BEACON.md` — and the application itself printed a bare one-line
-     * snippet and nothing else. An operator installing the beacon reads neither of those, so
-     * every option beyond `src` was effectively undocumented for the person who needed it.
+     * A PASS-THROUGH TO Beacon\Doc, which is where the list now lives. It stayed a method on
+     * this class because the panel is not the only surface that needs it — the shell wizard and
+     * the installer's closing report render the same nine options in plain text, and a list that
+     * lived in a panel class could only ever be read by the panel.
      *
-     * Declared as data rather than written out as markup so that
-     * tests/test_standalone.php can hold it against `b.js` itself: the option list is
-     * mechanically derivable from the source — every `attr('data-…')`, every `attrInt('data-…')`
-     * and every `w.Loghound…` — and a test that fails when the script grows an option this table
-     * does not carry is worth more than a careful proof-read that was accurate on the day.
-     *
-     * Each entry: the option, what it does, its default, its accepted range or format, and the
-     * configuration key that decides whether what it sends is actually STORED. A null `switch`
-     * means nothing can discard it — the value is used by the script itself, or it is a
-     * measurement rather than a declaration.
+     * The strings carry the inline markup described in Beacon\Doc, never HTML, so the same entry
+     * renders correctly in a browser, in a terminal and in a Markdown file.
      *
      * @return array<int,array{name:string,kind:string,what:string,default:string,limits:string,switch:?string}>
      */
     public static function beaconOptions(): array
     {
-        return [
-            [
-                'name'    => 'data-endpoint',
-                'kind'    => 'attribute',
-                'what'    => 'Collector URL, when it is not a sibling of b.js.',
-                'default' => 'the script&rsquo;s own <code class="mono">src</code> with '
-                    . '<code class="mono">b.js</code> &rarr; <code class="mono">collect.php</code>',
-                'limits'  => 'Any URL. Set it only if you serve the script from a CDN or a different path.',
-                'switch'  => null,
-            ],
-            [
-                'name'    => 'data-hb',
-                'kind'    => 'attribute',
-                'what'    => 'Heartbeat interval, in milliseconds. A beat is sent only when engaged time '
-                    . 'actually advanced, so an idle tab produces one, not hundreds.',
-                'default' => '15000',
-                'limits'  => 'Integer, clamped to 2&nbsp;000&ndash;300&nbsp;000. Anything else is ignored '
-                    . 'and the default is used.',
-                'switch'  => null,
-            ],
-            [
-                'name'    => 'data-idle',
-                'kind'    => 'attribute',
-                'what'    => 'How long after a real interaction a visitor still counts as engaged, in '
-                    . 'milliseconds. This is the definition of the <em>Engaged</em> clock.',
-                'default' => '30000',
-                'limits'  => 'Integer, clamped to 1&nbsp;000&ndash;600&nbsp;000.',
-                'switch'  => null,
-            ],
-            [
-                'name'    => 'data-ident',
-                'kind'    => 'attribute',
-                'what'    => 'An identity <strong>your site</strong> attaches to the session &mdash; an email '
-                    . 'address, a customer number, whatever you call the person. Never guessed.',
-                'default' => 'absent, and absent is not empty',
-                'limits'  => 'Free text, truncated to ' . \Loghound\Beacon::MAX_IDENT . ' bytes. Control '
-                    . 'characters stripped, invalid UTF-8 repaired.',
-                'switch'  => 'beacon.store_identity',
-            ],
-            [
-                'name'    => 'data-signed-in',
-                'kind'    => 'attribute',
-                'what'    => 'Whether the visitor was signed in. Splits every number in the panel into '
-                    . 'signed-in and anonymous.',
-                'default' => 'absent &mdash; which means <strong>not reported</strong>, never &ldquo;no&rdquo;',
-                'limits'  => '<code class="mono">1</code>/<code class="mono">0</code> or '
-                    . '<code class="mono">true</code>/<code class="mono">false</code>. Anything else, '
-                    . 'including an empty attribute a template rendered blank, is read as not reported.',
-                'switch'  => 'beacon.store_signed_in',
-            ],
-            [
-                'name'    => 'data-params',
-                'kind'    => 'attribute',
-                'what'    => 'URL query parameter <strong>names</strong> whose values are kept as search terms. '
-                    . 'Nothing else in the query string is read.',
-                'default' => 'absent &mdash; no parameter is collected',
-                'limits'  => 'Comma separated. At most 8 names, each at most 40 characters of '
-                    . '<code class="mono">a-z 0-9 _ - . [ ]</code>. Each value is capped at 96 characters '
-                    . 'and dropped, not truncated, if longer.',
-                'switch'  => 'beacon.query_params',
-            ],
-            [
-                'name'    => 'window.LoghoundIdent',
-                'kind'    => 'global',
-                'what'    => 'The same value as <code class="mono">data-ident</code>, for a template where '
-                    . 'adding an attribute to the tag is awkward but setting a variable above it is not.',
-                'default' => 'unset',
-                'limits'  => 'A string. Must be set <em>before</em> b.js executes &mdash; with '
-                    . '<code>defer</code> that means anywhere in the document. The attribute wins if both '
-                    . 'are present.',
-                'switch'  => 'beacon.store_identity',
-            ],
-            [
-                'name'    => 'window.LoghoundSignedIn',
-                'kind'    => 'global',
-                'what'    => 'The same value as <code class="mono">data-signed-in</code>.',
-                'default' => 'unset &mdash; not reported',
-                'limits'  => 'A real boolean, or the same strings the attribute accepts. Must be set before '
-                    . 'b.js executes.',
-                'switch'  => 'beacon.store_signed_in',
-            ],
-            [
-                'name'    => 'window.loghound.identify(ident, signedIn)',
-                'kind'    => 'function',
-                'what'    => 'Attach either value <strong>after</strong> the page has loaded &mdash; a '
-                    . 'single-page application that signs somebody in without a navigation, which no '
-                    . 'attribute can express.',
-                'default' => 'never called',
-                'limits'  => 'Both arguments optional and independent. <strong>Makes no request of its '
-                    . 'own:</strong> the values ride the heartbeat that is already scheduled. Safe to call '
-                    . 'with anything &mdash; it cannot throw into your code.',
-                'switch'  => 'beacon.store_identity / beacon.store_signed_in',
-            ],
-        ];
+        return Doc::options();
     }
 
     /**
@@ -2847,14 +2884,6 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function beaconOptionsTable(): void
     {
-        $collected = \Loghound\Beacon::normaliseParamNames((array) $this->cfg->get('beacon.query_params', []));
-
-        $state = [
-            'beacon.store_identity'  => (bool) $this->cfg->get('beacon.store_identity', false),
-            'beacon.store_signed_in' => (bool) $this->cfg->get('beacon.store_signed_in', true),
-            'beacon.query_params'    => $collected !== [],
-        ];
-
         echo '<h3>Every option the beacon reads</h3>';
         echo '<p class="muted">The complete list. The last column is <strong>this installation</strong>, read '
             . 'from <code>config/loghound.php</code> as the page was rendered &mdash; so an option whose value '
@@ -2873,10 +2902,10 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<tr>';
             echo '<td><code class="mono">' . Security::esc($opt['name']) . '</code>'
                 . '<br><span class="faint">' . Security::esc($opt['kind']) . '</span></td>';
-            echo '<td>' . $opt['what'] . '</td>';
-            echo '<td>' . $opt['default'] . '</td>';
-            echo '<td>' . $opt['limits'] . '</td>';
-            echo '<td>' . $this->beaconOptionState($opt['switch'], $state, $collected) . '</td>';
+            echo '<td>' . Doc::inlineHtml($opt['what']) . '</td>';
+            echo '<td>' . Doc::inlineHtml($opt['default']) . '</td>';
+            echo '<td>' . Doc::inlineHtml($opt['limits']) . '</td>';
+            echo '<td>' . $this->beaconOptionState($opt['switch']) . '</td>';
             echo '</tr>';
         }
 
@@ -2886,65 +2915,30 @@ final class Settings extends Controller implements JobHost, Sections
     /**
      * The "stored here?" cell for one option.
      *
-     * Three answers. An option with no switch is used by the script itself and nothing can
-     * discard it. An option whose switch is on names the switch, so the operator knows which
+     * Four answers, worked out by Beacon\Doc::optionState() against the live configuration and
+     * dressed as chips here. An option with no switch is used by the script itself and nothing
+     * can discard it. An option whose switch is on names the switch, so the operator knows which
      * line in the config file is doing it. An option whose switch is off says DISCARDED in as
-     * many words, because the failure mode it is warning about is completely silent: the
-     * snippet works, the collector answers 204, and the value is dropped before anything is
-     * written.
+     * many words, because the failure mode it is warning about is completely silent: the snippet
+     * works, the collector answers 204, and the value is dropped before anything is written.
      *
      * `beacon.query_params` is answered with the actual parameter names rather than with "on".
      * The page knows them, and "collecting q" is the answer to the question an operator is
      * really asking, where "enabled" would still leave them guessing which names to put in
      * `data-params`.
-     *
-     * @param array<string,bool> $state
-     * @param array<int,string>  $collected
      */
-    private function beaconOptionState(?string $switch, array $state, array $collected): string
+    private function beaconOptionState(?string $switch): string
     {
-        if ($switch === null) {
-            return '<span class="chip">always</span> <span class="faint">used by the script itself</span>';
-        }
+        $state = Doc::optionState($switch, $this->cfg);
 
-        if ($switch === 'beacon.query_params') {
-            if ($collected === []) {
-                return '<span class="chip chip-accent">discarded</span> <span class="faint">'
-                    . '<code class="mono">beacon.query_params</code> is empty, so no parameter is accepted'
-                    . '</span>';
-            }
-            $names = [];
-            foreach ($collected as $name) {
-                $names[] = '<code class="mono">' . Security::esc($name) . '</code>';
-            }
-            return '<span class="chip chip-good">yes</span> <span class="faint">accepting '
-                . implode(', ', $names) . '</span>';
-        }
+        $chip = [
+            'always'    => '<span class="chip">always</span>',
+            'yes'       => '<span class="chip chip-good">yes</span>',
+            'partly'    => '<span class="chip chip-accent">partly discarded</span>',
+            'discarded' => '<span class="chip chip-accent">discarded</span>',
+        ][$state['state']] ?? '<span class="chip">' . Security::esc($state['state']) . '</span>';
 
-        /* The identify() row is governed by both switches, so it reports the weaker of the two:
-           saying "yes" while half of what it can send is being dropped would be the misleading
-           half of the truth. */
-        $keys = array_map('trim', explode('/', $switch));
-        $off  = [];
-        foreach ($keys as $key) {
-            if (empty($state[$key])) {
-                $off[] = $key;
-            }
-        }
-
-        if ($off === []) {
-            return '<span class="chip chip-good">yes</span> <span class="faint">'
-                . '<code class="mono">' . Security::esc($keys[0]) . '</code> is on</span>';
-        }
-
-        $named = [];
-        foreach ($off as $key) {
-            $named[] = '<code class="mono">' . Security::esc($key) . '</code>';
-        }
-
-        return '<span class="chip chip-accent">' . (count($off) === count($keys) ? 'discarded' : 'partly discarded')
-            . '</span> <span class="faint">' . implode(' and ', $named)
-            . (count($off) === 1 ? ' is off' : ' are off') . '</span>';
+        return $chip . ' <span class="faint">' . Doc::inlineHtml($state['detail']) . '</span>';
     }
 
     /**
@@ -2969,11 +2963,7 @@ final class Settings extends Controller implements JobHost, Sections
     private function beaconHostsBlock(array $allowed, array $collected): void
     {
         echo '<h3>Sites on other servers</h3>';
-
-        echo '<p class="muted">The beacon works on a host this machine has no access log for — a search '
-            . 'page, a marketing site, anything on another server. Paste the same snippet. The page reports '
-            . 'its own hostname, and a session is created for it if that hostname is on '
-            . '<code class="mono">beacon.allowed_hosts</code>. Nothing else has to be installed there.</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('standalone', 'allowlist')) . '</p>';
 
         if ($allowed === []) {
             echo '<div class="banner banner-warn"><strong>No hostnames are listed.</strong> '
@@ -2990,51 +2980,34 @@ final class Settings extends Controller implements JobHost, Sections
             echo implode(', ', $parts) . '.</p>';
         }
 
-        echo '<p class="muted"><strong>What the list does and does not do.</strong> A browser cannot forge the '
-            . '<code>Origin</code> header, so an ordinary web page cannot impersonate a site you listed. '
-            . 'Anything that is <em>not</em> a browser can send any header it likes, so somebody who knows a '
-            . 'hostname is listed can fabricate sessions attributed to it. That is the same exposure every '
-            . 'client-side analytics product carries; it is bounded to the hosts you listed, it cannot read '
-            . 'anything, and it cannot reach your log-backed data. It is also exactly why a session measured by '
-            . 'the beacon alone is stored as <code class="mono">planes_s:beacon_only</code> and shown as '
-            . 'single-plane wherever it is counted. Treat the allowlist as a permission, not as a password.</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('standalone', 'limits')) . '</p>';
 
         echo '<h3>Search terms</h3>';
 
         if ($collected === []) {
-            echo '<p class="muted">Off. <code class="mono">beacon.query_params</code> is empty, so no URL '
-                . 'parameter is collected from anywhere — not by the beacon and not by the log parser. Naming '
-                . 'the parameters your search box uses (<code class="mono">q</code>, '
-                . '<code class="mono">s</code>, <code class="mono">search</code>) turns them into a facet you '
-                . 'can count and filter on.</p>';
+            echo '<p class="muted">Off on this installation. '
+                . '<code class="mono">beacon.query_params</code> is empty, so no URL parameter is collected '
+                . 'from anywhere — not by the beacon and not by the log parser. Naming the parameters your '
+                . 'search box uses turns them into a facet you can count and filter on.</p>';
         } else {
             $parts = [];
             foreach ($collected as $name) {
                 $parts[] = '<code class="mono">' . Security::esc($name) . '</code>';
             }
             echo '<p class="muted">Collecting ' . implode(', ', $parts) . ' as search terms, from the log '
-                . 'parser and from the beacon alike. The snippet below carries the same list, so a page on '
+                . 'parser and from the beacon alike. The snippets above carry the same list, so a page on '
                 . 'another server sends those parameters and nothing else out of its URL.</p>';
         }
 
-        echo '<p class="muted">This is the one place Loghound stores something a person typed rather than a '
-            . 'measurement or a hash, so it is a whitelist of parameter <em>names</em> and never the whole '
-            . 'query string: a page URL carries session tokens and password-reset codes, and none of those may '
-            . 'become a facet value. Terms are lower-cased, whitespace-collapsed, capped at 96 characters and '
-            . 'dropped rather than truncated when longer.</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('params', 'names')) . '</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('params', 'server_half')) . '</p>';
 
         echo '<h3>Content-Security-Policy</h3>';
-        echo '<p class="muted">A measured site with a CSP needs two directives, and the second is the one that '
-            . 'gets forgotten — without it the browser blocks the collector POST silently, the beacon reports '
-            . 'nothing, and there is no error anywhere to explain why:</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('csp', 'directives')) . '</p>';
         echo '<pre class="snippet mono">' . Security::esc(
-            'script-src  ' . self::cspOrigin($this->cfg) . ";\n"
-            . 'connect-src ' . self::cspOrigin($this->cfg) . ';'
+            Doc::cspDirectives(self::cspOrigin($this->cfg))
         ) . '</pre>';
-
-        echo '<p class="muted">Both are needed even though the beacon uses '
-            . '<code>navigator.sendBeacon</code> first: a browser that does not have it, or refuses the call, '
-            . 'falls back to <code>fetch</code>, and <code>connect-src</code> governs both.</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('csp', 'fallback')) . '</p>';
     }
 
     /**
@@ -3042,17 +3015,17 @@ final class Settings extends Controller implements JobHost, Sections
      *
      * The scheme and host of `base_url`, with no path: a CSP source is an origin, and pasting a
      * URL with a path into one is the mistake that makes the directive silently not match.
+     *
+     * An unset or unparseable address falls back to the documentation's own example host. That
+     * is right here and only here: the directive is pasted into somebody else's web server
+     * configuration, where a wrong origin is a line they will notice and correct, unlike a
+     * beacon snippet pointing at a host nobody owns, which fails in silence.
      */
     private static function cspOrigin(Config $cfg): string
     {
-        $base = (string) $cfg->get('base_url', '');
-        $parts = $base === '' ? false : parse_url($base);
-        if (!is_array($parts) || ($parts['host'] ?? '') === '') {
-            return 'https://loghound.example.com';
-        }
+        $origin = Doc::cspOrigin((string) $cfg->get('base_url', ''));
 
-        return ($parts['scheme'] ?? 'https') . '://' . $parts['host']
-            . (isset($parts['port']) ? ':' . (int) $parts['port'] : '');
+        return $origin === '' ? 'https://loghound.example.com' : $origin;
     }
 
     /**
@@ -3253,9 +3226,14 @@ final class Settings extends Controller implements JobHost, Sections
         $report = $this->detection();
         $sources = (array) ($report['sources'] ?? []);
         $configured = [];
+        /* Keyed by path and holding the ingest decision as well, because the toggle below has to
+           render the state that is stored rather than a default: `enabled` absent means enabled,
+           and Config::sourceEnabled() is the one place that is decided. */
+        $ingesting = [];
         foreach ((array) $this->cfg->get('sources', []) as $s) {
             if (isset($s['path'])) {
                 $configured[(string) $s['path']] = !empty($s['confirmed']);
+                $ingesting[(string) $s['path']] = Config::sourceEnabled((array) $s);
             }
         }
 
@@ -3289,12 +3267,20 @@ final class Settings extends Controller implements JobHost, Sections
             $path = (string) ($src['path'] ?? '');
             $confidence = (float) ($src['confidence'] ?? 0);
             $confirmed = !empty($src['confirmed']) || !empty($configured[$path]);
+            $ingested = $ingesting[$path] ?? true;
 
-            echo '<article class="source">';
+            /* MUTED, NEVER GONE. A source the operator has opted out of stays in the list with
+               everything it had — the detection, the mapping, the samples — because it is a
+               decision they made and can see, and a row that vanished would leave them looking
+               for a file the scan keeps finding and the panel keeps not mentioning. */
+            echo '<article class="source' . ($ingested ? '' : ' source-off') . '">';
             echo '<div class="source-head">';
             self::filePath($path);
             echo '<span class="chip ' . ($confirmed ? 'chip-good' : 'chip-warn') . '">'
                 . ($confirmed ? 'Confirmed' : 'Awaiting review') . '</span>';
+            if (!$ingested) {
+                echo '<span class="chip chip-off">Not ingested</span>';
+            }
             echo '</div>';
 
             echo '<dl class="kv">';
@@ -3379,13 +3365,14 @@ final class Settings extends Controller implements JobHost, Sections
             }
 
             if (!$confirmed) {
-                echo '<form method="post" action="?v=settings" class="confirm-form">';
+                echo '<form method="post" action="?v=settings" class="confirm-form awaiting">';
                 self::csrfField();
                 echo '<input type="hidden" name="action" value="confirm_source">';
                 echo '<input type="hidden" name="path" value="' . Security::esc($path) . '">';
                 echo '<button type="submit" class="primary">Looks right — start ingesting this file</button>';
                 echo '</form>';
             } elseif (isset($configured[$path])) {
+                $this->ingestForm($path, $ingested, (string) ($src['vhost'] ?? ''));
                 self::removeForm($path, 'Stop ingesting this file');
             }
             echo '</article>';
@@ -3446,7 +3433,11 @@ final class Settings extends Controller implements JobHost, Sections
         foreach ((array) $this->cfg->get('sources', []) as $source) {
             $path = is_array($source) ? (string) ($source['path'] ?? '') : '';
             if ($path !== '' && !isset($known[$path])) {
-                $orphans[$path] = (string) ($source['format'] ?? '');
+                $orphans[$path] = [
+                    'format'  => (string) ($source['format'] ?? ''),
+                    'host'    => (string) ($source['host'] ?? ''),
+                    'ingest'  => Config::sourceEnabled((array) $source),
+                ];
             }
         }
         if ($orphans === []) {
@@ -3457,16 +3448,65 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<p class="muted">These are being read by the tailer and were not in the last detection run — they '
             . 'were added by <code class="mono">' . Security::esc(self::setupCommand())
             . '</code>, or the file has moved since.</p>';
-        foreach ($orphans as $path => $format) {
-            echo '<article class="source">';
+        foreach ($orphans as $path => $orphan) {
+            echo '<article class="source' . ($orphan['ingest'] ? '' : ' source-off') . '">';
             echo '<div class="source-head">';
             self::filePath($path);
-            echo '<span class="chip chip-warn">Not in the last scan</span></div>';
+            echo '<span class="chip chip-warn">Not in the last scan</span>';
+            if (!$orphan['ingest']) {
+                echo '<span class="chip chip-off">Not ingested</span>';
+            }
+            echo '</div>';
             echo '<dl class="kv"><dt>Format</dt><dd><code class="mono wrap">'
-                . Security::esc($format) . '</code></dd></dl>';
-            self::removeForm($path, 'Stop ingesting this file');
+                . Security::esc($orphan['format']) . '</code></dd></dl>';
+            $this->ingestForm((string) $path, $orphan['ingest'], $orphan['host']);
+            self::removeForm((string) $path, 'Stop ingesting this file');
             echo '</article>';
         }
+    }
+
+    /**
+     * The per-source ingest switch, and the one case that made it necessary.
+     *
+     * NOT THE SAME CONTROL AS "STOP INGESTING THIS FILE", and they sit next to each other so the
+     * difference is visible: removing a source takes it out of the configuration and off this
+     * card, while this leaves everything exactly where it is and only stops the tailer reading
+     * it. Unticking is reversible from the same row; removing is not.
+     *
+     * A FORM PER ROW rather than one form over the list. The rows already carry two forms of
+     * their own — confirm and remove — and HTML has no nesting for that; a single outer form
+     * would also mean every save rewrote every source's flag, so a stale tab submitted on
+     * Tuesday would silently reinstate a decision made on Wednesday. One row, one submission,
+     * one entry touched.
+     *
+     * THE HELPER TEXT APPEARS ONLY WHERE IT IS TRUE. On a self-hosted installation the panel's
+     * own virtual host is a log source like any other on the machine, so browsing Loghound puts
+     * sessions into the data Loghound is displaying — and this is the only way to say no to
+     * that. It is NOT about double-counting the beacon: Loghound's own script and collector are
+     * already excluded automatically, matched on host AND path (Config::selfEndpoints(), and
+     * never on the bare filename, so a measured site's own /collect.php is untouched). What is
+     * left is the operator's own visits to their own panel, counted as traffic, which is a
+     * legitimate thing to want either way.
+     *
+     * @param string $host The virtual host this source logs, when one is known.
+     */
+    private function ingestForm(string $path, bool $enabled, string $host): void
+    {
+        $own = Config::selfEndpoints((string) $this->cfg->get('base_url', ''))['host'];
+        $isOwn = $own !== '' && $host !== '' && strtolower($host) === $own;
+
+        echo '<form method="post" action="?v=settings" class="ingest-form">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="source_ingest">';
+        echo '<input type="hidden" name="source" value="' . Security::esc(self::sourceId($path)) . '">';
+        echo '<label class="check"><input type="checkbox" name="source_enabled"'
+            . ($enabled ? ' checked' : '') . '> Ingest this log</label>';
+        if ($isOwn) {
+            echo '<p class="muted">This is Loghound&rsquo;s own site. Leave it on to measure the panel '
+                . 'like any other site; turn it off to keep your own visits out of the data.</p>';
+        }
+        echo '<button type="submit">Save</button>';
+        echo '</form>';
     }
 
     /**
@@ -3508,6 +3548,8 @@ final class Settings extends Controller implements JobHost, Sections
 
         self::cardOpen('set-solr', self::sectionNum('set-solr'), 'Solr connection');
 
+        $this->pendingIndexesNotice();
+
         if ($mode !== Config::SOLR_MODE) {
             echo '<p class="pop">This configuration is not usable.</p>';
             echo '<p>It sets <code>solr.mode</code> to <code class="mono">' . Security::esc($mode)
@@ -3537,7 +3579,7 @@ final class Settings extends Controller implements JobHost, Sections
 
         $this->schemaPart();
         $this->opensolrAccountForm();
-        $this->pairSwitchPart();
+        $this->indexChoicePart();
 
         echo '<h4>Or change it from a shell</h4>';
         echo '<p class="muted">A headless install with no browser access still needs this, and it does exactly '
@@ -3691,7 +3733,46 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
-     * The form that changes which Opensolr account this installation uses.
+     * The interim state, said plainly at the top of the card, with the route out of it.
+     *
+     * THE STATE BETWEEN THE TWO STEPS IS REAL AND IS HANDLED HERE. An operator who has named an
+     * account and not yet picked indexes has a configuration that names indexes the account does
+     * not hold. Every query then fails, and what the panel used to say about it was "a service
+     * this panel depends on is not answering" — which is not what happened, sends them to check a
+     * network that is fine, and does not mention the one thing that fixes it.
+     *
+     * It costs nothing to render. The fact was written down when the account was saved and the
+     * platform had just listed what it holds, so nothing here asks the network; that is what lets
+     * this survive a redirect, a page reload and a fresh sign-in, which is the whole point — an
+     * operator who saves an account and closes the tab has to be able to come back and finish.
+     *
+     * It goes out through problemBanner() so the accordion cannot fold it away.
+     */
+    private function pendingIndexesNotice(): void
+    {
+        if (!Pairs::isPending($this->cfg)) {
+            return;
+        }
+
+        self::problemBanner(
+            Pairs::pendingHeadline() . ' ' . Pairs::pendingDetail($this->cfg)
+            . ' The list is under "' . Pairs::choiceHeading() . '" further down this card.'
+        );
+    }
+
+    /**
+     * STEP ONE: the form that says which Opensolr account this installation uses.
+     *
+     * IT SAVES ON ITS OWN. Email, key, region, and nothing else — no question about indexes, no
+     * checkbox, no guard. The operator is naming an account; they have not yet said anything about
+     * indexes, and there is nothing here to refuse them for. What indexes to use is step two,
+     * below, and the two are never one control.
+     *
+     * There used to be an `accept_reindex` checkbox here, refusing the save unless it was ticked
+     * whenever the new account did not hold the two indexes already configured. It is gone. It led
+     * with the guard rather than the situation, stated the rule as a double negative, and buried
+     * two index names in the load-bearing sentence — and it existed to prevent a state that is
+     * legitimate and now simply gets reported. See pendingIndexesNotice().
      *
      * THE KEY FIELD IS EMPTY AND HAS NO VALUE ATTRIBUTE, on every render, whether or not a key
      * is stored. There is no placeholder carrying a prefix, no masked form of it, no length
@@ -3725,11 +3806,11 @@ final class Settings extends Controller implements JobHost, Sections
         $haveKey = (string) $this->cfg->get('opensolr.api_key', '') !== '';
         $twoFactor = TwoFactor::isEnabled((array) $this->cfg->get('auth', []));
 
-        echo '<h4>Changing the API key</h4>';
-        echo '<p class="muted">Change the account, the key or the region here. The key is checked against '
-            . 'Opensolr before anything is written, so a key that does not authenticate can never replace one '
-            . 'that does — a typo leaves the working credentials exactly as they were and tells you what came '
-            . 'back.</p>';
+        echo '<h4>Which Opensolr account this installation uses</h4>';
+        echo '<p class="muted">Changing the API key, the account email or the region is done here; which '
+            . 'indexes to use is the next question, below. The key is checked against Opensolr before '
+            . 'anything is written, so a key that does not authenticate can never replace one that does — a '
+            . 'typo leaves the working credentials exactly as they were and tells you what came back.</p>';
 
         echo '<form method="post" action="?v=settings" class="setup-form" autocomplete="off">';
         self::csrfField();
@@ -3765,16 +3846,148 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'it belongs to, so a stolen session must not be enough to swap it for somebody else\'s.</p>';
         }
 
-        echo '<label class="check"><input type="checkbox" name="accept_reindex" value="1"> '
-            . 'I will choose new indexes — this account does not have to hold the ones in use now</label>';
-        echo '<p class="muted">Without this, changing to an account that does not hold '
-            . '<span class="mono">' . Security::esc($this->gw->hitsCore()) . '</span> and '
-            . '<span class="mono">' . Security::esc($this->gw->sessionsCore()) . '</span> is refused, '
-            . 'because it would leave the panel pointing at indexes it cannot read. Tick it if you '
-            . 'mean to move this installation onto a pair in the new account.</p>';
-
         echo '<button type="submit" class="primary">Check and save</button>';
         echo '</form>';
+    }
+
+    /**
+     * The answer cache: whether it is on, how long an answer lives, and what it has saved.
+     *
+     * WHY AN OPERATOR IS SHOWN THIS AT ALL. It is not a performance tweak with a bandwidth
+     * side effect; on a Loghound installation it is the only lever on the plan's bandwidth
+     * bill, and the copy below says why in the terms the bill is actually metered in.
+     *
+     * CONFIGURED AND WORKING ARE REPORTED SEPARATELY, never folded into one verdict. "Off" and
+     * "on but unreachable" look identical to a card that prints a single word and they need
+     * opposite actions from the operator — one is a decision, the other is a fault — and a
+     * panel that collapses them is how somebody spends an afternoon wondering why the
+     * installation they switched the cache on for is still slow. Cache::status() hands over
+     * both facts for exactly this reason and this card is the surface that uses them.
+     *
+     * THE SAVING IS PRINTED ONLY WHEN IT CAN BE STATED HONESTLY. Every byte in it was measured
+     * on the wire and stored with the entry that was served, so it is never modelled — but
+     * `partial` means at least one hit came from an entry that did not record its size, and a
+     * floor presented as a total is a wrong number. When that flag is set the figure is left
+     * out altogether rather than hedged into meaninglessness, and when it is printed it is
+     * printed as an approximation, because TLS framing is not counted.
+     */
+    private function cacheSection(): void
+    {
+        $cache = $this->gw->cache();
+        $status = $cache->status();
+        $ttl = Cache::clampTtl($this->cfg->get('cache.ttl_seconds', Cache::TTL_DEFAULT));
+
+        self::cardOpen(
+            'set-cache',
+            self::sectionNum('set-cache'),
+            'Cached queries',
+            'Whether the panel may keep a Solr answer and re-serve it, and for how long.'
+        );
+
+        self::cacheState($status);
+
+        echo '<p>Cached queries make the panel instant and cut the plan bandwidth it consumes. '
+            . 'Opensolr meters outgoing traffic &mdash; the responses Solr sends back &mdash; so it is '
+            . 'reads that spend your allowance, not writes: the tailer uploads log lines and gets back '
+            . 'a short acknowledgement, which is why ingestion costs almost nothing. The metered '
+            . 'bandwidth on a Loghound installation is therefore almost entirely this panel&rsquo;s own '
+            . 'reads, and a facet response over a large index is not small.</p>';
+
+        self::cacheSavingsLine($this->gw->cacheSavings());
+
+        /* THE LIST IS EXACT, and tests/test_cache_surfaces.php proves it against the views
+           themselves rather than against this sentence, so a view that changes its mind about
+           Controller::SCOPE_CACHE breaks the build instead of quietly making this prose wrong. */
+        echo '<p class="muted">Clear cache is in the page head of every page that reads cached data '
+            . '&mdash; Overview, Bot forensics, Fingerprints, Networks, Session explorer, Performance, '
+            . 'Virtual hosts, Who is querying and Storage &amp; bandwidth &mdash; and deliberately not on '
+            . 'Index analytics, Query analysis or this page: the first two read the Opensolr request '
+            . 'log, which is not cached, and Settings makes no cached read at all.</p>';
+
+        echo '<form method="post" action="?v=settings">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="cache">';
+
+        echo '<fieldset><legend>Caching</legend>';
+        echo '<label class="check"><input type="checkbox" name="cache_enabled"'
+            . ($status['configured'] ? ' checked' : '') . '> '
+            . 'Keep Solr answers and re-serve them <span class="muted">(a new installation ships with '
+            . 'this off)</span></label>';
+
+        echo '<label for="cache-ttl">An answer is kept for</label> ';
+        echo '<input type="number" id="cache-ttl" name="cache_ttl_seconds"'
+            . ' min="' . Security::esc((string) Cache::TTL_MIN) . '"'
+            . ' max="' . Security::esc((string) Cache::TTL_MAX) . '"'
+            . ' value="' . Security::esc((string) $ttl) . '" inputmode="numeric">'
+            . ' <span class="muted">seconds &mdash; ' . Security::esc((string) Cache::TTL_MIN) . ' to '
+            . Security::esc((string) Cache::TTL_MAX) . ', and the default is '
+            . Security::esc((string) Cache::TTL_DEFAULT) . '. A number outside that range is brought '
+            . 'back inside it rather than refused, by the same function the cache itself uses, so the '
+            . 'field and the object can never disagree about what was saved.</span>';
+        echo '</fieldset>';
+
+        echo '<button type="submit" class="primary">Save caching</button>';
+        echo '</form>';
+
+        self::cardEnd();
+    }
+
+    /**
+     * The cache's two facts, as two states rather than one verdict.
+     *
+     * @param array{configured:bool,working:bool,driver:string,server:string,reason:string,
+     *              ttl:int,ttl_min:int,ttl_max:int} $status From Cache::status().
+     */
+    private static function cacheState(array $status): void
+    {
+        if (!$status['configured']) {
+            echo '<div class="check-row"><p><span class="chip chip-good">Off</span> '
+                . '<strong>Every page is computed from Solr as you open it.</strong></p>';
+            echo '<p class="muted">This is the shipped default and the panel is entirely correct '
+                . 'running this way. Tick the box below to turn caching on.</p></div>';
+            return;
+        }
+
+        if ($status['working']) {
+            echo '<div class="check-row"><p><span class="chip chip-good">On</span> '
+                . '<strong>Answers are being kept and re-served.</strong></p>';
+            echo '<p class="muted">Held by <code class="mono">' . Security::esc($status['driver'])
+                . '</code> at <code class="mono">' . Security::esc($status['server'])
+                . '</code>, for ' . Security::esc((string) $status['ttl']) . ' seconds each.</p></div>';
+            return;
+        }
+
+        /* NOT A PASS AND NOT A DISASTER. An unreachable cache costs a fraction of a second once
+           per request and then gets out of the way, so the panel is slow rather than broken —
+           but it is slow while the operator believes it is fast, which is the state worth
+           shouting about. `chip-warn` is also what responsive.js force-opens the card on. */
+        echo '<div class="check-row"><p><span class="chip chip-warn">On, and not answering</span> '
+            . '<strong>Caching is switched on and nothing is being cached.</strong></p>';
+        echo '<p class="muted">The panel is working and every page is being computed from Solr, '
+            . 'which is what an installation with caching off does &mdash; so this costs bandwidth '
+            . 'that was meant to be saved. Reason: ' . Security::esc($status['reason'])
+            . '. Check that memcached is running and that <code class="mono">'
+            . Security::esc($status['server']) . '</code> is the address it is listening on.</p></div>';
+    }
+
+    /**
+     * What the cache has not had to fetch, when that can be said without qualifying it away.
+     *
+     * @param array{available:bool,requests:int,bytes:int,since:int,partial:bool,
+     *              request_requests:int,request_bytes:int} $savings From Cache::savings().
+     */
+    private static function cacheSavingsLine(array $savings): void
+    {
+        if (!$savings['available'] || $savings['partial'] || $savings['requests'] < 1) {
+            return;
+        }
+
+        echo '<p class="muted">Since the cache was last cleared it has answered approximately '
+            . Security::esc(number_format($savings['requests'])) . ' '
+            . ($savings['requests'] === 1 ? 'read' : 'reads')
+            . ' without going to Solr, which is approximately '
+            . Security::esc(Quota::mb($savings['bytes'] / 1048576)) . ' of metered response '
+            . 'traffic not fetched.</p>';
     }
 
     /**
@@ -4069,14 +4282,13 @@ final class Settings extends Controller implements JobHost, Sections
     /**
      * The cache-busting version for `b.js`.
      *
-     * The beacon is served with long cache headers (SPEC §3), so the only way a change
-     * reaches returning visitors promptly is a version query. Using the file's own mtime
-     * means there is nothing to remember to bump — and nothing to build.
+     * Beacon\Doc::version() and nothing else. It used to be worked out here and hardcoded to `1`
+     * in the installer, so an operator who pasted the snippet they were handed at the end of
+     * setup pinned their visitors to the first version of the beacon for good.
      */
     private function beaconVersion(): string
     {
-        $path = __DIR__ . '/../../public/b.js';
-        return is_file($path) ? (string) filemtime($path) : '1';
+        return Doc::version();
     }
 
     /**
@@ -4133,7 +4345,7 @@ final class Settings extends Controller implements JobHost, Sections
     {
         [$base, $configured] = $this->baseUrl();
         $ver = $this->beaconVersion();
-        $src = $base . '/b.js?v=' . $ver;
+        $src = Doc::src($base);
         $enabled = (bool) $this->cfg->get('beacon.enabled');
 
         self::cardOpen('set-beacon', self::sectionNum('set-beacon'), 'Beacon / JavaScript tracking');
@@ -4218,6 +4430,10 @@ final class Settings extends Controller implements JobHost, Sections
             . 'snippet <strong>with an identity attached</strong>, because that is the part nobody can guess from '
             . 'the one-line version; the attributes are optional and the snippet works without them.</p>';
 
+        echo '<p class="muted">The same reference is printed by <code class="mono">bin/loghound-setup '
+            . '--beacon-doc</code> on the machine itself, and by the installer when it finishes, so an '
+            . 'operator working from a terminal reads exactly what is on this card.</p>';
+
         /*
          * The snippet the panel prints must be the snippet that works, first time, on the site
          * it is going to be pasted into. So it is BUILT from the live configuration rather than
@@ -4227,11 +4443,10 @@ final class Settings extends Controller implements JobHost, Sections
          * cannot succeed.
          */
         $collected = \Loghound\Beacon::normaliseParamNames((array) $this->cfg->get('beacon.query_params', []));
-        $paramsAttr = $collected === [] ? '' : ' data-params="' . implode(',', $collected) . '"';
+        $configuredAttrs = Doc::configuredAttrs($this->cfg);
+        $paramsAttr = $configuredAttrs === [] ? '' : ' data-params="' . $configuredAttrs['data-params'] . '"';
 
         $allowed = (new \Loghound\Beacon($this->cfg))->allowedHosts();
-
-        $htmlSnippet = '<script src="' . $src . '"' . $paramsAttr . ' defer></script>';
 
         /*
          * EVERY TAB SHOWS THE IDENTITY FORM, in the syntax that platform actually uses.
@@ -4252,10 +4467,11 @@ final class Settings extends Controller implements JobHost, Sections
          * rather than broken: a page cache serving one visitor's identity to everybody, and
          * Drupal's render cache doing the same unless the user cache context is declared.
          */
-        $identAttrs = ' data-ident="ada@example.com" data-signed-in="1"';
-
         $htmlIdentSnippet = '<!-- your template renders the two values; omit either to say nothing -->' . "\n"
-            . '<script src="' . $src . '"' . $paramsAttr . $identAttrs . ' defer></script>';
+            . Doc::snippet($base, array_merge($configuredAttrs, [
+                'data-ident'     => '<?= htmlspecialchars($user->email, ENT_QUOTES) ?>',
+                'data-signed-in' => '<?= $user->isSignedIn() ? \'1\' : \'0\' ?>',
+            ]));
 
         $wpSnippet = <<<PHPCODE
         // wp-content/mu-plugins/loghound.php — a must-use plugin, so it survives a theme change.

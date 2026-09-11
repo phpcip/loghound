@@ -130,7 +130,7 @@ server {
     # THE BEACON — /b.js
     #
     # Cacheable and long-lived: it is versioned by query string
-    # (<script src="/b.js?v=2">), so a new version is a new URL and there is
+    # (<script src="/b.js?v=1789104523">), so a new version is a new URL and there is
     # never a stale-beacon problem to debug.
     # =====================================================================
     location = /b.js {
@@ -170,8 +170,10 @@ server {
     # =====================================================================
     # STATIC ASSETS — self-hosted ECharts, CSS, fonts. No PHP here, ever.
     # =====================================================================
+    # Every URL the panel emits under here carries ?v=<mtime> — including every ES module,
+    # via the import map in src/Assets.php — so "immutable" is true rather than a bet.
     location ^~ /assets/ {
-        add_header Cache-Control "public, max-age=2592000" always;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options "nosniff" always;
         try_files $uri =404;
 

@@ -28,6 +28,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../src/autoload.php';
 
+use Loghound\Beacon\Doc;
 use Loghound\Config;
 use Loghound\Panel\Gateway;
 use Loghound\Panel\Settings;
@@ -254,18 +255,68 @@ return [
         }
     },
 
-    'a configured base_url produces the one-line beacon tag' => function (): void {
-        $cfg = lh_finish_config();
-        $cfg->set('base_url', 'https://logs.example.org/');
-        $group = lh_finish_group($cfg, 'beacon');
+    'a configured base_url produces the one-line beacon tag, at the version b.js actually is'
+        => function (): void {
+            $cfg = lh_finish_config();
+            $cfg->set('base_url', 'https://logs.example.org/');
+            $group = lh_finish_group($cfg, 'beacon');
 
-        lh_same('', $group['problem'], 'nothing to fix');
-        lh_same(
-            '<script src="https://logs.example.org/b.js?v=1" defer></script>',
-            $group['lines'][0],
-            'beacon snippet'
-        );
-    },
+            $version = (string) filemtime(__DIR__ . '/../public/b.js');
+
+            lh_same('', $group['problem'], 'nothing to fix');
+            lh_same(
+                '<script src="https://logs.example.org/b.js?v=' . $version . '" defer></script>',
+                $group['lines'][0],
+                'The version is the beacon file\'s own modification time, not a hardcoded 1. b.js is '
+                . 'served immutable for a week, so a snippet pinned to a fixed ?v= means no later fix '
+                . 'to the beacon ever reaches a single returning visitor of that site — and this is '
+                . 'the snippet an operator is handed at the end of setup and pastes once'
+            );
+            lh_same(
+                Doc::version(),
+                $version,
+                'and the whole product works it out in one place, so no surface can hand out a '
+                . 'version of its own'
+            );
+        },
+
+    'the finish steps carry the identity snippet and the CSP directives, not only the bare tag'
+        => function (): void {
+            $cfg = lh_finish_config();
+            $cfg->set('base_url', 'https://logs.example.org');
+
+            $identity = lh_finish_group($cfg, 'beacon-identity');
+            lh_same('', $identity['problem'], 'nothing to fix');
+            lh_contains($identity['lines'][0], 'data-ident="<?=', 'the identity comes out of the '
+                . 'template\'s own user object; a literal address is the one form nobody can paste unedited');
+            lh_contains($identity['lines'][0], 'data-signed-in="<?=', 'and so does the signed-in flag');
+            lh_contains($identity['lines'][0], 'htmlspecialchars', 'escaped, so an address with a quote '
+                . 'in it cannot break the tag');
+
+            $csp = lh_finish_group($cfg, 'beacon-csp');
+            lh_same('', $csp['problem'], 'nothing to fix');
+            lh_contains($csp['lines'][0], 'script-src https://logs.example.org', 'the script directive');
+            lh_contains($csp['lines'][0], 'connect-src https://logs.example.org', 'and the one people miss: '
+                . 'without it the browser blocks the collector POST silently and nothing arrives');
+            lh_false(str_contains($csp['lines'][0], '/b.js'), 'a CSP source is an origin, never a path');
+        },
+
+    'the snippet carries the query parameters this installation collects, and none when it collects none'
+        => function (): void {
+            $cfg = lh_finish_config();
+            $cfg->set('base_url', 'https://logs.example.org');
+            lh_false(
+                str_contains(lh_finish_group($cfg, 'beacon')['lines'][0], 'data-params'),
+                'an installation collecting no parameter is never handed a snippet advertising one'
+            );
+
+            $cfg->set('beacon.query_params', ['q', 'search']);
+            lh_contains(
+                lh_finish_group($cfg, 'beacon')['lines'][0],
+                'data-params="q,search"',
+                'and one that collects them is, so the pasted snippet works first time'
+            );
+        },
 
     'ingestion liveness comes from the tailer status document, and says which state it is in'
         => function (): void {

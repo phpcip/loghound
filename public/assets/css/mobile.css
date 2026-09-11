@@ -242,9 +242,14 @@ textarea {
     .rowopen,
     .expander,
     .lh-navbtn,
+    .card-refresh,
     .lh-railbtn { min-width: var(--lh-tap); }
 
+    /* The per-section reload control is a 16px mark in a 30x26 box, so it needs
+       both dimensions like every other icon-shaped control here. The generic
+       `button` rule above would otherwise leave it 30x44. */
     .rowopen,
+    .card-refresh,
     .expander { min-height: var(--lh-tap); }
 
     /* A TICK BOX IS A TARGET TOO. Measured at 20x20 on every checkbox and radio in the panel.
@@ -323,6 +328,15 @@ textarea {
         padding-bottom: 6px;
     }
 
+    /* "Open this page in a new tab", beside a path. It is the second control on a row whose
+       first one is already thumb-sized, so it needs the same floor or it becomes the one thing
+       on the row that cannot be hit. The box grows; the arrow inside it does not move. */
+
+    .urlout {
+        min-width: var(--lh-tap);
+        min-height: var(--lh-tap);
+    }
+
     /* Chips that remove a filter. Small type, large target, unchanged appearance. */
 
     .fchip,
@@ -339,6 +353,20 @@ textarea {
 
     .tab,
     .toggle button {
+        min-height: var(--lh-tap);
+        padding-top: 10px;
+    }
+
+    /* The CSV export control is typed as a sort chip and is a target for the same reason one
+       is: 14px of uppercase label with 6px of padding measures about 20px, against a 44px
+       thumb. It keeps its underline and gains the room, exactly as `.toggle button` above
+       does — and it is an <a>, so it has to be told to be a flex box before min-height means
+       anything. It stays on its own line rather than being squeezed beside the heading: at
+       375px `.card-head` wraps, and a two-word control that wraps mid-phrase reads as two. */
+
+    .export {
+        display: inline-flex;
+        align-items: center;
         min-height: var(--lh-tap);
         padding-top: 10px;
     }
@@ -480,6 +508,13 @@ textarea {
     /* A card heading and its tools stop competing for one line. */
 
     .card-head { gap: 8px 16px; }
+
+    /* The computed-at stamp is a mono timestamp plus an age, which is about 300px and would
+       not fit the 343px content box beside anything else. It is prose rather than a control,
+       so it is allowed to wrap here — a nowrap element wider than its container is what
+       starts a horizontal scroll on the whole page. */
+
+    .card-stamp { white-space: normal; }
 
     /* Banners are read on a phone at arm's length, so they get their measure back. */
 
@@ -850,6 +885,22 @@ textarea {
        label-and-value row there is nothing to line it up against. */
 
     table.lh-stack td.num { text-align: left; }
+
+    /* A path and its "open the page" link, in a card with no columns.
+
+       THE WHOLE VALUE HAS TO BE REACHABLE, and in a card it can be: there is no column to fit
+       inside, so the path wraps to as many lines as it needs instead of truncating, and the link
+       wraps with it rather than being pushed off the right-hand edge. A 96-character URL at
+       375px therefore reads as three lines of a card and never as a row that scrolls sideways. */
+
+    table.lh-stack td.urlcell { overflow: visible; }
+    table.lh-stack .urlwrap { flex-wrap: wrap; }
+    table.lh-stack .urlwrap > .urlpath {
+        white-space: normal;
+        overflow: visible;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+    }
 
     /* A stacked table's rows are cards, so the sticky positioning that kept a header on
        screen while a long table scrolled has nothing left to do. */

@@ -1238,6 +1238,16 @@ final class Rules
      * for it. Counting only kind_s=asset fires this rule on a real session in
      * tests/fixtures/apache_combined_bot_fleet.log whose only sub-resource was the favicon.
      *
+     * LOGHOUND'S OWN BEACON SCRIPT SILENCES THE RULE, and this is the deliberate counterweight
+     * to excluding it from `sub_resources`. Sessionizer stopped counting `/b.js` as site traffic,
+     * which is correct — it is not the measured site's asset — but a visitor whose only
+     * sub-resource WAS `/b.js` would then present as "took the markup and left" and newly collect
+     * 25 bot points, on the strength of having done exactly what Loghound's own script tag told
+     * their browser to do. That is a false positive manufactured by the measurement, which is the
+     * worst kind. `own_assets` is the evidence that the renderer did go back to a server for
+     * something the markup referenced, so the rule has nothing to say and says nothing. It is the
+     * conservative direction: the rule can only fail to fire, never fire wrongly.
+     *
      * @param array<string,mixed> $s
      */
     private function ruleNoAssets(array $s): ?string
@@ -1246,6 +1256,9 @@ final class Rules
             return null;
         }
         if ((int) ($s['sub_resources'] ?? 0) > 0) {
+            return null;
+        }
+        if ((int) ($s['own_assets'] ?? 0) > 0) {
             return null;
         }
         return 'An HTML page was served with a 200 and the client fetched no stylesheets, scripts, '

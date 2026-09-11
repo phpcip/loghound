@@ -63,6 +63,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Assets;
 use Loghound\Auth\Persistence;
 use Loghound\Auth\TwoFactor;
 use Loghound\Config;
@@ -606,10 +607,7 @@ final class Login
      */
     private function head(string $title, string $heading): void
     {
-        $asset = function (string $rel): string {
-            $path = $this->root . '/public/' . $rel;
-            return $rel . '?v=' . (is_file($path) ? (string) filemtime($path) : '0');
-        };
+        $asset = fn (string $rel): string => Assets::url($rel, $this->root);
 
         header('Content-Type: text/html; charset=utf-8');
 
@@ -627,6 +625,7 @@ final class Login
         echo '<link rel="icon" href="' . Security::esc($asset('favicon.ico')) . '" sizes="any">' . "\n";
         echo '<link rel="apple-touch-icon" href="' . Security::esc($asset('apple-touch-icon.png')) . '">' . "\n";
         echo '<script src="' . Security::esc($asset('assets/js/theme.js')) . '"></script>' . "\n";
+        echo Assets::importMapTag($this->root) . "\n";
         echo '<script type="module" src="' . Security::esc($asset('assets/js/responsive.js')) . '"></script>' . "\n";
         echo "</head>\n<body class=\"setup-body\">\n";
 

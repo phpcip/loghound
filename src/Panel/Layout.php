@@ -28,8 +28,10 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Assets;
 use Loghound\Config;
 use Loghound\Security;
+use Loghound\Setup\Pairs;
 use Loghound\Setup\Steps;
 
 final class Layout
@@ -67,11 +69,7 @@ final class Layout
         $siteName = (string) $cfg->get('site_name', 'Loghound');
         $slug = $view->slug();
 
-        $v = static function (string $rel): string {
-            $path = __DIR__ . '/../../public/' . $rel;
-            $stamp = is_file($path) ? (string) filemtime($path) : '0';
-            return $rel . '?v=' . $stamp;
-        };
+        $v = static fn (string $rel): string => Assets::url($rel);
 
         echo "<!doctype html>\n";
         echo '<html lang="en" data-theme="auto">' . "\n";
@@ -88,6 +86,7 @@ final class Layout
         echo '<link rel="icon" href="' . Security::esc($v('favicon.ico')) . '" sizes="any">' . "\n";
         echo '<link rel="apple-touch-icon" href="' . Security::esc($v('apple-touch-icon.png')) . '">' . "\n";
         echo '<script src="' . Security::esc($v('assets/js/theme.js')) . '"></script>' . "\n";
+        echo Assets::importMapTag() . "\n";
         echo '</head>' . "\n";
         echo '<body data-view="' . Security::esc($slug) . '">' . "\n";
 
@@ -108,7 +107,7 @@ final class Layout
 
         echo '<main id="main">' . "\n";
         self::sectionNav($view, $body);
-        self::header($view);
+        self::header($view, $boot);
         self::banners($gw, $cfg);
 
         echo '<div class="view">' . "\n";
@@ -172,7 +171,22 @@ final class Layout
             if ($id === '') {
                 continue;
             }
-            echo '<li><a href="#' . Security::esc($id) . '-card" data-sect="' . Security::esc($id) . '">'
+            /* THE UNTRUNCATED HEADING TRAVELS WITH THE ENTRY, WHEN THERE IS ONE TO TRAVEL.
+               The bar cuts a derived label to 22 characters, so "Declared versus evasive, by
+               week" reaches the reader as "Declared versus evasi…" and the rest of it existed
+               nowhere on the page — not in the markup, not in a title. The stylesheet shows it
+               on hover and on focus from this attribute, and assets/js/responsive.js uses the
+               same value as the anchor's accessible name.
+
+               Emitted only when it differs from what is rendered: an entry that fits needs no
+               tooltip, and one that repeats a fully visible label is noise. A view that
+               declares sections() chooses labels written for this bar, returns three elements,
+               and correctly gets nothing. */
+            $full = (string) ($entry[3] ?? '');
+
+            echo '<li><a href="#' . Security::esc($id) . '-card" data-sect="' . Security::esc($id) . '"'
+                . ($full !== '' && $full !== $label ? ' data-full="' . Security::esc($full) . '"' : '')
+                . '>'
                 . '<span class="set-nav-num">' . Security::esc(self::pad($i)) . '</span>'
                 . '<span class="set-nav-label">' . Security::esc($label) . '</span></a></li>';
         }
@@ -196,7 +210,7 @@ final class Layout
      * Headings are written for a card, not for a one-row bar, so they are trimmed to a length
      * the bar can carry. A view that wants a label chosen rather than cut declares sections().
      *
-     * @return array<int,array{0:string,1:string}>
+     * @return array<int,array{0:string,1:string,2:string,3:string}>
      */
     private static function cardsIn(string $body): array
     {
@@ -211,11 +225,12 @@ final class Layout
 
         $out = [];
         foreach ($matches as $match) {
-            $label = html_entity_decode($match[2], ENT_QUOTES, 'UTF-8');
+            $full = html_entity_decode($match[2], ENT_QUOTES, 'UTF-8');
+            $label = $full;
             if (mb_strlen($label) > 22) {
                 $label = rtrim(mb_substr($label, 0, 21)) . '…';
             }
-            $out[] = [$match[1], $label];
+            $out[] = [$match[1], $label, '', $full];
         }
         return $out;
     }
@@ -271,9 +286,14 @@ final class Layout
         echo '<div class="brand"><span class="brand-mark" aria-hidden="true"></span>'
             . '<span class="brand-name">' . Security::esc($siteName) . '</span></div>' . "\n";
         echo '<ul>';
+        /* THE NAVIGATION CARRIES THE DASHBOARD'S STATE. These were bare `?v=<slug>` links, so
+           every move between views threw away the time range and every filter in force. The
+           filter bar exists precisely because a filtered number that does not say it is
+           filtered is a wrong number on every page — and the navigation was quietly clearing
+           the filters it was there to announce. urlWith() re-validates every key it carries. */
         foreach (self::nav() as $item) {
             $is = $item['slug'] === $active;
-            echo '<li><a href="?v=' . Security::esc($item['slug']) . '"'
+            echo '<li><a href="' . Security::esc(self::urlWith(['v' => $item['slug']])) . '"'
                 . ($is ? ' class="on" aria-current="page"' : '')
                 . ' title="' . Security::esc($item['hint']) . '">'
                 . '<span class="navlabel">' . Security::esc($item['label']) . '</span></a></li>';
@@ -332,9 +352,27 @@ final class Layout
         echo '<div class="banner banner-bad" id="lh-conn" role="alert" hidden>'
             . '<strong>A service this panel depends on is not answering.</strong> '
             . '<span id="lh-conn-detail"></span> '
-            . 'Run the connection check under <a href="?v=settings">Settings</a>, or set '
+            . 'Run the connection check under <a href="' . Security::esc(self::urlWith(['v' => 'settings'])) . '">Settings</a>, or set '
             . '<code>LOGHOUND_DEMO=1</code> to explore the panel with sample data.'
             . '</div>' . "\n";
+
+        /* AN ACCOUNT IS SET AND ITS INDEXES HAVE NOT BEEN CHOSEN YET. Without this the panel
+           answered that state with "A service this panel depends on is not answering" on every
+           view, which is true of the symptom and useless about the cause: nothing is broken,
+           a question has not been answered yet, and the answer is two clicks away. Saying so
+           here rather than only on Settings is what makes the state recoverable from wherever
+           the operator happens to be — including after they close the tab and sign in again.
+
+           Free, like every other check in this method: the verdict was recorded at the one
+           moment it was known and is read from config, so no page pays a control-plane call
+           for it. */
+        if (Pairs::isPending($cfg)) {
+            echo '<div class="banner banner-warn" role="alert"><strong>'
+                . Security::esc(Pairs::pendingHeadline()) . '</strong> '
+                . Security::esc(Pairs::pendingDetail($cfg))
+                . ' <a href="' . Security::esc(self::urlWith(['v' => 'settings'])) . '#set-solr">'
+                . 'Choose them</a></div>' . "\n";
+        }
 
         if (!$gw->isDemo()) {
             $ingest = Steps::ingestStatus(dirname(__DIR__, 2));
@@ -354,7 +392,7 @@ final class Layout
 
                 echo '<div class="banner banner-warn" role="alert"><strong>'
                     . Security::esc($headline) . '</strong> ' . Security::esc($detail)
-                    . ' <a href="?v=settings#set-finish-card">What to do</a></div>' . "\n";
+                    . ' <a href="' . Security::esc(self::urlWith(['v' => 'settings'])) . '#set-finish-card">What to do</a></div>' . "\n";
             }
         }
 
@@ -362,7 +400,7 @@ final class Layout
         if ($errors !== []) {
             echo '<div class="banner banner-warn" role="alert"><strong>Configuration needs attention:</strong> '
                 . Security::esc(implode(' · ', array_slice($errors, 0, 3)))
-                . ' <a href="?v=settings">Open settings</a></div>' . "\n";
+                . ' <a href="' . Security::esc(self::urlWith(['v' => 'settings'])) . '">Open settings</a></div>' . "\n";
         }
     }
 
@@ -372,7 +410,7 @@ final class Layout
      * Nothing sits above the H1 — no kicker, no badge, no breadcrumb. That is rule 5 of
      * the editorial system and it is not negotiable per page.
      */
-    private static function header(Controller $view): void
+    private static function header(Controller $view, array $boot = []): void
     {
         echo '<header class="head">' . "\n";
         echo '<h1>' . Security::esc($view->title()) . '</h1>';
@@ -380,18 +418,86 @@ final class Layout
 
         $current = Query::range(isset($_GET['range']) && is_string($_GET['range']) ? $_GET['range'] : null);
         $slug = $view->slug();
+
         echo '<div class="head-tools">';
-        echo '<div class="ranges" role="group" aria-label="Time range">';
-        foreach (Query::ranges() as $key => $def) {
-            $on = $key === $current['key'];
-            $qs = self::urlWith(['v' => $slug, 'range' => $key]);
-            echo '<a href="' . Security::esc($qs) . '"' . ($on ? ' class="on" aria-current="true"' : '') . '>'
-                . Security::esc(strtoupper($key)) . '</a>';
+
+        /* THE PICKER IS RENDERED ONLY WHERE IT DOES SOMETHING. See Controller::toolbar() for
+           why this is asked of the view rather than special-cased: on Settings and on Storage
+           & bandwidth the six links changed nothing at all, and a control that answers a press
+           by doing nothing is worse than no control.
+
+           The CHOICE still travels — urlWith() carries `range` through every navigation — so a
+           reader who picks 7D, opens Settings and comes back is still on 7D even though the
+           page in between had nowhere to show it. */
+        if ($view->honours(Controller::SCOPE_RANGE)) {
+            echo '<div class="ranges" role="group" aria-label="Time range">';
+            foreach (Query::ranges() as $key => $def) {
+                $on = $key === $current['key'];
+                $qs = self::urlWith(['v' => $slug, 'range' => $key]);
+                echo '<a href="' . Security::esc($qs) . '"' . ($on ? ' class="on" aria-current="true"' : '') . '>'
+                    . Security::esc(strtoupper($key)) . '</a>';
+            }
+            echo '</div>';
         }
-        echo '</div>';
+
+        self::clearCache($view, $boot, $slug);
+
         echo '<span class="job-meta" id="lh-page-status"></span>';
         echo "</div>\n";
+
+        /* The bandwidth strip is a READOUT, not a control, and it used to be injected into the
+           row above beside the range links — which put a status line in a group of controls and
+           made it look like one more thing to press. It keeps its own slot here, outside the
+           toolbar, so it can stay on every view (it is the one quota that cannot be reclaimed,
+           and once exceeded the panel itself answers 403) without pretending to be an input. */
+        echo '<div class="head-readout" id="lh-readout"></div>' . "\n";
         echo "</header>\n";
+    }
+
+    /**
+     * The Clear cache control, and the one line that follows a press.
+     *
+     * WHY IT IS IN THE PAGE HEAD AND NOT IN SETTINGS. It undoes something the reader is looking
+     * at: the numbers on this page may have been computed up to the cache duration ago, and the
+     * question "is this current?" is asked where the number is, not two pages away. The stamp
+     * each card carries answers the question; this answers the follow-up.
+     *
+     * IT IS A FORM, NOT A LINK. Clearing state is a POST with a CSRF token, for the ordinary
+     * reason — a GET route would let any page on the internet empty an operator's cache with an
+     * <img> tag. The front controller answers it with a redirect, so a refresh cannot clear
+     * twice and the outcome arrives as a validated query parameter rather than a rendered POST.
+     *
+     * WHERE IT DOES NOT APPEAR. Only on a view that actually reads cached Solr answers, by the
+     * same declaration that governs the other three controls — see Controller::SCOPE_CACHE.
+     * Index analytics and Query analysis read the Opensolr request log, which is not cached, so
+     * a button there would discard nothing and say it had. And on no view at all when the cache
+     * is switched off or is not reachable, which is what `enabled` reports: an installation with
+     * nothing to clear is not offered a control that would do nothing.
+     *
+     * @param array<string,mixed> $boot
+     */
+    private static function clearCache(Controller $view, array $boot, string $slug): void
+    {
+        $cache = (array) ($boot['cache'] ?? []);
+        if (empty($cache['enabled']) || !$view->honours(Controller::SCOPE_CACHE)) {
+            return;
+        }
+
+        $cleared = $cache['cleared'] ?? null;
+
+        echo '<form method="post" action="' . Security::esc(self::urlWith(['v' => $slug])) . '" class="cacheclear">';
+        echo '<input type="hidden" name="csrf" value="' . Security::esc(Security::csrfToken()) . '">';
+        echo '<button type="submit" name="clear_cache" value="1" class="ghost small">Clear cache</button>';
+
+        if ($cleared !== null) {
+            $n = (int) $cleared;
+            $said = $n < 0
+                ? 'Nothing was cleared — the cache did not answer.'
+                : ($n === 1 ? '1 cached answer discarded.' : number_format($n) . ' cached answers discarded.');
+            echo '<span class="job-meta" role="status">' . Security::esc($said) . '</span>';
+        }
+
+        echo "</form>\n";
     }
 
     /**
@@ -463,6 +569,23 @@ final class Layout
         $core = $_GET['core'] ?? null;
         if (is_string($core) && $core !== '' && Security::isSafeCoreName($core)) {
             $params['core'] = $core;
+        }
+
+        /* THE RANGE TRAVELS TOO, AND IT DID NOT. Every other piece of dashboard state was
+           carried across a navigation and the time window was not, so an operator who chose
+           7D and moved to another view silently landed back on the 24h default — and the
+           page said 24H while they believed they were still on 7D, which is the same class
+           of wrong number as a filter that inverts itself.
+
+           It matters more now that a view which is not scoped by time does not render the
+           picker at all: without this, going to such a view and coming back would discard
+           the choice, because the URL that took them there had nowhere to keep it.
+
+           Validated against the table rather than passed through, like every other key here:
+           an unknown token is dropped, and Query::range() would default it anyway. */
+        $range = $_GET['range'] ?? null;
+        if (is_string($range) && isset(Query::ranges()[$range])) {
+            $params['range'] = $range;
         }
 
         foreach ($overrides as $k => $v) {

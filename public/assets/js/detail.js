@@ -23,10 +23,15 @@
  *
  * EVERY VALUE IN HERE IS HOSTILE. Paths, User-Agents, referrers, AS organisation names, RIR
  * netnames and any identity the measured site chose to attach are all somebody else's input.
- * All of it reaches the DOM through core.js's el({text}), which is textContent. The only value
- * that becomes an href is one the SERVER already passed through Security::safeUrl() — the
- * client never decides that a scheme is safe — and the filter links are built with
- * encodeURIComponent by identity.js.
+ * All of it reaches the DOM through core.js's el({text}), which is textContent. A referrer
+ * becomes an href only after the SERVER has passed it through Security::safeUrl(), a site URL
+ * only after url.js has rebuilt it from a validated host and a validated path — the client
+ * never decides that a scheme is safe — and the filter links are built with encodeURIComponent
+ * by identity.js.
+ *
+ * A PATH IS NEVER SHOWN BARE. The trail, the entry and exit pages and the recent-visitors table
+ * all carry the full URL beside the path, as a link that opens in a new tab. A hit's own host is
+ * preferred and the session's host is the fallback, because a session can cross virtual hosts.
  */
 
 'use strict';
@@ -38,6 +43,7 @@ import { closeDialog, dialogFail, isCurrent, openDialog, registerOpener } from '
 import { clientNode, countryNode, dimLabel, dimValue, flagNode, networkNode, verdictChip } from './identity.js';
 import { markSortable } from './sorttable.js';
 import { countryName } from './geo.js';
+import { outLink, pathCell, urlMark } from './url.js';
 
 /** Population keys in the order every other chart in the panel stacks them. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -151,14 +157,19 @@ function trail(data) {
     }
 
     const list = el('ul', { class: 'timeline' });
+    const sessionHost = (data.session && data.session.host) || null;
+
     for (const hit of data.timeline) {
         const statusClass = 't-status-' + String(hit.status === null ? '' : hit.status).charAt(0);
         list.appendChild(el('li', {}, [
             el('span', { class: 'muted mono', text: when(hit.ts).split(' ')[1] || '' }),
             el('span', { class: 't-method muted', text: hit.method || '' }),
-            el('span', { class: 't-path', title: hit.path + (hit.query ? '?' + hit.query : '') }, [
-                el('span', { text: hit.path }),
-                hit.query ? el('span', { class: 'muted', text: '?' + hit.query }) : null
+            el('span', { class: 't-path urlwrap', title: hit.path + (hit.query ? '?' + hit.query : '') }, [
+                el('span', { class: 'urlpath' }, [
+                    el('span', { text: hit.path }),
+                    hit.query ? el('span', { class: 'muted', text: '?' + hit.query }) : null
+                ]),
+                urlMark(hit.path, { host: hit.host, fallback: sessionHost, query: hit.query })
             ]),
             el('span', { class: statusClass + ' mono', text: hit.status === null ? '—' : String(hit.status) }),
             el('span', { class: 't-bytes muted mono', text: bytes(hit.bytes) }),
@@ -265,15 +276,20 @@ function renderSession(body, data) {
     ];
 
     const arrival = [
-        ['Entry page', s.entry, true],
-        ['Exit page', s.exit, true],
+        ['Entry page', s.entry ? pathCell(s.entry, { fallback: s.host }) : null],
+        ['Exit page', s.exit ? pathCell(s.exit, { fallback: s.host }) : null],
         ['Referrer', s.referer
             ? (s.referer_href && s.referer_href !== '#'
                 ? el('a', { href: s.referer_href, rel: 'noreferrer noopener', text: s.referer })
                 : el('span', { class: 'mono wrap', text: s.referer }))
             : 'none sent'],
         ['Referrer type', s.referer_type ? dimValue('referer_type_s', s.referer_type) : null],
-        ['Virtual host', s.host ? dimValue('host_s', s.host, { mono: true }) : null]
+        ['Virtual host', s.host
+            ? el('span', { class: 'urlwrap' }, [
+                el('span', { class: 'urlpath' }, [dimValue('host_s', s.host, { mono: true })]),
+                outLink(s.host, '/')
+            ])
+            : null]
     ];
 
     const execution = [];
@@ -447,11 +463,14 @@ function visitorTable(rows) {
         }, [clientNode(v)]));
         tr.appendChild(el('td', { class: 'num', text: num(v.hits), 'data-sort': v.hits === null ? '' : String(v.hits) }));
         tr.appendChild(el('td', {
-            class: 'clip mono',
+            class: 'clip urlcell',
             title: v.entry || '',
-            text: v.entry || '—',
             'data-sort': v.entry || ''
-        }));
+        }, [
+            v.entry
+                ? pathCell(v.entry, { host: v.host })
+                : el('span', { class: 'muted', text: '—' })
+        ]));
         tr.appendChild(el('td', { 'data-sort': v.verdict || '' }, [verdictChip(v.verdict)]));
         body.appendChild(tr);
     }

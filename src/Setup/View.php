@@ -29,6 +29,7 @@ declare(strict_types=1);
 
 namespace Loghound\Setup;
 
+use Loghound\Assets;
 use Loghound\Config;
 use Loghound\Security;
 
@@ -84,10 +85,7 @@ final class View
 
         header('Content-Type: text/html; charset=utf-8');
 
-        $asset = function (string $rel): string {
-            $path = $this->root . '/public/' . $rel;
-            return $rel . '?v=' . (is_file($path) ? (string) filemtime($path) : '0');
-        };
+        $asset = fn (string $rel): string => Assets::url($rel, $this->root);
 
         echo "<!doctype html>\n";
         echo '<html lang="en" data-theme="auto">' . "\n<head>\n";
@@ -103,6 +101,7 @@ final class View
         echo '<link rel="icon" href="' . Security::esc($asset('favicon.ico')) . '" sizes="any">' . "\n";
         echo '<link rel="apple-touch-icon" href="' . Security::esc($asset('apple-touch-icon.png')) . '">' . "\n";
         echo '<script src="' . Security::esc($asset('assets/js/theme.js')) . '"></script>' . "\n";
+        echo Assets::importMapTag($this->root) . "\n";
         echo '<script type="module" src="' . Security::esc($asset('assets/js/responsive.js')) . '"></script>' . "\n";
         echo "</head>\n<body class=\"setup-body\">\n";
 
@@ -752,10 +751,11 @@ final class View
             echo '<details class="card">';
             echo '<summary>Point this installation at different indexes</summary>';
             echo '<p class="muted">The two indexes above already exist and answer, so normally '
-                . 'there is nothing to do here — carry on with Continue. Opening this lets you '
-                . 'join a different pair your account already holds, which creates nothing, or '
-                . 'create a NEW pair under a fresh name. Creating leaves the current two on your '
-                . 'account, where they keep counting against your plan until you delete them.</p>';
+                . 'there is nothing to do here — carry on with Continue. Opening this shows the '
+                . 'same one-choice list as a fresh install: any pair your account already holds, '
+                . 'which creates nothing, or a new pair under a fresh name. Picking a new pair '
+                . 'leaves the current two on your account, where they keep counting against your '
+                . 'plan until you delete them.</p>';
             $this->opensolrPanel();
             echo '</details>';
 
@@ -766,17 +766,19 @@ final class View
     }
 
     /**
-     * Provisioning on Opensolr — the only path to storage there is.
+     * STEP ONE on Opensolr — the only path to storage there is.
      *
-     * Two phases, because the region list belongs to the account and cannot be known until
-     * the credentials are: enter the account details, then choose from the regions the
-     * platform actually returned for it. The API key is a password field, is never
-     * re-rendered, and is never placed in a hidden field.
+     * TWO STEPS, NEVER ONE. This form is the whole of the first: the account email and the API
+     * key, checked and saved on their own. It asks nothing about indexes, because the operator is
+     * saying which account to use and has not yet said anything about where their traffic lands.
+     * Which indexes to use is the panel below, and it only exists once there is an account to
+     * read. The API key is a password field, is never re-rendered, and is never placed in a
+     * hidden field.
      *
-     * The three panels below the form have nothing to say until the account has been read, so
-     * the method returns before them. Until credentials are entered the snapshot is a BLANK
-     * one rather than a failed one, and rendering it anyway opened the screen with an empty
-     * red banner reporting a failure that had not happened.
+     * The two panels below the form have nothing to say until the account has been read, so the
+     * method returns before them. Until credentials are entered the snapshot is a BLANK one
+     * rather than a failed one, and rendering it anyway opened the screen with an empty red
+     * banner reporting a failure that had not happened.
      */
     private function opensolrPanel(): void
     {
@@ -832,8 +834,7 @@ final class View
         }
 
         $this->accountPanel($account);
-        $this->reusePanel($account);
-        $this->createPanel($account, $regions);
+        $this->indexChoicePanel($account, $regions);
     }
 
     /**
@@ -847,6 +848,10 @@ final class View
      * A read that failed is reported as a failed read. It is not rendered as an account with
      * nothing in it, because "you have no Loghound indexes" and "we could not ask" lead to
      * opposite decisions.
+     *
+     * WHAT IS NOT HERE ANY MORE: the unmatched halves and the ways out of a full plan. Both are
+     * things the operator needs while they are looking at the list they have to pick from, so
+     * both moved into step two, which is the panel below.
      *
      * @param array<string,mixed> $account
      */
@@ -869,29 +874,6 @@ final class View
             echo '<p>' . Security::esc((string) ($capacity['sentence'] ?? '')) . '</p>';
         }
 
-        if ($blocked) {
-            echo '<p>Three ways on from here:</p>';
-            echo '<ul>';
-            foreach (Pairs::waysForward(!empty($account['pairs'])) as $way) {
-                echo '<li>' . Security::esc($way['text']);
-                if ($way['url'] !== '') {
-                    echo ' <a href="' . Security::safeUrl($way['url'])
-                        . '" target="_blank" rel="noopener noreferrer">Open your Opensolr account</a>';
-                }
-                echo '</li>';
-            }
-            echo '</ul>';
-        }
-
-        foreach ((array) ($account['halves'] ?? []) as $half) {
-            echo '<p class="muted"><strong>' . Security::esc((string) $half['name']) . '</strong> is on '
-                . 'this account without its matching <strong>' . Security::esc((string) $half['missing'])
-                . '</strong>. That is what a setup run that stopped half way leaves behind: it holds '
-                . 'no usable data on its own, it cannot be joined as a pair, and it still counts '
-                . 'against your plan. Delete it in your Opensolr account, or leave it and create a '
-                . 'new pair below — Loghound will not touch it either way.</p>';
-        }
-
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
         $this->csrf(Installer::STEP_STORAGE, 'refresh');
         echo '<button type="submit">Check the account again</button>';
@@ -900,118 +882,117 @@ final class View
     }
 
     /**
-     * The Loghound index pairs this account already holds, offered as pairs.
+     * STEP TWO: the pairs this account holds, plus the option to make a new one, as one choice.
      *
-     * WHY THIS SCREEN EXISTS. One pair of indexes can serve many sites. Every document
-     * Loghound writes carries the virtual host it came from, so six installations reporting
-     * into one pair stay separable in the panel by its Virtual host dimension — and an
-     * operator with six sites wants two indexes and six hostnames, not twelve indexes.
+     * WHY ONE LIST AND NOT TWO PANELS. Joining an existing pair and creating a new one are the
+     * alternatives to a single question — which indexes does this installation use — and they
+     * used to be two cards with two forms and two buttons, which reads as two offers rather than
+     * one decision. Now the operator picks one row and confirms. A single pair is a row like any
+     * other: they have said which account to use and have not yet said anything about indexes,
+     * so adopting the only pair on their behalf would be Loghound choosing where their traffic
+     * lands and calling it a convenience.
      *
-     * They are shown as PAIRS and are only selectable as pairs, because half a pair is not
-     * somewhere Loghound can work: hits and sessions are two different shapes, and adopting
-     * one without the other would leave a step of setup that no screen can finish.
+     * ONE PAIR CAN SERVE MANY SITES, which is why joining is offered at all. Every document
+     * Loghound writes carries the virtual host it came from, so six installations reporting into
+     * one pair stay separable in the panel by its Virtual host dimension — and an operator with
+     * six sites wants two indexes and six hostnames, not twelve indexes. On a plan with a small
+     * index limit it is the only way the sixth machine gets set up at all.
      *
-     * The consequence is printed next to the button that accepts it, not in a paragraph
-     * further up: joining means this site's traffic lands among data that is already there.
+     * An unmatched half is listed as the leftover it is and is not selectable, because half a
+     * pair is not somewhere Loghound can work. The provision option is withheld when the plan is
+     * known to be full: a control that cannot succeed is not shown as a control, and pressing
+     * "create" to watch a job fail on its second step is the experience this screen replaces.
+     *
+     * Every sentence comes from Pairs::decide(), which is what the Settings card and both shell
+     * paths render too.
      *
      * @param array<string,mixed> $account
+     * @param array<int,mixed>    $regions
      */
-    private function reusePanel(array $account): void
+    private function indexChoicePanel(array $account, array $regions): void
     {
-        $pairs = (array) ($account['pairs'] ?? []);
-        if ($pairs === []) {
+        $step = Pairs::decide($this->cfg, $account);
+
+        echo '<section class="card storage-option on">';
+        echo '<h2>' . Security::esc($step['heading']) . '</h2>';
+
+        if (!$step['ok']) {
+            echo '<p class="muted">' . Security::esc($step['error']) . '</p>';
+            echo '</section>';
             return;
         }
 
-        $host = Pairs::siteHost($this->cfg);
+        if ($step['dead_end'] !== '') {
+            echo '<div class="banner banner-bad" role="alert">'
+                . Security::esc($step['dead_end']) . '</div>';
+            echo '<p>' . Security::esc($step['ways_heading']) . '</p><ul>';
+            foreach ($step['ways'] as $way) {
+                echo '<li>' . Security::esc($way['text']);
+                if ($way['url'] !== '') {
+                    echo ' <a href="' . Security::safeUrl($way['url'])
+                        . '" target="_blank" rel="noopener noreferrer">Open your Opensolr account</a>';
+                }
+                echo '</li>';
+            }
+            echo '</ul></section>';
+            return;
+        }
 
-        echo '<section class="card storage-option on">';
-        echo '<h2>Use indexes this account already has</h2>';
-        echo '<p>Loghound found ' . count($pairs) . ' pair' . (count($pairs) === 1 ? '' : 's')
-            . ' of its own indexes on this account. <strong>One pair can serve several sites.</strong> '
-            . 'Every record carries the hostname it came from, so this installation appears as its own '
-            . 'value under Virtual host in the panel, next to whatever else is reporting in.</p>';
+        echo '<p>' . Security::esc($step['intro']) . '</p>';
+
+        foreach ($step['halves'] as $notice) {
+            echo '<p class="muted">' . Security::esc($notice) . '</p>';
+        }
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
-        $this->csrf(Installer::STEP_STORAGE, 'reuse');
+        $this->csrf(Installer::STEP_STORAGE, 'indexes');
 
         $first = true;
-        foreach ($pairs as $pair) {
-            $id      = (string) $pair['install_id'];
-            $current = Pairs::isCurrent($this->cfg, $pair);
-
+        foreach ($step['pairs'] as $pair) {
             echo '<label class="radio">';
-            echo '<input type="radio" name="install_id" value="' . Security::esc($id) . '"'
-                . ($first || $current ? ' checked' : '') . ' required>';
-            echo '<span><span class="mono">' . Security::esc((string) $pair['hits']) . '</span><br>'
-                . '<span class="mono">' . Security::esc((string) $pair['sessions']) . '</span>'
-                . ($current ? ' <span class="chip chip-good">already in use here</span>' : '')
+            echo '<input type="radio" name="install_id" value="' . Security::esc($pair['install_id']) . '"'
+                . ($first ? ' checked' : '') . ' required>';
+            echo '<span><span class="mono">' . Security::esc($pair['hits']) . '</span><br>'
+                . '<span class="mono">' . Security::esc($pair['sessions']) . '</span>'
+                . ($pair['current'] ? ' <span class="chip chip-good">already in use here</span>' : '')
                 . '</span>';
             echo '</label>';
             $first = false;
         }
 
-        echo '<p class="muted">' . Security::esc(Pairs::reuseConsequence($pairs[0], $host)) . '</p>';
+        if ($step['can_new'] && $regions !== []) {
+            echo '<label class="radio">';
+            echo '<input type="radio" name="install_id" value="' . Security::esc(Pairs::CHOICE_NEW) . '"'
+                . ($first ? ' checked' : '') . ' required>';
+            echo '<span>' . Security::esc($step['new_label']) . '</span>';
+            echo '</label>';
 
-        echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
-            . 'If these indexes were made by an older Loghound, add the fields this version writes</label>';
-        echo '<p class="muted">Leave it unticked and Loghound checks the shape first and stops if it '
-            . 'does not match, changing nothing. Ticked, it adds the missing fields — which only ever '
-            . 'adds, and does not alter or remove a single document already in there.</p>';
+            echo '<label for="region">Region for a new pair</label>';
+            echo '<select id="region" name="region">';
+            foreach ($regions as $region) {
+                $region = (string) $region;
+                echo '<option value="' . Security::esc($region) . '"'
+                    . ($region === (string) $this->cfg->get('opensolr.region') ? ' selected' : '') . '>'
+                    . Security::esc($region) . '</option>';
+            }
+            echo '</select>';
+            echo '<p class="muted">' . Security::esc($step['new_detail'])
+                . ' These are the regions your account can use, as the platform returned them.</p>';
+        } elseif ($step['new_blocked'] !== '') {
+            echo '<p class="muted">' . Security::esc($step['new_blocked']) . '</p>';
+        }
+
+        if ($step['pairs'] !== []) {
+            echo '<p class="muted">' . Security::esc($step['consequence']) . '</p>';
+            echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
+                . 'If the pair you pick was made by an older Loghound, add the fields this version '
+                . 'writes</label>';
+            echo '<p class="muted">Left unticked, the shape is checked first and nothing changes if it '
+                . 'does not match. Ticked, the missing fields are added, which only ever adds and does '
+                . 'not alter or remove a single document already in there.</p>';
+        }
 
         echo '<button type="submit" class="primary">Use these indexes</button>';
-        echo '</form>';
-        echo '</section>';
-    }
-
-    /**
-     * Create a brand-new pair, in a region this account can use.
-     *
-     * The button is withheld when the plan is known to be full, and the reason is the sentence
-     * in the panel above rather than a second copy of it here. A control that cannot succeed is
-     * not shown as a control: pressing "Create my indexes" and watching a job fail on its
-     * second step is the experience this whole screen exists to replace.
-     *
-     * @param array<string,mixed> $account
-     * @param array<int,mixed>    $regions
-     */
-    private function createPanel(array $account, array $regions): void
-    {
-        if ($regions === []) {
-            return;
-        }
-
-        $capacity = (array) ($account['capacity'] ?? []);
-        $blocked  = !empty($capacity['blocked']);
-
-        echo '<section class="card">';
-        echo '<h2>Or create a new pair</h2>';
-
-        if ($blocked) {
-            echo '<div class="banner banner-bad" role="alert">'
-                . Security::esc((string) ($capacity['sentence'] ?? ''))
-                . ' So there is nothing to create here yet — free a slot or move to a larger plan, '
-                . 'then check the account again.</div>';
-            echo '</section>';
-            return;
-        }
-
-        echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
-        $this->csrf(Installer::STEP_STORAGE, 'provision');
-        echo '<label for="region">Region</label>';
-        echo '<select id="region" name="region" required>';
-        foreach ($regions as $region) {
-            $region = (string) $region;
-            echo '<option value="' . Security::esc($region) . '"'
-                . ($region === (string) $this->cfg->get('opensolr.region') ? ' selected' : '') . '>'
-                . Security::esc($region) . '</option>';
-        }
-        echo '</select>';
-        echo '<p class="muted">These are the regions your account can use, as the platform '
-            . 'returned them. The two index names are generated for you — an Opensolr index name '
-            . 'has to be unique across the whole platform, so a fixed name would collide with '
-            . 'someone else\'s. Two indexes are created, and they count against your plan.</p>';
-        echo '<button type="submit" class="primary">Create my indexes</button>';
         echo '</form>';
         echo '</section>';
     }

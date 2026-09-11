@@ -464,6 +464,19 @@ exit(0);
  * A source discovered on a later cycle rather than at startup is worth exactly one log line:
  * a new vhost coming online is something an operator wants to see in the journal.
  *
+ * A SOURCE MAY SAY NO. `enabled => false` on the entry stops the file being read, and the
+ * decision itself is Config::sourceEnabled() so the panel and the daemon cannot disagree about
+ * it. The switch exists for the panel's own virtual host: it is a log source like any other on
+ * the machine that serves it, so browsing Loghound creates sessions in the data Loghound
+ * displays, and until now the only answer was prose in three documents advising against a setup
+ * the software would happily run. Absent means enabled, so no existing configuration changes.
+ *
+ * It is tested before glob() and before any Tail is constructed, because a disabled source must
+ * cost nothing and must not appear in $tails — one that were opened and only then ignored would
+ * still advance its cursor and still be reported as ingesting. The skip is announced on a full
+ * build but not on the once-a-second rescan, which is what $quiet distinguishes; a log file
+ * nobody is reading is the most expensive misconfiguration this daemon can be handed.
+ *
  * @param array<string,Tail>               $tails      out-param
  * @param array<string,array<string,mixed>> $sourceMeta out-param
  */
@@ -492,6 +505,13 @@ function buildSources(
     foreach ((array) $cfg->get('sources', []) as $src) {
         $pattern = (string) ($src['path'] ?? '');
         if ($pattern === '') {
+            continue;
+        }
+
+        if (!Config::sourceEnabled((array) $src)) {
+            if (!$quiet) {
+                logLine('info', 'source disabled in configuration, not ingesting: ' . $pattern);
+            }
             continue;
         }
 
@@ -1180,16 +1200,28 @@ final class Pipeline
      * installations: it goes into the hit id, where it stops two machines tailing identically
      * named log files from overwriting each other's documents, and onto the document as
      * `install_s`. Parser::normalize() carries the full reasoning.
+     *
+     * `own_host` and `own_paths` are this panel's own beacon script and collector, derived from
+     * `base_url` by Config::selfEndpoints(). Without them the parser cannot tell Loghound's
+     * instrumentation from the traffic it measures, and every request the beacon makes is
+     * counted as a page the visitor asked for — which is what put `/collect.php` and `/b.js` at
+     * the top of Overview's Top pages. They are handed over here, at construction, because they
+     * are a property of the installation; the per-source vhost is not, and arrives through
+     * setSourceHost() one line before each parse.
      */
     private function initParser(): void
     {
         if (class_exists('\\Loghound\\Parser')) {
+            $own = \Loghound\Config::selfEndpoints((string) $this->cfg->get('base_url', ''));
+
             $this->parser = new \Loghound\Parser([
                 'ip_mode'       => (string) $this->cfg->get('privacy.ip_mode', 'full'),
                 'ip_salt'       => (string) $this->cfg->get('privacy.ip_salt', ''),
                 'keep_raw'      => (bool) $this->cfg->get('ingest.keep_raw', true),
                 'search_params' => (array) $this->cfg->get('beacon.query_params', []),
                 'install_id'    => (string) $this->cfg->get('solr.install_id', ''),
+                'own_host'      => (string) $own['host'],
+                'own_paths'     => (array) $own['paths'],
             ]);
             return;
         }
@@ -1330,6 +1362,13 @@ final class Pipeline
      * is filled in here when the log format does not carry %v and the operator told setup which
      * site the file belongs to.
      *
+     * THE VHOST IS HANDED OVER BEFORE THE PARSE, NOT AFTER IT. It used to be applied further
+     * down, once the document already existed, which is too late for any decision that has to
+     * know which site the request was made to — and the own-endpoint test is one, because
+     * excluding Loghound's beacon on a path match alone would delete a measured site's real
+     * `/collect.php` from its own analytics. The post-hoc fill below stays as the backstop for a
+     * hit whose format yielded no host at all.
+     *
      * ENRICH. SPEC §5.3: enrichment failure NEVER blocks indexing. Every lookup is wrapped,
      * every result is merged only where it adds a key, and a miss leaves the field ABSENT
      * rather than empty — "" and "not known" are different facts, and conflating them poisons
@@ -1366,6 +1405,8 @@ final class Pipeline
             $raw = $fmt->parse($line);
             return is_array($raw) && $raw !== [] ? $raw : null;
         }
+
+        $this->parser->setSourceHost(isset($meta['host']) ? (string) $meta['host'] : null);
 
         try {
             $hit = $this->parser->parseLine($fmt, $line, $src, $offset);

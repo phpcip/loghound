@@ -273,6 +273,17 @@ main {
 }
 
 /*
+ * The readout slot: status the page reports, not controls the reader presses.
+ *
+ * The bandwidth strip used to be injected into .head-tools beside the range links, which put a
+ * quota warning inside a group of inputs and made it read as one more thing to press. It has
+ * its own row now, below the toolbar, and it collapses to nothing until something fills it —
+ * an empty div with no margin, so a page with no readout is laid out exactly as before.
+ */
+.head-readout:empty { display: none; }
+.head-readout { margin-top: 12px; }
+
+/*
  * The range picker.
  *
  * MEASURED: "1H" was a 24px-wide target, "7D" 25px and "6H" 26px, at every width including a
@@ -540,6 +551,46 @@ td.nowrap, th.nowrap { white-space: nowrap; }
 
 td.clip { max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 td.wrap, .wrap { white-space: normal; overflow-wrap: anywhere; }
+
+/*
+ * A PATH AND ITS FULL URL.
+ *
+ * Two controls in one cell and they must not be confused for one another: the value filters the
+ * dashboard to itself, the small link at the end opens the page in a new tab. So the value is a
+ * flex item that may shrink to an ellipsis and the link is one that never shrinks at all —
+ * `text-overflow` on the cell alone would eat the link first, which is the whole point of the
+ * change, and it would do it silently.
+ *
+ * `td.urlcell` drops the cell's own ellipsis because the inner `.urlpath` now owns it. Without
+ * that the browser would have two truncation points on one line and put a second "…" after the
+ * arrow.
+ */
+.urlwrap { display: flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; }
+.urlwrap > .urlpath { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.urlwrap > .urlout,
+.urlwrap > .urlamb { flex: 0 0 auto; }
+
+td.urlcell { text-overflow: clip; }
+
+.urlout {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    font-size: 14px; line-height: 1;
+    color: var(--muted); text-decoration: none;
+    border: 1px solid transparent; border-radius: var(--radius);
+}
+.urlout:hover,
+.urlout:focus-visible { color: var(--accent-ink); background: var(--band); border-color: var(--field-border); }
+.urlout:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.urlout-mark { font-size: 14px; line-height: 1; }
+
+/*
+ * The marker that stands where a link cannot, because the path belongs to several sites.
+ *
+ * Deliberately not a chip and deliberately not a control: it is a statement about what the panel
+ * does not know, and anything with a box around it in a row full of links reads as pressable.
+ */
+.urlamb { font-size: 14px; color: var(--faint); white-space: nowrap; cursor: help; }
 table.tight td, table.tight th { padding-top: 6px; padding-bottom: 6px; }
 .bar-col { width: 130px; }
 
@@ -585,6 +636,11 @@ table.tight td, table.tight th { padding-top: 6px; padding-bottom: 6px; }
 .chip-warn   { border-color: var(--accent); color: var(--accent-ink); }
 .chip-bad    { border-color: var(--accent); color: var(--accent-ink); }
 .chip-accent { border-color: var(--accent); color: var(--accent-ink); }
+
+/* A state the operator CHOSE, so it is quiet rather than alarming: the hairline
+   and the faint ink, which is what the panel already uses for "switched off"
+   as opposed to "something is wrong". */
+.chip-off    { border-color: var(--hairline); color: var(--faint); }
 
 .v-human, .v-likely_human { border-color: var(--ink); color: var(--ink); }
 .v-unknown                { border-color: var(--hairline); color: var(--faint); }
@@ -765,6 +821,151 @@ button.primary[disabled]:hover { background: var(--accent); color: var(--on-acce
 .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 15px; }
 .controls label { color: var(--faint); font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
 
+/* ---------------------------------------------------------------------------
+   THE CSV EXPORT CONTROL.
+
+   Typed as a sort chip, not as a button, and that is the whole design
+   decision. It sits in the card head beside the population toggles and the
+   `.controls` selects, so it has to read as one more of that family: the same
+   14px uppercase label at the same weight, the same faint resting colour, the
+   same 2px accent rule appearing underneath on hover. A filled button there
+   would be the loudest thing on a card whose point is the numbers underneath
+   it, and an export is not the reason anybody opened the page.
+
+   It is an <a> with a real href, so the states it needs are a link's: the
+   underline is removed because the border-bottom is the affordance, and
+   :focus-visible gets the same treatment as :hover so keyboard and pointer
+   land in the same place. Both states declare BOTH colours, per the rule at
+   the top of the button section.
+
+   `white-space: nowrap` because two of these can share one card head
+   ("Handlers CSV" beside "Statuses CSV") and a wrapped two-word control reads
+   as two controls.
+   --------------------------------------------------------------------------- */
+
+.export {
+    flex: none;
+    align-self: center;
+    padding: 2px 0 4px;
+    border-bottom: 2px solid transparent;
+    font: 600 14px/1 var(--font-ui);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    background: transparent;
+    color: var(--faint);
+    text-decoration: none;
+}
+.export:hover, .export:focus-visible {
+    background: transparent;
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+}
+
+/* Two exports in one card head, or an export next to a `.controls` group or a
+   `.job-meta` count: they are separate controls and need a gap of their own,
+   because `.card-head` only spaces its direct children. */
+.card-head > .export + .export,
+.card-head > .controls + .export,
+.card-head > .toggle + .export,
+.card-head > .job-meta + .export { margin-left: 4px; }
+
+/* ---------------------------------------------------------------------------
+   WHEN THIS CARD'S NUMBERS WERE COMPUTED.
+
+   With a query cache in front of Solr the figures on screen may be up to the
+   cache TTL old, and nothing else on the card distinguishes a live read from a
+   two-hour-old one. It is a STATEMENT, not a control: mono and faint, the same
+   treatment `.job-meta` gets, so it reads as provenance beside the heading
+   rather than as something to press. It is drawn only when the cache is
+   actually enabled — see renderStamp() in assets/js/core.js.
+   --------------------------------------------------------------------------- */
+
+.card-stamp {
+    flex: none;
+    align-self: center;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--faint);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.card-head > .card-stamp + .export,
+.card-head > .export + .card-stamp { margin-left: 4px; }
+
+/* ---------------------------------------------------------------------------
+   RELOAD THIS SECTION, AND ONLY THIS SECTION.
+
+   WHAT IT IS NOT. It is not Clear cache, which lives in the page header and
+   throws the stored answers away. This re-runs one card's ordinary load, cache
+   and all, so it is the quietest control on the card rather than the loudest:
+   a drawn mark at the faint resting tone with the same 2px accent rule
+   appearing underneath on hover that `.export` and the sort chips use. A
+   filled button here would out-shout the numbers the card exists to show.
+
+   WHERE IT SITS. A sibling of the h2 inside `.card-head`, put there by
+   loadCard() in assets/js/core.js — never inside the h2, because the accordion
+   moves every child of the heading into `button.card-toggle` and a button
+   nested in a button is invalid markup that does not reliably take a press.
+
+   Both states declare BOTH background and colour, per the rule at the top of
+   the button section: `button:hover` fills with ink, and a rule here that set
+   only a colour would inherit that fill.
+   --------------------------------------------------------------------------- */
+
+.card-refresh {
+    flex: none;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 26px;
+    margin: 0;
+    padding: 2px 0 4px;
+    background: transparent;
+    color: var(--faint);
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    cursor: pointer;
+}
+.card-refresh:hover {
+    background: transparent;
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+}
+.card-refresh:focus-visible {
+    background: transparent;
+    color: var(--ink);
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* While the card is loading the press is ignored — loadCard() returns early for
+   a card already in flight — so the control says so and stops offering the
+   hover it would not honour. `aria-disabled` and not `disabled`, so a keyboard
+   operator who pressed it keeps their place in the tab order. */
+.card-refresh[aria-disabled="true"] { color: var(--field-border); cursor: default; }
+.card-refresh[aria-disabled="true"]:hover {
+    background: transparent;
+    color: var(--field-border);
+    border-bottom-color: transparent;
+}
+
+.card-refresh > svg { display: block; }
+
+/* On paper there is nothing to press and nothing to reload. */
+@media print {
+    .card-refresh { display: none; }
+}
+
+/* The value browser's export lives beside the dialog's search box rather than
+   in a card head, so that row becomes a two-item flex line: the box takes the
+   space, the control keeps its own width. */
+.fb-head { display: flex; align-items: center; gap: 14px; }
+.fb-head .fb-search { flex: 1 1 auto; min-width: 0; }
+
 /*
  * The colour square in a chart's key.
  *
@@ -882,6 +1083,11 @@ tr.row-link:focus-visible > td { background: var(--band); color: var(--ink); }
 }
 .timeline li:last-child { border-bottom: 0; }
 .timeline .t-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The request's own link lives inside the path column, because the row is a fixed grid and a
+   seventh child would land outside it. `.urlpath` does the truncating now, so the column itself
+   must stop, or the link is clipped by the cell that contains it. */
+.timeline .t-path.urlwrap { overflow: visible; text-overflow: clip; }
 .timeline .t-status-2 { color: var(--ok); }
 .timeline .t-status-3 { color: var(--mid); }
 .timeline .t-status-4 { color: var(--warn); }
@@ -911,6 +1117,13 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; padding: 8px 0; border-bottom: 1p
     margin-bottom: 22px;
 }
 .source:last-child { margin-bottom: 0; }
+
+/* A source the operator has opted out of. It keeps its place and everything in
+   it — the detection, the mapping, the samples — and only says, quietly, that
+   nothing is being read from it. The form inside it stays at full strength,
+   because turning it back on is the one thing this row is for. */
+.source-off { border-style: dashed; }
+.source-off > *:not(.ingest-form):not(.confirm-form) { opacity: 0.62; }
 .source-head { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .source-head h3 { margin: 0; overflow-wrap: anywhere; font-size: 17px; }
 
@@ -948,6 +1161,18 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
 .thresholds { display: flex; flex-wrap: wrap; gap: 20px; font-size: 15px; }
 .thresholds label { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
 .confirm-form { margin-top: 18px; }
+
+/* The per-source ingest switch. Above the destructive control and separated from
+   it by a hairline, because "stop reading this file" and "remove this file from
+   the configuration" are one careless click apart and only one of them is
+   reversible from this row. */
+.ingest-form {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--hairline);
+}
+.ingest-form label.check { margin-bottom: 10px; }
+.ingest-form p.muted { margin: 0 0 12px 32px; font-size: 14px; }
 
 /* Beacon section */
 
@@ -1643,6 +1868,93 @@ td .shape { white-space: nowrap; }
     background: none;
 }
 .set-nav-num { font-family: var(--font-mono); font-size: 14px; color: var(--faint); }
+
+/* ---------------------------------------------------------------------------
+   THE SECTION BAR'S TOOLTIP — the collapsed rail's, laid under instead of beside.
+
+   WHY IT IS HERE AT ALL. The bar is one row that never wraps, so its labels are
+   short by contract, and for a view that has not declared its own sections the
+   label is a heading CUT to 22 characters by Layout::cardsIn(). "01 Declared
+   versus evasi…" is the first half of a label with no way to reach the other
+   half: the bar sets no `title`, and `title` is the bubble this work replaces.
+
+   IT NEVER REPEATS WHAT IS ON SCREEN. The content is `data-full`, the
+   untruncated label, and the box only exists on an entry responsive.js has
+   MEASURED as short of it — either the rendered text differs from `data-full`
+   or the label overflows its own box. An entry that fits carries no
+   `data-lh-tip` and has no ::after at all.
+
+   POSITION. `fixed`, because `.set-nav` is `overflow-x: auto` and would clip an
+   absolutely positioned box at the row's edge — and because the bar is
+   `position: sticky`, which is a scroll container's problem all over again.
+   Both coordinates are published by responsive.js: unlike the rail, which is
+   pinned to the left edge at a known width, this bar scrolls sideways, so
+   neither axis can be derived from a fixed edge. The horizontal one is clamped
+   against --lh-sectiontip-w so an entry at the end of the row cannot open a box
+   that runs off the window.
+
+   Everything else is the rail's: out of flow so nothing shifts, no pointer
+   events so it cannot flicker under the cursor, hover gated on there being a
+   hover so a tap on a touch screen activates the entry rather than revealing a
+   label, and `:focus-visible` unconditional because the bar is tab-navigable.
+   --------------------------------------------------------------------------- */
+
+/* --lh-navtip-x and --lh-navtip-y ARE DECLARED EMPTY ON PURPOSE, and the empty
+   value is the mechanism rather than an oversight: responsive.js writes the
+   position of whichever control has just been reached onto that control, and
+   until it does, `var()` substitutes nothing, the declaration reading it is
+   invalid at computed-value time, and the box falls back to its static position
+   rather than to the top-left corner of the window. Declaring them also keeps
+   them out of the class of properties that are used and never declared, where
+   that same outcome would be a silent defect instead of a designed fallback. */
+
+:root {
+    --lh-sectiontip-w: 360px;
+    --lh-sectiontip-edge: 12px;
+    --lh-navtip-x: ;
+    --lh-navtip-y: ;
+}
+
+/* The two icon-only controls that live in the page share this rule rather than
+   owning one each: the card head's refresh mark and the row opener that ends a
+   drillable row. Same component, same job — a fixed box under the control, out
+   of flow, `data-full` for its content, coordinates published by responsive.js.
+   The one difference is that they always carry the marker, because their text
+   is a hint for a glyph with no words rather than a label the layout cut.
+   `.set-nav a[data-lh-tip]::after` stays last in the list so the rule keeps the
+   name the suite looks it up by. */
+.card-refresh[data-lh-tip]::after,
+.rowopen[data-lh-tip]::after,
+.set-nav a[data-lh-tip]::after {
+    content: attr(data-full);
+    position: fixed;
+    z-index: 40;
+    left: var(--lh-navtip-x);
+    top: var(--lh-navtip-y);
+    max-width: min(var(--lh-sectiontip-w), calc(100vw - var(--lh-sectiontip-edge) * 2));
+    padding: 6px 10px;
+    font: 500 14px/1.35 var(--font-ui);
+    letter-spacing: 0;
+    text-transform: none;
+    white-space: normal;
+    color: var(--page);
+    background: var(--ink);
+    border: 1px solid var(--ink);
+    border-radius: var(--radius);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.card-refresh[data-lh-tip]:focus-visible::after,
+.rowopen[data-lh-tip]:focus-visible::after,
+.set-nav a[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+
+@media (hover: hover) and (pointer: fine) {
+    .card-refresh[data-lh-tip]:hover::after,
+    .rowopen[data-lh-tip]:hover::after,
+    .set-nav a[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
+}
 .set-nav a:hover .set-nav-num,
 .set-nav a:focus-visible .set-nav-num,
 .set-nav a.on .set-nav-num { background: none; color: var(--accent-ink); }
@@ -2109,6 +2421,23 @@ table .sub,
 .facet-list { list-style: none; margin: 0; padding: 0; }
 .facet-li { margin: 0; }
 
+/*
+ * A path row carries the row's filter link AND a link to the page itself.
+ *
+ * The second one is a SIBLING of the row, never a child: the row is already one <a> spanning its
+ * whole width, and an anchor inside an anchor is not something a browser will render. So the row
+ * becomes a flex item that shrinks and the small link sits outside it, which is also what makes
+ * the two read as two controls rather than one.
+ */
+.facet-li-url,
+.fb-value-url { display: flex; align-items: center; gap: 4px; }
+.facet-li-url > .facet-opt,
+.fb-value-url > a { flex: 1 1 auto; min-width: 0; }
+.facet-li-url > .urlout,
+.facet-li-url > .urlamb,
+.fb-value-url > .urlout,
+.fb-value-url > .urlamb { flex: 0 0 auto; }
+
 .facet-opt {
     position: relative;
     display: grid; grid-template-columns: 14px minmax(0, 1fr) max-content;
@@ -2261,6 +2590,14 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
 
     :root.lh-rail-collapsed { --side-w: 60px; }
 
+    /* --lh-navtip-h is the tooltip's own height, declared once because two things
+       read it: the box, and the `top` that centres the box on the mark it
+       belongs to. --lh-navtip-y is declared with the rest of the tooltip tokens
+       further up this file, and is empty until responsive.js measures the
+       control the pointer or the keyboard has reached. */
+
+    :root.lh-rail-collapsed { --lh-navtip-h: 30px; }
+
     .lh-rail .side { padding-top: 16px; overflow-x: hidden; }
 
     /* The toggle sits where the eye already is: directly under the brand, above
@@ -2320,9 +2657,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     :root.lh-rail-collapsed .brand { padding: 0 0 20px; justify-content: center; }
     :root.lh-rail-collapsed .brand-name { display: none; }
     :root.lh-rail-collapsed .lh-railbtn { justify-content: center; padding: 6px 0; }
-    :root.lh-rail-collapsed .lh-railbtn-label { display: none; }
     :root.lh-rail-collapsed .side li a { justify-content: center; padding: 11px 0; }
-    :root.lh-rail-collapsed .side li a .navlabel,
     :root.lh-rail-collapsed .side li a .lh-navhint { display: none; }
     :root.lh-rail-collapsed .side li a.on { background: var(--band); color: var(--accent-ink); }
     :root.lh-rail-collapsed .theme-toggle {
@@ -2334,11 +2669,112 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         padding: 8px 0;
         border-color: transparent;
     }
-    :root.lh-rail-collapsed .theme-toggle .lh-themelabel { display: none; }
     .lh-rail .theme-toggle { display: flex; align-items: center; gap: 10px; }
     :root.lh-rail-collapsed .side .signout { padding: 0 10px; }
     :root.lh-rail-collapsed .side .signout button { padding: 8px 4px; text-align: center; }
     :root.lh-rail-collapsed .signout-who { display: none; }
+
+    /* ---------------------------------------------------------------------
+       THE TOOLTIP THE COLLAPSED RAIL IS READ BY.
+
+       Collapsed is the default, so twelve marks in a 60px column ARE the
+       navigation, and the only way to find out what one of them was called
+       used to be to expand the rail or to wait for the browser's own `title`
+       bubble — which arrives about a second late, cannot be styled, and lands
+       wherever the pointer happens to be. That is not good enough for the
+       primary way anybody reads this navigation.
+
+       NO NEW MARKUP, AND NOT A SECOND LABEL. `.navlabel` is the span the
+       expanded rail already shows; here it is taken out of flow and drawn
+       beside the mark instead of being hidden, so there is exactly one copy of
+       every view's name in the document. `.lh-railbtn-label` and
+       `.lh-themelabel` are the same arrangement for the two other controls
+       that become a lone icon when the rail collapses.
+
+       THE NAME IS NOT THIS. Every mark carries its own `aria-label`, set by
+       responsive.js, so a screen reader announces the view whether or not this
+       box is on screen. The tooltip is a visual affordance and `visibility:
+       hidden` keeps it out of the accessibility tree until it is shown; it is
+       never the accessibility mechanism.
+
+       WHY `fixed` AND NOT `absolute`. `.side` is `overflow-y: auto` and an
+       element scrollable on one axis clips the other, so an absolutely
+       positioned tooltip is cut off at the 60px edge of the rail — the one
+       place it must not be. A fixed box is positioned against the viewport and
+       no ancestor's overflow can clip it. Nothing above the rail carries a
+       transform, a filter or containment, which are the only things that would
+       turn that containing block back into an element.
+
+       WHERE IT LANDS. Horizontally it is arithmetic, not a measurement: the
+       rail is itself fixed at the left edge and is exactly `--side-w` wide.
+       Vertically, `--lh-navtip-y` is the centre of the control the pointer or
+       the keyboard has reached, published by responsive.js at the moment it is
+       reached, and half a known box height is what centres the tooltip on the
+       mark. With that property absent — script off, or an event that never
+       fired — `top` is invalid at computed-value time and falls back to `auto`,
+       which is the static position, and that is the centre of the control too
+       for as long as the rail is not scrolled inside itself.
+
+       IT MOVES NOTHING AND TAKES NO CLICK. Out of flow, so revealing it cannot
+       shift the page by a pixel, and `pointer-events: none`, so travelling
+       towards a mark cannot put the tooltip under the cursor and make it
+       flicker.
+       --------------------------------------------------------------------- */
+
+    :root.lh-rail-collapsed .side li a .navlabel,
+    :root.lh-rail-collapsed .lh-railbtn .lh-railbtn-label,
+    :root.lh-rail-collapsed .theme-toggle .lh-themelabel {
+        position: fixed;
+        z-index: 40;
+        left: calc(var(--side-w) + 10px);
+        top: calc(var(--lh-navtip-y) - var(--lh-navtip-h) / 2);
+        display: block;
+        height: var(--lh-navtip-h);
+        max-width: 260px;
+        padding: 0 10px;
+        overflow: hidden;
+        /* The line box is the box height less the two 1px rules, so the text is
+           optically centred without a second centring mechanism. */
+        font: 500 14px/28px var(--font-ui);
+        letter-spacing: 0;
+        text-transform: none;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        /* Inverted against the page in both themes, so the box is legible over
+           whatever the content column happens to be showing behind it. */
+        color: var(--page);
+        background: var(--ink);
+        border: 1px solid var(--ink);
+        border-radius: var(--radius);
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+    }
+
+    /* Keyboard first and unconditionally: the rail is tab-navigable, and a
+       coarse-pointer device with a keyboard attached still gets this. */
+
+    :root.lh-rail-collapsed .side li a:focus-visible .navlabel,
+    :root.lh-rail-collapsed .lh-railbtn:focus-visible .lh-railbtn-label,
+    :root.lh-rail-collapsed .theme-toggle:focus-visible .lh-themelabel {
+        opacity: 1;
+        visibility: visible;
+    }
+
+    /* THE HOVER TRIGGER IS GATED ON THERE BEING A HOVER. A touch screen
+       synthesises a hover on tap, which would leave the tooltip stuck on screen
+       over the page the tap just opened. The link is an <a href> and the
+       tooltip takes no pointer events, so a tap navigates either way — this
+       just stops the ghost. */
+
+    @media (hover: hover) and (pointer: fine) {
+        :root.lh-rail-collapsed .side li a:hover .navlabel,
+        :root.lh-rail-collapsed .lh-railbtn:hover .lh-railbtn-label,
+        :root.lh-rail-collapsed .theme-toggle:hover .lh-themelabel {
+            opacity: 1;
+            visibility: visible;
+        }
+    }
 
     /* THE FACET COLUMN.
 

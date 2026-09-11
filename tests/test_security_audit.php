@@ -886,8 +886,8 @@ return [
 
         file_put_contents($file, implode("\n", [
             '<?php',
-            "\$a = 'https://admin:Notaj0kePassw0rd@solr.example.com/solr';",
-            "\$b = 'ghp_0123456789012345678901234567890123ab'; // fp",
+            "\$a = 'https://admin:Notaj0kePassw0rd@solr.example.com/solr';", // lh-scanner-fixture
+            "\$b = 'ghp_0123456789012345678901234567890123ab'; // fp", // lh-scanner-fixture
             '',
         ]));
 

@@ -119,17 +119,16 @@ function bar(percent, level) {
  * than showing an empty box for ever.
  */
 function paintStrip(data) {
-    const tools = document.querySelector('.head-tools');
+    const slot = byId('lh-readout');
     const worst = data && data.worst;
-    if (!tools || !worst || worst.ratio === null || worst.ratio === undefined) {
+    if (!slot || !worst || worst.ratio === null || worst.ratio === undefined) {
         return;
     }
 
     let strip = byId('lh-bw');
     if (!strip) {
         strip = el('div', { class: 'bwstrip', id: 'lh-bw' });
-        const anchor = byId('lh-page-status');
-        tools.insertBefore(strip, anchor || null);
+        slot.appendChild(strip);
     }
 
     const level = String(worst.level || 'unknown');

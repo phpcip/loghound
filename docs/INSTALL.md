@@ -494,7 +494,7 @@ detector will recognise it.
 One line on your site. Put it anywhere — `<head>` is earliest, before `</body>` works too:
 
 ```html
-<script src="https://loghound.example.com/b.js?v=1" defer></script>
+<script src="https://loghound.example.com/b.js?v=1757000000" defer></script>
 ```
 
 No dependencies, no cookies by default, passive and throttled event listeners. It ships as
@@ -518,14 +518,30 @@ transport and behavioural planes — but headless automation is *inferred* rathe
 *proven*, and time-on-site falls back to `log_span_ms`, the weak log-derived number every
 other log analyser reports. The two things this project exists to do both need the beacon.
 
-The `?v=` matters: `b.js` is served with `max-age=604800, immutable`, so the only thing
-that reaches a returning visitor after an upgrade is a new URL. The panel's Settings page
-builds the snippet for you with the beacon file's own modification time in that slot, which
-means there is nothing to remember to bump; if you hand-write the tag instead, bump the
-number yourself when you upgrade.
+**The `?v=` matters, and it is not a number you choose.** `b.js` is served with
+`max-age=604800, immutable`, so a browser that already has the file will not ask for it
+again for a week whatever changes on the server — the only thing that reaches a returning
+visitor after an upgrade is a different URL. Loghound fills the slot in from the beacon
+file's own modification time everywhere it prints a snippet: the panel's Settings page, the
+installer's last screen, `install.sh`'s closing report and `bin/loghound-setup`. Copy the
+snippet one of those gives you rather than the example above, and do not pin it to a number
+of your own.
 
-Everything the beacon sends, every signal code it can emit, and the exact wire protocol
-are in [BEACON.md](BEACON.md).
+**The tag takes more than a `src`.** Six attributes and two globals: `data-ident` and
+`data-signed-in` to say who the visitor is, `data-params` to keep named search terms,
+`data-hb` and `data-idle` to change the two clocks, `data-endpoint` for a collector that is
+not a sibling of the script, `window.LoghoundIdent` / `window.LoghoundSignedIn` for a
+template that cannot add an attribute, and `window.loghound.identify()` for a sign-in that
+happens after the page loaded. What each one defaults to, what it accepts, and whether
+*this* installation stores what it sends:
+
+```
+bin/loghound-setup --beacon-doc
+```
+
+The same reference is on the panel under Settings → Beacon, and the long form — every field
+the beacon sends, every signal code it can emit, the standalone contract and the exact wire
+protocol — is in [BEACON.md](BEACON.md).
 
 ---
 
@@ -553,12 +569,24 @@ way to keep the schema right — so the option promised something the product ca
 See [An older configuration on `solr.mode: custom`](#an-older-configuration-on-solrmode-custom)
 if you are upgrading one.
 
-### Join a pair you already have, or create one
+### Which account, then which indexes
 
-You give it the email address and API key from your Opensolr control panel. Before it offers
-you anything, it reads your account once and tells you what is there: how many indexes it
-holds, which pairs of Loghound indexes are already on it, and anything a half-finished setup
-run left behind.
+**These are two questions and they are always asked in that order.** Naming an Opensolr account
+is one decision; saying where this site's traffic should land is another. Step one takes the
+account email and the API key and saves them on their own, with nothing asked about indexes and
+nothing refused because of what the account does or does not hold. Step two, separately, asks
+which indexes to use.
+
+Between the two there is a moment where the configuration names indexes the new account does not
+hold — that is normal, it is not an error, and both the wizard and **Settings → Solr connection**
+say so in those words, with the list to pick from right beside the sentence. It survives closing
+the tab: an account saved is an account saved, and the choice is still waiting when you come
+back.
+
+Step two reads your account once and shows what is there — how many indexes it holds, which
+pairs of Loghound indexes are already on it, and anything a half-finished setup run left behind
+— then offers **one list**: every pair the account holds, plus one more option meaning *make a
+new pair for this site*. You pick one.
 
 **One pair of indexes can serve several sites.** Every record Loghound writes carries the
 virtual host it came from, so a pair collecting traffic from six machines stays separable in
@@ -569,10 +597,28 @@ a small index limit it is the only thing that will work.
 Pairs are listed and chosen as pairs, never as halves:
 
 ```
-aaaa1111   loghound_aaaa1111_hits + loghound_aaaa1111_sessions
+Which indexes this installation uses:
+
+    This account holds one pair of Loghound indexes. Pick it and this site records into
+    it alongside whatever is already there, or have Loghound make a pair of its own for
+    this site.
+
+      aaaa1111   loghound_aaaa1111_hits + loghound_aaaa1111_sessions
+      new        Make a new pair for this site
+
+Which indexes should this installation use (aaaa1111|new) [new]:
 ```
 
-Choosing one confirms the pair is still on the account, reads the connection details, **checks
+A single pair is still something you pick. Loghound does not adopt the only pair on the account
+on your behalf — you have said which account to use and have not yet said anything about
+indexes.
+
+The same list, the same options in the same order and the same sentences appear in the browser
+installer and in **Settings → Solr connection**, because all three render one decision rather
+than three descriptions of it. Changing accounts and moving onto a different pair are the same
+flow: Settings has no separate pair-switcher.
+
+Choosing a pair confirms it is still on the account, reads the connection details, **checks
 the indexes have the shape this version writes** — by comparing their live schema against the
 one in this release, field by field — and queries both. **Reusing joins; it never overwrites.**
 Nothing is cleared, reshaped or reloaded, and what this installation records is added alongside
@@ -611,13 +657,18 @@ is known and too small the wizard stops with the numbers and does not create any
 Your Opensolr plan allows 4 indexes and 4 are already in use, so there is room for
 none more and Loghound needs 2.
 
-xx  There is no room on this plan for the two indexes Loghound needs.
+xx  There is nothing to pick here yet: this account holds no pair of Loghound indexes,
+    and there is no room to create one. Your Opensolr plan allows 4 indexes and 4 are
+    already in use, so there is room for none more and Loghound needs 2.
+    Two ways on from here:
       - Delete an index you no longer need, which frees a slot immediately. https://opensolr.com/solr_manager/admin
       - Move to a plan that allows more indexes. https://opensolr.com/solr-hosting
 ```
 
-Joining a pair you already have is offered first when there is one, because it creates nothing
-and the limit does not apply to it.
+That is the dead end, and it is the only case with no way through inside Loghound. When the plan
+is full but the account **does** hold a pair, the list still has that pair on it — joining
+creates nothing, so the limit does not apply to it — and only the *make a new pair* option is
+withheld, with the numbers saying why.
 
 The allowance comes from Opensolr's `get_account_summary`, which reports how many indexes the
 plan allows, how many exist and how many more can be created — from the same two figures the
@@ -761,9 +812,30 @@ mode string appears anywhere near a source path in the codebase. There is a test
 suite that asserts a source file's size is unchanged after a full read.
 
 Everything Loghound writes goes into `<prefix>/var/`: the SQLite state database, the
-status file, the capped bad-line sample. Its own vhost logs to its own files, and you
-should **not** point Loghound at those — it would ingest its own beacon traffic and
-inflate every number it reports.
+status file, the capped bad-line sample.
+
+Loghound's own vhost logs to its own files, and pointing Loghound at those is a choice rather
+than a mistake. **Its own instrumentation is never counted, wherever the log comes from**:
+`/b.js` and the collector are matched on host *and* path, derived from `base_url`, and excluded
+from the session aggregate — the path list, the unique-path and hit counts, the asset counts and
+ratio, the status classes and the gap series. A measured site's own `/collect.php` is a
+different URL and is untouched. What remains is people browsing the panel, which is ordinary
+traffic to a real site: keep it if you want to see who is using Loghound, or leave it out if you
+would rather the numbers were only about the sites you are measuring. To leave it out, switch
+the source off rather than deleting it:
+
+```php
+[
+    'path'    => '/var/log/apache2/loghound_access.log',
+    'format'  => 'apache_combined',
+    'host'    => 'loghound.example.com',
+    'enabled' => false,
+],
+```
+
+`enabled` is optional and absent means enabled, so every configuration written before it existed
+behaves exactly as it did. A value that is not readable as a boolean is a configuration error
+rather than a silently dead source.
 
 Reading the same file from several processes is safe. Loghound holds an open descriptor
 and reads forward from a recorded offset; it takes no locks and does not care who else is
@@ -1052,10 +1124,13 @@ sudo LOGHOUND_HOSTNAME=shop.example.com \
 That is how several sites report into one pair; they are told apart in the panel by the
 hostname on every record. The id is the 8 hex characters in the middle of the index names, and
 the wizard prints the account's pairs with their ids before it asks. `LOGHOUND_OPENSOLR_REUSE`
-defaults to `new`, so an unattended re-run never adopts another site's indexes merely because
-it found some. Add `LOGHOUND_OPENSOLR_UPGRADE_SCHEMA=yes` only if you accept that indexes made
-by an older Loghound may have the fields this version writes added to them; without it, a
-mismatch stops the run and changes nothing.
+answers the one question step two asks, so it takes either an installation id or `new`, and it
+defaults to `new` — an unattended re-run never adopts another site's indexes merely because it
+found some. When a new pair is **not** available (a full plan) there is no safe default left, so
+an unattended run with this variable unset stops and says so rather than falling through to
+whichever pair happened to be listed first. Add `LOGHOUND_OPENSOLR_UPGRADE_SCHEMA=yes` only if
+you accept that indexes made by an older Loghound may have the fields this version writes added
+to them; without it, a mismatch stops the run and changes nothing.
 
 `LOGHOUND_OPENSOLR_REGION` applies only to indexes this run **creates**. Reusing a pair asks no
 region question, because the indexes are already wherever they were made.

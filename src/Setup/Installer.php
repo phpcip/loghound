@@ -300,11 +300,22 @@ final class Installer
             case self::STEP_STORAGE . ':credentials':
                 $this->doOpensolrCredentials();
                 break;
+            case self::STEP_STORAGE . ':indexes':
+                $this->doChooseIndexes(
+                    is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : ''
+                );
+                break;
+            /* THE TWO RETRY ALIASES. Step two is one form posting one choice; these exist only
+               for the "Try again" button on a job that failed, which re-runs the work that
+               failed rather than asking the question again — so the choice is implied by the
+               job's kind instead of arriving in the request. Both land in the same handler. */
             case self::STEP_STORAGE . ':provision':
-                $this->doProvision();
+                $this->doChooseIndexes(Pairs::CHOICE_NEW);
                 break;
             case self::STEP_STORAGE . ':reuse':
-                $this->doReuse();
+                $this->doChooseIndexes(
+                    is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : ''
+                );
                 break;
             case self::STEP_STORAGE . ':refresh':
                 $this->doRefreshAccount();
@@ -503,19 +514,29 @@ final class Installer
     }
 
     /**
-     * Record the Opensolr account details, then verify them by listing regions.
+     * STEP ONE: record the Opensolr account details, then verify them by listing regions.
      *
-     * Verification is a job because it is a network call: it must not block the request,
-     * and its failure must be attributable to this step rather than to "setup".
+     * IT SAVES ON ITS OWN, with nothing said about indexes. That is the shape Settings has been
+     * brought round to as well: naming an account is one decision and choosing indexes is
+     * another, and this handler finishes the first without asking anything about the second.
+     *
+     * Verification is a network call, which is why the form is a POST that redirects rather than
+     * something checked as the operator types.
+     *
+     * THE INTERIM STATE IS RECORDED HERE. On a fresh install there is no pair configured and
+     * settleOwnership() says so; on a re-run that has moved to another account it writes down
+     * that indexes are outstanding, which is what lets the operator close the tab and come back
+     * to step two instead of meeting a panel that reads nothing and cannot say why.
      *
      * @return never
      */
     private function doOpensolrCredentials(): void
     {
-        $email = is_string($_POST['email'] ?? null) ? $_POST['email'] : '';
-        $key   = is_string($_POST['api_key'] ?? null) ? $_POST['api_key'] : '';
+        $email  = is_string($_POST['email'] ?? null) ? $_POST['email'] : '';
+        $key    = is_string($_POST['api_key'] ?? null) ? $_POST['api_key'] : '';
+        $region = is_string($_POST['region'] ?? null) ? trim($_POST['region']) : '';
 
-        $errors = Storage::saveCredentials($this->cfg, $email, $key);
+        $errors = Storage::saveCredentials($this->cfg, $email, $key, $region);
         if ($errors !== []) {
             $this->flash('error', implode(' ', $errors));
             $this->redirect(self::STEP_STORAGE);
@@ -531,16 +552,23 @@ final class Installer
             $this->redirect(self::STEP_STORAGE);
         }
 
+        $chosen = Storage::settleRegion($this->cfg, $regions, $region !== '');
+        if ($chosen === null) {
+            $this->flash('error', Storage::regionRefusal($region, $regions));
+            $this->redirect(self::STEP_STORAGE);
+        }
+        $this->cfg->set('opensolr.region', $chosen);
+
         $this->rememberRegions($regions);
-        $account = $this->rememberAccount();
+        $account   = $this->rememberAccount();
+        $ownership = Pairs::settleOwnership($this->cfg, $account);
+        $this->persist(self::STEP_STORAGE);
 
         $this->flash(
-            'ok',
-            'Opensolr accepted your credentials. ' . (
-                $account['pairs'] !== []
-                    ? 'This account already has Loghound indexes — you can join them or create a new pair.'
-                    : 'Choose where the indexes should live.'
-            )
+            $ownership === 'missing' ? 'error' : 'ok',
+            'Opensolr accepted your credentials. ' . ($ownership === 'missing'
+                ? Pairs::pendingDetail($this->cfg)
+                : Pairs::choiceIntro(count((array) $account['pairs'])))
         );
         $this->redirect(self::STEP_STORAGE);
     }
@@ -568,67 +596,72 @@ final class Installer
             $this->redirect(self::STEP_STORAGE);
         }
 
+        Pairs::settleOwnership($this->cfg, $account);
+        $this->persist(self::STEP_STORAGE);
+
         $this->flash('ok', $account['capacity']['sentence']);
         $this->redirect(self::STEP_STORAGE);
     }
 
     /**
-     * Join a pair of Loghound indexes this account already holds.
+     * STEP TWO: act on the one choice the operator made — a pair from the list, or a new pair.
      *
-     * The installation id is checked for shape here and checked for EXISTENCE by the job,
-     * against the account, before a single configuration key is written. A form field is not
-     * evidence that an index exists, and two index names built from one are two names this
-     * installation would start writing documents into.
+     * ONE HANDLER, BECAUSE IT IS ONE CHOICE. Joining and creating used to be two separate forms
+     * with two separate actions, which made them read as two unrelated offers rather than as the
+     * alternatives they are. They are now one radio list submitting one field, and Settings does
+     * exactly the same through the same shared decision.
      *
-     * Reuse is a job for the same reason provisioning is: it makes several control-plane
-     * calls, one of which reads a whole schema back, and the operator has to be able to watch
-     * it and to be told which step refused.
+     * NEITHER ARM TRUSTS THE FIELD. An installation id is checked for shape here and for
+     * EXISTENCE against the list the account just returned, because a form field is not evidence
+     * that an index exists and two names built from an unchecked id are two names this
+     * installation would start writing documents into. A region is checked against what the
+     * platform offers THIS account, so a region Opensolr adds works without a Loghound release
+     * and one the account cannot use is refused before any index is made.
      *
+     * Both arms are jobs for the same reason: several control-plane calls, one of which reads a
+     * whole schema back, and the operator has to be able to watch it and be told which step
+     * refused. The capacity gate is step 2 of the provisioning job, ahead of the first create.
+     *
+     * @param string $choice An installation id from the list, or Pairs::CHOICE_NEW.
      * @return never
      */
-    private function doReuse(): void
+    private function doChooseIndexes(string $choice): void
     {
-        $installId = is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : '';
+        if ($choice === Pairs::CHOICE_NEW) {
+            $region  = is_string($_POST['region'] ?? null) ? $_POST['region'] : '';
+            $offered = $this->regions();
 
-        if (!preg_match('/^[a-f0-9]{4,32}$/D', $installId)) {
-            $this->flash('error', 'Choose which pair of indexes to use.');
+            if ($offered !== [] && !in_array($region, $offered, true)) {
+                $this->flash('error', Storage::regionRefusal($region, $offered));
+                $this->redirect(self::STEP_STORAGE);
+            }
+            if (!preg_match('/^[A-Z0-9_]{2,32}$/D', $region)) {
+                $this->flash('error', 'Pick a region for the new indexes, then submit again.');
+                $this->redirect(self::STEP_STORAGE);
+            }
+
+            $this->startJob(Job::KIND_OPENSOLR, ['region' => $region]);
+        }
+
+        if (!preg_match('/^[a-f0-9]{4,32}$/D', $choice)) {
+            $this->flash('error', 'Pick which indexes this installation should use, then submit again.');
             $this->redirect(self::STEP_STORAGE);
         }
 
         $account = $this->account();
-        if (Pairs::find($account['pairs'], $installId) === null) {
+        if (Pairs::find($account['pairs'], $choice) === null) {
             $this->flash(
                 'error',
-                'That pair is not in the list this account returned. Refresh the list and choose again.'
+                'That pair is not in the list this account returned. Check the account again and choose '
+                . 'from the list as it stands now.'
             );
             $this->redirect(self::STEP_STORAGE);
         }
 
         $this->startJob(Job::KIND_REUSE, [
-            'install_id'     => $installId,
+            'install_id'     => $choice,
             'upgrade_schema' => ($_POST['upgrade_schema'] ?? '') === '1',
         ]);
-    }
-
-    /**
-     * Start provisioning in the chosen region.
-     *
-     * The region is checked against the list the platform returned for THIS account, not
-     * against a hardcoded one: a region added by Opensolr appears here without a Loghound
-     * release, and a region this account cannot use is refused before any index is made.
-     *
-     * @return never
-     */
-    private function doProvision(): void
-    {
-        $region = is_string($_POST['region'] ?? null) ? $_POST['region'] : '';
-
-        if (!preg_match('/^[A-Z0-9_]{2,32}$/D', $region)) {
-            $this->flash('error', 'Choose a region for your indexes.');
-            $this->redirect(self::STEP_STORAGE);
-        }
-
-        $this->startJob(Job::KIND_OPENSOLR, ['region' => $region]);
     }
 
     /**

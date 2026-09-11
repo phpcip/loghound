@@ -1611,7 +1611,7 @@ $tls_block
     </Location>
 
     <Location "/assets/">
-        Header always set Cache-Control "public, max-age=2592000"
+        Header always set Cache-Control "public, max-age=31536000, immutable"
         Header always set X-Content-Type-Options "nosniff"
     </Location>
 
@@ -1718,7 +1718,7 @@ $listen_block
     }
 
     location ^~ /assets/ {
-        add_header Cache-Control "public, max-age=2592000" always;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options "nosniff" always;
         try_files \$uri =404;
         location ~ \\.php\$ { deny all; return 404; }
@@ -2874,8 +2874,10 @@ uninstall_report() {
     printf '\n'
 
     if [[ -n "$host" ]]; then
-        say "  THE BEACON TAG on your website. Remove this line from your templates:"
-        say "      <script src=\"https://$host/b.js?v=1\" defer></script>"
+        say "  THE BEACON TAG on your website — the <script> element whose src points at"
+        say "      https://$host/b.js"
+        say "  Remove it from your templates. The version after the ? differs per"
+        say "  installation, so match on the path and not on the whole URL."
     else
         say "  THE BEACON TAG on your website — the <script> element pointing at this"
         say "  panel's /b.js. Only you can take it out of your templates."
@@ -3075,6 +3077,40 @@ fi
 # Final report
 # =============================================================================
 
+# The beacon reference, printed by the one PHP entry point that owns it.
+#
+# This script cannot read a PHP array, and a copy of the option list in this file is exactly how
+# the snippet came to say "?v=1" here while the panel built the same tag from the beacon file's
+# own modification time. So bin/loghound-setup --beacon-doc renders the reference and this only
+# indents what comes back: the snippet, every attribute and global b.js reads, what THIS
+# installation will store, the identity routes, the hostname allowlist and the two CSP
+# directives.
+#
+# A tree with no PHP, or a wizard that fails for any reason, is told where the same material is
+# rather than being handed a tag this script made up.
+beacon_reference() {
+    local base="$1"
+    local out=""
+
+    if [[ -n "$PHP_BIN" ]] && [[ -f "$PREFIX/bin/loghound-setup" ]]; then
+        if out="$("$PHP_BIN" "$PREFIX/bin/loghound-setup" --beacon-doc --no-color \
+                  --base-url="$base" --config="$PREFIX/config/loghound.php" 2>/dev/null)"; then
+            printf '%s\n' "$out" | sed 's/^/    /'
+            logfile "printed the beacon reference for $base"
+            return 0
+        fi
+    fi
+
+    say "BEACON — one line of JavaScript on your site. Without it Loghound cannot"
+    say "measure real engaged time and cannot run the execution-plane checks that"
+    say "catch headless automation."
+    printf '\n'
+    say "The snippet, every option it reads, what this installation stores and the"
+    say "two CSP directives are on the panel under Settings > Beacon, in"
+    say "$PREFIX/docs/BEACON.md, and from:"
+    say "    $PREFIX/bin/loghound-setup --beacon-doc"
+}
+
 step "Done"
 
 if (( DRY_RUN )); then
@@ -3117,15 +3153,9 @@ cat <<EOF
        one, then re-run: sudo $0 --tls-mode existing --hostname $HOSTNAME_FQDN)
 EOF
 fi
-cat <<EOF
-
-    BEACON — add this one line to your site, before </body>. Without it,
-    Loghound cannot measure real engaged time and cannot run the
-    execution-plane checks that catch headless automation.
-
-      <script src="$SCHEME://$HOSTNAME_FQDN/b.js?v=1" defer></script>
-
-EOF
+printf '\n'
+beacon_reference "$SCHEME://$HOSTNAME_FQDN"
+printf '\n'
 fi
 
 cat <<EOF
@@ -3137,8 +3167,12 @@ cat <<EOF
 
     READ NEXT
       $PREFIX/docs/INSTALL.md     the LogFormat that makes detection much stronger
+      $PREFIX/docs/BEACON.md      the beacon in full: every option, and the wire protocol
       $PREFIX/docs/DETECTION.md   what each rule fires on, and why
       $PREFIX/docs/PRIVACY.md     what is collected, and what to tell your users
+
+    The beacon reference above, again, at any time:
+      $PREFIX/bin/loghound-setup --beacon-doc
 
     Install log: $INSTALL_LOG
     Uninstall:   sudo $0 --uninstall

@@ -238,11 +238,14 @@ loghound-tail --status --human
 And add one line to your site — anywhere in the page, `<head>` earliest:
 
 ```html
-<script src="https://loghound.example.com/b.js?v=1" defer></script>
+<script src="https://loghound.example.com/b.js?v=1789104523" defer></script>
 ```
 
-The panel's Settings page hands you that snippet with your own URL and a `?v=` taken from
-the file's modification time, so an upgrade reaches returning visitors on its own.
+**Do not copy that version.** `b.js` is served with a long immutable cache, so the `?v=` is
+what makes an upgrade reach a returning visitor at all — and a snippet pinned to a literal
+never will. Take the line from the panel's Settings → Beacon card, or from
+`bin/loghound-setup --beacon-doc`: both build it with your own URL and the `?v=` taken from the
+file's own modification time, which is the only value that is ever correct.
 
 **The site does not have to be on this machine.** That same line is the whole install on a
 host with no Loghound and no shared access log — a hosted search page, a marketing site,

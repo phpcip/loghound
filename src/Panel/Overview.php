@@ -27,6 +27,18 @@ use Loghound\Setup\Steps;
 
 final class Overview extends Controller
 {
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * Every card runs under sessionFqs(), which carries the range, the host and every facet.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+    }
+
     public function slug(): string
     {
         return 'overview';
@@ -40,6 +52,73 @@ final class Overview extends Controller
     public function subtitle(): string
     {
         return 'Who reached the site, and how long they were actually there.';
+    }
+
+    /**
+     * The three tables on this view worth taking out as CSV.
+     *
+     * The headline counters are not among them, and neither is the hourly series: four numbers
+     * and a chart are not a dataset, and a two-cell CSV is furniture. What is here is the two
+     * top-N tables and the cross-tab, all three of which are the shape somebody continues
+     * working on elsewhere.
+     *
+     * `pop` is carried on the pages export because the population toggle is the one control on
+     * this view that does not live in the URL, and an export that silently reverted to "humans
+     * only" while the table on screen showed bots would be a file that contradicts the page it
+     * came from.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'pages' => [
+                'label'   => 'Top pages',
+                'action'  => 'toppages',
+                'unit'    => 'paths',
+                'ranked'  => 'ranked by the number of sessions that requested them',
+                'cap'     => 50,
+                'params'  => ['limit' => 50],
+                'carry'   => ['pop'],
+                'note'    => 'Counted as sessions that requested the path at least once, not as a raw '
+                    . 'request count. Loghound\'s own beacon and collector requests are excluded here, '
+                    . 'because this reads the path set on the session document; a Performance export reads '
+                    . 'the hits index, where they are still present.',
+                'scope'   => ['population_label' => 'Population'],
+                'columns' => [
+                    ['Path', 'path', 'text'],
+                    ['Sessions', 'sessions', 'number'],
+                    ['Virtual host', 'host', 'text'],
+                    ['Distinct hosts serving this path', 'hosts', 'number'],
+                ],
+            ],
+
+            'searches' => [
+                'label'   => 'Search terms',
+                'action'  => 'searches',
+                'unit'    => 'search terms',
+                'ranked'  => 'ranked by the number of sessions that searched for them',
+                'cap'     => 50,
+                'params'  => ['limit' => 50],
+                'scope'   => ['searched' => 'Sessions that ran a search'],
+                'columns' => [
+                    ['Search term', 'term', 'text'],
+                    ['Sessions', 'sessions', 'number'],
+                ],
+            ],
+
+            'pivot' => [
+                'label'  => 'Country by verdict',
+                'action' => 'totals',
+                'shape'  => 'pivot',
+                'key'    => 'pivot',
+                'unit'   => 'country and verdict pairs',
+                'cap'    => 400,
+                'note'   => 'One record per pair. The verdict breakdown of a country is a LIMITED facet, '
+                    . 'so its rows do not add up to that country\'s session total — the covered column is '
+                    . 'how much of the total the listed verdicts account for.',
+            ],
+        ];
     }
 
     /**
@@ -230,6 +309,17 @@ final class Overview extends Controller
      * capped at 50 values per session by the scorer (SPEC §4.2), so this counts sessions
      * that touched a path rather than raw hits, and the caption says so.
      *
+     * EVERY ROW CARRIES ITS HOST WHERE IT HONESTLY CAN. A path with no site in front of it is
+     * not actionable and, on a machine serving several virtual hosts, does not even say which
+     * site it belongs to — so a `host_s` sub-facet is nested inside the path facet and each row
+     * comes back knowing whether it belongs to exactly one host (`host`) or to several
+     * (`hosts`). Nested rather than fetched afterwards: it costs no second round trip, and the
+     * sub-facet's domain is this query's, so filtering to one host resolves every row at once.
+     *
+     * The caption carries `note`, because the path set on the session document deliberately
+     * excludes Loghound's own beacon script and collector (Sessionizer::accumulateSelf()), and
+     * a count that quietly omits something must say so.
+     *
      * @return array<string,mixed>
      */
     private function topPages(): array
@@ -254,20 +344,25 @@ final class Overview extends Controller
                 'field' => 'paths_ss',
                 'limit' => Security::clampInt($_GET['limit'] ?? null, 5, 50, 15),
                 'sort'  => 'count desc',
+                'facet' => SiteUrl::hostSubFacet(),
             ],
         ]);
 
         $rows = [];
         foreach (self::buckets($f, 'paths') as $bucket) {
+            $site = SiteUrl::resolve($bucket);
             $rows[] = [
                 'path'     => (string) ($bucket['val'] ?? ''),
                 'sessions' => (int) ($bucket['count'] ?? 0),
+                'host'     => $site['host'],
+                'hosts'    => $site['hosts'],
             ];
         }
 
         return $this->envelope([
             'population'       => $population,
             'population_label' => $label,
+            'note'             => 'Loghound’s own beacon and collector requests are not counted.',
             'total'            => (int) ($f['count'] ?? 0),
             'rows'             => $rows,
         ]);
@@ -366,7 +461,8 @@ final class Overview extends Controller
             'ov-searches',
             '05',
             'What they searched for',
-            'Sessions that ran a search, by term.'
+            'Sessions that ran a search, by term.',
+            $this->exportTool('searches')
         );
         self::skeleton('ov-searches', 'rows', 0, 'Faceting search terms');
 
@@ -483,6 +579,7 @@ final class Overview extends Controller
                 . '>' . $label . '</button>';
         }
         $tools .= '</div>';
+        $tools .= $this->exportTool('pages');
 
         self::cardOpen('ov-pages', '04', 'Top pages', 'Humans only.', $tools);
         self::skeleton('ov-pages', 'rows', 0, 'Faceting requested paths');

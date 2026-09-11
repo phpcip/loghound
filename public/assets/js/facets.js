@@ -61,6 +61,7 @@ import {
     toggleUrl,
     urlFor
 } from './facetfilter.js';
+import { isPathField, urlMark } from './url.js';
 
 /** Has the panel-wide dimension list been fetched? One request per page load, on first open. */
 let loaded = false;
@@ -127,6 +128,12 @@ function activeKeys() {
  * label are applied in the one place every table cell and dialog uses too.
  *
  * The aria-label carries the whole sentence, because a screen reader gets no bar and no tick.
+ *
+ * A PATH ROW CARRIES A SECOND CONTROL, and it is a SIBLING of the row rather than a child of it:
+ * the whole row is already one <a>, and an anchor inside an anchor is not a thing a browser will
+ * render. So the "open the page in a new tab" control sits after it in the <li>, which is also
+ * what keeps the two affordances visually distinct — the row filters the dashboard, the little
+ * link at the end leaves it.
  */
 function option(group, bucket, largest) {
     const count = bucket.count === null || bucket.count === undefined ? null : bucket.count;
@@ -134,12 +141,14 @@ function option(group, bucket, largest) {
     const label = dimLabel(group.field);
     const state = bucket.state || 'off';
     const shown = String(bucket.label || bucket.value);
+    const path = isPathField(group.field);
 
     /* A value the server marked unfilterable is a static row, not a link: it has a real count and
        no filter can be built for it, and a link that does nothing when pressed is worse than a row
        that says why. Same treatment as a whole dimension that is not filterable. */
+
     if (group.filterable === false || state === 'unfilterable') {
-        return el('li', { class: 'facet-li', title: bucket.why || '' }, [
+        return el('li', { class: 'facet-li' + (path ? ' facet-li-url' : ''), title: bucket.why || '' }, [
             el('span', { class: 'facet-opt is-static' }, [
                 el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
                 el('span', { class: 'facet-mark', 'aria-hidden': 'true' }),
@@ -147,7 +156,8 @@ function option(group, bucket, largest) {
                     dimValue(group.field, bucket.value, { text: shown, mono: group.mono, link: false })
                 ]),
                 el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
-            ])
+            ]),
+            path ? urlMark(bucket.value) : null
         ]);
     }
 
@@ -155,7 +165,10 @@ function option(group, bucket, largest) {
         ? ' — selected, activate to remove'
         : (state === 'excluded' ? ' — excluded, activate to stop excluding it' : ' — activate to filter to it');
 
-    return el('li', { class: 'facet-li', dataset: { value: String(bucket.value).toLowerCase() } }, [
+    return el('li', {
+        class: 'facet-li' + (path ? ' facet-li-url' : ''),
+        dataset: { value: String(bucket.value).toLowerCase() }
+    }, [
         el('a', {
             class: 'facet-opt' + (state === 'on' ? ' is-on' : '') + (state === 'excluded' ? ' is-excluded' : ''),
             href: toggleUrl(group.field, bucket.value, group.ns),
@@ -174,7 +187,8 @@ function option(group, bucket, largest) {
                 dimValue(group.field, bucket.value, { text: shown, mono: group.mono, link: false })
             ]),
             el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
-        ])
+        ]),
+        path ? urlMark(bucket.value) : null
     ]);
 }
 

@@ -37,8 +37,37 @@ final class Fingerprints extends Controller
     /** Hard ceiling on cluster rows: each one costs a nested range facet. */
     private const MAX_CLUSTERS = 100;
 
+    /**
+     * The words the cluster sort selector shows, keyed by the token clusters() accepts.
+     *
+     * The export has to NAME the ordering in the file, because which hundred clusters a capped
+     * export contains is decided entirely by it — and a stored token is never what this product
+     * shows a person (Panel\Vocabulary).
+     *
+     * @var array<string,string>
+     */
+    private const SORT_LABELS = [
+        'ips'      => 'Most distinct IPs first',
+        'sessions' => 'Most sessions first',
+        'hits'     => 'Most requests first',
+        'score'    => 'Highest bot score first',
+        'recent'   => 'Most recently seen first',
+    ];
+
     /** Hard ceiling on member IPs shown when a cluster is expanded. */
     private const MAX_MEMBERS = 250;
+
+    /**
+     * Which page-toolbar controls this view honours.
+     *
+     * sessionFqs() throughout, and the sparkline is built from the selected range.
+     *
+     * @return array<int,string>
+     */
+    public function toolbar(): array
+    {
+        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+    }
 
     public function slug(): string
     {
@@ -53,6 +82,76 @@ final class Fingerprints extends Controller
     public function subtitle(): string
     {
         return 'One header signature across many addresses is a proxy fleet wearing one client.';
+    }
+
+    /**
+     * The cluster table, as CSV.
+     *
+     * `total_fps` is a genuine denominator here and is used as one: it is the number of DISTINCT
+     * fingerprints in scope, which is the same unit as a row, so the coverage line can say "the
+     * 100 widest-spread of 183" rather than falling back to "the set may be larger". Almost no
+     * other table in the panel can do that, because their payload totals count sessions.
+     *
+     * The sort order and the minimum-IP threshold are carried, because they are what decides
+     * WHICH hundred clusters this is — an export that quietly reverted to the default ordering
+     * would be a different hundred rows under the same filename.
+     *
+     * The activity sparkline is deliberately not a column: it is twenty-four bucket counts whose
+     * bucket width depends on the selected range, and flattened into one cell it would be a
+     * number nobody could interpret without the geometry that produced it.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'clusters' => [
+                'label'   => 'Fingerprint clusters',
+                'action'  => 'clusters',
+                'unit'    => 'fingerprint clusters',
+                'ranked'  => 'in the order the table is sorted',
+                'cap'     => self::MAX_CLUSTERS,
+                'params'  => ['limit' => self::MAX_CLUSTERS],
+                'carry'   => ['sort', 'min_ips'],
+                'total'   => 'total_fps',
+                'note'    => 'Distinct-IP, netblock and network counts come from Solr\'s unique(), which is '
+                    . 'exact for small counts and approximate for large ones. Mobile carrier networks are '
+                    . 'excluded from the proxy-fleet flag, because a carrier gateway legitimately puts many '
+                    . 'people behind one fingerprint.',
+                'scope'   => [
+                    'sort'    => ['Sort order', static fn ($v): string =>
+                        is_string($v) ? (self::SORT_LABELS[$v] ?? '') : ''],
+                    'min_ips' => 'Minimum distinct IPs',
+                ],
+                'columns' => [
+                    ['Fingerprint', 'fp', 'id'],
+                    ['Sessions', 'sessions', 'number'],
+                    ['Distinct IPs', 'uniq_ips', 'number'],
+                    ['Distinct netblocks', 'uniq_nets', 'number'],
+                    ['Distinct networks (ASNs)', 'uniq_asns', 'number'],
+                    ['Requests', 'hits', 'number'],
+                    ['Average bot score', 'avg_score', 'number'],
+                    ['First seen', 'first', 'date'],
+                    ['Last seen', 'last', 'date'],
+                    ['Browser', 'browser', 'text'],
+                    ['Browser version', 'browser_ver', 'text'],
+                    ['OS', 'os', 'text'],
+                    ['Device', 'device', 'text'],
+                    ['Declared crawler', 'ua_bot_name', 'text'],
+                    ['Declared bot category', 'ua_bot_cat', 'vocab', 'ua_bot_cat_s'],
+                    ['AS organisation', 'org', 'text'],
+                    ['Network type', 'as_type', 'vocab', 'as_type_s'],
+                    ['Network type code', 'as_type', 'id'],
+                    ['Country', 'country', 'id'],
+                    ['Verdict', 'verdict', 'vocab', 'bot_verdict_s'],
+                    ['Verdict code', 'verdict', 'id'],
+                    ['Bot class', 'class', 'vocab', 'bot_class_s'],
+                    ['Sessions with beacon data', 'beacon', 'number'],
+                    ['Declared itself', 'declared', 'bool'],
+                    ['Flagged as a proxy fleet', 'fleet', 'bool'],
+                ],
+            ],
+        ];
     }
 
     /**
@@ -330,6 +429,7 @@ final class Fingerprints extends Controller
         $tools .= '<label for="fp-min">Min IPs</label>';
         $tools .= '<input type="number" id="fp-min" min="1" max="500" value="1" inputmode="numeric">';
         $tools .= '</div>';
+        $tools .= $this->exportTool('clusters');
 
         self::cardOpen(
             'fp-table',
