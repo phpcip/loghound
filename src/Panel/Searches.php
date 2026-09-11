@@ -102,6 +102,7 @@ final class Searches extends Controller
                         is_array($v) ? implode('; ', array_map('strval', $v)) : ''],
                 ],
                 'columns' => [
+                    ['Parameter', 'param', 'text'],
                     ['Search term', 'term', 'text'],
                     ['Visits', 'sessions', 'number'],
                 ],
@@ -119,6 +120,7 @@ final class Searches extends Controller
                     . 'one. The selected window runs up to the moment the file was taken while the baseline '
                     . 'is complete, so a period that has only just begun makes everything look down.',
                 'columns' => [
+                    ['Parameter', 'param', 'text'],
                     ['Search term', 'term', 'text'],
                     ['Visits this period', 'now', 'number'],
                     ['Visits the period before', 'prev', 'number'],
@@ -173,8 +175,11 @@ final class Searches extends Controller
 
         $out = [];
         foreach (self::buckets($f, 'terms') as $bucket) {
+            [$param, $term] = \Loghound\Beacon::splitTerm((string) ($bucket['val'] ?? ''));
             $out[] = [
-                'term'     => (string) ($bucket['val'] ?? ''),
+                'param'    => $param,
+                'term'     => $term,
+                'value'    => (string) ($bucket['val'] ?? ''),
                 'sessions' => (int) ($bucket['count'] ?? 0),
             ];
         }
@@ -223,8 +228,11 @@ final class Searches extends Controller
         foreach (self::buckets($f, 'terms') as $bucket) {
             $now = self::qcount($bucket, 'now');
             $prev = self::qcount($bucket, 'prev');
+            [$param, $term] = \Loghound\Beacon::splitTerm((string) ($bucket['val'] ?? ''));
             $candidates[] = [
-                'term'  => (string) ($bucket['val'] ?? ''),
+                'param' => $param,
+                'term'  => $term,
+                'value' => (string) ($bucket['val'] ?? ''),
                 'now'   => $now,
                 'prev'  => $prev,
                 'delta' => $now - $prev,
@@ -261,8 +269,9 @@ final class Searches extends Controller
         );
         self::skeleton('an-terms', 'rows', 0, 'Faceting search terms');
         echo '<div class="table-wrap"><table id="an-terms-table" class="table-fixed"><colgroup>'
-            . '<col style="width:60%"><col style="width:16%"><col style="width:24%">'
+            . '<col style="width:18%"><col style="width:42%"><col style="width:16%"><col style="width:24%">'
             . '</colgroup><thead><tr>'
+            . '<th scope="col">Parameter</th>'
             . '<th scope="col">Search term</th>'
             . '<th scope="col" class="num">Visits</th>'
             . '<th scope="col" class="bar-col">Share</th>'
@@ -279,8 +288,9 @@ final class Searches extends Controller
         );
         self::skeleton('an-termtrend', 'rows', 0, 'Comparing this period against the one before');
         echo '<div class="table-wrap"><table id="an-termtrend-table" class="table-fixed"><colgroup>'
-            . '<col style="width:44%"><col style="width:13%"><col style="width:13%">'
+            . '<col style="width:16%"><col style="width:28%"><col style="width:13%"><col style="width:13%">'
             . '<col style="width:14%"><col style="width:16%"></colgroup><thead><tr>'
+            . '<th scope="col">Parameter</th>'
             . '<th scope="col">Search term</th>'
             . '<th scope="col" class="num">This period</th>'
             . '<th scope="col" class="num">Before</th>'

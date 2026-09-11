@@ -51,8 +51,9 @@ function renderTerms(data) {
     hideEmpty('an-terms-empty');
 
     tbody(byId('an-terms-table'), data.rows.map((row) => ({
-        attrs: dimRow('search_terms_ss', row.term),
+        attrs: dimRow('search_terms_ss', row.value),
         cells: [
+            { text: row.param || '—', clip: true, sort: row.param },
             { text: row.term, clip: true, sort: row.term },
             { text: num(row.sessions), num: true, sort: row.sessions },
             { node: shareBar(row.sessions, data.searched, 'visits that searched'), sort: row.sessions }
@@ -82,8 +83,9 @@ function renderTrend(data) {
 
     const top = data.rows.reduce((m, r) => Math.max(m, Math.abs(r.delta)), 0) || 1;
     tbody(byId('an-termtrend-table'), data.rows.map((row) => ({
-        attrs: dimRow('search_terms_ss', row.term),
+        attrs: dimRow('search_terms_ss', row.value),
         cells: [
+            { text: row.param || '—', clip: true, sort: row.param },
             { text: row.term, clip: true, sort: row.term },
             { text: num(row.now), num: true, sort: row.now },
             { text: num(row.prev), num: true, sort: row.prev },

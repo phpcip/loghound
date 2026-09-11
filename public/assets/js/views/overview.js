@@ -316,8 +316,9 @@ function renderSearches(data) {
        half the people who searched is 50%, whatever proportion of visitors search at all. See
        shareCell() for why dividing by the top row was wrong on every table that did it. */
     tbody(byId('ov-searches-table'), data.rows.map((row) => ({
-        attrs: dimRow('search_terms_ss', row.term),
+        attrs: dimRow('search_terms_ss', row.value),
         cells: [
+            { text: row.param || '—', clip: true, sort: row.param },
             { text: row.term, clip: true, sort: row.term },
             { text: num(row.sessions), num: true, sort: row.sessions },
             shareCell(row.sessions, data.searched)

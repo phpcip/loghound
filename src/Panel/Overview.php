@@ -527,8 +527,11 @@ final class Overview extends Controller
 
         $rows = [];
         foreach (self::buckets($f, 'terms') as $bucket) {
+            [$param, $term] = \Loghound\Beacon::splitTerm((string) ($bucket['val'] ?? ''));
             $rows[] = [
-                'term'     => (string) ($bucket['val'] ?? ''),
+                'param'    => $param,
+                'term'     => $term,
+                'value'    => (string) ($bucket['val'] ?? ''),
                 'sessions' => (int) ($bucket['count'] ?? 0),
             ];
         }
@@ -596,6 +599,7 @@ final class Overview extends Controller
         self::skeleton('ov-searches', 'rows', 0, 'Faceting search terms');
 
         echo '<div class="table-wrap"><table id="ov-searches-table"><thead><tr>'
+            . '<th scope="col">Parameter</th>'
             . '<th scope="col">Search term</th>'
             . '<th scope="col" class="num">Sessions</th>'
             . '<th scope="col" class="bar-col">Share</th>'

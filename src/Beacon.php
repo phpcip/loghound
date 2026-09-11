@@ -445,6 +445,25 @@ final class Beacon
      *
      * @param mixed $v
      */
+    /**
+     * Split a stored term back into the parameter it came from and the value somebody typed.
+     *
+     * The pairing is written by searchTerms() and termsOf() as `name=value`. The name is
+     * whitelisted and cannot contain `=`, so the FIRST `=` is the separator and a value that
+     * contains one survives intact.
+     *
+     * A term with no `=` predates the pairing. It is returned with an empty name rather than
+     * dropped or guessed at, so rows written before this still read as the values they are.
+     *
+     * @return array{0:string,1:string} name, value
+     */
+    public static function splitTerm(string $term): array
+    {
+        $eq = strpos($term, '=');
+
+        return $eq === false ? ['', $term] : [substr($term, 0, $eq), substr($term, $eq + 1)];
+    }
+
     public static function normaliseTerm($v): string
     {
         if (!is_string($v) || $v === '') {
@@ -504,7 +523,13 @@ final class Beacon
             }
             $term = self::normaliseTerm(rawurldecode(str_replace('+', ' ', substr($pair, $eq + 1))));
             if ($term !== '') {
-                $out[$term] = true;
+                /* THE NAME IS KEPT, NOT JUST USED AS A GATE. Storing the bare value threw away
+                   which parameter it came from, so an operator collecting more than one — a
+                   query, a category, a sort — got them all in one undifferentiated heap and
+                   could not tell a search from a filter. The name is whitelisted and cannot
+                   contain '=', so splitting on the FIRST '=' recovers the pair even when the
+                   value itself contains one. */
+                $out[$name . '=' . $term] = true;
             }
             if (count($out) >= self::MAX_TERMS) {
                 break;
@@ -544,7 +569,10 @@ final class Beacon
             }
             $term = self::normaliseTerm($value);
             if ($term !== '') {
-                $out[$term] = true;
+                /* Same pairing as searchTerms(), so a value collected from the beacon and the
+                   same value collected from the log line are one thing in the index rather
+                   than two that differ by which plane happened to see them. */
+                $out[strtolower($name) . '=' . $term] = true;
             }
             if (count($out) >= self::MAX_TERMS) {
                 break;
