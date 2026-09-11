@@ -23,6 +23,7 @@ declare(strict_types=1);
 namespace Loghound\Panel;
 
 use Loghound\Security;
+use Loghound\Setup\Steps;
 
 final class Overview extends Controller
 {
@@ -85,6 +86,7 @@ final class Overview extends Controller
         $human = is_array($f['human'] ?? null) ? $f['human'] : [];
 
         return $this->envelope([
+            'pending'        => $this->pendingExplanation((int) ($f['count'] ?? 0)),
             'total_sessions' => (int) ($f['count'] ?? 0),
             'totals'         => $totals,
             'labels'         => Query::populationLabels(),
@@ -384,4 +386,53 @@ final class Overview extends Controller
 
         self::cardClose('ov-pages');
     }
+    /**
+     * Why there are no sessions yet, when there is traffic.
+     *
+     * A session is written only when it CLOSES, and it closes after the visitor has been
+     * silent for ingest.session_idle_sec — half an hour by default. So on a fresh install
+     * the operator starts the daemon, browses their own site to check it works, and every
+     * view reports zero for the next thirty minutes while the logs are being read perfectly
+     * well. "0 scored sessions" is true and reads as "nothing happened", which is a lie
+     * about the only thing they want to know.
+     *
+     * The evidence comes from the tailer's own status file, which is a local read — no
+     * second Solr query to say why the first one was empty.
+     *
+     * Returns an empty string whenever there is nothing to explain: sessions exist, or
+     * nothing has been read either, in which case the ingestion banner already says so.
+     */
+    private function pendingExplanation(int $sessions): string
+    {
+        if ($sessions > 0) {
+            return '';
+        }
+
+        $ingest = Steps::ingestStatus(dirname(__DIR__, 2));
+        $lines  = (int) ($ingest['lines'] ?? 0);
+        if ((string) $ingest['state'] !== 'live' || $lines < 1) {
+            return '';
+        }
+
+        $idle = Security::clampInt($this->cfg->get('ingest.session_idle_sec'), 60, 86400, 1800);
+
+        return number_format($lines) . ' requests have been read from your logs, so ingestion is working. '
+            . 'A session is scored only once it CLOSES, and it closes after the visitor has been quiet for '
+            . self::humanMinutes($idle) . ' — so if you are browsing your own site right now, your session '
+            . 'is still open and nothing here will fill in until you stop.';
+    }
+
+    /**
+     * A duration in whole minutes, or seconds when it is shorter than one.
+     */
+    private static function humanMinutes(int $seconds): string
+    {
+        if ($seconds < 60) {
+            return $seconds . ' seconds';
+        }
+        $minutes = (int) round($seconds / 60);
+
+        return $minutes . ' minute' . ($minutes === 1 ? '' : 's');
+    }
+
 }

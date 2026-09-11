@@ -40,7 +40,7 @@ function renderTotals(data) {
     }
     setPop('ov-stats', num(data.total_sessions) + ' scored sessions in the selected range, split into five ' +
         'mutually exclusive populations. Distinct human visitors: ' + num(data.human_detail.visitors) +
-        ' (approximate above ~100).');
+        ' (approximate above ~100).' + (data.pending ? ' ' + data.pending : ''));
 }
 
 /**
