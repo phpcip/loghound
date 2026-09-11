@@ -150,6 +150,9 @@ const MARKS = {
      */
     view: {
         overview:     ['M2.6 12.4V7.2', 'M6.2 12.4V3.6', 'M9.8 12.4V6', 'M13.4 12.4V9'],
+        /* A trace with one spike in it: the log, moving, which is the only thing on that page
+           that is not history. */
+        live:         ['M2.4 8h2.4l1.6-4.2 2 8.4 1.6-4.2h3.6'],
         /* A shield with a breach in it: the subject is an attempt on the site, and the gap is
            the honest half — this product reads the log afterwards and blocked nothing. */
         attacks:      ['M8 2.4 3.2 4.2v3.5c0 3 2 5.1 4.8 5.9 2.8-.8 4.8-2.9 4.8-5.9V4.2Z', 'M8 5.6v2.6', 'M8 10.2h.1'],

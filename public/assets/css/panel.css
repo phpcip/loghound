@@ -64,7 +64,7 @@
     --font-mono: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
 
     --radius: 2px;
-    --side-w: 216px;
+    --side-w: 240px;
     --rail:   1240px;
 }
 
@@ -275,7 +275,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
     flex: 1 1 auto;
     min-width: 0;
     min-height: 40px;
-    padding: 6px 24px;
+    padding: 6px 16px;
     color: var(--muted);
     font-weight: 500;
     font-size: 15px;
@@ -1156,7 +1156,13 @@ tr.row-link:focus-visible > td { background: var(--band); color: var(--ink); }
 
 /* Settings */
 
-dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0 24px; margin: 0 0 18px; font-size: 15px; }
+/* THE TERM COLUMN IS CAPPED, AND A TERM MAY WRAP. `max-content` with `nowrap` on the dt sized
+   this column to the longest term in the list, and a term that is a sentence rather than a label
+   — "By size — how much disk your plan gives this index" — overflowed its own cell and painted
+   across the definition beside it, with that row's rule drawn through the middle of the words.
+   `fit-content` leaves a short term at its natural width and caps a long one, which is the only
+   version of this that holds for both kinds of term without having to know which is which. */
+dl.kv { display: grid; grid-template-columns: fit-content(26ch) minmax(0, 1fr); gap: 0 24px; margin: 0 0 18px; font-size: 15px; }
 /* A term is a short label and must not wrap — "Sessions core", "Query timeout". A term that
    holds a CODE identifier is not a short label: `window.loghound.identify(ident, signedIn)` is
    402px of unbreakable string in a 343px column, and `white-space: nowrap` on the dt defeats
@@ -1165,7 +1171,7 @@ dl.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0
 dl.kv dt:has(code) { white-space: normal; overflow-wrap: anywhere; }
 
 dl.kv dt {
-    color: var(--faint); white-space: nowrap; font-size: 14px;
+    color: var(--faint); white-space: normal; font-size: 14px;
     text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;
     padding: 8px 0; border-bottom: 1px solid var(--hairline);
 }
@@ -4400,3 +4406,165 @@ button.stat:hover .stat-go { color: var(--accent); }
 /* A movement, coloured only where it is worth colouring: the accent is spent on growth. */
 .trend-up { color: var(--accent-ink); }
 .trend-down { color: var(--faint); }
+
+/* ---------------------------------------------------------------------------
+   ONE COLOUR PER VIRTUAL HOST
+
+   Eight swatches, picked by assets/js/hostcolor.js as a pure function of the hostname, so a
+   host is the same colour on every row of every table, after every reload, on every machine.
+   The dot is never the only carrier of the information — the hostname is always beside it —
+   so a reader who cannot distinguish these loses nothing but the grouping aid.
+
+   The hues deliberately avoid the accent's, because a dot that read as "selected" would be a
+   state the reader cannot clear. Each has a dark-theme value of its own: one colour cannot be
+   legible on #ffffff and on #111111, and a palette that pretends otherwise goes muddy on one
+   of them.
+   --------------------------------------------------------------------------- */
+
+:root {
+    --hc-0: #3f72a4;
+    --hc-1: #2f8476;
+    --hc-2: #5b8f3a;
+    --hc-3: #8a7a1f;
+    --hc-4: #9a5aa8;
+    --hc-5: #b4508a;
+    --hc-6: #6a63c8;
+    --hc-7: #7b7f88;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --hc-0: #6fa3d4;
+        --hc-1: #4fb4a4;
+        --hc-2: #8cc167;
+        --hc-3: #c4b046;
+        --hc-4: #c68ed4;
+        --hc-5: #e07fb4;
+        --hc-6: #9a93f0;
+        --hc-7: #a9adb8;
+    }
+}
+
+:root[data-theme="dark"] {
+    --hc-0: #6fa3d4;
+    --hc-1: #4fb4a4;
+    --hc-2: #8cc167;
+    --hc-3: #c4b046;
+    --hc-4: #c68ed4;
+    --hc-5: #e07fb4;
+    --hc-6: #9a93f0;
+    --hc-7: #a9adb8;
+}
+
+/* The same flex shape url.js uses for a path: the mark never shrinks, the name does, and the
+   name is what gets the ellipsis. */
+.hostcell { display: flex; align-items: baseline; gap: 7px; min-width: 0; max-width: 100%; }
+.hostcell > .hostdot { flex: 0 0 auto; }
+.hostcell > :not(.hostdot) {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A stacked table is a card per record, where there is room for the whole name and no column
+   to keep it out of — so the truncation is given back. */
+@media (max-width: 900px) {
+    table.lh-stack .hostcell > :not(.hostdot) {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+    }
+}
+
+.hostdot {
+    flex: none;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    transform: translateY(-1px);
+}
+.hostdot-0 { background: var(--hc-0); }
+.hostdot-1 { background: var(--hc-1); }
+.hostdot-2 { background: var(--hc-2); }
+.hostdot-3 { background: var(--hc-3); }
+.hostdot-4 { background: var(--hc-4); }
+.hostdot-5 { background: var(--hc-5); }
+.hostdot-6 { background: var(--hc-6); }
+.hostdot-7 { background: var(--hc-7); }
+
+/* A dot drawn from a colour is a dot that vanishes in forced-colours mode, where every
+   background is replaced. A ring in the current text colour survives, which keeps the
+   grouping visible even though the hue does not. */
+@media (forced-colors: active) {
+    .hostdot { background: currentColor; }
+}
+
+/* ---------------------------------------------------------------------------
+   THE LIVE STREAM
+
+   The card has a connection rather than a load, so its furniture is a state line and a
+   Pause/Resume control instead of a progress strip. Everything else on it is the panel's own
+   table, chip and fold styling.
+   --------------------------------------------------------------------------- */
+
+.live-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 18px;
+    margin-bottom: 16px;
+    font-size: 14px;
+}
+.live-state { display: inline-flex; align-items: baseline; gap: 8px; font-weight: 700; }
+.live-counts { font-size: 14px; }
+
+.live-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--faint);
+    transform: translateY(-1px);
+}
+.live-state[data-state="live"] .live-dot { background: var(--accent); }
+.live-state[data-state="wait"] .live-dot { background: var(--field-border); }
+.live-state[data-state="off"] .live-dot { background: transparent; box-shadow: inset 0 0 0 1px var(--field-border); }
+
+/* The heartbeat is the one motion on the page and it means something: the connection is up.
+   It stops with the stream, and it does not run at all for a reader who has asked for less. */
+@media (prefers-reduced-motion: no-preference) {
+    .live-state[data-state="live"] .live-dot { animation: live-pulse 2s ease-in-out infinite; }
+}
+@keyframes live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+.live-table td { vertical-align: baseline; }
+.urlwrap > .live-method { flex: 0 0 auto; font-size: 13px; }
+
+/* The opener floats rather than the cell becoming a flex row, because responsive.js turns a
+   narrow table's cells into label/value rows and a `display: flex` on the cell would fight it.
+   The same shape the visit table's verdict cell already uses. */
+.live-table td.live-read > .rowopen { float: right; margin-left: 8px; }
+
+/* Three tones and no more. A reading is a reading, so the strongest of them is the accent the
+   rest of the panel already spends on "look here" — never a second colour that would have to be
+   learnt, and never a background, which would make a row look selected. */
+.live-tone-plain { color: var(--muted); font-weight: 400; }
+.live-tone-watch { color: var(--ink); }
+.live-tone-alarm { color: var(--accent-ink); }
+
+.live-sources { margin-top: 20px; }
+.live-verdicts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+
+/* The status palette the request timeline already uses, extended to the two surfaces that show
+   a bare status code outside it. Scoped rather than made global, because `.t-status-2` on an
+   arbitrary element elsewhere in the panel would be colour applied by accident. */
+.live-table .t-status-2, .lh-dialog-body .t-status-2 { color: var(--ok); }
+.live-table .t-status-3, .lh-dialog-body .t-status-3 { color: var(--mid); }
+.live-table .t-status-4, .lh-dialog-body .t-status-4 { color: var(--warn); }
+.live-table .t-status-5, .lh-dialog-body .t-status-5 { color: var(--bad); font-weight: 700; }

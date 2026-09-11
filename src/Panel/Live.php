@@ -76,8 +76,35 @@ final class Live extends Controller
     /** Pause between reads of the log files. */
     private const POLL_US = 400000;
 
-    /** Seconds of silence before a keep-alive comment goes down the wire. */
+    /** Seconds of silence before the stream says out loud that it is alive and the log is quiet. */
     private const HEARTBEAT_SEC = 12;
+
+    /**
+     * Seconds of silence before a bare comment goes down the wire.
+     *
+     * Two different intervals because they answer to two different readers. The heartbeat above
+     * is for the operator: it carries how far behind the stream is and refreshes the state line.
+     * This one is for whatever sits between the browser and PHP — a reverse proxy with an idle
+     * read timeout will close a connection that has said nothing for thirty seconds, and the
+     * page would report a dropped connection on a perfectly healthy quiet site. A comment is one
+     * line, reaches no listener, and keeps the socket warm.
+     */
+    private const KEEPALIVE_SEC = 4;
+
+    /**
+     * The shapes `ip_s` can legitimately hold, and the only ones that are looked up.
+     *
+     * Three, and \Loghound\Security::applyIpPrivacy() is where they come from: the address
+     * itself under `full`, a `203.0.113.0/24` or `2001:db8::/48` prefix under `truncate`, and a
+     * keyed hex digest under `hash`. All of them fit hex digits, dots, colons and a slash.
+     *
+     * A value outside that set is a malformed `remote_addr` the parser passed through — a log
+     * line can carry anything in that column — and there is no client behind it to look up. It
+     * is refused HERE rather than bound and sent, because \Loghound\Solr refuses a local-param
+     * sequence anywhere in a filter and would answer with a transport error, which reads as "the
+     * panel is broken" rather than as "that is not an address".
+     */
+    private const ADDRESS_RE = '/^[0-9a-fA-F:.\/]{1,64}$/D';
 
     /**
      * Which page-toolbar controls this view honours.
@@ -153,8 +180,9 @@ final class Live extends Controller
      * front controller applied before this method could be reached.
      *
      * The output buffers are unwound before the first byte, because an event that sits in a
-     * buffer is not an event. `X-Accel-Buffering` says the same thing to nginx, which buffers
-     * proxied responses by default and would otherwise hold the whole stream until it ended.
+     * buffer is not an event. Three things can hold one and all three are addressed here:
+     * PHP's own buffers, zlib compression when an operator has turned it on globally, and
+     * nginx, which buffers a FastCGI response by default until `X-Accel-Buffering` says not to.
      *
      * @return array<string,mixed>
      */
@@ -164,6 +192,7 @@ final class Live extends Controller
         $reader->open($this->requestedCursor());
 
         ignore_user_abort(false);
+        @ini_set('zlib.output_compression', '0');
         while (ob_get_level() > 0) {
             ob_end_flush();
         }
@@ -185,6 +214,7 @@ final class Live extends Controller
 
         $deadline = microtime(true) + self::MAX_SECONDS;
         $spoke = microtime(true);
+        $wrote = microtime(true);
 
         while (microtime(true) < $deadline) {
             if (connection_aborted() !== 0) {
@@ -192,6 +222,8 @@ final class Live extends Controller
             }
 
             $batch = $reader->poll();
+            $now = microtime(true);
+
             if ($batch['rows'] !== []) {
                 self::event('lines', [
                     'rows'     => $batch['rows'],
@@ -201,15 +233,19 @@ final class Live extends Controller
                     'dropped'  => $batch['dropped'],
                 ], $batch['cursor']);
                 self::push();
-                $spoke = microtime(true);
-            } elseif (microtime(true) - $spoke >= self::HEARTBEAT_SEC) {
+                $spoke = $wrote = $now;
+            } elseif ($now - $spoke >= self::HEARTBEAT_SEC) {
                 self::event('quiet', [
                     'lag'      => $batch['lag'],
                     'unparsed' => $batch['unparsed'],
                     'why'      => $batch['unparsed_why'],
                 ], $batch['cursor']);
                 self::push();
-                $spoke = microtime(true);
+                $spoke = $wrote = $now;
+            } elseif ($now - $wrote >= self::KEEPALIVE_SEC) {
+                echo ":\n\n";
+                self::push();
+                $wrote = $now;
             }
 
             usleep(self::POLL_US);
@@ -296,9 +332,12 @@ final class Live extends Controller
      */
     private function client(): array
     {
-        $ip = self::text('ip', 255);
+        $ip = self::text('ip', 64);
         if ($ip === '') {
             return ['error' => 'No client was named.'];
+        }
+        if (preg_match(self::ADDRESS_RE, $ip) !== 1) {
+            return ['error' => 'That is not the shape of a client address, so there is nothing to look up.'];
         }
 
         $hosts = $this->selectedHosts();
@@ -444,7 +483,7 @@ final class Live extends Controller
             'lv-stream',
             Layout::cardNum(self::SECTIONS, 'lv-stream'),
             'As it happens',
-            'Requests as they reach the log. Nothing here is a session, so nothing here is a verdict.',
+            'Requests as they reach the log, one row each.',
             '<div class="controls"><button type="button" class="small" id="lv-toggle">Pause</button></div>'
         );
 
@@ -456,9 +495,9 @@ final class Live extends Controller
             . '<span class="live-counts muted" id="lv-counts"></span>'
             . '</div>';
 
-        echo '<div class="note"><p><strong>One line is not a session.</strong> A verdict is scored '
-            . 'over a whole visit once it settles, so the last column says what this request shows and '
-            . 'nothing more. Open a row for what the index already knows about the same client.</p></div>';
+        echo '<div class="note"><p><strong>One line is not a session.</strong> A verdict is scored over '
+            . 'a whole visit; the last column says what this request shows. Open a row for what the index '
+            . 'already knows about the client.</p></div>';
 
         echo '<div class="table-wrap"><table id="lv-table" class="table-fixed live-table"><colgroup>'
             . '<col style="width:9%"><col style="width:16%"><col style="width:15%">'

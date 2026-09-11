@@ -544,6 +544,40 @@ are two renderings of one facet rather than two questions.
 Overview was one request feeding three cards. It is now four: the timing block appears the
 moment it is ready instead of waiting on the hourly series.
 
+### Live — no card fetches, one stream
+
+The only view that does not go through the async card contract, because it has no answer to
+wait for. `?v=live&api=stream` is an `EventSource`, not a `fetch()`, so the card carries no
+progress strip and no refresh control: there is a connection, and it is either held or stopped.
+
+It reads the access logs directly, through `Loghound\Live\Reader`, and touches Solr only when a
+row is opened. The reader resolves the files from `sources` with the same three guards
+`bin/loghound-tail` applies — the entry may be switched off, the pattern is bounded before
+`glob()`, every expansion is resolved against `allowed_log_roots` — opens them `rb`, and writes
+nothing anywhere. The ingest cursor in `var/state.db` is never read and never moved; this
+reader's cursor is the SSE event id and lives in the browser.
+
+| Concern | How it is answered |
+|---|---|
+| Which files | `sources`, resolved per request. Never a request parameter. |
+| Which lines | The host chip filters the PARSED line, not the filename: one file can carry many vhosts and one vhost many files. |
+| Geo and network | Read from the enrichment cache the ingest daemon fills, read-only, and reported as "not looked up yet" when it is empty. No lookup is ever made from a page load. |
+| Worker cost | The server ends each connection after 45 seconds and the browser reconnects with `Last-Event-ID`, so a stream never sits inside the FPM pool's execution limit. The page stops asking after fifteen minutes, or as soon as the tab is hidden, and offers Resume. |
+| Liveness | A `quiet` event every twelve seconds carries the unread byte count; a bare comment every four keeps an idle proxy from closing the socket. |
+| Rotation | The open descriptor is drained to EOF before the new inode is picked up, the same rule `Loghound\Tail` follows, so the lines written between the rename and the webserver's reopen are not skipped. |
+
+**What a row claims.** The last column is headed "This line" and means it. A verdict is scored
+over a session once it settles, so no row carries one. What the column carries is the reading of
+one request — a declared crawler in the User-Agent, a path that matched a named pattern, a status
+the server returned, a sub-resource rather than a page — every part of which is checkable against
+the bytes beside it.
+
+**What the dialog adds.** Opening a row shows the request, the client, the geography, and the
+patterns it matched, all from the line. Under a separate heading, and after a separate request to
+`?v=live&api=client`, it shows what the index already knows about that address: how many visits
+carry it, how many of those have settled, and their verdicts. That half is allowed to carry a
+verdict because every session behind it has been scored. The two are never in the same block.
+
 ### Bot forensics — 6 requests, 6 cards
 
 `split`, `reasons`, `verdicts`, `histogram`, `classes`, `crawlers`. The `bot_reasons_ss`

@@ -1616,6 +1616,64 @@ function watch() {
 }
 
 /**
+ * Keep the navigation where the operator left it across a page load.
+ *
+ * The navigation is two levels deep now, so the list is long and the item somebody is working
+ * through is usually near the bottom of it. Following a link there and arriving with the list
+ * scrolled back to the top costs them their place on every single navigation.
+ *
+ * Restored before the first paint rather than after: this module is a deferred module, so it
+ * runs once the document is parsed and before anything is painted, and setting the position
+ * later produces a visible jump from the top, which is worse than not restoring it at all.
+ *
+ * The position is only honoured when it actually shows the current page's link. A remembered
+ * offset is a guess about a list whose shape may have changed — a group opened or closed, a view
+ * added — and a guess that hides the link you just followed is wrong however faithfully it
+ * reproduces a number. In that case the active item is brought into view instead, which is what
+ * the operator wanted from the remembered position in the first place.
+ */
+function keepNavPlace() {
+    const side = document.querySelector('nav.side');
+    if (!side) {
+        return;
+    }
+
+    const KEY = 'lh.navscroll';
+    let saved = null;
+    try {
+        saved = window.sessionStorage.getItem(KEY);
+    } catch (e) {
+        saved = null;
+    }
+
+    if (saved !== null) {
+        const top = Number(saved);
+        if (Number.isFinite(top) && top > 0) {
+            side.scrollTop = top;
+        }
+    }
+
+    const current = side.querySelector('.navlink.on, .navsub a.on');
+    if (current) {
+        const box = current.getBoundingClientRect();
+        const rail = side.getBoundingClientRect();
+        if (box.top < rail.top || box.bottom > rail.bottom) {
+            current.scrollIntoView({ block: 'center' });
+        }
+    }
+
+    const remember = () => {
+        try {
+            window.sessionStorage.setItem(KEY, String(side.scrollTop));
+        } catch (e) {
+            void e;
+        }
+    };
+    side.addEventListener('click', remember, true);
+    window.addEventListener('pagehide', remember);
+}
+
+/**
  * Start.
  *
  * The navigation and the facet rail are set up once; the table pass runs whenever the
@@ -1623,6 +1681,7 @@ function watch() {
  * before the first number lands.
  */
 function start() {
+    keepNavPlace();
     setUpNav();
     setUpRail();
     setUpFacets();

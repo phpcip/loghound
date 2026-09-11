@@ -595,13 +595,21 @@ final class Reader
         $status = isset($doc['status_i']) ? (int) $doc['status_i'] : null;
 
         if ($flags !== []) {
-            $first = Attacks::describe($flags[0]);
+            $decisive = null;
+            foreach ($flags as $code) {
+                if (Attacks::isDecisive($code)) {
+                    $decisive = $code;
+                    break;
+                }
+            }
+
+            $named = Attacks::describe($decisive ?? $flags[0]);
             return [
                 'code'  => 'matched',
-                'label' => count($flags) === 1 ? $first['label'] : $first['label'] . ' +' . (count($flags) - 1),
+                'label' => count($flags) === 1 ? $named['label'] : $named['label'] . ' +' . (count($flags) - 1),
                 'why'   => 'The request matched a named pattern. Whether it achieved anything depends on '
                     . 'what the server answered.',
-                'tone'  => Attacks::isDecisive($flags[0]) ? 'alarm' : 'watch',
+                'tone'  => $decisive === null ? 'watch' : 'alarm',
             ];
         }
 
@@ -685,15 +693,32 @@ final class Reader
         ];
     }
 
-    /** The request kind in a word, for the dimensions that have no stored vocabulary. */
+    /**
+     * The request kind in a word, for the two dimensions that have no stored vocabulary.
+     *
+     * Translated here rather than in the browser because `kind_s` and `asset_kind_s` are not in
+     * Panel\Vocabulary — they are ingest-side classifications rather than conclusions, and
+     * adding them to the vocabulary would make them filterable, which is a decision nobody has
+     * asked for. An unrecognised value renders as itself, never as a plausible guess.
+     */
     private static function kindWord(string $kind, $assetKind): string
     {
         $asset = is_string($assetKind) && $assetKind !== '' ? $assetKind : '';
 
+        $named = match ($asset) {
+            'js'    => 'Script',
+            'css'   => 'Stylesheet',
+            'map'   => 'Source map',
+            'img'   => 'Image',
+            'font'  => 'Font',
+            'media' => 'Media',
+            default => $asset,
+        };
+
         return match ($kind) {
             'html'    => 'Page',
             'api'     => 'API',
-            'asset'   => $asset === '' ? 'Sub-resource' : ucfirst($asset),
+            'asset'   => $named === '' ? 'Sub-resource' : $named,
             'favicon' => 'Icon',
             'robots'  => 'Crawl file',
             'beacon'  => 'Beacon',

@@ -345,10 +345,7 @@ function buildRow(row) {
     tr.appendChild(el('td', {
         class: 'clip urlcell',
         title: (row.method ? row.method + ' ' : '') + row.path + (row.query ? '?' + row.query : '')
-    }, [
-        el('span', { class: 'live-method muted mono', text: row.method || '' }),
-        pathCell(row.path, { host: row.host, query: row.query })
-    ]));
+    }, [requestCell(row)]));
 
     tr.appendChild(el('td', { class: 'num mono' }, [
         row.status === null
@@ -374,6 +371,21 @@ function buildRow(row) {
     ]));
 
     return tr;
+}
+
+/**
+ * The method and the path, as one cell.
+ *
+ * The method is put INSIDE url.js's own wrapper rather than beside it. That wrapper is a flex
+ * row whose path shrinks and whose link does not, and a sibling in front of it would sit on its
+ * own line — and would fight the grid mobile.css turns a cell into when the table stacks.
+ */
+function requestCell(row) {
+    const cell = pathCell(row.path, { host: row.host, query: row.query });
+    if (row.method) {
+        cell.insertBefore(el('span', { class: 'live-method muted mono', text: row.method }), cell.firstChild);
+    }
+    return cell;
 }
 
 /** The client in a few words: the browser, or what it says it is. */
@@ -680,7 +692,7 @@ function renderKnown(mount, ip, data, generation) {
         })
     ]);
 
-    const verdicts = el('p', { class: 'live-verdicts' });
+    const verdicts = el('div', { class: 'live-verdicts' });
     for (const row of (data.verdicts || [])) {
         verdicts.appendChild(el('span', {
             class: 'chip v-' + row.value,
