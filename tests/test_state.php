@@ -226,7 +226,7 @@ return [
 
     'meta values and counters persist' => function (): void {
         lh_with_state(function (State $state): void {
-            lh_same('1', $state->metaGet('schema_version'), 'schema_version');
+            lh_same('2', $state->metaGet('schema_version'), 'schema_version');
             lh_same('fallback', $state->metaGet('nope', 'fallback'), 'default');
 
             $state->metaSet('last_run', '2026-09-10T09:57:08Z');

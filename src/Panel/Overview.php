@@ -108,6 +108,11 @@ final class Overview extends Controller
      * front end never has to guess which population a figure belongs to.
      *
      * @return array<string,mixed>
+     * COMPLETED SESSIONS ONLY. An open session's log span is the gap between its first hit
+     * and its most recent one, so averaging it in measures how long ago the visitor arrived
+     * rather than how long they stayed — which is precisely the lie this card exists to
+     * expose. Counting a live session is honest; measuring one is not.
+     *
      */
     private function timing(): array
     {
@@ -115,7 +120,7 @@ final class Overview extends Controller
 
         $f = $this->gw->facet('overview.timing', $this->gw->sessionsCore(), [
             'q'  => '*:*',
-            'fq' => $this->sessionFqs(),
+            'fq' => $this->settledSessionFqs(),
         ], [
             'humans' => ['type' => 'query', 'q' => $human, 'facet' => [
                 'log_span_avg' => 'avg(log_span_ms_l)',
@@ -416,10 +421,10 @@ final class Overview extends Controller
 
         $idle = Security::clampInt($this->cfg->get('ingest.session_idle_sec'), 60, 86400, 1800);
 
-        return number_format($lines) . ' requests have been read from your logs, so ingestion is working. '
-            . 'A session is scored only once it CLOSES, and it closes after the visitor has been quiet for '
-            . self::humanMinutes($idle) . ' — so if you are browsing your own site right now, your session '
-            . 'is still open and nothing here will fill in until you stop.';
+        return number_format($lines) . ' requests have been read from your logs, so ingestion is working, '
+            . 'and nothing has been scored yet. The scorer runs about once a minute; give it one. '
+            . 'A session settles once the visitor has been quiet for ' . self::humanMinutes($idle)
+            . ', and until then its numbers are still moving.';
     }
 
     /**

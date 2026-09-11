@@ -38,12 +38,14 @@
  * ---------------------------------------------------------------------------------------
  * DEPENDENCY ON src/State.php
  * ---------------------------------------------------------------------------------------
- * This class drives the `sessions_open` table through five State methods and nothing else:
+ * This class drives the `sessions_open` table through seven State methods and nothing else:
  *
  *   findOpenSession(string $clientKey, int $idleSec, int $nowMs): ?array
  *   openSession(string $clientKey, int $firstTsMs, ?string $host, array $data): string
  *   updateSession(string $sessionId, int $lastTsMs, int $hitsDelta, ?array $data): void
  *   listIdleSessions(int $idleSec, int $nowMs, int $limit): array
+ *   listDirtyOpenSessions(int $limit): array
+ *   markSessionsScored(array $marks): void
  *   closeSession(string $sessionId): void
  *
  * Two things about that interface are worth knowing because they shape the code below.
@@ -242,6 +244,57 @@ final class Sessionizer
             $out[] = $this->finalise($row);
         }
         return $out;
+    }
+
+    /**
+     * The OPEN sessions that need a provisional document, finalised the same way a closed one is.
+     *
+     * Same shape as closeIdle()'s return value on purpose: the scorer builds one document from
+     * it through the same buildSessionDoc(), so there is no second definition of what a session
+     * document contains and no way for the two to drift. The difference is entirely in what the
+     * scorer does with it — it marks the document provisional, scores it under the provisional
+     * gate, and does NOT close the row.
+     *
+     * Nothing here is mutated in State. The row stays open, the beacon rows stay unmerged, and
+     * markProvisional() is called only after the documents are safely in Solr, for the same
+     * reason the beacon rows are: a failed index must leave the session looking unpublished, so
+     * the next run tries again.
+     *
+     * Sessions that closeIdle() has already taken in this run are excluded automatically,
+     * because it stamps closed_at before returning them — which is why the scorer must call it
+     * first.
+     *
+     * @param int $limit Batch size, bounding the cost of one run.
+     * @return array<int,array<string,mixed>> Session aggregates, ready for scoring.
+     */
+    public function listOpen(int $limit = 500): array
+    {
+        $out = [];
+        foreach ($this->state->listDirtyOpenSessions($limit) as $row) {
+            $out[] = $this->finalise($row);
+        }
+        return $out;
+    }
+
+    /**
+     * Record that these open sessions have been published, so they are not republished unchanged.
+     *
+     * `ts_end_ms` is the instant that was actually published, which is what makes the dirty
+     * check exact: a hit that arrived while the run was in flight leaves the session dirty.
+     *
+     * @param array<int,array<string,mixed>> $sessions Aggregates from listOpen().
+     */
+    public function markProvisional(array $sessions): void
+    {
+        $marks = [];
+        foreach ($sessions as $session) {
+            $sid = (string) ($session['session_id'] ?? '');
+            if ($sid === '') {
+                continue;
+            }
+            $marks[$sid] = (int) ($session['ts_end_ms'] ?? 0);
+        }
+        $this->state->markSessionsScored($marks);
     }
 
     /**

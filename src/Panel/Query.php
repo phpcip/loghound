@@ -89,6 +89,29 @@ final class Query
     public const SESSION_DOCS = 'doc_type_s:session';
 
     /**
+     * Sessions that have ENDED — the settled population.
+     *
+     * A NEGATION, never `provisional_b:false`, and the distinction is the whole correctness of
+     * the clause: bin/loghound-score writes `provisional_b` only as true and omits it entirely on
+     * a settled document, so every session indexed before the field existed has no value for it.
+     * `provisional_b:false` would match none of them and would empty every card that used it.
+     *
+     * Use this on any number that is only meaningful over a completed session: a duration
+     * average, an engagement percentile, a coverage ratio whose denominator assumes the session
+     * had its chance to produce the thing being counted.
+     */
+    public const SETTLED_SESSIONS = '-provisional_b:true';
+
+    /**
+     * Sessions that are still open — partial counts, provisional verdicts (SPEC §4.2).
+     *
+     * Offered so a view can single them out deliberately, which is the point of the field: the
+     * session explorer can badge a live session, and "is anything happening right now" becomes a
+     * one-facet question. It is never the right filter for an aggregate.
+     */
+    public const PROVISIONAL_SESSIONS = 'provisional_b:true';
+
+    /**
      * The five overview series, in stacking order (most human at the bottom).
      *
      * @return array<string,string> series key => filter query
@@ -361,6 +384,10 @@ final class Query
      * Explicit rather than `fl=*`: the panel should never accidentally start shipping a
      * field that was added to the schema for scoring purposes, and an explicit list is
      * also what keeps the response small.
+     *
+     * `provisional_b` is on the list because a row whose counts are still moving has to be able
+     * to say so. Absent on a settled session, so the front end reads it as a flag, not a boolean
+     * with two meanings.
      */
     public static function sessionFl(): string
     {
@@ -377,6 +404,7 @@ final class Query
             'ua_bot_b', 'ua_bot_name_s', 'ua_bot_cat_s', 'ai_crawler_b',
             'referer_s', 'referer_host_s', 'referer_type_s',
             'fp_hash_s', 'fp_ips_24h_i',
+            'provisional_b',
             'js_b', 'headless_b', 'automation_ss', 'ua_claim_ok_b', 'tz_match_b', 'webgl_s',
             'bot_score_f', 'bot_verdict_s', 'bot_reasons_ss', 'bot_class_s', 'rule_version_i',
         ]);

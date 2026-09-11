@@ -290,6 +290,22 @@ Verdict: `bot_score_f` (0–100), `bot_verdict_s`
 (`human`|`likely_human`|`unknown`|`likely_bot`|`bot`), `bot_reasons_ss`, `rule_version_i`,
 `bot_class_s` (`headless`|`scripted`|`declared_crawler`|`ai_crawler`|`monitor`|`spoofed_ua`|`proxy_fleet`|`none`).
 
+**`provisional_b` — the session has not ended yet.**
+
+A session document is written for an OPEN session too, on every scorer run, so the dashboard
+shows traffic within a minute of ingestion starting rather than after `session_idle_sec` (30
+minutes). It is written under the session's own id, so the final document REPLACES it when the
+session closes; there is never a second document for the same session.
+
+| | |
+|---|---|
+| Value | `true` on an open session. **ABSENT on a settled one — never written as `false`.** |
+| Settled population | `-provisional_b:true`. This is the only correct form: it also matches every session indexed before the field existed. `provisional_b:false` would exclude a site's entire history. |
+| Provisional population | `provisional_b:true` |
+| Counts | `hits_i`, `pages_i`, `assets_i`, `uniq_paths_i`, `bytes_l`, `status_*`, `log_span_ms_l`, `paths_ss` are **partial** — what has been logged so far, not what the session will amount to. |
+| Verdict | Reached with the five absence-based rules **not evaluated** (§7), and **floored at `unknown`**: a provisional verdict may never be `human` or `likely_human`. |
+| Rollups | Excluded. Daily rollups count settled sessions only (§4.2 rollup block). |
+
 ---
 
 ## 5. Ingestion pipeline
@@ -317,12 +333,24 @@ Verdict: `bot_score_f` (0–100), `bot_verdict_s`
    `autoSoftCommit maxTime=5000`, `autoCommit maxTime=60000 openSearcher=false`.
 
 `bin/loghound-score` runs every 60s via systemd timer:
-1. Close sessions idle > timeout.
-2. Merge beacon data for those sessions (§6).
+1. Close sessions idle > timeout, and collect the OPEN sessions whose aggregate has advanced
+   since they were last published (§4.2 `provisional_b`). Without the second half the panel is
+   empty for the whole idle timeout on a fresh install, which reads as a broken product.
+2. Merge beacon data for those sessions (§6). Staged rows are marked merged only for sessions
+   that CLOSED — a provisional merge must not consume the only copy of the beacon data.
 3. Compute `fp_ips_24h_i` via one JSON Facet query per distinct fingerprint in the batch.
-4. Run `Score/Rules.php` → verdict + reasons.
-5. Upsert the `sessions` doc.
-6. Write the daily rollup doc.
+4. Run `Score/Rules.php` → verdict + reasons. Open sessions are scored under the provisional
+   gate (§7).
+5. Upsert the `sessions` doc — same id whether provisional or final, so a close overwrites.
+6. Write the daily rollup doc, over SETTLED sessions only, for the days the CLOSED batch
+   touched. A run that published nothing but provisional documents rebuilds no rollup.
+
+**Cost bound.** The provisional half of a run is bounded by `PROVISIONAL_BATCH` (500) documents,
+and by dirty tracking: a session is republished only when it has logged a new hit since its last
+publication, so steady-state cost tracks the REQUEST rate, not the accumulated open-session
+population. Ten thousand idle open sessions cost nothing; the bound bites only above ~8
+newly-active sessions per second, and a session whose provisional refresh is deferred still gets
+its final document the moment it closes.
 
 ---
 
@@ -443,6 +471,30 @@ Suggested starting weights (tune against real data, document the tuning):
 | `ua_declared_bot` | 100 | honest self-declaring crawler — verdict `bot`, class `declared_crawler`/`ai_crawler`, **not** a threat |
 
 Thresholds: `>=80 bot`, `60–79 likely_bot`, `40–59 unknown`, `20–39 likely_human`, `<20 human`.
+
+**Scoring a session that has not ended (`provisional_b`, §4.2).**
+
+Five of the seventeen rules fire on the ABSENCE of something a session may still go on to do,
+and every one of them would accuse a live human visitor:
+
+| Deferred code | What its absence means while the session is open |
+|---|---|
+| `no_js_on_html` | the beacon reports on pagehide — a visitor still reading has not sent one |
+| `no_assets` | the sub-resource log lines have not been written yet |
+| `no_304_on_repeat` | nothing has been re-fetched yet, and no 304 has arrived yet |
+| `no_interaction` | the visitor has not scrolled or clicked **yet** |
+| `single_page_10s` | every session is one page and under ten seconds at second one |
+
+So a provisional verdict rests only on evidence already PRESENT in the log, and it is
+**floored at `unknown`**: it may reach `likely_bot` or `bot` on positive evidence — all seven
+decisive-alone rules are presence-based, so `navigator.webdriver` is still called immediately —
+but it may never claim `human` or `likely_human`, because "nothing incriminating yet" on one
+request is not an acquittal. When the floor applies, `bot_reasons_ss` carries the pseudo-code
+`provisional_session` so the verdict still explains itself, exactly as `no_bot_signals` does.
+
+`rule_version_i` is NOT bumped for this. A CLOSED session's verdict is unchanged, byte for
+byte; the discriminator is per-document (`provisional_b`) and not per-ruleset, and bumping
+would send a rescoring pass over all of history to no effect.
 
 **Honest crawlers are not the enemy.** GPTBot/Googlebot get `bot` + their class, and the UI
 must present declared crawlers separately from evasive ones. Conflating them is what makes

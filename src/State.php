@@ -103,6 +103,11 @@ final class State
      * with it; loghound-score drains it. The three enrichment caches have an identical shape
      * and are separate tables rather than one table with a namespace column, so that each can
      * be vacuumed and sized independently.
+     *
+     * `sessions_open.scored_ts` arrived after version 1, so it is both in the CREATE and in an
+     * addColumn() call: a fresh install gets it from the table definition, and an install that
+     * already has the table gets it from the ALTER. Leaving it out of one or the other would
+     * mean the feature works on exactly one of the two.
      */
     private function migrate(): void
     {
@@ -125,9 +130,11 @@ final class State
                 last_ts     INTEGER NOT NULL,
                 hits        INTEGER NOT NULL DEFAULT 0,
                 data        TEXT NOT NULL DEFAULT ' . "'{}'" . ',
-                closed_at   INTEGER
+                closed_at   INTEGER,
+                scored_ts   INTEGER
             )'
         );
+        $this->addColumn('sessions_open', 'scored_ts', 'INTEGER');
         $this->db->exec(
             'CREATE INDEX IF NOT EXISTS idx_sessions_client
                 ON sessions_open (client_key, closed_at)'
@@ -135,6 +142,10 @@ final class State
         $this->db->exec(
             'CREATE INDEX IF NOT EXISTS idx_sessions_last
                 ON sessions_open (closed_at, last_ts)'
+        );
+        $this->db->exec(
+            'CREATE INDEX IF NOT EXISTS idx_sessions_dirty
+                ON sessions_open (closed_at, scored_ts, last_ts)'
         );
 
         $this->db->exec(
@@ -185,7 +196,36 @@ final class State
             )'
         );
 
-        $this->metaSet('schema_version', '1');
+        $this->metaSet('schema_version', '2');
+    }
+
+    /**
+     * Add a column to an existing table, if it is not already there.
+     *
+     * SQLite has no `ADD COLUMN IF NOT EXISTS`, and a plain ALTER on an existing column is an
+     * error, so the current columns are read first. The table and column names are compile-time
+     * literals from this file and never come from input — which they cannot, because ALTER TABLE
+     * takes no bound parameters for identifiers.
+     *
+     * @param string $type SQL type and any default, e.g. 'INTEGER' or "TEXT NOT NULL DEFAULT ''".
+     */
+    private function addColumn(string $table, string $column, string $type): void
+    {
+        if (!preg_match('/^[a-z_][a-z0-9_]*$/', $table) || !preg_match('/^[a-z_][a-z0-9_]*$/', $column)) {
+            throw new \InvalidArgumentException('State: unsafe identifier in addColumn().');
+        }
+
+        $res = $this->db->query('PRAGMA table_info(' . $table . ')');
+        if ($res === false) {
+            return;
+        }
+        while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+            if ((string) ($row['name'] ?? '') === $column) {
+                return;
+            }
+        }
+
+        $this->db->exec('ALTER TABLE ' . $table . ' ADD COLUMN ' . $column . ' ' . $type);
     }
 
     /** The underlying handle, for the rare caller that needs a transaction of its own. */
@@ -375,6 +415,77 @@ final class State
             ]
         );
         return array_map([self::class, 'hydrateSession'], $rows);
+    }
+
+    /**
+     * List OPEN sessions whose aggregate has advanced since they were last published.
+     *
+     * This is the other half of what `bin/loghound-score` polls for: `listIdleSessions()`
+     * returns what can be finalised, this returns what is still running and needs a
+     * provisional document (SPEC §4.2 `provisional_b`) so the dashboard is not empty for the
+     * whole idle timeout.
+     *
+     * "Advanced" is `scored_ts < last_ts`, both in epoch milliseconds, and that comparison is
+     * what bounds the cost of the feature. A session is republished only when it has logged a
+     * new hit since the last time its document went to Solr, so the work per run tracks the
+     * REQUEST rate rather than the number of sessions that happen to be open — ten thousand
+     * idle open sessions cost one index scan and nothing else. A NULL scored_ts means "never
+     * published", which is how a session gets its first document and how the first run after an
+     * upgrade picks up sessions that were already open.
+     *
+     * Freshest first, so that when the batch limit does bite it is the sessions an operator is
+     * most likely to be watching that get published, not an arbitrary slice.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    public function listDirtyOpenSessions(int $limit = 500): array
+    {
+        $rows = $this->all(
+            'SELECT session_id, client_key, host, first_ts, last_ts, hits, data
+               FROM sessions_open
+              WHERE closed_at IS NULL
+                AND (scored_ts IS NULL OR scored_ts < last_ts)
+              ORDER BY last_ts DESC
+              LIMIT :lim',
+            [':lim' => Security::clampInt($limit, 1, 5000, 500)]
+        );
+        return array_map([self::class, 'hydrateSession'], $rows);
+    }
+
+    /**
+     * Record that a session was published to Solr as of a given instant.
+     *
+     * The instant is passed in rather than read from `last_ts` inside the UPDATE, and that is
+     * the point: a hit that landed between the read and this write leaves `last_ts` ahead of
+     * `scored_ts`, so the session stays dirty and is republished on the next run. Setting
+     * `scored_ts = last_ts` in SQL would mark it clean and lose that hit from the panel until
+     * the session closed.
+     *
+     * Wrapped in one transaction so a batch of several hundred is one fsync rather than
+     * several hundred.
+     *
+     * @param array<string,int> $marks session_id => the ts_end, in epoch milliseconds, that
+     *                                 was actually published.
+     */
+    public function markSessionsScored(array $marks): void
+    {
+        if ($marks === []) {
+            return;
+        }
+
+        $this->db->exec('BEGIN IMMEDIATE');
+        try {
+            foreach ($marks as $sessionId => $tsMs) {
+                $this->run(
+                    'UPDATE sessions_open SET scored_ts = :ts WHERE session_id = :id',
+                    [':ts' => (int) $tsMs, ':id' => (string) $sessionId]
+                );
+            }
+            $this->db->exec('COMMIT');
+        } catch (\Throwable $e) {
+            $this->db->exec('ROLLBACK');
+            throw $e;
+        }
     }
 
     /**

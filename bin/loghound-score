@@ -5,13 +5,42 @@
  *
  * Run every 60 seconds by loghound-score.timer. One pass does, in order:
  *
- *   1. Close sessions that have been idle past the timeout.
+ *   1. Close sessions that have been idle past the timeout, and collect the OPEN sessions
+ *      whose aggregate has advanced since they were last published.
  *   2. Merge staged beacon rows into those sessions.
  *   3. Compute fp_ips_24h_i for every distinct fingerprint in the batch, in as few Solr
  *      queries as possible.
- *   4. Run the ruleset.
+ *   4. Run the ruleset — open sessions under the provisional gate.
  *   5. Upsert the session documents.
- *   6. Recompute the daily rollup for every day the batch touched.
+ *   6. Recompute the daily rollup, over settled sessions only, for every day the CLOSED
+ *      half of the batch touched.
+ *
+ * ---------------------------------------------------------------------------------
+ * WHY OPEN SESSIONS ARE PUBLISHED AT ALL
+ * ---------------------------------------------------------------------------------
+ * Because otherwise the product looks broken for half an hour after it is installed, and that
+ * is not a charting problem — it is the defect that makes everything else look missing. A
+ * session is only scored when it CLOSES, and it closes after ingest.session_idle_sec of silence
+ * (1800 by default). Every panel view except Performance reads the sessions core. So on a fresh
+ * install with ingestion working perfectly, the hits core fills up, the sessions core stays
+ * empty, and every single view reports zero — while the operator browses their own site to
+ * check that it works.
+ *
+ * So each open session also gets a document, at its own id, marked provisional_b (SPEC §4.2),
+ * rewritten whenever it has new hits, and REPLACED by the final document when the session
+ * closes. Three things make that safe rather than merely fast, and each is documented where it
+ * happens: the id is the session id so a close overwrites instead of duplicating
+ * (buildSessionDoc); the verdict is deliberately weakened so a provisional session can never
+ * claim to be human (Score\Rules::DEFERRED_CODES and PROVISIONAL_FLOOR); and the daily rollups
+ * exclude provisional documents so a historical total can never absorb a partial one
+ * (computeRollup). The cost is bounded by PROVISIONAL_BATCH and by dirty tracking in
+ * State::listDirtyOpenSessions().
+ *
+ * Staged beacon rows are merged onto a provisional document but NOT marked merged — they are
+ * consumed only when the session closes. Marking them on a provisional run would hand the
+ * execution plane to a document that is about to be overwritten and lose it permanently, since
+ * there is no second copy of it anywhere. Beacon::mergeIntoSession() recomputes from the row
+ * set every time and holds no state, so merging the same rows twice is exact.
  *
  * Everything except steps 3 and 5–6 is local: the session aggregate was accumulated in
  * SQLite while the session was open, so the scorer does not re-read the hits core to find
@@ -134,6 +163,31 @@ if (PHP_SAPI !== 'cli') {
 
 require __DIR__ . '/../src/autoload.php';
 
+/**
+ * Maximum provisional documents one run publishes.
+ *
+ * This is the cost bound on the whole feature. Combined with the dirty tracking in
+ * State::listDirtyOpenSessions() — a session is republished only after it has logged a new hit —
+ * it means the provisional half of a run costs at most one extra 500-document POST and a couple
+ * of extra fingerprint facet chunks, whatever the open-session population happens to be.
+ *
+ * Five hundred, matching the closed-session batch, so the worst case for a run is symmetric and
+ * one number describes both halves. A site producing more than 500 newly-active sessions per
+ * minute will see its provisional documents lag; those sessions still get their final document
+ * the moment they close, which is the number that has to be right.
+ */
+const PROVISIONAL_BATCH = 500;
+
+/**
+ * The filter that restricts a query to sessions that have ENDED.
+ *
+ * Expressed as a NEGATION rather than `provisional_b:false`, and that is load-bearing: the field
+ * is written only as true and is absent on every settled document, including every session
+ * indexed before it existed. `provisional_b:false` would match nothing and quietly empty the
+ * rollups. Panel\Query carries the same constant for the dashboard side of the contract.
+ */
+const SETTLED_SESSIONS = '-provisional_b:true';
+
 use Loghound\Config;
 use Loghound\Score\Rules;
 use Loghound\Score\Signals;
@@ -208,27 +262,48 @@ try {
     exit(2);
 }
 
-if ($closed === []) {
+try {
+    $open = $sessionizer->listOpen(PROVISIONAL_BATCH);
+} catch (\Throwable $e) {
+    $log('listing open sessions failed: ' . $e->getMessage());
+    $open = [];
+}
+
+if ($closed === [] && $open === []) {
     $log('nothing to score');
     exit(0);
 }
-$log('closed ' . count($closed) . ' session(s)');
+$log('closed ' . count($closed) . ' session(s), ' . count($open) . ' still open');
+
+/** @var array<string,bool> session id => true when the session is still open. */
+$isProvisional = [];
+foreach ($open as $session) {
+    $isProvisional[(string) $session['session_id']] = true;
+}
+
+/** @var array<int,array<string,mixed>> Both batches, in one list, scored in one pass. */
+$batch = array_merge($closed, $open);
 
 $docs      = [];
 $mergedIds = [];
 
-foreach ($closed as $session) {
+foreach ($batch as $session) {
     $sid = (string) $session['session_id'];
+    $provisional = isset($isProvisional[$sid]);
 
-    $doc = buildSessionDoc($session);
+    $doc = buildSessionDoc($session, $provisional);
 
     if ($beaconMerger !== null) {
         try {
             $rows = $state->beaconsFor($sid, (string) ($session['client_key'] ?? ''));
-            $doc = $beaconMerger->mergeIntoSession($doc, $rows);
-            foreach ($rows as $row) {
-                if (isset($row['id'])) {
-                    $mergedIds[] = (int) $row['id'];
+            if (!$provisional || $rows !== []) {
+                $doc = $beaconMerger->mergeIntoSession($doc, $rows);
+            }
+            if (!$provisional) {
+                foreach ($rows as $row) {
+                    if (isset($row['id'])) {
+                        $mergedIds[] = (int) $row['id'];
+                    }
                 }
             }
         } catch (\Throwable $e) {
@@ -241,8 +316,8 @@ foreach ($closed as $session) {
 
 $beaconDeployed = false;
 if ((bool) $cfg->get('beacon.enabled')) {
-    foreach ($docs as $doc) {
-        if (!empty($doc['beacon_b'])) {
+    foreach ($closed as $session) {
+        if (!empty($docs[(string) $session['session_id']]['beacon_b'])) {
             $beaconDeployed = true;
             break;
         }
@@ -262,7 +337,7 @@ $fpCounts = [];
 
 /** @var array<int,array<string,bool>> hour bucket => set of fingerprints */
 $buckets = [];
-foreach ($closed as $session) {
+foreach ($batch as $session) {
     $fp = (string) (($session['first']['fp_hash_s'] ?? '') ?: '');
     if ($fp === '') {
         continue;
@@ -316,10 +391,14 @@ foreach ($buckets as $bucketStart => $fpSet) {
 $ready = [];
 $days  = [];
 
-foreach ($closed as $session) {
+/** @var array<int,array<string,mixed>> Open sessions whose document made it into the batch. */
+$publishedOpen = [];
+
+foreach ($batch as $session) {
     $sid = (string) $session['session_id'];
     $fp  = (string) ($session['first']['fp_hash_s'] ?? '');
-    $doc = $docs[$sid] ?? buildSessionDoc($session);
+    $provisional = isset($isProvisional[$sid]);
+    $doc = $docs[$sid] ?? buildSessionDoc($session, $provisional);
 
     $fpIps = array_key_exists($fp, $fpCounts) ? $fpCounts[$fp] : null;
     if ($fpIps !== null) {
@@ -332,6 +411,7 @@ foreach ($closed as $session) {
         $verdict = $rules->score($signals, [
             'beacon_deployed' => $beaconDeployed,
             'site_sends_304'  => $siteSends304,
+            'provisional'     => $provisional,
         ]);
     } catch (\Throwable $e) {
         fwrite(STDERR, 'Loghound: scoring failed for session ' . $sid . ': ' . $e->getMessage() . "\n");
@@ -345,7 +425,12 @@ foreach ($closed as $session) {
     $doc['rule_version_i'] = (int) $verdict['rule_version'];
 
     $ready[] = $doc;
-    $days[gmdate('Y-m-d', (int) $session['ts_start'])] = true;
+
+    if ($provisional) {
+        $publishedOpen[] = $session;
+    } else {
+        $days[gmdate('Y-m-d', (int) $session['ts_start'])] = true;
+    }
 }
 
 $docs = $ready;
@@ -360,13 +445,16 @@ if ($docs !== []) {
         if ($mergedIds !== [] && method_exists($state, 'markBeaconsMerged')) {
             $state->markBeaconsMerged($mergedIds);
         }
+        if ($publishedOpen !== []) {
+            $sessionizer->markProvisional($publishedOpen);
+        }
     } catch (\Throwable $e) {
         fwrite(STDERR, 'Loghound: indexing sessions failed: ' . $e->getMessage() . "\n");
         exit(2);
     }
 }
 
-if ((int) gmdate('H', $now) < 2) {
+if ($closed !== [] && (int) gmdate('H', $now) < 2) {
     $days[gmdate('Y-m-d', $now - 86400)] = true;
 }
 
@@ -384,7 +472,7 @@ exit(0);
 
 
 /**
- * Turn a closed session into the BASE Solr document.
+ * Turn a session aggregate into the BASE Solr document.
  *
  * Base means: everything the log plane knows, and nothing else. The execution-plane fields
  * are added afterwards by Beacon::mergeIntoSession(), and the verdict fields after that by
@@ -406,10 +494,20 @@ exit(0);
  * field off the document. Internal parser metadata, `_logged` and friends, never goes to
  * Solr.
  *
- * @param array<string,mixed> $session Aggregate from Sessionizer::closeIdle().
+ * THE ID IS THE SESSION ID, whether the session has ended or not, and that is the whole
+ * mechanism behind provisional documents: a session published while open and republished when
+ * it closes is one document at one id, so the final version REPLACES the partial one. Solr's
+ * /update with a duplicate uniqueKey is a delete-and-add, not a merge, so the final document
+ * is complete and carries nothing left over from the provisional one — which is why
+ * provisional_b is written only as true and simply disappears on close. A session counted twice
+ * would be worse than a session counted late, and this is the line that prevents it.
+ *
+ * @param array<string,mixed> $session     Aggregate from Sessionizer::closeIdle() or listOpen().
+ * @param bool                $provisional True when the session is still open, so every count
+ *                                         on the document is partial (SPEC §4.2).
  * @return array<string,mixed>
  */
-function buildSessionDoc(array $session): array
+function buildSessionDoc(array $session, bool $provisional = false): array
 {
     $doc = [
         'id'         => (string) $session['session_id'],
@@ -438,6 +536,10 @@ function buildSessionDoc(array $session): array
         'beacon_b' => false,
     ];
 
+    if ($provisional) {
+        $doc['provisional_b'] = true;
+    }
+
     if (($session['entry_path'] ?? null) !== null) {
         $doc['entry_path_s'] = (string) $session['entry_path'];
     }
@@ -465,6 +567,21 @@ function buildSessionDoc(array $session): array
  * what makes privacy.rollup_forever compatible with a 90-day retention policy: the
  * sessions behind it can be deleted while the shape of the traffic survives.
  *
+ * SETTLED SESSIONS ONLY — SETTLED_SESSIONS is on the query and is not optional. An open
+ * session has doc_type_s:session and a ts_start inside the day, so without that clause its
+ * PARTIAL hit, page and byte counts and its FLOORED verdict would be folded into the day's
+ * totals. Recomputing rather than incrementing means the same session is never counted twice
+ * (it is one document at one id, open or closed), but it does not save the numbers from being
+ * wrong while it is open: r_unknown_i would carry every live visitor and r_human_i would be
+ * short by the same amount, on every rebuild, and the rollup is the one set of numbers in the
+ * product that is meant to outlive the sessions behind it. The cost of the clause is that
+ * TODAY's rollup lags by up to the idle timeout — which is what a settled daily aggregate IS.
+ * The live picture comes from the session documents themselves.
+ *
+ * Nothing else is needed to keep the day correct: when a session that started on day D finally
+ * closes, D goes back into the run's day set and the whole day is rebuilt from scratch, so the
+ * session is counted exactly once, at its final values, on the day it started.
+ *
  * r_beacon_sessions_i is written alongside the timing sums on purpose. A sum of engaged
  * milliseconds without the population it covers is uninterpretable, and presenting one
  * without the other is the exact mistake SPEC §10 forbids ("an unlabelled number is a lie").
@@ -488,6 +605,7 @@ function computeRollup(Solr $solr, string $core, string $day): array
             'q'  => '*:*',
             'fq' => [
                 Solr::termFilter('doc_type_s', 'session'),
+                SETTLED_SESSIONS,
                 Solr::rangeFilter('ts_start', $from, $to),
             ],
         ],

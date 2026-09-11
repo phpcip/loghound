@@ -827,7 +827,11 @@ return [
         $accepted = lh_os_call($view, 'jobParams', ['shape_scan']);
         $_POST = [];
 
-        lh_same(['core' => 'mine_two', 'range' => '7d'], $accepted, 'an owned index is accepted');
+        lh_same(
+            ['core' => 'mine_two', 'range' => '7d', 'lf' => '', 'outcome' => ''],
+            $accepted,
+            'an owned index is accepted, with an empty filter set'
+        );
     },
 
     'a malformed index name or range is refused before a job exists' => function (): void {

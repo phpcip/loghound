@@ -213,6 +213,15 @@ abstract class Controller
     protected const FQ_SESSION_DOCS = 'doc_type_s:session';
 
     /**
+     * The filter that keeps a session which has not ended out of an aggregate.
+     *
+     * The panel's half of the `provisional_b` contract (SPEC §4.2). A negation, for the reason
+     * spelled out on Query::SETTLED_SESSIONS: the field is never written as false, so this is the
+     * only spelling that also matches the sessions a site already had.
+     */
+    protected const FQ_SETTLED = Query::SETTLED_SESSIONS;
+
+    /**
      * The base `fq` list for a sessions-core query: document type, time range, filters.
      *
      * The document-type clause is not optional. A rollup document carries `ts_start`, so
@@ -221,10 +230,24 @@ abstract class Controller
      * ninety-day window — and the five populations stop summing to the figure printed above
      * them, because a rollup matches none of them.
      *
-     * Every sessions-core query reached through a Controller subclass goes through here.
-     * The two queries in Panel\Callers build their own `fq` list and carry the same clause
-     * themselves; Panel\Jobs deliberately counts the whole core, because "how many documents
-     * are in this index" is the question that diagnostic asks.
+     * SESSIONS THAT ARE STILL OPEN ARE INCLUDED, and that is a decision rather than a default.
+     * Excluding them here would mean a fresh install shows nothing for half an hour on every
+     * view — the exact defect provisional documents exist to fix — so the live population is
+     * what a counting or faceting card gets: how many sessions, from which networks, with which
+     * verdicts, sharing which fingerprints. Their verdicts are honestly weakened by the scorer
+     * (Score\Rules::DEFERRED_CODES) rather than hidden by the panel, and the five Overview
+     * populations still partition the domain exactly, because a provisional verdict is still one
+     * of the five and is floored into `unknown` rather than into nothing.
+     *
+     * A card whose number is only meaningful once a session has FINISHED must call
+     * settledSessionFqs() instead and say so. Duration and engagement averages are the clear
+     * case: an open session's log_span_ms_l is partial by construction, so averaging it in makes
+     * "time on site" read low — which is precisely the lie the timing card exists to expose.
+     *
+     * Every sessions-core query reached through a Controller subclass goes through one of these
+     * two. The two queries in Panel\Callers build their own `fq` list and carry the document-type
+     * clause themselves; Panel\Jobs deliberately counts the whole core, because "how many
+     * documents are in this index" is the question that diagnostic asks.
      *
      * @return array<int,string>
      */
@@ -234,6 +257,27 @@ abstract class Controller
             [self::FQ_SESSION_DOCS, Query::rangeFq('ts_start', $this->range)],
             $this->filterFqs(null, Query::sessionFilterAliases())
         );
+    }
+
+    /**
+     * sessionFqs(), restricted to sessions that have ended.
+     *
+     * For the cards that measure a session rather than count one. A provisional document carries
+     * partial counts — hits so far, bytes so far, the span between the first hit and the most
+     * recent one — so any average, percentile or ratio built on them is measuring how long ago
+     * the visitor arrived, not how long they stayed. Those cards want this list; the ones that
+     * answer "who is here" want sessionFqs().
+     *
+     * The caption on such a card has to name the population, as SPEC §10 requires of every
+     * number: the figure covers completed sessions, and the live ones are deliberately not in it.
+     *
+     * @return array<int,string>
+     */
+    protected function settledSessionFqs(): array
+    {
+        $fqs = $this->sessionFqs();
+        $fqs[] = self::FQ_SETTLED;
+        return $fqs;
     }
 
     /**

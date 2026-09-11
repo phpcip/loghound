@@ -56,8 +56,72 @@ final class Rules
      * the logic that produced it, and so a rescoring pass can find everything judged by an
      * older ruleset. Changing a weight without bumping this makes past and present verdicts
      * silently incomparable.
+     *
+     * The provisional gate (DEFERRED_CODES, below) deliberately did NOT bump it. A CLOSED
+     * session's verdict is identical with and without that gate, byte for byte, so bumping would
+     * declare the whole of a site's history incomparable with itself and send a rescoring pass
+     * over all of it to no effect. What a consumer actually needs to know — "was this verdict
+     * reached before the session ended" — is a property of the DOCUMENT, not of the ruleset, and
+     * it is on the document as `provisional_b`.
      */
     public const RULE_VERSION = 1;
+
+    /**
+     * Rules that may not be evaluated until the session has ENDED.
+     *
+     * Every one of them fires on the ABSENCE of something the session may still go on to do, so
+     * on an open session each is a statement about the future dressed up as evidence — and each
+     * would accuse a live human visitor:
+     *
+     *   no_js_on_html     the beacon reports on pagehide. Someone still reading the page has
+     *                     not sent one, and this is 70 points: it would call the entire live
+     *                     audience of a beacon-equipped site likely_bot.
+     *   no_assets         the sub-resource lines are written to the log after the HTML line,
+     *                     and a scorer run can land between them.
+     *   no_304_on_repeat  nothing has been re-fetched yet, and no 304 has arrived yet. Both
+     *                     halves of the rule read "not yet" as "never".
+     *   no_interaction    the beacon may have reported the first pageview before the visitor
+     *                     scrolled or clicked. "Has not interacted yet" is not "did not".
+     *   single_page_10s   at second one EVERY session is one page inside ten seconds. This one
+     *                     fires on literally every visitor, human or not.
+     *
+     * What is left is every rule that reads evidence already PRESENT — a declared bot UA,
+     * contradictory client hints, a failed rDNS check, a datacentre address, a software
+     * rasteriser, a shared fingerprint, a measured rhythm. All seven of the decisive-alone
+     * rules are in that set, which is why a provisional verdict can still call
+     * `navigator.webdriver` a bot on the first request rather than in half an hour.
+     *
+     * @var string[]
+     */
+    public const DEFERRED_CODES = [
+        'no_js_on_html',
+        'no_assets',
+        'no_304_on_repeat',
+        'no_interaction',
+        'single_page_10s',
+    ];
+
+    /**
+     * The verdict a provisional session may not be better than.
+     *
+     * A session that has tripped nothing scores 0 and would be called `human`. On one request,
+     * with five rules not yet evaluated, that is not a finding — it is the absence of one, and
+     * publishing it as `human` is the trap this whole feature could have walked into: the
+     * verdict would then FLIP as the session continued, and a bot detector that exonerates and
+     * then accuses is worse than one that waits. So a provisional verdict is floored here. It
+     * can be worse than this on positive evidence; it can never be better.
+     */
+    public const PROVISIONAL_FLOOR = 'unknown';
+
+    /**
+     * The reason code recorded when the floor above changes the verdict.
+     *
+     * Not a rule and worth no points — it explains an absence of evidence rather than adding
+     * any, exactly like `no_bot_signals`, and it exists because SPEC §1 requires every verdict
+     * to carry a reason somebody can read. An operator looking at an `unknown` session is owed
+     * the sentence "this session has not ended yet" rather than a shrug.
+     */
+    public const PROVISIONAL_REASON = 'provisional_session';
 
     /**
      * Default weights (SPEC §7). Overridable per rule from scoring.weights.
@@ -174,6 +238,11 @@ final class Rules
      * when it should and does not misfire when it should not, and that test should not have
      * to run the whole scorer and infer which rule was responsible.
      *
+     * `ctx['provisional']` silences every rule in DEFERRED_CODES, and it is checked here rather
+     * than in score() so that both entry points give the same answer to "does this rule fire on
+     * this session". A test that asks fired() directly and a scorer that asks score() must never
+     * be able to disagree about a rule.
+     *
      * @param array<string,mixed> $s   Signal map from Signals::fromSession().
      * @param array<string,mixed> $ctx Scoring context (see score()).
      * @return string|null             A human-readable explanation when the rule fires,
@@ -181,6 +250,10 @@ final class Rules
      */
     public function fired(string $code, array $s, array $ctx = []): ?string
     {
+        if (!empty($ctx['provisional']) && in_array($code, self::DEFERRED_CODES, true)) {
+            return null;
+        }
+
         switch ($code) {
             case 'automation_marker':      return $this->ruleAutomationMarker($s);
             case 'ua_declared_bot':        return $this->ruleUaDeclaredBot($s);
@@ -214,14 +287,29 @@ final class Rules
      * session is given a positive reason of its own rather than an empty array — which also
      * makes "how many sessions tripped nothing at all" a one-facet question.
      *
+     * A clean PROVISIONAL session gets PROVISIONAL_REASON instead of `no_bot_signals`, and that
+     * is not an oversight: five rules were not evaluated, so "nothing fired" is not yet a fact
+     * about the session. The facet stays honest by counting only sessions that were fully tested.
+     *
      * That invariant is asserted rather than merely documented. If the assertion ever throws,
      * the bug is that a rule contributed points without recording why, which would produce a
      * verdict nobody can defend and that someone would nonetheless act on.
+     *
+     * A PROVISIONAL session — one that has not ended — is scored with the DEFERRED_CODES rules
+     * silenced and the verdict floored at PROVISIONAL_FLOOR. Both halves are needed and neither
+     * is sufficient: silencing the absence-based rules stops the detector accusing a live human,
+     * and the floor stops it exonerating a bot whose only incriminating act has not happened yet.
+     * The floor records PROVISIONAL_REASON so the verdict still explains itself, which also keeps
+     * the "no verdict without a reason" assertion below meaningful rather than bypassed.
      *
      * @param array<string,mixed> $s   Signal map from Signals::fromSession().
      * @param array<string,mixed> $ctx Context:
      *                                 beacon_deployed (bool) — is the beacon actually live
      *                                 on this site? Controls no_js_on_html; see that rule.
+     *                                 site_sends_304 (bool) — does this site emit validators?
+     *                                 Controls no_304_on_repeat; see that rule.
+     *                                 provisional (bool) — is this session still open?
+     *                                 See DEFERRED_CODES and PROVISIONAL_FLOOR.
      * @return array{
      *     score:float, verdict:string, reasons:string[], class:string,
      *     rule_version:int, detail:array<string,array{weight:int,why:string}>
@@ -249,7 +337,19 @@ final class Rules
 
         $score   = Signals::clampScore($total);
         $verdict = $this->verdictFor($score);
-        $class   = $this->classify($s, $reasons, $verdict);
+
+        if (!empty($ctx['provisional']) && self::isBetterThanFloor($verdict)) {
+            $verdict = self::PROVISIONAL_FLOOR;
+            $reasons[] = self::PROVISIONAL_REASON;
+            $detail[self::PROVISIONAL_REASON] = [
+                'weight' => 0,
+                'why'    => 'This session has not ended yet, so the ' . count(self::DEFERRED_CODES)
+                    . ' signals that can only be read once it has were not evaluated. '
+                    . 'Not enough evidence to call it human.',
+            ];
+        }
+
+        $class = $this->classify($s, $reasons, $verdict);
 
         if ($reasons === []) {
             $reasons[] = 'no_bot_signals';
@@ -274,6 +374,33 @@ final class Rules
             'rule_version' => $this->ruleVersion,
             'detail'       => $detail,
         ];
+    }
+
+    /**
+     * The five verdicts from most human to most bot.
+     *
+     * Ordered rather than derived from the thresholds, because the thresholds are configurable
+     * and their ORDER is not: an operator who sets `likely_bot` above `bot` has misconfigured
+     * the tool, and the provisional floor must not become a ceiling as a result.
+     *
+     * @var string[]
+     */
+    private const VERDICT_ORDER = ['human', 'likely_human', 'unknown', 'likely_bot', 'bot'];
+
+    /**
+     * Is this verdict a stronger claim of humanity than a provisional session is allowed to make?
+     *
+     * An unrecognised verdict answers false, which leaves it untouched: the floor exists to
+     * suppress an overclaim, never to invent a verdict nobody asked for.
+     */
+    private static function isBetterThanFloor(string $verdict): bool
+    {
+        $rank  = array_search($verdict, self::VERDICT_ORDER, true);
+        $floor = array_search(self::PROVISIONAL_FLOOR, self::VERDICT_ORDER, true);
+        if ($rank === false || $floor === false) {
+            return false;
+        }
+        return $rank < $floor;
     }
 
     /**

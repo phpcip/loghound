@@ -44,7 +44,7 @@ use Loghound\Setup\Detector;
 use Loghound\Setup\Requirements;
 use Loghound\Setup\Steps;
 
-final class Settings extends Controller implements JobHost
+final class Settings extends Controller implements JobHost, Sections
 {
     /**
      * Where `bin/loghound-setup` is expected to leave its detection report.
@@ -717,7 +717,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-auth',
-            '10',
+            self::sectionNum('set-auth'),
             'Sign-in',
             'Applies to the next request. Changing this does not change your username or password.'
         );
@@ -835,55 +835,58 @@ final class Settings extends Controller implements JobHost
      * The sections on this page, in the order they render.
      *
      * One list drives three things that used to be maintained separately and drifted: the
-     * order sections are rendered in, the number printed on each card, and the jump links.
+     * order sections are rendered in, the number printed on each card, and the jump bar.
      * Before it, two cards both claimed 02 and two both claimed 03.
      *
-     * @var array<int,array{0:string,1:string,2:string}> id, label, renderer
+     * The second element is the JUMP-BAR label, not the card's heading, and it is short
+     * because the bar is one row that never wraps — eleven headings at full length do not fit
+     * on a line at any realistic width. The heading stays in each section's own cardOpen().
+     *
+     * @var array<int,array{0:string,1:string,2:string}> id, nav label, renderer
      */
     private const SECTIONS = [
-        ['set-finish', 'Finish setting up', 'finishSection'],
+        ['set-finish', 'Finish setup', 'finishSection'],
         ['set-ops', 'Running it', 'operationsSection'],
         ['set-check', 'System check', 'systemCheckSection'],
         ['set-sources', 'Log sources', 'sourcesSection'],
-        ['set-solr', 'Solr connection', 'solrSection'],
-        ['set-beacon', 'Beacon / JavaScript tracking', 'beaconSection'],
+        ['set-solr', 'Solr', 'solrSection'],
+        ['set-beacon', 'Beacon', 'beaconSection'],
         ['set-privacy', 'Privacy', 'privacySection'],
-        ['set-retention', 'Retention preview', 'retentionSection'],
-        ['set-scoring', 'Scoring weights', 'scoringSection'],
+        ['set-retention', 'Retention', 'retentionSection'],
+        ['set-scoring', 'Scoring', 'scoringSection'],
         ['set-auth', 'Sign-in', 'authSection'],
         ['set-display', 'Display', 'displaySection'],
     ];
 
+    /**
+     * The card list, for the jump bar Layout pins above the page and for the numbering.
+     *
+     * The bar itself used to be emitted here, inside `.view`, and did not work: `.view` is a
+     * flex column, and a `position: sticky` child of a flex container is sticky within its own
+     * flex item box — a box exactly as tall as the bar — so it had no travel and scrolled away
+     * once the reader passed the sixth card. Layout renders it as a sibling of `.view`, where
+     * its containing block is the whole page.
+     *
+     * @return array<int,array<int,string>>
+     */
+    public function sections(): array
+    {
+        return self::SECTIONS;
+    }
+
+    /** The number a card carries, from its position in SECTIONS rather than a literal. */
+    private static function sectionNum(string $id): string
+    {
+        return Layout::cardNum(self::SECTIONS, $id);
+    }
+
     public function body(): void
     {
         self::flash();
-        self::sectionNav();
 
-        foreach (self::SECTIONS as $i => [$id, $label, $method]) {
+        foreach (self::SECTIONS as [$id, $label, $method]) {
             $this->{$method}();
         }
-    }
-
-    /**
-     * The jump bar that makes this page navigable.
-     *
-     * Settings is eleven cards long and was a single unbroken scroll: finding the scoring
-     * weights meant remembering roughly how far down they were. It sticks under the page
-     * header so it is reachable from anywhere on the page, and the entries are numbered to
-     * match the cards they point at.
-     *
-     * Plain anchors, so it works with scripting off and every entry is a real link somebody
-     * can open in a new tab or send to a colleague.
-     */
-    private static function sectionNav(): void
-    {
-        echo '<nav class="set-nav" aria-label="Settings sections"><ul>';
-        foreach (self::SECTIONS as $i => [$id, $label, $method]) {
-            echo '<li><a href="#' . Security::esc($id) . '-card">'
-                . '<span class="set-nav-num">' . sprintf('%02d', $i + 1) . '</span>'
-                . Security::esc($label) . '</a></li>';
-        }
-        echo '</ul></nav>';
     }
 
     /**
@@ -924,7 +927,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-finish',
-            '01',
+            self::sectionNum('set-finish'),
             'Finish setting up',
             'Setup writes the configuration. It does not start the ingest daemon and it cannot add the beacon '
             . 'to your site; both are done here, once, by hand.'
@@ -994,7 +997,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-check',
-            '03',
+            self::sectionNum('set-check'),
             'System check',
             'What this installation needs from the machine, re-checked every time you open this page.'
         );
@@ -1068,7 +1071,7 @@ final class Settings extends Controller implements JobHost
     {
         self::cardOpen(
             'set-ops',
-            '02',
+            self::sectionNum('set-ops'),
             'Running it',
             'Everything Loghound put on this machine, and how to inspect, stop or remove it.'
         );
@@ -1223,7 +1226,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-sources',
-            '04',
+            self::sectionNum('set-sources'),
             'Log sources',
             'Detected by reading your webserver configuration where possible, and by scoring sample lines against '
             . 'the known-format library where it is not. Nothing is ingested until you confirm the mapping below.'
@@ -1452,7 +1455,7 @@ final class Settings extends Controller implements JobHost
     {
         $mode = (string) $this->cfg->get('solr.mode', Config::SOLR_MODE);
 
-        self::cardOpen('set-solr', '05', 'Solr connection');
+        self::cardOpen('set-solr', self::sectionNum('set-solr'), 'Solr connection');
 
         if ($mode !== Config::SOLR_MODE) {
             echo '<p class="pop">This configuration is not usable.</p>';
@@ -1507,7 +1510,7 @@ final class Settings extends Controller implements JobHost
     {
         $days = (int) $this->cfg->get('privacy.retention_days', 0);
 
-        self::cardOpen('set-retention', '08', 'Retention preview');
+        self::cardOpen('set-retention', self::sectionNum('set-retention'), 'Retention preview');
         echo '<p class="pop">' . ($days > 0
             ? Security::esc('Documents older than ' . $days . ' days are eligible for deletion.')
             : 'Retention is disabled, so nothing is ever deleted.') . '</p>';
@@ -1575,7 +1578,7 @@ final class Settings extends Controller implements JobHost
     {
         $f = $this->gw->facet('settings.beacon', $this->gw->sessionsCore(), [
             'q'  => '*:*',
-            'fq' => [self::FQ_SESSION_DOCS, 'ts_start:[NOW-30DAY TO NOW]'],
+            'fq' => [self::FQ_SESSION_DOCS, Query::SETTLED_SESSIONS, 'ts_start:[NOW-30DAY TO NOW]'],
         ], [
             'withBeacon' => ['type' => 'query', 'q' => Query::POP_BEACON, 'facet' => [
                 'last' => 'max(ts_start)',
@@ -1613,7 +1616,7 @@ final class Settings extends Controller implements JobHost
         $src = $base . '/b.js?v=' . $ver;
         $enabled = (bool) $this->cfg->get('beacon.enabled');
 
-        self::cardOpen('set-beacon', '06', 'Beacon / JavaScript tracking');
+        self::cardOpen('set-beacon', self::sectionNum('set-beacon'), 'Beacon / JavaScript tracking');
         echo '<p class="pop">One line of JavaScript, optional. Loghound works without it. This section explains '
             . 'exactly what changes if you add it.</p>';
 
@@ -1811,7 +1814,7 @@ final class Settings extends Controller implements JobHost
         $mode = (string) $this->cfg->get('privacy.ip_mode', 'full');
         $days = (int) $this->cfg->get('privacy.retention_days', 90);
 
-        self::cardOpen('set-privacy', '07', 'Privacy');
+        self::cardOpen('set-privacy', self::sectionNum('set-privacy'), 'Privacy');
 
         echo '<p class="muted">Setup does not ask about these. A new installation keeps the full '
             . 'address and deletes hits after 90 days; this card is where both are changed.</p>';
@@ -1867,7 +1870,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-scoring',
-            '09',
+            self::sectionNum('set-scoring'),
             'Scoring weights',
             'Points added to bot_score_f when a rule fires. Saving bumps rule_version_i, so sessions scored under '
             . 'the old weights stay identifiable. Existing documents are not rescored.'
@@ -1914,7 +1917,7 @@ final class Settings extends Controller implements JobHost
     {
         $tz = (string) $this->cfg->get('ui.timezone', 'UTC');
 
-        self::cardOpen('set-display', '11', 'Display');
+        self::cardOpen('set-display', self::sectionNum('set-display'), 'Display');
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="ui">';

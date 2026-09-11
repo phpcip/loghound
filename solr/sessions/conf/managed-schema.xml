@@ -6,8 +6,10 @@
 
   Two document types live in this core, distinguished by doc_type_s:
 
-    doc_type_s = "session"      one document per closed session. This is what the
-                                dashboard queries for essentially everything.
+    doc_type_s = "session"      one document per session. This is what the dashboard queries
+                                for essentially everything. A session that is still open also
+                                has one, marked provisional_b=true and rewritten in final form
+                                when it closes; see that field.
     doc_type_s = "rollup_daily" one document per day, written by bin/loghound-score.
                                 Tiny, and kept forever when privacy.rollup_forever is set,
                                 so year-over-year charts survive the retention job that
@@ -88,6 +90,27 @@
     <!-- session | rollup_daily. Two values, so its docValues cost is ~1 byte per document,
          and every dashboard query filters on it. -->
     <field name="doc_type_s" type="string" indexed="true" stored="true" docValues="true"/>
+
+    <!--
+      TRUE on a session that has NOT ended yet, and ABSENT on every settled document.
+
+      bin/loghound-score publishes a document for each OPEN session on every run so the
+      dashboard shows traffic within a minute of ingestion starting, instead of after the
+      session_idle_sec timeout (30 minutes by default) has expired. That document is written
+      under the session's own id, so when the session finally closes the final document
+      REPLACES it rather than adding a second one.
+
+      Everything on a provisional document is partial by construction: hits_i, pages_i,
+      bytes_l and log_span_ms_l count only what has been logged so far, and the verdict was
+      reached with the five absence-based rules switched off (see Score\Rules::DEFERRED_CODES)
+      and floored so it can never claim `human` or `likely_human`. SPEC §4.2 is the contract.
+
+      WRITTEN ONLY AS TRUE, NEVER AS FALSE. A settled document omits the field entirely, which
+      is what makes `-provisional_b:true` the one correct way to ask for the settled
+      population: it also matches every session indexed before this field existed. Asking for
+      `provisional_b:false` instead would silently exclude the whole of a site's history.
+    -->
+    <field name="provisional_b" type="boolean" indexed="true" stored="true" docValues="true"/>
 
 
     <!-- ==================== SESSION ROLLUP (SPEC §4.2) ==================== -->
@@ -340,7 +363,17 @@
          hits behind it have been deleted by the retention job.
 
          Only aggregate counts live here. Nothing in a rollup document identifies a visitor;
-         that is what makes keeping it forever compatible with a 90-day retention policy. -->
+         that is what makes keeping it forever compatible with a 90-day retention policy.
+
+         SETTLED SESSIONS ONLY. Every count below is computed over `-provisional_b:true`, so a
+         session contributes to the day it started exactly once, when it has ended and its
+         numbers are final. The consequence is deliberate and must be read as part of the
+         contract: TODAY's rollup is incomplete until today's sessions have closed. A rollup
+         that counted open sessions would fold partial hit counts and floored verdicts into a
+         historical total, and would keep doing so on every rebuild — corrupting the one set of
+         numbers in the product that is meant to outlive the sessions behind it. The live
+         picture is what the dashboard reads off the session documents themselves; a rollup is
+         the settled one. -->
 
     <!-- YYYY-MM-DD, UTC. Also encoded in the id, so a re-run overwrites. -->
     <field name="day_s" type="string" indexed="true" stored="true" docValues="true"/>
