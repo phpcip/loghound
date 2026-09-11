@@ -962,37 +962,10 @@ export function initTheme() {
  * ---------------------------------------------------------------------- */
 
 /**
- * Wire every [data-copy] button to copy the text of the element it names.
+ * The copy-to-clipboard control.
  *
- * Used by the beacon snippets. Falls back to a selection-based copy when the async
- * clipboard API is unavailable (it requires a secure context, and plenty of these
- * installs are plain HTTP on a private network).
+ * Re-exported rather than implemented here: the installer bundle needs the identical
+ * behaviour and does not load this module, so the implementation lives in copy.js and both
+ * front ends import it from there. Panel code keeps importing it from core.js.
  */
-export function initCopyButtons() {
-    for (const button of document.querySelectorAll('[data-copy]')) {
-        button.addEventListener('click', async () => {
-            const source = byId(button.dataset.copy);
-            if (!source) {
-                return;
-            }
-            const text = source.textContent || '';
-            const done = (ok) => {
-                const original = button.dataset.label || button.textContent;
-                button.dataset.label = original;
-                button.textContent = ok ? 'Copied' : 'Press Ctrl+C';
-                window.setTimeout(() => { button.textContent = original; }, 1600);
-            };
-            try {
-                await navigator.clipboard.writeText(text);
-                done(true);
-            } catch (e) {
-                const range = document.createRange();
-                range.selectNodeContents(source);
-                const sel = window.getSelection();
-                sel.removeAllRanges();
-                sel.addRange(range);
-                done(false);
-            }
-        });
-    }
-}
+export { initCopyButtons } from './copy.js';

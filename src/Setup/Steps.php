@@ -374,40 +374,175 @@ final class Steps
     }
 
     /**
+     * Where `bin/loghound-tail` leaves the status document it writes about itself.
+     *
+     * The daemon rewrites this at most once a second for as long as it is alive, whether or
+     * not any log line arrived, so its modification is a record of the tailer running rather
+     * than of the site being busy. `--status` reads this exact file and nothing else, and so
+     * does ingestStatus(): one artefact, one answer, whoever is asking.
+     */
+    public const TAIL_STATUS_FILE = 'var/tail-status.json';
+
+    /**
+     * How old the tailer's own status document may be before it stops counting as evidence.
+     *
+     * Ten seconds, the same number `bin/loghound-tail --status` uses to decide it is looking
+     * at a dead daemon's leftovers. Both places have to agree, because an operator who runs
+     * the command after reading this panel must not be told two different things.
+     */
+    public const TAIL_STALE_AFTER = 10;
+
+    /**
      * What to do once the configuration is written.
      *
-     * Shared so the shell wizard and the browser installer print the same instructions;
-     * if these ever drift, one of the two is lying to somebody.
+     * Shared so the shell wizard, the browser installer and the panel print the same
+     * instructions; if these ever drift, one of the three is lying to somebody.
      *
-     * @return array<int,array{title:string,lines:string[]}>
+     * The unit line is ONE command. `systemctl enable --now` takes a list, so the service
+     * and both timers are enabled and started together, and the title says what `enable`
+     * buys — the units come back on their own after a reboot. Nothing here CHECKS that, and
+     * nothing in this product can: there is no process execution anywhere in `src/`, `bin/`
+     * or `public/`, which is a published property of Loghound and worth more than a badge.
+     *
+     * `lines` is a list of single, directly pasteable lines — one line in, one line out, so
+     * a copy button hands the operator something a shell will accept unedited.
+     *
+     * A group whose command cannot honestly be built carries an empty `lines` and a
+     * populated `problem` naming what to fix. That is the beacon's case when `base_url` is
+     * unset or unusable: a snippet pointing at a guessed host is pasted into a template,
+     * collects nothing, and reads as the product being broken.
+     *
+     * @return array<int,array{key:string,title:string,lines:string[],problem:string}>
      */
     public static function nextSteps(Config $cfg, string $root): array
     {
-        $base = rtrim((string) $cfg->get('base_url', ''), '/');
-        if ($base === '') {
-            $base = 'https://loghound.example.com';
-        }
+        [$snippet, $problem] = self::beaconSnippet($cfg);
 
         return [
             [
-                'title' => 'Start reading the logs',
-                'lines' => [
-                    'sudo systemctl enable --now loghound-tail.service',
-                    'sudo systemctl enable --now loghound-score.timer loghound-retention.timer',
+                'key'     => 'ingest',
+                'title'   => 'Start reading the logs, now and after every reboot',
+                'lines'   => [
+                    'sudo systemctl enable --now loghound-tail.service '
+                        . 'loghound-score.timer loghound-retention.timer',
                 ],
+                'problem' => '',
             ],
             [
-                'title' => 'Check it is keeping up',
-                'lines' => [
-                    $root . '/bin/loghound-tail --status --human',
+                'key'     => 'status',
+                'title'   => 'Check it is keeping up',
+                'lines'   => [
+                    rtrim($root, '/') . '/bin/loghound-tail --status --human',
                 ],
+                'problem' => '',
             ],
             [
-                'title' => 'Add the beacon to your site',
-                'lines' => [
-                    '<script src="' . $base . '/b.js?v=1" defer></script>',
-                ],
+                'key'     => 'beacon',
+                'title'   => 'Add the beacon to your site',
+                'lines'   => $snippet === '' ? [] : [$snippet],
+                'problem' => $problem,
             ],
+        ];
+    }
+
+    /**
+     * The one-line beacon tag, or the reason there is not one to give.
+     *
+     * The snippet is worthless unless the URL in it is the URL visitors' browsers can
+     * actually reach, and the only value that can be is `base_url` — the request's own Host
+     * header is whatever the person looking at the panel happened to type, and is routinely
+     * an internal name or an IP address. So there is no fallback host here and no example
+     * domain: either the operator has configured the address, or this says so.
+     *
+     * "Unusable" is judged by the same two checks applyBaseUrl() refuses a value with, so a
+     * config file edited by hand is held to the standard the form enforces.
+     *
+     * @return array{0:string,1:string} [snippet, problem] — exactly one is ever non-empty.
+     */
+    public static function beaconSnippet(Config $cfg): array
+    {
+        $base = rtrim(trim((string) $cfg->get('base_url', '')), '/');
+
+        if ($base === '') {
+            return ['', 'The public address of this panel is not set, so there is no snippet to copy. '
+                . 'Set base_url in config/loghound.php to the URL your visitors would reach this '
+                . 'installation at, then come back.'];
+        }
+        if (Security::urlHasUserinfo($base)) {
+            return ['', 'The configured address of this panel contains a username or password, which would '
+                . 'be published in the HTML of every page you measure. Set base_url to https://host/path '
+                . 'only.'];
+        }
+        if (Security::safeUrl($base) === '#') {
+            return ['', 'The configured address of this panel is not a plain http:// or https:// URL, so no '
+                . 'snippet can be built from it. Correct base_url in config/loghound.php.'];
+        }
+
+        return ['<script src="' . $base . '/b.js?v=1" defer></script>', ''];
+    }
+
+    /**
+     * Is anything actually reading the logs, judged from the tailer's own record?
+     *
+     * THIS IS EVIDENCE, NOT INFERENCE. It does not ask systemd, it does not run a process
+     * and it does not open a socket — Loghound contains no exec, shell_exec, proc_open or
+     * SSH by design, and a liveness badge is not worth giving that up. What it does is read
+     * the document the daemon writes about itself every second and look at how old it is,
+     * which answers "is ingestion working" better than a unit file's state would anyway: an
+     * active unit whose tailer is wedged still reports active.
+     *
+     * The four states are deliberately distinct. 'absent' means the daemon has never run
+     * here, which is the case this whole section exists for. 'stale' means it ran and has
+     * stopped, which is a different sentence and a different worry. 'unreadable' means the
+     * file is there but is not a status document — a permissions problem or a half-migrated
+     * install — and is never quietly folded into either of the others.
+     *
+     * Boot persistence is NOT reported. Nothing here can see it.
+     *
+     * @param string $root Installation root; the status file is found under it.
+     * @return array{state:string,file:string,age_sec:?int,generated_at:?string,lag_bytes:?int,lines:?int,indexed:?int,sources:?int}
+     */
+    public static function ingestStatus(string $root): array
+    {
+        $file = rtrim($root, '/') . '/' . self::TAIL_STATUS_FILE;
+        $blank = [
+            'state'        => 'absent',
+            'file'         => $file,
+            'age_sec'      => null,
+            'generated_at' => null,
+            'lag_bytes'    => null,
+            'lines'        => null,
+            'indexed'      => null,
+            'sources'      => null,
+        ];
+
+        if (!is_file($file) || !is_readable($file)) {
+            return $blank;
+        }
+
+        $raw = @file_get_contents($file);
+        $doc = is_string($raw) ? json_decode($raw, true) : null;
+        if (!is_array($doc) || !is_string($doc['generated_at'] ?? null)) {
+            return ['state' => 'unreadable'] + $blank;
+        }
+
+        $written = strtotime($doc['generated_at']);
+        if ($written === false) {
+            return ['state' => 'unreadable'] + $blank;
+        }
+
+        $age = max(0, time() - $written);
+        $totals = is_array($doc['totals'] ?? null) ? $doc['totals'] : [];
+
+        return [
+            'state'        => $age > self::TAIL_STALE_AFTER ? 'stale' : 'live',
+            'file'         => $file,
+            'age_sec'      => $age,
+            'generated_at' => $doc['generated_at'],
+            'lag_bytes'    => is_int($doc['lag_bytes'] ?? null) ? $doc['lag_bytes'] : null,
+            'lines'        => is_int($totals['lines'] ?? null) ? $totals['lines'] : null,
+            'indexed'      => is_int($totals['docs_indexed'] ?? null) ? $totals['docs_indexed'] : null,
+            'sources'      => is_array($doc['sources'] ?? null) ? count($doc['sources']) : null,
         ];
     }
 

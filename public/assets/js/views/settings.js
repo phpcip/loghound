@@ -149,6 +149,45 @@ async function loadBeaconStatus() {
             'No session in the last 30 days has carried beacon data. If you have just added the snippet, load a ' +
             'page on your site and refresh this view.'
         )]));
+
+    paintFinishBeacon(status, live, everSeen);
+}
+
+/**
+ * Report the same beacon fact in the "Finish setting up" card at the top of the page.
+ *
+ * ONE FETCH, TWO PLACES. The card exists so that an operator who never saw the installer's
+ * last screen can still find out that the beacon was never added, and asking the sessions
+ * core a second time for an answer already in hand would be a second Solr query for nothing.
+ *
+ * Never having seen the beacon opens the commands block, because that is the case the card
+ * was built for. It is only ever opened, never closed: an operator who expanded it to read
+ * something must not have it collapse underneath them when this request lands.
+ */
+function paintFinishBeacon(status, live, everSeen) {
+    const box = byId('finish-beacon');
+    const label = byId('finish-beacon-label');
+    const detail = byId('finish-beacon-detail');
+    if (!box || !label || !detail) {
+        return;
+    }
+
+    box.className = 'finish-state ' + (everSeen ? 'finish-ok' : 'finish-bad');
+    label.textContent = everSeen
+        ? (live ? 'Beacon: receiving data' : 'Beacon: seen, but not in the last hour')
+        : 'Beacon: never seen';
+
+    detail.replaceChildren(...(everSeen
+        ? beaconDetail(status)
+        : [document.createTextNode(
+            'No session in the last 30 days has carried beacon data, so the snippet below has either not been ' +
+            'added or is not loading. The beacon is optional, and Loghound keeps working without it.'
+        )]));
+
+    const all = byId('finish-all');
+    if (all && !everSeen) {
+        all.open = true;
+    }
 }
 
 /**

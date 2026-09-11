@@ -306,6 +306,10 @@ $n = 0;
 foreach (Steps::nextSteps($cfg, $ROOT) as $group) {
     $n++;
     $UI->info($n . '. ' . $group['title'] . ':');
+    if ((string) $group['problem'] !== '') {
+        $UI->raw(wordwrap('     ' . $group['problem'], 76, "\n     "));
+        continue;
+    }
     foreach ($group['lines'] as $line) {
         $UI->raw('     ' . $line);
     }

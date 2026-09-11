@@ -887,15 +887,18 @@ afterwards.
 ```bash
 sudo cp install/loghound-*.service install/loghound-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now loghound-score.timer loghound-retention.timer
 ```
 
 **7. Configure and start**
 
 ```bash
 sudo -u loghound php /opt/loghound/bin/loghound-setup
-sudo systemctl enable --now loghound-tail.service
+sudo systemctl enable --now loghound-tail.service loghound-score.timer loghound-retention.timer
 loghound-tail --status --human
 ```
+
+One command enables and starts all three units and brings them back after a reboot. The
+panel repeats it under **Settings → Finish setting up**, with whether ingestion is actually
+running, read from the same status document `--status` reads.
 
 **8. Beacon** — add the one-line snippet to your site.

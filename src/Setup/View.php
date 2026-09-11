@@ -871,25 +871,55 @@ final class View
             . 'again.</p>';
     }
 
-    /** The commands to run on the server once setup is done. */
+    /**
+     * The commands to run on the server once setup is done.
+     *
+     * The same Steps::nextSteps() the panel renders under Settings, so this screen and that
+     * card cannot drift. It no longer claims to be the operator's only chance to read them:
+     * closing this tab used to lose the one thing that makes Loghound collect anything.
+     */
     private function nextStepsCard(): void
     {
         echo '<section class="card">';
         echo '<h2>After you finish</h2>';
-        echo '<p>Loghound reads logs from a small daemon, not from this page. Copy these now — '
-            . 'this screen goes away when setup completes.</p>';
+        echo '<p>Loghound reads logs from a small daemon, not from this page. These commands are kept '
+            . 'under <strong>Settings</strong> in the panel as well, together with whether each one has '
+            . 'actually taken effect, so nothing here is lost when this screen goes away.</p>';
 
         foreach (Steps::nextSteps($this->cfg, $this->root) as $group) {
             echo '<h4>' . Security::esc($group['title']) . '</h4>';
-            echo '<pre class="snippet mono">';
-            foreach ($group['lines'] as $line) {
-                echo Security::esc($line) . "\n";
-            }
-            echo '</pre>';
+            self::commandBlock('finish-cmd-' . (string) $group['key'], $group);
         }
 
         echo '<p class="muted">' . Security::esc(Steps::beaconRationale()) . '</p>';
         echo '</section>';
+    }
+
+    /**
+     * One pasteable command, with the copy control the panel uses for the same thing.
+     *
+     * The button is a real element with a `data-copy` attribute and no handler on it: the
+     * CSP is `script-src 'self'`, so the listener is attached by
+     * public/assets/js/copy.js, which the panel imports as well. A group that has a
+     * `problem` instead of a command renders the sentence and NO button — a copy control
+     * over an empty block would hand the operator an empty clipboard.
+     *
+     * @param array{key:string,title:string,lines:string[],problem:string} $group
+     */
+    private static function commandBlock(string $id, array $group): void
+    {
+        if ((string) $group['problem'] !== '') {
+            echo '<div class="banner banner-warn">' . Security::esc((string) $group['problem']) . '</div>';
+            return;
+        }
+
+        echo '<div class="snippet-block">';
+        echo '<pre class="snippet mono" id="' . Security::esc($id) . '">';
+        echo Security::esc(implode("\n", $group['lines']));
+        echo '</pre>';
+        echo '<button type="button" class="copy-btn" data-copy="' . Security::esc($id) . '"'
+            . ' aria-live="polite">Copy</button>';
+        echo '</div>';
     }
 
     /**

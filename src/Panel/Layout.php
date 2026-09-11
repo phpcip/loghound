@@ -26,6 +26,7 @@ namespace Loghound\Panel;
 
 use Loghound\Config;
 use Loghound\Security;
+use Loghound\Setup\Steps;
 
 final class Layout
 {
@@ -156,6 +157,13 @@ final class Layout
      *
      * The two checks that remain are free: demo mode is a config flag, and
      * Config::validate() touches no network.
+     *
+     * The ingest banner is free on the same terms — Steps::ingestStatus() stats and reads
+     * one small local file that the tailer rewrites every second, and asks nothing of Solr.
+     * It is here rather than only on the Settings page because an operator who clicked
+     * through the installer's last screen has never been told that ingestion needs starting,
+     * and an empty dashboard does not say why it is empty. Suppressed in demo mode, where
+     * the numbers are fabricated and no daemon is meant to be running.
      */
     private static function banners(Gateway $gw, Config $cfg): void
     {
@@ -173,6 +181,22 @@ final class Layout
             . 'Run the connection check under <a href="?v=settings">Settings</a>, or set '
             . '<code>LOGHOUND_DEMO=1</code> to explore the panel with sample data.'
             . '</div>' . "\n";
+
+        if (!$gw->isDemo()) {
+            $ingest = Steps::ingestStatus(dirname(__DIR__, 2));
+            if ($ingest['state'] !== 'live') {
+                echo '<div class="banner banner-warn" role="alert"><strong>'
+                    . ($ingest['state'] === 'absent'
+                        ? 'Nothing is reading your logs.'
+                        : 'The log reader has stopped.')
+                    . '</strong> '
+                    . ($ingest['state'] === 'absent'
+                        ? 'The ingest daemon has never reported in on this machine, so every number in this '
+                            . 'panel will stay empty until it is started.'
+                        : 'The ingest daemon is not reporting any more, so nothing new is arriving.')
+                    . ' <a href="?v=settings#set-finish-card">Finish setting up</a></div>' . "\n";
+            }
+        }
 
         $errors = $cfg->validate();
         if ($errors !== []) {

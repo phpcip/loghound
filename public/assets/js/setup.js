@@ -9,6 +9,8 @@
  *      after another, while polling for progress in between. Nothing here decides what a
  *      step IS — that is entirely server-side.
  *   2. Show the custom-pattern field only when a custom pattern is being chosen.
+ *   3. Wire the copy buttons on the "After you finish" commands, from the same module the
+ *      panel uses, so the control behaves identically on both screens.
  *
  * Constraints:
  *   - The CSP is `script-src 'self'`. No inline handlers, no eval, no new Function, no
@@ -20,6 +22,8 @@
  *
  * @license MIT
  */
+
+import { initCopyButtons } from './copy.js';
 
 /**
  * Read the server's boot payload.
@@ -296,6 +300,7 @@ function init() {
         }
     });
     wireFormatSelect();
+    initCopyButtons();
 }
 
 if (document.readyState === 'loading') {

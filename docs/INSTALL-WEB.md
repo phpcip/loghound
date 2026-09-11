@@ -219,13 +219,18 @@ to enumerate usernames.
 
 You can change the mode later under Settings without setting the password again.
 
-Copy the commands on this screen before you finish — the installer disappears when setup
-completes:
+The same commands are kept in the panel under **Settings → Finish setting up**, together
+with whether each one has actually taken effect, so nothing here is lost when this screen
+goes away:
 
 ```
-sudo systemctl enable --now loghound-tail.service
-sudo systemctl enable --now loghound-score.timer loghound-retention.timer
+sudo systemctl enable --now loghound-tail.service loghound-score.timer loghound-retention.timer
 ```
+
+`enable --now` starts the service and both timers immediately and brings them back after a
+reboot. The panel reports whether they are running — it reads the status document the
+tailer writes about itself — but it cannot see whether they are enabled at boot, because
+Loghound executes no processes.
 
 Finishing takes you to the dashboard, which then asks you to sign in for the first time with
 the username and password you just chose — through your browser's own prompt in `basic`

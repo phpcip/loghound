@@ -56,6 +56,7 @@ final class Settings extends Controller implements JobHost
      */
     private const DETECT_FILE = __DIR__ . '/../../var/detect.json';
 
+
     /**
      * The job kind that re-runs log discovery, registered by this view rather than built in.
      *
@@ -715,7 +716,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-auth',
-            '07',
+            '08',
             'Sign-in',
             'Applies to the next request. Changing this does not change your username or password.'
         );
@@ -832,6 +833,7 @@ final class Settings extends Controller implements JobHost
     public function body(): void
     {
         self::flash();
+        $this->finishSection();
         $this->sourcesSection();
         $this->solrSection();
         $this->beaconSection();
@@ -840,6 +842,182 @@ final class Settings extends Controller implements JobHost
         $this->scoringSection();
         $this->authSection();
         $this->displaySection();
+    }
+
+    /**
+     * The installer's "After you finish" screen, kept for the life of the installation.
+     *
+     * THE DEFECT THIS FIXES. Those instructions used to exist once, on the last screen of
+     * the installer, under a line saying to copy them now because the screen was about to
+     * disappear. An operator who clicked through — or whose tab was closed under them —
+     * lost the two things that make Loghound collect anything, and nothing in the panel
+     * afterwards said ingestion had never been started or that the beacon was never added.
+     *
+     * It is the FIRST card on this page, above the log sources, because an operator who
+     * has never seen the installer's last screen has to find it without being told where
+     * to look, and because Layout's banner points here from every other view when
+     * ingestion is not running.
+     *
+     * The content is Steps::nextSteps(), the same array the installer renders — there is
+     * one copy of these commands in the product, not two.
+     *
+     * Two health facts are reported, and neither is guessed:
+     *  - Ingestion, from the status document `bin/loghound-tail` writes about itself once a
+     *    second and `--status` reads. Rendered server-side; it is a local file read.
+     *  - The beacon, from beaconStatus(), which asks the sessions core whether any beacon
+     *    data has ever arrived. Fetched after render by settings.js, because a settings
+     *    page must not block on Solr.
+     *
+     * What is NOT reported is whether the units are enabled at boot. `systemctl enable`
+     * does persist across a reboot, and the group title says so, but this panel cannot
+     * verify it: there is no exec, shell_exec, proc_open or SSH anywhere in src/, bin/ or
+     * public/, that is a published property of Loghound, and it is not being traded for a
+     * status badge. The liveness figure above is real evidence; boot persistence is stated
+     * as what the command buys, never as something that has been checked.
+     */
+    private function finishSection(): void
+    {
+        $ingest = Steps::ingestStatus(self::root());
+        $healthy = $ingest['state'] === 'live';
+
+        self::cardOpen(
+            'set-finish',
+            '01',
+            'Finish setting up',
+            'Setup writes the configuration. It does not start the ingest daemon and it cannot add the beacon '
+            . 'to your site; both are done here, once, by hand.'
+        );
+
+        echo '<div class="finish-state ' . ($healthy ? 'finish-ok' : 'finish-bad') . '" id="finish-ingest"'
+            . ' role="status">';
+        echo '<span class="finish-dot" aria-hidden="true"></span>';
+        echo '<div class="finish-text"><strong>' . Security::esc(self::ingestLabel($ingest)) . '</strong>';
+        echo '<span class="muted">' . Security::esc(self::ingestDetail($ingest)) . '</span>';
+        echo '</div></div>';
+
+        echo '<div class="finish-state finish-unknown" id="finish-beacon" role="status">';
+        echo '<span class="finish-dot" aria-hidden="true"></span>';
+        echo '<div class="finish-text"><strong id="finish-beacon-label">Beacon: checking</strong>';
+        echo '<span class="muted" id="finish-beacon-detail">Asking the sessions core whether any beacon data has '
+            . 'ever arrived. The beacon is optional; without it the execution plane is blind.</span>';
+        echo '</div></div>';
+
+        echo '<details class="finish-all" id="finish-all"' . ($healthy ? '' : ' open') . '>';
+        echo '<summary>The commands, and the one line of HTML</summary>';
+
+        foreach (Steps::nextSteps($this->cfg, self::root()) as $group) {
+            $key = (string) $group['key'];
+            echo '<div class="finish-group" id="finish-g-' . Security::esc($key) . '">';
+            echo '<h3>' . Security::esc((string) $group['title']) . '</h3>';
+            if ($key === 'ingest') {
+                echo '<p class="muted">One command. <code>enable --now</code> starts the service and both '
+                    . 'timers immediately and brings them back after a reboot; this panel reports whether '
+                    . 'they are running, and cannot see whether they are enabled at boot.</p>';
+            }
+            self::commandBlock('finish-cmd-' . $key, $group);
+            echo '</div>';
+        }
+
+        echo '</details>';
+        echo '<p class="muted">' . Security::esc(Steps::beaconRationale()) . '</p>';
+        self::cardEnd();
+    }
+
+    /**
+     * The installation root, as the setup steps expect to be handed it.
+     *
+     * Steps::nextSteps() builds the `bin/loghound-tail --status` line from it and
+     * Steps::ingestStatus() finds the tailer's status document under it, so the panel and
+     * the installer describe the same checkout. Resolved rather than concatenated, so the
+     * command the operator copies has no `/../..` in the middle of it.
+     */
+    private static function root(): string
+    {
+        $root = dirname(__DIR__, 2);
+        $real = realpath($root);
+        return $real === false ? $root : $real;
+    }
+
+    /**
+     * The headline sentence for whatever the tailer last said about itself.
+     *
+     * @param array<string,mixed> $ingest From Steps::ingestStatus().
+     */
+    private static function ingestLabel(array $ingest): string
+    {
+        return match ((string) $ingest['state']) {
+            'live'  => 'Ingestion: running',
+            'stale' => 'Ingestion: stopped',
+            'unreadable' => 'Ingestion: cannot tell',
+            default => 'Ingestion: never started',
+        };
+    }
+
+    /**
+     * The supporting line: what was measured, and what to do when it is bad.
+     *
+     * Numbers only where there are numbers. SPEC §1 forbids inventing one, so an absent
+     * lag or line count is simply not mentioned rather than printed as zero.
+     *
+     * @param array<string,mixed> $ingest From Steps::ingestStatus().
+     */
+    private static function ingestDetail(array $ingest): string
+    {
+        if ((string) $ingest['state'] === 'unreadable') {
+            return $ingest['file'] . ' exists but is not a status document. Check that the user '
+                . 'bin/loghound-tail runs as can write it.';
+        }
+        if ((string) $ingest['state'] === 'absent') {
+            return 'Nothing has ever written ' . $ingest['file'] . ', so no log line has been read on this '
+                . 'machine. Run the first command below.';
+        }
+
+        $age = (int) $ingest['age_sec'];
+        $parts = ['Last read ' . $age . ' second' . ($age === 1 ? '' : 's') . ' ago'];
+        if ($ingest['sources'] !== null) {
+            $parts[] = (int) $ingest['sources'] . ' log file' . ((int) $ingest['sources'] === 1 ? '' : 's');
+        }
+        if ($ingest['lines'] !== null) {
+            $parts[] = number_format((int) $ingest['lines']) . ' lines read';
+        }
+        if ($ingest['lag_bytes'] !== null) {
+            $parts[] = number_format((int) $ingest['lag_bytes']) . ' bytes behind';
+        }
+
+        $line = implode(' · ', $parts) . '.';
+
+        return (string) $ingest['state'] === 'live'
+            ? $line
+            : $line . ' The daemon stops updating that record within a second of dying, so this one is '
+                . 'leftovers. Start it again with the first command below.';
+    }
+
+    /**
+     * One pasteable command, with its copy control.
+     *
+     * Byte-identical in behaviour to the installer's own block (Setup\View::commandBlock):
+     * both render a `data-copy` button with no handler attribute — the CSP is
+     * `script-src 'self'` — and both are wired by public/assets/js/copy.js, which the
+     * panel bundle and the installer bundle each import. A group carrying a `problem`
+     * instead of a command renders the sentence and no button, because a copy control over
+     * a block with nothing in it hands the operator an empty clipboard.
+     *
+     * @param array{key:string,title:string,lines:string[],problem:string} $group
+     */
+    private static function commandBlock(string $id, array $group): void
+    {
+        if ((string) $group['problem'] !== '') {
+            echo '<div class="banner banner-warn">' . Security::esc((string) $group['problem']) . '</div>';
+            return;
+        }
+
+        echo '<div class="snippet-block">';
+        echo '<pre class="snippet mono" id="' . Security::esc($id) . '">';
+        echo Security::esc(implode("\n", $group['lines']));
+        echo '</pre>';
+        echo '<button type="button" class="copy-btn" data-copy="' . Security::esc($id) . '"'
+            . ' aria-live="polite">Copy</button>';
+        echo '</div>';
     }
 
     /**
@@ -863,7 +1041,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-sources',
-            '01',
+            '02',
             'Log sources',
             'Detected by reading your webserver configuration where possible, and by scoring sample lines against '
             . 'the known-format library where it is not. Nothing is ingested until you confirm the mapping below.'
@@ -1092,7 +1270,7 @@ final class Settings extends Controller implements JobHost
     {
         $mode = (string) $this->cfg->get('solr.mode', Config::SOLR_MODE);
 
-        self::cardOpen('set-solr', '02', 'Solr connection');
+        self::cardOpen('set-solr', '03', 'Solr connection');
 
         if ($mode !== Config::SOLR_MODE) {
             echo '<p class="pop">This configuration is not usable.</p>';
@@ -1147,7 +1325,7 @@ final class Settings extends Controller implements JobHost
     {
         $days = (int) $this->cfg->get('privacy.retention_days', 0);
 
-        self::cardOpen('set-retention', '05', 'Retention preview');
+        self::cardOpen('set-retention', '06', 'Retention preview');
         echo '<p class="pop">' . ($days > 0
             ? Security::esc('Documents older than ' . $days . ' days are eligible for deletion.')
             : 'Retention is disabled, so nothing is ever deleted.') . '</p>';
@@ -1253,7 +1431,7 @@ final class Settings extends Controller implements JobHost
         $src = $base . '/b.js?v=' . $ver;
         $enabled = (bool) $this->cfg->get('beacon.enabled');
 
-        self::cardOpen('set-beacon', '03', 'Beacon / JavaScript tracking');
+        self::cardOpen('set-beacon', '04', 'Beacon / JavaScript tracking');
         echo '<p class="pop">One line of JavaScript, optional. Loghound works without it. This section explains '
             . 'exactly what changes if you add it.</p>';
 
@@ -1451,7 +1629,7 @@ final class Settings extends Controller implements JobHost
         $mode = (string) $this->cfg->get('privacy.ip_mode', 'full');
         $days = (int) $this->cfg->get('privacy.retention_days', 90);
 
-        self::cardOpen('set-privacy', '04', 'Privacy');
+        self::cardOpen('set-privacy', '05', 'Privacy');
 
         echo '<p class="muted">Setup does not ask about these. A new installation keeps the full '
             . 'address and deletes hits after 90 days; this card is where both are changed.</p>';
@@ -1507,7 +1685,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-scoring',
-            '06',
+            '07',
             'Scoring weights',
             'Points added to bot_score_f when a rule fires. Saving bumps rule_version_i, so sessions scored under '
             . 'the old weights stay identifiable. Existing documents are not rescored.'
@@ -1554,7 +1732,7 @@ final class Settings extends Controller implements JobHost
     {
         $tz = (string) $this->cfg->get('ui.timezone', 'UTC');
 
-        self::cardOpen('set-display', '08', 'Display');
+        self::cardOpen('set-display', '09', 'Display');
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="ui">';
