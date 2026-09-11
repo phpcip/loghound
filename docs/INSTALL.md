@@ -391,6 +391,16 @@ The wizard asks nothing about where the index lives: there is one answer. Loghou
 and manages its own two indexes on your Opensolr account, and **an Opensolr account is a hard
 requirement.**
 
+Opensolr is **free forever to start — no credit card, no expiry date**.
+[Create an account](https://opensolr.com/register) ·
+[Sign in](https://opensolr.com/users/login) ·
+[What the plans hold](https://opensolr.com/solr-hosting)
+
+Setup asks for the account email and the API key, which is under **Account** in the Opensolr
+control panel, and does the rest itself. Retention scales with the plan rather than being cut
+off by it — Loghound trims its oldest data before the account reaches its disk limit, so the
+free tier keeps running and simply holds less history.
+
 Pointing Loghound at a Solr you run yourself used to be an option and was removed. Loghound
 does not merely read and write these two indexes, it owns them: it creates them, uploads the
 configsets, reloads the cores and verifies them, and later reports and trims them against your

@@ -344,8 +344,16 @@ beacon is independent of whatever other analytics you run.
 - An [Opensolr](https://opensolr.com) account, and it is a hard requirement. Loghound
   provisions and manages its own two indexes there — it creates them, uploads their
   configsets, reloads the cores and verifies them — and it cannot do that on a Solr it does
-  not administer, so there is no option to point it at one you run yourself. The free tier is
-  enough to start, and retention scales with whatever plan you are on.
+  not administer, so there is no option to point it at one you run yourself.
+
+  **Opensolr is free forever to start — no credit card, no expiry date.**
+  [Create an account](https://opensolr.com/register) · [Sign in](https://opensolr.com/users/login)
+  · [What the plans hold](https://opensolr.com/solr-hosting)
+
+  Retention scales with the plan rather than being cut off by it: Loghound trims its oldest
+  data before the account reaches its disk limit, so it keeps running on the free tier and
+  simply holds less history. More disk buys more history. Setup asks for the account email
+  and the API key from **Account** in the control panel, and provisions both indexes itself.
 - systemd, for the daemon and the two timers.
 - Read access to your access logs. The installer puts the service user in `adm`.
 

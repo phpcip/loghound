@@ -258,7 +258,7 @@ return [
 
     'an unparseable Solr base URL is not echoed back' => static function (): void {
         [$root, $cfg] = lh_guard_scaffold();
-        $cfg->set('solr.base_url', 'https://sneaky:hunter2@');
+        $cfg->set('solr.base_url', 'https://sneaky:changeme@');
         $cfg->set('solr.hits_core', 'loghound_deadbeef_hits');
 
         $transport = static fn(array $req): array => [
@@ -270,7 +270,7 @@ return [
         $probe = Storage::probeCore($cfg, 'loghound_deadbeef_hits', $transport);
         lh_false($probe['ok'], 'an unresolvable host is not a healthy core');
         lh_true(
-            !str_contains($probe['message'], 'hunter2'),
+            !str_contains($probe['message'], 'changeme'),
             'a URL that cannot be parsed must not be printed verbatim: ' . $probe['message']
         );
 

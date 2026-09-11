@@ -21,7 +21,7 @@ You need:
 * PHP 8.1 or newer with `curl`, `json`, `pcre`, `sqlite3` and `mbstring`
 * a webserver whose document root points at `loghound/public`
 * shell access to the machine — the installer asks you to prove it (see [The setup token](#the-setup-token))
-* an Opensolr account — Loghound keeps everything it learns in two indexes it provisions there, and does not run without one
+* an Opensolr account — Loghound keeps everything it learns in two indexes it provisions there, and does not run without one. It is **free forever to start, no credit card, no expiry date**: [create one](https://opensolr.com/register), [sign in](https://opensolr.com/users/login), or [see what the plans hold](https://opensolr.com/solr-hosting). Have the account email and the API key from **Account** in the control panel ready — the installer asks for both.
 
 `install/install.sh` sets all of this up including a dedicated PHP-FPM pool. Run it with
 **`--skip-setup`**: without that flag it hands over to the shell wizard at the end, and a

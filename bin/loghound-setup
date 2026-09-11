@@ -486,6 +486,18 @@ function configureOpensolr(Config $cfg, Ui $UI, string $root): void
         }
     }
 
+    $UI->info('You need an Opensolr account to get started. It is free forever to start,');
+    $UI->info('with no credit card and no expiry date, and retention scales with the plan:');
+    $UI->info('Loghound trims its oldest data before the account reaches its disk limit, so');
+    $UI->info('the free tier keeps running and simply holds less history.');
+    $UI->info('');
+    $UI->info('  Create a free account   https://opensolr.com/register');
+    $UI->info('  Sign in                 https://opensolr.com/users/login');
+    $UI->info('  What the plans hold     https://opensolr.com/solr-hosting');
+    $UI->info('');
+    $UI->info('The API key is under Account in the Opensolr control panel.');
+    $UI->info('');
+
     while (true) {
         $email = trim($UI->ask(
             'Opensolr account email',

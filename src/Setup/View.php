@@ -34,6 +34,23 @@ use Loghound\Security;
 
 final class View
 {
+    /**
+     * Where an operator without an account goes next.
+     *
+     * The storage step is the first point at which Loghound asks for something the operator
+     * may not have yet, and "an Opensolr account is required" with no way to get one is a
+     * dead end in the middle of an installation. Constants rather than inline literals so
+     * the three places that offer them — this step, the shell wizard and the docs — cannot
+     * drift apart.
+     */
+    private const URL_REGISTER = 'https://opensolr.com/register';
+
+    /** Sign-in, for an operator who already has an account and needs the API key. */
+    private const URL_LOGIN = 'https://opensolr.com/users/login';
+
+    /** What each plan holds, since retention is sized to it. */
+    private const URL_PLANS = 'https://opensolr.com/solr-hosting';
+
     private Config $cfg;
 
     private string $root;
@@ -706,6 +723,17 @@ final class View
             . 'own two indexes — creating them, uploading their configsets and reloading them — and '
             . 'it cannot do that on a Solr it does not administer, so there is no option to point it '
             . 'at one.</p>';
+
+        echo '<p class="muted"><strong>You need an Opensolr account to get started, and it is free '
+            . 'forever to start — no credit card, no expiry date.</strong> Retention scales with the '
+            . 'plan rather than being cut off by it: Loghound trims its oldest data before the account '
+            . 'reaches its disk limit, so the free tier keeps running and simply holds less history.</p>';
+
+        echo '<p class="muted">'
+            . '<a href="' . Security::safeUrl(self::URL_REGISTER) . '" target="_blank" rel="noopener noreferrer">Create a free account</a> &middot; '
+            . '<a href="' . Security::safeUrl(self::URL_LOGIN) . '" target="_blank" rel="noopener noreferrer">Sign in</a> &middot; '
+            . '<a href="' . Security::safeUrl(self::URL_PLANS) . '" target="_blank" rel="noopener noreferrer">What the plans hold</a>'
+            . '</p>';
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
         $this->csrf(Installer::STEP_STORAGE, 'credentials');
