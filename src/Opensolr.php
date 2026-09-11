@@ -100,6 +100,40 @@ final class Opensolr
     }
 
     /**
+     * List the indexes this account owns.
+     *
+     * Endpoint: GET /get_index_list, which answers with a bare JSON array of
+     * {"index_name": ..., "index_type": ...} objects — so decode() hands it back under the
+     * synthetic `_list` key, exactly as /regions does.
+     *
+     * The index analytics views use this so the account's indexes are DISCOVERED rather
+     * than typed: an index name in a config file goes stale the moment one is renamed, and
+     * a typed name is indistinguishable from an index the account does not own. The
+     * platform also filters this list by the API key's own scope, so a restricted key sees
+     * only what it is allowed to see and Loghound inherits that for free.
+     *
+     * Names that do not match the platform's own [A-Za-z0-9_] index-name rule are dropped
+     * rather than returned: the value goes on to become a `core_name` parameter and a
+     * select option, and one that could not have been created by the platform did not come
+     * from the platform.
+     *
+     * @return string[] Index names, in the order the platform returned them.
+     */
+    public function listIndexes(): array
+    {
+        $res = $this->call('get_index_list', [], 'GET');
+
+        $out = [];
+        foreach ((array) ($res['_list'] ?? []) as $entry) {
+            $name = is_array($entry) ? ($entry['index_name'] ?? null) : $entry;
+            if (is_string($name) && Security::isSafeCoreName($name)) {
+                $out[] = $name;
+            }
+        }
+        return $out;
+    }
+
+    /**
      * Create a managed index.
      *
      * Endpoint: GET /create_index?index_name=&region=&email=&api_key=
@@ -329,6 +363,95 @@ final class Opensolr
     }
 
     /**
+     * Plan usage for a managed index: disk used, disk allowed, bandwidth used, bandwidth allowed.
+     *
+     * Endpoint: GET /get_core_info?core_name=, reading `msg.core_data` rather than `msg.info`.
+     *
+     * THE FIELD NAMES ARE THE PLATFORM'S, MISSPELLINGS INCLUDED — `core_badnwidth_mb` and
+     * `max_badnwdith_mb` are spelled exactly like that on the wire, and they are matched here
+     * exactly and normalised on the way out, so nothing else in Loghound has to know. Do not
+     * "fix" them: they are a contract with a live API, not a typo in this repository.
+     *
+     * WHY THIS IS EXPENSIVE, and why callers must cache it. The platform derives
+     * `core_size_mb` by asking the Solr node for its live index status, so this is not a
+     * cheap database read — it is a round trip to the control plane which is itself a round
+     * trip to the index. \Loghound\Quota is the only caller and caches on both a clock and a
+     * document count for that reason.
+     *
+     * Failure is a STATE, not an exception, for the same reason it is in OpensolrLog: "the
+     * account does not own that index", "the control plane is unreachable" and "the platform
+     * refused" are three different things an operator has to be told apart, and none of them
+     * is a programming error. The platform answers a non-owner with HTTP 200 and
+     * `{"status":false,"msg":"NOT_OWNER_ERROR"}`, which is a normal outcome for a stale
+     * config or a scoped API key.
+     *
+     * `account` carries the platform's own account-wide totals from `msg.all_cores`, which
+     * are already scoped to what this API key may see. They are informational: the limits
+     * that actually block an index are the per-index ones above them.
+     *
+     * @return array{state:string,message:string,size_mb:float,max_size_mb:float,
+     *               bw_mb:float,max_bw_mb:float,account:array<string,float>}
+     */
+    public function coreUsage(string $indexName): array
+    {
+        if (!Security::isSafeCoreName($indexName)) {
+            throw new \InvalidArgumentException('Opensolr: invalid index name: ' . $indexName);
+        }
+
+        $fail = static function (string $state, string $message): array {
+            return [
+                'state'       => $state,
+                'message'     => $message,
+                'size_mb'     => 0.0,
+                'max_size_mb' => 0.0,
+                'bw_mb'       => 0.0,
+                'max_bw_mb'   => 0.0,
+                'account'     => [],
+            ];
+        };
+
+        try {
+            $res = $this->call('get_core_info', ['core_name' => $indexName], 'GET');
+        } catch (\Throwable $e) {
+            return $fail('unreachable', $this->redact($e->getMessage()));
+        }
+
+        if (empty($res['status'])) {
+            $msg = self::stringifyMsg($res['msg'] ?? '');
+            if (stripos($msg, 'NOT_OWNER') !== false || stripos($msg, 'INVALID_CORE_NAME') !== false) {
+                return $fail(
+                    'not_owner',
+                    'This Opensolr account does not own that index, so the platform will not report its '
+                    . 'plan usage. Check solr.hits_core / solr.sessions_core and the credentials in '
+                    . 'config/loghound.php.'
+                );
+            }
+            return $fail('refused', 'Opensolr refused the request for this index.');
+        }
+
+        $data = (array) ($res['msg']['core_data'] ?? []);
+        if ($data === []) {
+            return $fail('refused', 'Opensolr answered without any plan usage for this index.');
+        }
+
+        $all = (array) ($res['msg']['all_cores'] ?? []);
+
+        return [
+            'state'       => 'ok',
+            'message'     => '',
+            'size_mb'     => (float) ($data['core_size_mb'] ?? 0),
+            'max_size_mb' => (float) ($data['max_core_size_mb'] ?? 0),
+            'bw_mb'       => (float) ($data['core_badnwidth_mb'] ?? 0),
+            'max_bw_mb'   => (float) ($data['max_badnwdith_mb'] ?? 0),
+            'account'     => [
+                'indexes'      => (float) ($all['total_number_of_cores'] ?? 0),
+                'disk_mb'      => (float) ($all['total_cores_disk_mb'] ?? 0),
+                'bandwidth_mb' => (float) ($all['total_cores_bandwidth_mb'] ?? 0),
+            ],
+        ];
+    }
+
+    /**
      * Push a configset (managed-schema.xml + solrconfig.xml) to a managed index.
      *
      * Endpoint: POST /upload_config_file, multipart/form-data, file field `userfile`,
@@ -537,7 +660,43 @@ final class Opensolr
             );
         }
 
-        return (array) $decoded;
+        $decoded = (array) $decoded;
+        if (isset($decoded['msg'])) {
+            $decoded['msg'] = $this->redactDeep($decoded['msg']);
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * Redact every string inside a decoded `msg`, whatever shape it has.
+     *
+     * The platform reports failure two ways: an HTTP error status, and HTTP 200 carrying
+     * `{"status":false,"msg":…}`. Only the first was redacted, so the second walked the key
+     * out of this class intact — and a caller then wrote it into a setup job note, which is
+     * a 0600 file under var/setup/ AND the JSON the job endpoint returns to a browser that
+     * is not yet authenticated, because the installer runs before an account exists.
+     *
+     * `msg` is a string in most responses and a structure in some (`core_data` among them),
+     * so this walks rather than flattens: stringifying would redact correctly and destroy
+     * every caller that reads a field out of it.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private function redactDeep($value)
+    {
+        if (is_string($value)) {
+            return $this->redact($value);
+        }
+        if (is_array($value)) {
+            $out = [];
+            foreach ($value as $k => $v) {
+                $out[$k] = $this->redactDeep($v);
+            }
+            return $out;
+        }
+        return $value;
     }
 
     /**

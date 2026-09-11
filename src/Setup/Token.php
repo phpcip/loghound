@@ -32,6 +32,22 @@
  * missing ext-sqlite3 is one of the things the status page has to be able to REPORT, so
  * the screen that reports it cannot itself depend on SQLite being present.
  *
+ * THE LIMIT IS PER ADDRESS, AND ONLY PER ADDRESS. There used to be a second, global budget
+ * of 40 attempts per window on top of it. It bought nothing and cost availability: the
+ * token is 128 bits of random, so an attacker who somehow controls forty thousand addresses
+ * is no closer to guessing it than one who controls eight — but any unauthenticated
+ * passer-by could spend the global budget in a couple of seconds and lock the real operator
+ * out of their own installer for a quarter of an hour, over and over, while the machine sat
+ * there with an unfinished config. A rate limiter that a stranger can aim at the operator
+ * is a denial-of-service tool wearing a security hat, so it is gone; the per-address budget
+ * is what actually bounds guessing, and the window is long enough to make sustained
+ * guessing from one address pointless.
+ *
+ * That leaves address rotation resetting an attacker's own counter, which is the correct
+ * trade: the alternative punishes the operator for the attacker's traffic, and the thing
+ * standing between the installer and the internet is the entropy of the token, not this
+ * ledger. Anything that cannot be measured — an unwritable var/ — still DENIES.
+ *
  * @package Loghound
  * @license MIT
  */
@@ -53,11 +69,8 @@ final class Token
     /** Attempts allowed per window, per client address. */
     private const MAX_PER_IP = 8;
 
-    /** Attempts allowed per window in total, so rotating addresses does not help. */
-    private const MAX_TOTAL = 40;
-
-    /** Window length in seconds. */
-    private const WINDOW = 900;
+    /** Window length in seconds. An hour: long enough that guessing is hopeless. */
+    private const WINDOW = 3600;
 
     private string $varDir;
 
@@ -114,12 +127,19 @@ final class Token
      * BEFORE the comparison so a flood of wrong guesses cannot be distinguished from a
      * flood of right ones by timing the response.
      *
+     * The refusal names the file the counter actually lives in. It used to say "restart
+     * PHP-FPM to clear the counter", which does nothing whatsoever — the ledger is on disk,
+     * not in a worker's memory — so an operator who locked themselves out followed the
+     * instruction, watched it not work, and had no idea what to do next. A remedy that does
+     * not work is worse than no remedy at all.
+     *
      * @return string '' on success, otherwise a human-readable refusal.
      */
     public function verify(string $given, string $clientIp): string
     {
         if (!$this->allow($clientIp)) {
-            return 'Too many attempts. Wait 15 minutes, or restart PHP-FPM to clear the counter.';
+            return 'Too many attempts from this address. Wait an hour, or clear the counter with: '
+                . 'sudo rm ' . $this->varDir . '/' . self::ATTEMPTS;
         }
         if (!$this->exists()) {
             return 'No setup token has been created yet. Reload this page.';
@@ -153,10 +173,21 @@ final class Token
     }
 
     /**
-     * Consume one attempt, returning false when the budget is exhausted.
+     * Consume one attempt for this address, returning false when its budget is exhausted.
      *
      * Fixed window rather than a token bucket: the numbers here are small and human-scaled
-     * ("eight tries in a quarter of an hour"), and a fixed window is trivially auditable.
+     * ("eight tries in an hour"), and a fixed window is trivially auditable.
+     *
+     * Only the calling address is ever consulted, so no amount of traffic from anywhere else
+     * can refuse the operator — see the class docblock for why the global budget that used
+     * to sit here was removed. The map of addresses is pruned when it grows, which can drop
+     * an attacker's own row and hand them a fresh eight; that is deliberate, and preferable
+     * to an unbounded file that a stranger can grow at will.
+     *
+     * A ledger that cannot be parsed — truncated by a crash mid-write, or simply not the
+     * shape this method wrote — is treated exactly like an expired window and started over,
+     * rather than being indexed into and turning a corrupt file into a fatal error on the
+     * one screen that has to keep rendering when things are broken.
      */
     private function allow(string $clientIp): bool
     {
@@ -176,18 +207,19 @@ final class Token
 
         $raw = (string) stream_get_contents($fh);
         $data = json_decode($raw, true);
-        if (!is_array($data) || (int) ($data['window'] ?? 0) + self::WINDOW < $now) {
-            $data = ['window' => $now, 'total' => 0, 'ips' => []];
+        if (!is_array($data)
+            || !is_array($data['ips'] ?? null)
+            || (int) ($data['window'] ?? 0) + self::WINDOW < $now
+        ) {
+            $data = ['window' => $now, 'ips' => []];
         }
 
         $key = $clientIp === '' ? 'unknown' : hash('sha256', $clientIp);
         $perIp = (int) ($data['ips'][$key] ?? 0);
-        $total = (int) ($data['total'] ?? 0);
 
-        $allowed = $perIp < self::MAX_PER_IP && $total < self::MAX_TOTAL;
+        $allowed = $perIp < self::MAX_PER_IP;
 
         $data['ips'][$key] = $perIp + 1;
-        $data['total'] = $total + 1;
         if (count($data['ips']) > 500) {
             $data['ips'] = array_slice($data['ips'], -200, null, true);
         }

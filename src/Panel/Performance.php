@@ -87,6 +87,22 @@ final class Performance extends Controller
     }
 
     /**
+     * Every response from this view names the sidebar filters it could not honour.
+     *
+     * Overridden rather than added at each of the four action methods, because "one action
+     * forgot to mention it" is exactly the failure this exists to prevent. The view queries
+     * the hits core, which does not carry the scorer's session-level conclusions, so a
+     * verdict or signal chip is real on every other view and inert here.
+     *
+     * @param array<string,mixed> $extra
+     * @return array<string,mixed>
+     */
+    protected function envelope(array $extra = []): array
+    {
+        return parent::envelope($extra + ['filters_ignored' => $this->ignoredHitFilters()]);
+    }
+
+    /**
      * Wrap a facet body in the population scope, keeping one probe outside it.
      *
      * SPEC §4.1 does not define `bot_verdict_s` on the hits core — the verdict lives on

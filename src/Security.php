@@ -28,6 +28,25 @@ final class Security
     public const MAX_START = 100000;
 
     /**
+     * The failed-sign-in ledger, inside var/ next to the setup token's own ledger.
+     *
+     * A file rather than SQLite, for the same reason Setup\Token uses one: the login path
+     * has to keep working on an installation whose ext-sqlite3 is missing or whose state
+     * database is being rebuilt, and an authentication control that depends on a component
+     * the panel is meant to REPORT on is a control that disappears exactly when it matters.
+     */
+    public const LOGIN_LEDGER = 'login-attempts.json';
+
+    /** Session key holding the signed-in operator's username. */
+    private const S_USER = 'lh_user';
+
+    /** Session key holding the instant the session was signed in (absolute timeout anchor). */
+    private const S_LOGIN_AT = 'lh_login_at';
+
+    /** Session key holding the instant of the last authenticated request (idle anchor). */
+    private const S_SEEN_AT = 'lh_seen_at';
+
+    /**
      * Escape for HTML text/attribute context.
      *
      * Used for every log-derived value that reaches the page: paths, User-Agents,
@@ -55,6 +74,31 @@ final class Security
     }
 
     /**
+     * Does this URL carry credentials in its authority — `scheme://user:pass@host/…`?
+     *
+     * Two independent tests, because one of them is the belt and the other the braces.
+     * parse_url() is what an HTTP client will itself see, so its verdict is authoritative
+     * for what would actually be sent. The raw-authority test then catches anything
+     * parse_url decides not to split out: everything between `://` and the first `/`, `?`
+     * or `#` is the authority by definition, and an `@` in there is userinfo whatever else
+     * it may look like.
+     *
+     * Used by safeUrl() to refuse rendering such a URL, and by the setup steps to refuse
+     * STORING one, where a specific message can be given instead of a bare refusal.
+     */
+    public static function urlHasUserinfo(string $url): bool
+    {
+        $parts = parse_url($url);
+        if (is_array($parts) && (isset($parts['user']) || isset($parts['pass']))) {
+            return true;
+        }
+        if (!preg_match('~^[A-Za-z][A-Za-z0-9+.\-]*://([^/?#]*)~', $url, $m)) {
+            return false;
+        }
+        return str_contains($m[1], '@');
+    }
+
+    /**
      * Validate a URL for use in an href/src attribute.
      *
      * Referer values come straight from the wire and routinely contain javascript:,
@@ -62,6 +106,14 @@ final class Security
      * rather than being rendered as a live link. Control characters and whitespace are
      * refused along with them, because either can split a header or break out of an
      * attribute.
+     *
+     * A URL carrying userinfo is refused as well, and that matters in both directions.
+     * Rendering `https://user:pass@host/` as a live link publishes somebody's credentials
+     * to whoever reads the panel and hands them to the target host the moment it is
+     * clicked, and an embedded-credential link is the oldest shape of a spoofed hostname
+     * there is. On the way IN it is the same refusal that stops `solr.base_url` from being
+     * a password stored in config/loghound.php and repeated into every request URL — the
+     * setup steps call urlHasUserinfo() first so they can say WHY rather than only "no".
      */
     public static function safeUrl(?string $url): string
     {
@@ -74,6 +126,9 @@ final class Security
             return '#';
         }
         if (preg_match('/[\x00-\x20\x7F"\'<>]/', $url)) {
+            return '#';
+        }
+        if (self::urlHasUserinfo($url)) {
             return '#';
         }
         return $url;
@@ -162,6 +217,23 @@ final class Security
     }
 
     /**
+     * Throw the current CSRF token away and mint a new one.
+     *
+     * Called at sign-in. The token that was valid for the anonymous pre-login session is
+     * not a privilege in itself, but it was known to whoever could observe that session,
+     * and an authenticated session should share nothing with the unauthenticated one it
+     * grew out of.
+     */
+    public static function rotateCsrf(): string
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
+        }
+        $_SESSION['lh_csrf'] = bin2hex(random_bytes(32));
+        return $_SESSION['lh_csrf'];
+    }
+
+    /**
      * Enforce a CSRF token on a state-changing request.
      *
      * Fails closed: any request that is not a GET/HEAD must present a matching token or
@@ -246,18 +318,31 @@ final class Security
     }
 
     /**
-     * Test a user-supplied regex for safety and usability before it is ever stored.
+     * A USABILITY check on an operator-supplied log pattern. NOT a safety proof.
      *
-     * A custom log pattern is untrusted code. Two failure modes matter: a pattern that
-     * does not compile (caught by the @preg_match probe) and a pattern that backtracks
-     * catastrophically, which would wedge the ingest daemon permanently. The probe runs
-     * the pattern against a subject engineered to expose nested quantifier blowup, under a
-     * low backtrack limit, and measures elapsed time; anything slow or failing is refused
-     * at save time, which is the only moment a human is present to fix it.
+     * What it actually establishes, and all it establishes:
+     *   - the pattern is a delimited regex with a modifier block we recognise;
+     *   - it is not absurdly long;
+     *   - it COMPILES, which is the mistake an operator makes most often;
+     *   - it is fast enough on ONE ordinary log-shaped line of about 900 bytes.
      *
-     * The shape of the pattern is checked before any of that. The /e modifier is long
-     * gone from PHP, but a modifier block we do not explicitly expect is refused anyway
-     * rather than passed to PCRE to see what happens.
+     * IT DOES NOT PROVE THE PATTERN IS SAFE, and it must never be described as if it did.
+     * The probe runs the candidate against a single fixed subject of plausible log-shaped
+     * text. Every real log pattern is anchored — `/^(?<remote_addr>\S+) .../` — and an
+     * anchored pattern fails against that subject in a handful of steps whatever its
+     * internal shape, so the timing tells you nothing about the pathological case. `/^(a+)+$/`
+     * is accepted here, and so is any pattern built the same way: the subject that makes it
+     * blow up is not this one, it is whichever line an attacker chooses to send to the
+     * origin server.
+     *
+     * CATASTROPHIC BACKTRACKING IS CONTAINED AT MATCH TIME, NOT HERE. LogFormat::parse()
+     * sets its own pcre.backtrack_limit around every single match and treats exhaustion as
+     * an ordinary parse failure, so the worst a hostile line can cost is one bounded match
+     * attempt. That is the guard. This function is the thing that stops an operator from
+     * saving a typo and finding out at 3am.
+     *
+     * The /e modifier is long gone from PHP, but a modifier block we do not explicitly
+     * expect is refused anyway rather than passed to PCRE to see what happens.
      *
      * @return string|null Null when acceptable, otherwise a human-readable reason.
      */
@@ -298,29 +383,309 @@ final class Security
     }
 
     /**
-     * Authenticate a panel request.
+     * The two authentication modes that exist, and what each one is.
      *
-     * Supports HTTP Basic (simple, works behind any proxy, easy to script against) and a
-     * form/session mode. Fails closed: when no auth is configured at all the panel refuses
-     * to serve rather than exposing traffic data to the internet, because an analytics
-     * dashboard left open is a data breach and defaults decide outcomes.
+     * A single list so the installer, Settings and Config::validate() cannot drift apart
+     * and start disagreeing about which values are real. 'none' is deliberately NOT here:
+     * it is the pre-setup state, not something an operator chooses.
      *
-     * The front controller sends an installation that has no credentials to the browser
-     * installer before this is ever reached, so the 'none' branch below is a backstop for
-     * any other caller rather than something an operator is expected to see.
-     *
-     * The username is compared in constant time as well as the password, so that valid
-     * account names cannot be enumerated by timing. A failed attempt then sleeps for a
-     * randomised fraction of a second, which blunts online guessing without needing a
-     * lockout system that an attacker could trip deliberately to deny the operator access.
-     *
-     * @param array $cfg The 'auth' section of the config.
+     * @return array<string,array{label:string,text:string,cost:string}>
      */
-    public static function requireAuth(array $cfg): void
+    public static function authModes(): array
     {
-        $mode = $cfg['mode'] ?? 'none';
+        return [
+            'basic' => [
+                'label' => 'The browser\'s own password prompt',
+                'text'  => 'Your browser asks for the username and password before it shows anything. '
+                    . 'Every tool that speaks HTTP can sign in the same way, so curl and scripts work '
+                    . 'with nothing more than --user.',
+                'cost'  => 'The prompt is the browser\'s and cannot be styled, and there is no way to '
+                    . 'sign out short of closing the browser.',
+            ],
+            'session' => [
+                'label' => 'A sign-in page',
+                'text'  => 'Loghound shows its own sign-in form, keeps you signed in for as long as you '
+                    . 'are using it, and gives you a Sign out button that ends the session on the server.',
+                'cost'  => 'It only works in a browser: curl and scripts cannot sign in to it, so a '
+                    . 'monitoring check against the panel has to be moved to Basic or dropped.',
+            ],
+        ];
+    }
+
+    /**
+     * The timeouts and lockout thresholds in force, clamped to sane bounds.
+     *
+     * Read from config on every request rather than cached, so changing them in Settings
+     * takes effect on the next request instead of the next restart. Every value goes
+     * through clampInt, so a hand-edited config cannot switch the lockout off by writing
+     * a zero or a string into it.
+     *
+     * @param array<string,mixed> $auth The 'auth' section of the config.
+     * @return array{idle:int,absolute:int,attempts:int,window:int}
+     */
+    public static function authLimits(array $auth): array
+    {
+        return [
+            'idle'     => self::clampInt($auth['idle_timeout'] ?? null, 60, 86400, 1800),
+            'absolute' => self::clampInt($auth['absolute_timeout'] ?? null, 300, 2592000, 43200),
+            'attempts' => self::clampInt($auth['lockout_attempts'] ?? null, 1, 1000, 8),
+            'window'   => self::clampInt($auth['lockout_window'] ?? null, 60, 86400, 900),
+        ];
+    }
+
+    /**
+     * Verify a username and password against the configured account.
+     *
+     * The username is compared in constant time as well as the password, so a valid
+     * account name cannot be enumerated by timing, and password_verify is always reached
+     * with a real hash when one is configured so that a wrong username and a wrong
+     * password cost the same. Returns false when no password has been set at all, which
+     * is the state of a half-finished install: no credential means no way in, never a
+     * way in for everybody.
+     *
+     * @param array<string,mixed> $auth The 'auth' section of the config.
+     */
+    public static function verifyPassword(array $auth, string $user, string $password): bool
+    {
+        $hash = (string) ($auth['password_hash'] ?? '');
+        if ($hash === '') {
+            return false;
+        }
+        $userOk = self::equals((string) ($auth['user'] ?? ''), $user);
+        $passOk = password_verify($password, $hash);
+        return $userOk && $passOk;
+    }
+
+    /**
+     * Resume an existing session without creating one.
+     *
+     * The panel is on the public internet and is crawled and probed constantly. Starting
+     * a session for every anonymous request would write a session file per probe, so a
+     * session is only started when the client actually presents one — a cookie, or an id
+     * set explicitly by a caller such as the test harness. Anything else is simply "not
+     * signed in", which is the same answer with none of the disk churn.
+     */
+    public static function sessionResume(): bool
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            return true;
+        }
+        if (session_id() === '' && !isset($_COOKIE[session_name()])) {
+            return false;
+        }
+        return session_start();
+    }
+
+    /**
+     * Sign an operator in, after their password has already been verified.
+     *
+     * session_regenerate_id(true) runs BEFORE the identity is written and deletes the old
+     * session file. That is the whole defence against session fixation: an attacker who
+     * planted a known session id on the browser — through a link, a subdomain cookie or an
+     * XSS on a neighbouring host — holds an id that stops existing at the exact moment it
+     * would have become valuable.
+     *
+     * Only a username and two timestamps are stored. The password is not kept, the hash is
+     * not kept, and nothing derived from either is kept: the session file is readable by
+     * whoever can read the filesystem, and it must not be worth reading.
+     */
+    public static function sessionSignIn(string $user): void
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            session_start();
+        }
+        session_regenerate_id(true);
+
+        $now = time();
+        $_SESSION[self::S_USER]     = $user;
+        $_SESSION[self::S_LOGIN_AT] = $now;
+        $_SESSION[self::S_SEEN_AT]  = $now;
+
+        self::rotateCsrf();
+    }
+
+    /**
+     * End a session on the server, not just in the browser.
+     *
+     * Clearing the cookie alone would leave a session file that is still valid to anyone
+     * who kept the id, so the order is: empty the array, expire the cookie, then
+     * session_destroy() to delete the server-side record. After this the old id is
+     * worthless even when replayed.
+     */
+    public static function sessionSignOut(): void
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            if (session_id() === '' && !isset($_COOKIE[session_name()])) {
+                return;
+            }
+            session_start();
+        }
+
+        $_SESSION = [];
+
+        if (ini_get('session.use_cookies')) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', [
+                'expires'  => time() - 42000,
+                'path'     => $params['path'] ?? '/',
+                'domain'   => $params['domain'] ?? '',
+                'secure'   => (bool) ($params['secure'] ?? false),
+                'httponly' => true,
+                'samesite' => 'Strict',
+            ]);
+        }
+
+        session_destroy();
+    }
+
+    /** The signed-in operator's username, or an empty string when nobody is signed in. */
+    public static function sessionUser(): string
+    {
+        return is_string($_SESSION[self::S_USER] ?? null) ? $_SESSION[self::S_USER] : '';
+    }
+
+    /**
+     * Decide whether this request may proceed, and say why when it may not.
+     *
+     * Split out of requireAuth() so the decision can be tested without a process that
+     * exits: requireAuth() is nothing but this plus the HTTP response for each outcome.
+     *
+     * States, all of which except 'ok' mean the request is refused:
+     *   ok        — authenticated, carry on.
+     *   setup     — auth.mode is 'none'; setup never finished.
+     *   basic     — Basic mode, credentials missing or wrong: challenge.
+     *   login     — session mode, nobody signed in: show the sign-in page.
+     *   idle      — session mode, no activity for auth.idle_timeout.
+     *   absolute  — session mode, signed in longer than auth.absolute_timeout.
+     *   locked    — too many failed attempts from this address.
+     *   store     — the attempt ledger could not be read or written.
+     *   unknown   — a mode with no implementation behind it.
+     *
+     * FAIL CLOSED IN BOTH DIRECTIONS. A mode we do not implement is refused rather than
+     * waved through, and an attempt counter that cannot be consulted is refused too: a
+     * check that cannot be performed is a failed check, never a passed one.
+     *
+     * @param array<string,mixed> $auth           The 'auth' section of the config.
+     * @param string|null         $varDir         Where the attempt ledger lives; null = the app's own var/.
+     * @param string[]            $trustedProxies CIDRs whose X-Forwarded-For may be believed.
+     * @return array{state:string,user:string,retry:int}
+     */
+    public static function authenticate(array $auth, ?string $varDir = null, array $trustedProxies = []): array
+    {
+        $mode = (string) ($auth['mode'] ?? 'none');
 
         if ($mode === 'none') {
+            return ['state' => 'setup', 'user' => '', 'retry' => 0];
+        }
+        if ($mode !== 'basic' && $mode !== 'session') {
+            return ['state' => 'unknown', 'user' => '', 'retry' => 0];
+        }
+
+        if ($mode === 'session') {
+            return self::authenticateSession($auth);
+        }
+
+        $ip = self::clientIp($trustedProxies);
+        $gate = self::loginGate($ip, $auth, $varDir);
+        if (!$gate['available']) {
+            return ['state' => 'store', 'user' => '', 'retry' => 0];
+        }
+        if (!$gate['allowed']) {
+            return ['state' => 'locked', 'user' => '', 'retry' => $gate['retry']];
+        }
+
+        $user = is_string($_SERVER['PHP_AUTH_USER'] ?? null) ? $_SERVER['PHP_AUTH_USER'] : '';
+        $pass = is_string($_SERVER['PHP_AUTH_PW'] ?? null) ? $_SERVER['PHP_AUTH_PW'] : '';
+
+        if (!self::verifyPassword($auth, $user, $pass)) {
+            self::loginFailure($ip, $auth, $varDir);
+            usleep(random_int(150000, 400000));
+            return ['state' => 'basic', 'user' => '', 'retry' => 0];
+        }
+
+        if ($gate['count'] > 0) {
+            self::loginSuccess($ip, $auth, $varDir);
+        }
+        return ['state' => 'ok', 'user' => $user, 'retry' => 0];
+    }
+
+    /**
+     * The session-mode half of authenticate().
+     *
+     * Both timeouts are enforced here rather than left to the session garbage collector,
+     * which is best-effort by design and runs on somebody else's request. An expired
+     * session is destroyed on the spot: the operator is sent back to the sign-in page, so
+     * the timeout is a door that reopens rather than a dead end.
+     *
+     * The idle anchor is only moved forward for a request that was already authenticated,
+     * so a stream of anonymous requests cannot keep somebody else's session alive.
+     *
+     * @param array<string,mixed> $auth
+     * @return array{state:string,user:string,retry:int}
+     */
+    private static function authenticateSession(array $auth): array
+    {
+        if (!self::sessionResume()) {
+            return ['state' => 'login', 'user' => '', 'retry' => 0];
+        }
+
+        $user = self::sessionUser();
+        if ($user === '') {
+            return ['state' => 'login', 'user' => '', 'retry' => 0];
+        }
+
+        $limits = self::authLimits($auth);
+        $now = time();
+        $loginAt = (int) ($_SESSION[self::S_LOGIN_AT] ?? 0);
+        $seenAt  = (int) ($_SESSION[self::S_SEEN_AT] ?? 0);
+
+        if ($loginAt <= 0 || $now - $loginAt > $limits['absolute']) {
+            self::sessionSignOut();
+            return ['state' => 'absolute', 'user' => '', 'retry' => 0];
+        }
+        if ($seenAt <= 0 || $now - $seenAt > $limits['idle']) {
+            self::sessionSignOut();
+            return ['state' => 'idle', 'user' => '', 'retry' => 0];
+        }
+
+        $_SESSION[self::S_SEEN_AT] = $now;
+        return ['state' => 'ok', 'user' => $user, 'retry' => 0];
+    }
+
+    /**
+     * Authenticate a panel request, or answer it with the refusal and stop.
+     *
+     * Supports HTTP Basic (simple, works behind any proxy, easy to script against) and the
+     * session/form mode (a real sign-in page and a real sign-out). Fails closed: when no
+     * auth is configured at all the panel refuses to serve rather than exposing traffic
+     * data to the internet, because an analytics dashboard left open is a data breach and
+     * defaults decide outcomes.
+     *
+     * The front controller sends an installation that has no credentials to the browser
+     * installer before this is ever reached, so the 'setup' branch is a backstop for any
+     * other caller rather than something an operator is expected to see.
+     *
+     * A refused session-mode request is REDIRECTED to the sign-in page, not answered with
+     * a bare 403. The 403 was a dead end: an operator who configured session mode had no
+     * route back into their own panel. The one exception is a `?api=` request, which is a
+     * fetch() from an already-loaded page — that gets 401 JSON, because redirecting an
+     * XHR to an HTML login form produces a confusing parse error instead of a clear
+     * "sign in again".
+     *
+     * @param array<string,mixed> $auth           The 'auth' section of the config.
+     * @param string|null         $varDir         Where the attempt ledger lives; null = the app's own var/.
+     * @param string[]            $trustedProxies CIDRs whose X-Forwarded-For may be believed.
+     */
+    public static function requireAuth(array $auth, ?string $varDir = null, array $trustedProxies = []): void
+    {
+        $result = self::authenticate($auth, $varDir, $trustedProxies);
+        $state = $result['state'];
+
+        if ($state === 'ok') {
+            return;
+        }
+
+        if ($state === 'setup') {
             http_response_code(503);
             header('Content-Type: text/plain; charset=utf-8');
             exit(
@@ -329,37 +694,226 @@ final class Security
             );
         }
 
-        if ($mode === 'basic') {
-            $user = $_SERVER['PHP_AUTH_USER'] ?? '';
-            $pass = $_SERVER['PHP_AUTH_PW'] ?? '';
-            $okUser = (string) ($cfg['user'] ?? '');
-            $hash   = (string) ($cfg['password_hash'] ?? '');
-
-            $userOk = self::equals($okUser, $user);
-            $passOk = $hash !== '' && password_verify($pass, $hash);
-
-            if (!$userOk || !$passOk) {
-                usleep(random_int(150000, 400000));
-                header('WWW-Authenticate: Basic realm="Loghound"');
-                http_response_code(401);
-                exit("Authentication required\n");
-            }
-            return;
+        if ($state === 'locked') {
+            $minutes = max(1, (int) ceil($result['retry'] / 60));
+            http_response_code(429);
+            header('Retry-After: ' . max(1, $result['retry']));
+            header('Content-Type: text/plain; charset=utf-8');
+            exit(
+                "Too many failed sign-in attempts from your address.\n" .
+                'Try again in ' . $minutes . " minute(s).\n" .
+                'To clear it now, delete ' . self::ledgerPath($varDir) . " on the server.\n"
+            );
         }
 
-        if ($mode === 'session') {
-            if (session_status() !== PHP_SESSION_ACTIVE) {
-                session_start();
+        if ($state === 'store') {
+            http_response_code(503);
+            header('Content-Type: text/plain; charset=utf-8');
+            exit(
+                "Loghound cannot record failed sign-in attempts, because it cannot write to\n" .
+                dirname(self::ledgerPath($varDir)) . ". It refuses to sign anyone in rather than\n" .
+                "skip the check. Give that directory to the user this panel runs as.\n"
+            );
+        }
+
+        if ($state === 'basic') {
+            header('WWW-Authenticate: Basic realm="Loghound"');
+            http_response_code(401);
+            header('Content-Type: text/plain; charset=utf-8');
+            exit("Authentication required\n");
+        }
+
+        if ($state === 'login' || $state === 'idle' || $state === 'absolute') {
+            $api = $_GET['api'] ?? null;
+            if (is_string($api) && $api !== '') {
+                http_response_code(401);
+                header('Content-Type: application/json; charset=utf-8');
+                exit((string) json_encode(['error' => 'Your session has ended. Reload the page to sign in again.']));
             }
-            if (empty($_SESSION['lh_user'])) {
-                http_response_code(403);
-                exit("Not signed in\n");
-            }
-            return;
+            $why = $state === 'login' ? '' : '&why=' . rawurlencode($state);
+            header('Location: ?login=1' . $why, true, 302);
+            exit;
         }
 
         http_response_code(500);
+        header('Content-Type: text/plain; charset=utf-8');
         exit("Unknown auth mode\n");
+    }
+
+    /**
+     * Where the failed-attempt ledger lives.
+     *
+     * Null means the application's own var/, worked out from this file's location. The
+     * parameter exists so a caller can point it somewhere else — the front controller
+     * passes the install prefix explicitly, and the tests give each case its own
+     * directory — never so that the limiter can be turned off: there is no value of
+     * $varDir that means "do not count".
+     */
+    public static function ledgerPath(?string $varDir = null): string
+    {
+        $dir = ($varDir !== null && $varDir !== '') ? rtrim($varDir, '/') : dirname(__DIR__) . '/var';
+        return $dir . '/' . self::LOGIN_LEDGER;
+    }
+
+    /**
+     * May this address try to sign in?
+     *
+     * PER ADDRESS, AND ONLY PER ADDRESS. There is deliberately no global cap here, and
+     * that is the difference between this limiter and the setup token's. A global counter
+     * on a login form is a denial-of-service primitive handed to anyone who can reach it:
+     * a few thousand wrong passwords from a botnet would trip it, and the legitimate
+     * operator — whose password is correct and whose address has zero failures — would be
+     * locked out of their own panel for as long as the attacker cared to keep going. Per
+     * address, an attacker can only ever lock out the address they are attacking from.
+     * Setup\Token makes the opposite trade on purpose: it guards a one-time,
+     * takeover-shaped window where refusing everybody is the safer failure.
+     *
+     * Each address gets its OWN window rather than sharing one global window, so an
+     * attacker's traffic can neither reset nor extend the operator's counter.
+     *
+     * `available` false means the ledger could not be opened or locked. Callers must treat
+     * that as a refusal — a check that cannot be performed is a failed check.
+     *
+     * @param array<string,mixed> $auth
+     * @return array{allowed:bool,available:bool,retry:int,count:int}
+     */
+    public static function loginGate(string $ip, array $auth, ?string $varDir = null): array
+    {
+        $limits = self::authLimits($auth);
+        $entry = self::attempts($varDir, self::ipKey($ip), $limits['window'], 'read');
+
+        if ($entry === null) {
+            return ['allowed' => false, 'available' => false, 'retry' => 0, 'count' => 0];
+        }
+
+        $count = $entry['n'];
+        if ($count < $limits['attempts']) {
+            return ['allowed' => true, 'available' => true, 'retry' => 0, 'count' => $count];
+        }
+
+        $retry = max(1, $entry['w'] + $limits['window'] - time());
+        return ['allowed' => false, 'available' => true, 'retry' => $retry, 'count' => $count];
+    }
+
+    /**
+     * Record one failed sign-in attempt for an address.
+     *
+     * @param array<string,mixed> $auth
+     */
+    public static function loginFailure(string $ip, array $auth, ?string $varDir = null): void
+    {
+        $limits = self::authLimits($auth);
+        self::attempts($varDir, self::ipKey($ip), $limits['window'], 'add');
+    }
+
+    /**
+     * Forget an address's failures after it proves it knows the password.
+     *
+     * Without this, an operator who mistypes their password four times and then gets it
+     * right would still be four attempts from a lockout for the rest of the window.
+     *
+     * Callers skip it when the address has no failures recorded, which is the normal case:
+     * Basic mode re-authenticates on every single request, and rewriting the ledger under a
+     * lock on each of them would put a file write in front of every page for nothing.
+     *
+     * @param array<string,mixed> $auth
+     */
+    public static function loginSuccess(string $ip, array $auth, ?string $varDir = null): void
+    {
+        $limits = self::authLimits($auth);
+        self::attempts($varDir, self::ipKey($ip), $limits['window'], 'clear');
+    }
+
+    /**
+     * The ledger key for an address.
+     *
+     * Hashed, because var/ is readable by the service user and a plain list of the
+     * addresses that failed to sign in is a small piece of intelligence about who is
+     * being watched and from where. An empty REMOTE_ADDR (a CLI caller, a broken SAPI)
+     * gets one shared bucket rather than an exemption.
+     */
+    private static function ipKey(string $ip): string
+    {
+        return $ip === '' ? 'unknown' : hash('sha256', $ip);
+    }
+
+    /**
+     * Read or update one address's entry in the fixed-window ledger.
+     *
+     * The same shape as Setup\Token's limiter — a JSON file under an exclusive flock, a
+     * fixed window, small human-scaled numbers — with one difference: the window is per
+     * address rather than global, so one client cannot move another client's window.
+     *
+     * Entries whose window has expired are dropped on every write, which keeps the file
+     * proportional to the number of addresses currently failing rather than to the number
+     * that ever have. The hard cap is a backstop for a flood from many addresses at once;
+     * evicting entries can only ever forgive attempts, never invent them.
+     *
+     * Returns null when the ledger cannot be opened or locked, which every caller must
+     * treat as a refusal.
+     *
+     * @param string $op 'read', 'add' or 'clear'
+     * @return array{n:int,w:int}|null
+     */
+    private static function attempts(?string $varDir, string $key, int $window, string $op): ?array
+    {
+        $file = self::ledgerPath($varDir);
+        $dir  = dirname($file);
+
+        if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
+            return null;
+        }
+
+        $fh = @fopen($file, 'c+');
+        if ($fh === false) {
+            return null;
+        }
+        @chmod($file, 0600);
+
+        if (!flock($fh, LOCK_EX)) {
+            fclose($fh);
+            return null;
+        }
+
+        $now = time();
+        $raw = (string) stream_get_contents($fh);
+        $data = json_decode($raw, true);
+        $ips = (is_array($data) && isset($data['ips']) && is_array($data['ips'])) ? $data['ips'] : [];
+
+        $entry = is_array($ips[$key] ?? null) ? $ips[$key] : ['n' => 0, 'w' => $now];
+        $entry = ['n' => (int) ($entry['n'] ?? 0), 'w' => (int) ($entry['w'] ?? 0)];
+
+        if ($entry['w'] + $window < $now) {
+            $entry = ['n' => 0, 'w' => $now];
+        }
+
+        if ($op === 'add') {
+            $entry['n']++;
+            $ips[$key] = $entry;
+        } elseif ($op === 'clear') {
+            unset($ips[$key]);
+            $entry = ['n' => 0, 'w' => $now];
+        }
+
+        if ($op !== 'read') {
+            foreach ($ips as $k => $v) {
+                if (!is_array($v) || (int) ($v['w'] ?? 0) + $window < $now) {
+                    unset($ips[$k]);
+                }
+            }
+            if (count($ips) > 500) {
+                $ips = array_slice($ips, -200, null, true);
+            }
+            ftruncate($fh, 0);
+            rewind($fh);
+            fwrite($fh, (string) json_encode(['ips' => $ips]));
+            fflush($fh);
+        }
+
+        flock($fh, LOCK_UN);
+        fclose($fh);
+
+        return $entry;
     }
 
     /**

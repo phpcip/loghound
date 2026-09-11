@@ -169,7 +169,39 @@
     <field name="referer_s"      type="string" indexed="true" stored="true"  docValues="true"/>
     <field name="referer_host_s" type="string" indexed="true" stored="false" docValues="true"/>
     <field name="referer_type_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <!-- ==================== CLIENT HINTS AND TRANSPORT ====================
+         Lifted from the session's FIRST hit by Sessionizer::identityOf() and written by
+         buildSessionDoc(), exactly like the identity fields above. They were being written
+         and swallowed by the catch-all `ignored` dynamic field at the bottom of this file:
+         the work of extracting and shipping them was already being paid for on every
+         session, and nothing could be faceted or filtered on the result.
+
+         Flags match their equivalents in solr/hits/conf/managed-schema.xml — indexed and
+         docValues, NOT stored. That is deliberate: docValues is what a facet and a filter
+         need, and nothing reads these fields back out of a session document. The scorer
+         reads them from the in-memory aggregate (Signals::fromSession() takes them off the
+         first hit), and Panel\Query::sessionFl() does not list them, so storing them would
+         be paying for a copy no reader ever asks for.
+
+         Adding a field here does NOT rewrite history: sessions indexed before this schema
+         landed have no values for them, and an absent field is absent, never zero. -->
+
+    <field name="accept_s"       type="string" indexed="true" stored="false" docValues="true"/>
     <field name="accept_lang_s"  type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="accept_enc_s"   type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="sec_ch_ua_s"       type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="sec_ch_platform_s" type="string"  indexed="true" stored="false" docValues="true"/>
+    <field name="sec_ch_mobile_b"   type="boolean" indexed="true" stored="false" docValues="true"/>
+
+    <field name="sec_fetch_site_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="sec_fetch_mode_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="sec_fetch_dest_s" type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="sec_fetch_user_s" type="string" indexed="true" stored="false" docValues="true"/>
+
+    <field name="tls_proto_s"  type="string" indexed="true" stored="false" docValues="true"/>
+    <field name="tls_cipher_s" type="string" indexed="true" stored="false" docValues="true"/>
 
     <field name="visitor_s" type="string" indexed="true" stored="false" docValues="true"/>
 

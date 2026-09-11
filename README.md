@@ -98,7 +98,7 @@ there is no subsequent request to measure against.
              │                                              │
              │  close idle sessions                         │
              │  merge beacon timings                        │
-             │  fp_ips_24h ─ ONE facet per fingerprint      │
+             │  fp_ips_24h ─ ONE facet per hour bucket      │
              │  Score/Rules ─ weights ─► verdict + reasons  │
              └────────────────────┬─────────────────────────┘
                                   ▼
@@ -145,6 +145,27 @@ sudo ./install/install.sh --dry-run
 sudo ./install/install.sh
 ```
 
+### Two installers, one result
+
+Setup happens either in a browser or in a shell, and **neither is a lesser version of the
+other**. Both drive the same code in `src/Setup/` — the same log detection, the same format
+grading, the same index provisioning, the same password rules — so a configuration written
+by one is indistinguishable from one written by the other, and you can start in the browser
+and finish over SSH.
+
+| | |
+|---|---|
+| **In a browser** — the normal path | Open the site and you land on the installer: a system check with the exact command for anything that is not passing, then four screens — access logs, storage, privacy, sign-in. **[docs/INSTALL-WEB.md](docs/INSTALL-WEB.md)** |
+| **In a shell** | `bin/loghound-setup` over SSH. This is what `install/install.sh` hands over to, and what unattended installs use. **[docs/INSTALL.md](docs/INSTALL.md)** |
+
+`install.sh` hands over to the shell wizard by default; **`--skip-setup`** stops once the
+machine is ready so you can finish in the browser.
+
+Anything not ready to serve lands on the browser installer — no configuration, half a
+configuration, or a configuration with no way to sign in. Loghound never answers a request
+by printing a configuration error and stopping. Once the configuration is complete every
+installer route is dead.
+
 Installs to `/opt/loghound` by default; `--prefix=/srv/loghound` (or anywhere else) works
 and every generated artefact follows it — the vhost docroot, the FPM pool, the systemd
 units, the deny rules. If the prefix is a git working copy, `--upgrade` is a fast-forward
@@ -166,8 +187,21 @@ The installer:
 
 It never modifies an existing vhost, pool, cron entry or service, never overwrites a file
 it did not write, and uses `reload` rather than `restart` so other sites on the box are
-undisturbed. `--dry-run` prints every action and changes nothing; `--uninstall` reverses
-it, prompting before deleting any data.
+undisturbed. `--dry-run` prints every action and changes nothing.
+
+`sudo ./install/uninstall.sh` reverses it — a thin wrapper around
+`install.sh --uninstall`, so there is one implementation rather than two that drift. It
+stops and removes the units and both timers, removes the vhost only after proving the web
+server still validates without it, removes the FPM pool, overwrites the credentials before
+unlinking them, and drops the service user's `adm` membership before trying `userdel`.
+It offers, as a separate question defaulting to **no**, to delete the two Opensolr indexes
+*this installation provisioned* — names derived from `solr.install_id`, matched against
+`^loghound_[a-f0-9]{8}_(hits|sessions)$`, and cross-checked against your account's own
+index list. If ownership cannot be proven it deletes nothing and prints the names instead;
+nothing else in your account is ever touched. `--dry-run` walks the whole teardown and
+changes nothing, and the run ends with a list of what it deliberately left behind —
+including the beacon `<script>` tag, which only you can remove. See
+[docs/INSTALL.md](docs/INSTALL.md#uninstalling).
 
 **Your log files are opened read-only and are never written to, truncated, rotated,
 renamed or deleted.** Every source path is opened `'rb'` and no other mode string appears
@@ -181,7 +215,7 @@ was served. The scorer and the retention job are systemd timers. On a box with n
 the installer falls back to cron for those two and tells you plainly that the daemon then
 needs a supervisor of your own.
 
-The wizard reads your Apache or nginx configuration, finds your `LogFormat` and
+Either installer reads your Apache or nginx configuration, finds your `LogFormat` and
 `CustomLog` directives, and shows you the mapping **with five of your own log lines
 rendered as parsed records and a confidence percentage**, then asks you to confirm.
 Nothing is ever ingested with a silently guessed format.
@@ -193,11 +227,14 @@ sudo systemctl enable --now loghound-tail.service
 loghound-tail --status --human
 ```
 
-And add one line to your site, before `</body>`:
+And add one line to your site — anywhere in the page, `<head>` earliest:
 
 ```html
 <script src="https://loghound.example.com/b.js?v=1" defer></script>
 ```
+
+The panel's Settings page hands you that snippet with your own URL and a `?v=` taken from
+the file's modification time, so an upgrade reaches returning visitors on its own.
 
 No Composer. No npm. No build step. `git clone` and `install.sh` on a bare box.
 
@@ -269,11 +306,10 @@ people one of them is the right answer.
 | Detects headless Chrome on residential proxies | yes, that is the point | no | no | no | no |
 | Cross-IP fingerprint clustering | yes — the primary signal | no | no | no | no |
 | Time-on-site | 4 distinct numbers incl. engaged time and the last page | request span only | tab-open time | tab-open time | tab-open time |
-| Storage | Solr 9 (self-hosted or managed) | in-memory / on-disk report | MySQL/MariaDB | ClickHouse | Google |
+| Storage | Opensolr (managed Solr 9) | in-memory / on-disk report | MySQL/MariaDB | ClickHouse | Google |
 | Install | `git clone` + `install.sh`, no Composer/npm | one binary, apt/dnf | PHP app + DB, or cloud | Docker/Postgres, or cloud | none |
 | Real-time | yes (softCommit, ~5s) | yes, genuinely instant | near | near | delayed |
 | Cost | free, MIT | free, MIT | free self-hosted, paid cloud | paid cloud, free self-hosted | free |
-| **Where it is genuinely better than Loghound** | — | Faster to run, zero moving parts, beautiful terminal UI, will parse a 10 GB log in seconds with nothing installed. If you want "what happened in this log file, now", use GoAccess. | A complete analytics product: goals, funnels, ecommerce, heatmaps, A/B testing, session recording, a large plugin ecosystem, mature GDPR tooling and a real company behind it. | The nicest UX in analytics, a 1 KB script, no cookies at all, genuinely simple, excellent for content sites that want honest pageviews without a project. | Free at any scale, integrates with Ads and Search Console, the attribution modelling is real work that nobody else has replicated. |
 
 Loghound is narrow on purpose. If your question is "how many people read my blog post",
 use Plausible. If your question is "which campaign drove revenue", use GA4 or Matomo. If
@@ -289,10 +325,11 @@ beacon is independent of whatever other analytics you run.
 
 | | |
 |---|---|
-| [docs/INSTALL.md](docs/INSTALL.md) | Installation, the recommended `LogFormat`, exactly which signals each extra header buys you, Solr and Opensolr setup, upgrading, troubleshooting |
+| [docs/INSTALL-WEB.md](docs/INSTALL-WEB.md) | Setting up from a browser: the system check, the setup token, the four screens, how the long operations run as jobs, and what each screen writes into the configuration |
+| [docs/INSTALL.md](docs/INSTALL.md) | Installation and the shell wizard: what `install.sh` does, the permission model, the recommended `LogFormat`, exactly which signals each extra header buys you, Solr and Opensolr setup, upgrading, troubleshooting |
 | [docs/DETECTION.md](docs/DETECTION.md) | The three planes, every rule with its weight and rationale, a worked example on real captured traffic, and a frank section on evasion and false positives |
 | [docs/BEACON.md](docs/BEACON.md) | The beacon: the three clocks, every field it sends, every signal code, the wire protocol, and what it cannot detect |
-| [docs/PANEL.md](docs/PANEL.md) | The web panel: request flow, the notes a security reviewer wants, demo mode |
+| [docs/PANEL.md](docs/PANEL.md) | The web panel: the async contract every card follows, stepped jobs, request flow, the notes a security reviewer wants, the design system, demo mode |
 | [docs/SCHEMA.md](docs/SCHEMA.md) | Both Solr cores field by field, why each is indexed/docValued/stored, index-size arithmetic, and what to turn off first |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, controls by surface, hardening checklist, known limitations, how to report a vulnerability |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | Exactly what is collected, the three IP modes, retention, GDPR posture, and what to tell your users |
@@ -304,7 +341,11 @@ beacon is independent of whatever other analytics you run.
 ## Requirements
 
 - PHP 8.1 or newer with `curl`, `json`, `pcre`, `sqlite3`, `mbstring`. **No Composer.**
-- Solr 9.x — self-hosted, or managed through [Opensolr](https://opensolr.com).
+- An [Opensolr](https://opensolr.com) account, and it is a hard requirement. Loghound
+  provisions and manages its own two indexes there — it creates them, uploads their
+  configsets, reloads the cores and verifies them — and it cannot do that on a Solr it does
+  not administer, so there is no option to point it at one you run yourself. The free tier is
+  enough to start, and retention scales with whatever plan you are on.
 - systemd, for the daemon and the two timers.
 - Read access to your access logs. The installer puts the service user in `adm`.
 

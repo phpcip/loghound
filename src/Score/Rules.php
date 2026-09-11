@@ -19,8 +19,10 @@
  * The weights follow one principle: a weight of 80 or more is a claim that this signal
  * ALONE is enough to call something a bot, because 80 is the `bot` threshold. So the
  * question for every rule is not "how suspicious is this" but "am I willing to publish a
- * verdict on this evidence and nothing else". Only six rules clear that bar, and each one
- * is a fact about the client that has no innocent explanation.
+ * verdict on this evidence and nothing else". Seven of the seventeen clear that bar —
+ * automation_marker, ua_declared_bot, rdns_claim_failed, headless_renderer, beacon_forged,
+ * ua_claim_failed and fp_cluster_proxy_fleet — and each one is a fact about the client that
+ * has no innocent explanation.
  *
  * Everything below 80 is designed to STACK. Three 30-point behavioural rules reaching 90
  * is the intended path for a scraper that leaves no single decisive mark, and it is why
@@ -527,8 +529,14 @@ final class Rules
      * different, legitimate-looking consumer address. What it cannot rotate is the header
      * tuple of the browser it is driving — change that and it stops being a convincing
      * Chrome. So the fingerprint stays fixed while the address moves, and counting distinct
-     * addresses per fingerprint in a twelve-hour window turns the fleet's own evasion into
-     * its signature.
+     * addresses per fingerprint turns the fleet's own evasion into its signature.
+     *
+     * THE WINDOW IS ±12 HOURS, WHICH IS 24 HOURS WIDE — hence the field name fp_ips_24h_i,
+     * and hence the wording of the sentence returned below. bin/loghound-score computes it
+     * as [bucketStart-12h, bucketStart+13h] around the hour a session ended; the extra hour
+     * is the bucketing slack it documents. Saying "within 12 hours" to an operator, as this
+     * message used to, understates the window by half and makes the count look twice as
+     * damning as it is.
      *
      * Eighty, so it reaches `bot` alone. That is justified because five distinct networks
      * behind one browser fingerprint has no innocent explanation — but two guards keep it
@@ -564,7 +572,7 @@ final class Rules
         }
 
         return 'This exact browser fingerprint was seen from ' . (int) $ips
-            . ' distinct IP addresses within 12 hours'
+            . ' distinct IP addresses in a 24-hour window around this session'
             . (isset($s['as_type']) && $s['as_type'] !== null ? ' (network type: ' . $s['as_type'] . ')' : '')
             . '. One browser cannot be on ' . (int) $ips
             . ' unrelated networks; this is a rotating-proxy fleet.';

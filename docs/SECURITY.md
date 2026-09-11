@@ -108,8 +108,19 @@ yourself writing `htmlspecialchars()` anywhere else, use `Security::esc()` inste
 `public/collect.php` is unauthenticated by design and is treated as hostile:
 
 - POST only. `text/plain` (sendBeacon's default) or JSON. **8 KB payload cap.**
-- **HMAC token.** The first call is issued `HMAC(secret, session_id|issued_at)`. Every
-  subsequent call must present it. Missing, invalid or expired (> 12h) is rejected.
+- **HMAC token, bound to the Origin it was issued to.** The first call is issued
+  `HMAC(secret, session_id \0 origin | issued_at)`, and verification recomputes with the
+  `Origin` of the request presenting it. Missing, invalid, expired (> 12h), future-dated or
+  presented from a different origin is rejected. The binding is what makes
+  `Access-Control-Allow-Origin: *` safe here: the endpoint must be reachable from origins
+  we do not know in advance, so the credential is tied to the origin instead of the
+  allow-list doing the work.
+- **The hello branch never returns an existing session id.** It always mints a fresh random
+  provisional id, and it never creates a session row. Returning the real id would let any
+  page on the internet make a CORS-simple POST from a visitor's browser, read the session
+  credentials off the response headers, and then submit whatever it liked about that
+  visitor's real session — in a bot-detection product, "report this human as headless".
+  `loghound-score` re-attaches the staged rows to the real session by `client_key`.
 - **Timing sanity.** `engaged_ms > visible_ms`, `visible_ms > wall_ms`, or
   `wall_ms > (now − issued_at + 60s)` are impossible. The payload is recorded with a
   `beacon_forged` signal rather than discarded — **the lie is evidence**.
@@ -124,19 +135,94 @@ yourself writing `htmlspecialchars()` anywhere else, use `Security::esc()` inste
 
 ### The panel
 
-- **Authentication is required and fails closed.** With `auth.mode = 'none'`,
-  `Security::requireAuth()` returns HTTP 503 and refuses to serve. An analytics dashboard
-  left open on the internet is a data breach, and defaults decide outcomes.
-- Passwords are stored with `password_hash(PASSWORD_DEFAULT)`. Failed Basic auth sleeps a
-  randomised 150–400 ms to blunt online guessing, and the username is compared with
-  `hash_equals` so it cannot be enumerated by timing.
+- **Authentication is required and fails closed, in both directions.** With
+  `auth.mode = 'none'`, `Security::requireAuth()` returns HTTP 503 and refuses to serve. A
+  mode with no implementation behind it is refused rather than waved through, and an attempt
+  counter that cannot be read or written is refused too — a check that cannot be performed is
+  a failed check, never a passed one. An analytics dashboard left open on the internet is a
+  data breach, and defaults decide outcomes.
+- **Two modes exist and no others.** `basic` is the browser's own password prompt: every
+  tool that speaks HTTP can sign in the same way, and there is no way to sign out short of
+  closing the browser. `session` is Loghound's own sign-in page with a real Sign out button,
+  an idle timeout (default 30 min) and an absolute one (default 12 h); it works only in a
+  browser, so a monitoring check against the panel has to use Basic or be dropped. Both
+  timeouts are read from config on every request and clamped, so a hand-edited value cannot
+  switch them off.
+- Passwords are stored with `password_hash(PASSWORD_DEFAULT)`. The username is compared with
+  `hash_equals` so it cannot be enumerated by timing, and a failed Basic attempt sleeps a
+  randomised 150–400 ms to blunt online guessing.
+- **Failed sign-ins are rate limited per address**, by a ledger in
+  `var/login-attempts.json`: 8 attempts in a 15-minute window by default, both clamped. The
+  address comes from `Security::clientIp()`, so `X-Forwarded-For` counts only when the
+  immediate peer is a configured trusted proxy — otherwise a guesser could reset their own
+  counter with a header. Signing in successfully clears the counter.
+- The sign-in POST carries a CSRF token like every other state-changing request, and the
+  session id is regenerated on sign-in so a fixated cookie is worthless. The session holds a
+  username and timestamps — never the password or its hash.
 - **CSRF token on every state-changing request**, enforced before the handler runs.
-- A strict Content-Security-Policy: `default-src 'self'`, `script-src 'self'`,
-  `object-src 'none'`, `base-uri 'none'`, `frame-ancestors 'none'`. No inline handlers, no
-  `eval`, no third-party origins. **ECharts is self-hosted precisely so this policy can
-  stay closed** — and so the panel works on an air-gapped box.
-- Plus `X-Content-Type-Options`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY`,
-  `Cross-Origin-Opener-Policy` and a restrictive `Permissions-Policy`.
+- A strict Content-Security-Policy, in full:
+  `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'
+  data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none';
+  frame-ancestors 'none'; form-action 'self'`. No inline `<script>`, no inline handlers, no
+  `eval`, no `new Function`, no dynamic `import()`, no third-party origins. **ECharts is
+  self-hosted precisely so this policy can stay closed** — and so the panel works on an
+  air-gapped box. Even the theme bootstrap, normally the one place people cheat because an
+  unthemed page flashes white, is an external synchronous file.
+- **`'unsafe-inline'` applies to styles only, and that is a real relaxation worth naming.**
+  The panel sets chart and bar heights with `style=` attributes; every value in one is a
+  constant or an integer that has been through `Security::clampInt()`, and no log-derived
+  string reaches a style attribute. It does not weaken `script-src`, but a reviewer should
+  know it is there rather than discover it.
+- Plus `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`,
+  `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy: same-origin` and a restrictive
+  `Permissions-Policy`. Every panel response, HTML and JSON alike, carries
+  `Cache-Control: no-store, private`.
+- **Long panel operations are stepped jobs** (`src/Panel/Jobs.php`), and every one of the
+  three endpoints is a POST behind the CSRF check. Job ids are 96 bits of `random_bytes`
+  and every lookup is scoped to an owner derived from the authenticated session, with a job
+  that is not yours reported *identically* to one that does not exist, so ids cannot be
+  probed. Nothing in a job payload is a secret: step details, persisted errors and log
+  lines all pass through `Jobs::redact()` first, because the Opensolr API key travels in a
+  query string and a transport error can quote the URL it failed on. See
+  [PANEL.md](PANEL.md).
+
+### The browser installer
+
+`src/Setup/` serves any request that arrives at an installation not yet ready to serve.
+That makes it, briefly, an unauthenticated surface, and it is treated as one.
+
+- **It is unreachable once setup is finished.** `Installer::isNeeded()` runs at the top of
+  every request, before authentication, and returns false the moment the configuration file
+  exists, carries `auth.mode` and `auth.password_hash`, and names both indexes. There is no
+  flag, no query parameter and no "re-run setup" button that gets past it.
+- **That gate is deliberately structural, and does not call `Config::validate()`.** Because
+  it runs before `requireAuth()`, whatever makes it return true hands an unauthenticated
+  visitor the installer — so it must depend only on facts that mean "setup never finished".
+  It previously returned `validate() !== []`, and `validate()` reports an error for a log
+  directory it cannot resolve, which is the normal state of a panel process under
+  `open_basedir`. A correctly installed instance therefore looked unconfigured forever: the
+  status page disclosed the environment, paths, index names and `open_basedir` value to
+  anyone who asked, and re-minted a live setup token on a machine where it had already been
+  destroyed. Configuration problems that are *not* "setup never finished" belong in the
+  panel's own warning banner, which is where they now go.
+- **Filesystem proof before any write.** Nothing reaches the configuration until the
+  operator pastes the token from `var/install-token` (mode 0600), which requires shell
+  access as the service user or root. Guessing is rate limited by a fixed-window ledger next
+  to the token file, and the file is deleted the moment setup completes. The status page
+  itself is readable without the token, deliberately — you have to be able to *see* a
+  permission problem in order to go and fix it.
+- **CSRF on everything that changes anything**, through the same `Security::requireCsrf()`
+  the panel uses. No privileged action is reachable with a GET, and a step whose
+  prerequisites are unmet redirects to the first incomplete one rather than letting a
+  guessed URL skip ahead.
+- **No secret is ever rendered** — not the Opensolr API key, the beacon secret, the IP salt
+  or the password, and not into a hidden field, a URL, a job payload, a log line or an error
+  message. Presence is shown; values never are.
+- Log sample lines are attacker-chosen bytes by definition and are displayed on the review
+  screen on purpose; every one goes through `Security::esc()`. A hand-typed log path is
+  resolved with `realpath()` and refused unless it is inside `allowed_log_roots` — the
+  installer will not widen that list for you, because it is a security control. A custom
+  pattern is refused unless it compiles and runs fast (`Security::validateUserRegex()`).
 
 ### Filesystem
 
@@ -263,9 +349,17 @@ addresses can be brute-forced back (the IPv4 space is small).
 
 Stated plainly, because a security document that only lists strengths is marketing.
 
-- **The panel has no rate limiting on login.** There is a randomised delay on failure and
-  nothing more — no lockout, no fail2ban integration. Put it behind an IP allowlist or a
-  VPN if that matters to you.
+- **The login lockout is per address, and only per address.** That is deliberate, not an
+  oversight: a global cap on a login form is a denial-of-service primitive handed to anyone
+  who can reach it — a few thousand wrong passwords from a botnet would trip it, and the
+  legitimate operator, whose password is correct and whose address has zero failures, would
+  be locked out of their own panel for as long as the attacker cared to keep going. Per
+  address, an attacker can only lock out the address they are attacking from. The cost is
+  that a distributed guesser is not slowed by the lockout at all, only by the randomised
+  delay and by whatever entropy is in the password. (`Setup\Token` makes the opposite trade
+  on purpose, because it guards a one-time, takeover-shaped window where refusing everybody
+  is the safer failure.) Put the panel behind an IP allowlist or a VPN if that matters to
+  you.
 - **No audit log of panel actions.** There is no record of who looked at what.
 - **`keep_raw` stores complete log lines**, including any credential that ended up in a
   query string on your site. That is your data and your risk; the toggle exists so you can
@@ -276,9 +370,16 @@ Stated plainly, because a security document that only lists strengths is marketi
 - **`ja4_s` is defined and never populated.** The field exists for HAProxy-sourced JA4
   fingerprints; nothing in v1 produces one.
 - **The beacon can be blocked, and it can be replayed within its token window.** The HMAC
-  proves the token was issued by us, not that this particular client is the one it was
-  issued to. Session hijacking of a beacon token gets an attacker the ability to lie about
-  dwell time for that session, which is why forged timings are recorded as a signal rather
-  than trusted or dropped.
+  proves the token was issued by us, for that session id and that Origin — not that this
+  particular client is the one it was issued to. Origin binding stops a third-party page
+  obtaining credentials for somebody else's session, but anyone who can read a token out of
+  a browser they already control can keep using it until it expires. What that buys them is
+  the ability to lie about dwell time for their own session, which is why forged timings are
+  recorded as a signal rather than trusted or dropped.
+- **The panel counts daily rollup documents as sessions.** The rollup lives in the sessions
+  core discriminated by `doc_type_s`, and no panel query filters on it, so every session
+  total is high by up to one document per day in the selected range. Not a security issue;
+  listed here because it is a wrong number the product presents as evidence. See
+  [PANEL.md](PANEL.md).
 - **No formal third-party security audit has been performed.** If you do one, the results
   are very welcome.

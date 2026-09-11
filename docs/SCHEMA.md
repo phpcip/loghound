@@ -1,6 +1,8 @@
 # Loghound — Solr schema
 
-Two cores, Solr 9.6, classic single-core indexes (not SolrCloud).
+Two cores, Solr 9.x, classic single-core indexes (not SolrCloud). Both configsets declare
+`version="1.6"` in their `<schema>` element — that is the schema format version, not a Solr
+version; nothing here pins a Solr point release.
 
 | Core | One document per | Queried by |
 |---|---|---|
@@ -13,12 +15,20 @@ permanent once created, and must match `[a-zA-Z0-9_]`. So `Config::coreName()` b
 `loghound_<install id>_hits` and `loghound_<install id>_sessions` from one 8-hex install id
 shared by the pair — for example `loghound_9f3c17ab_hits`. The names are written into
 `solr.hits_core` / `solr.sessions_core` at setup and everything else reads them from there;
-nothing in the code or in either configset hardcodes a core name. On a Solr you run
-yourself the names are yours to choose and a plain `loghound_hits` is fine.
+nothing in the code or in either configset hardcodes a core name. There is no setting, prompt
+or environment variable that lets you supply one.
 
 Configset files: `solr/hits/conf/{managed-schema.xml,solrconfig.xml}` and
 `solr/sessions/conf/{managed-schema.xml,solrconfig.xml}`. Both are heavily commented; this
 document is the operator-facing version of the same reasoning, plus the numbers.
+
+**How these files reach Solr.** You do not install them. Setup **uploads them to Opensolr** —
+schema first, then `solrconfig.xml`, then a core reload; reversed, the core reloads against a
+solrconfig referring to field types the old schema does not define and the reload fails. This
+is the reason Loghound requires an Opensolr account and no longer offers to point at a Solr you
+run yourself: it owns these two indexes, it has to be able to create them and keep their schema
+right, and it cannot do that on a Solr it does not administer. The configsets below are exactly
+what gets pushed, so everything this document describes is what is running.
 
 **Field names are a contract** (SPEC §4). The parser writes them, the scorer reads them, the
 dashboard queries them. Renaming one is a breaking change to three components at once.
@@ -34,8 +44,8 @@ fields a human reads in the drill-down are stored.
 
 **2. `omitNorms="true"` on every string field.**
 Norms are one byte per document per field, used for length normalisation during relevance
-scoring. Nothing here is ranked on a string field — they are filtered and faceted. At 45
-string fields and 10 million documents that is 450 MB of nothing.
+scoring. Nothing here is ranked on a string field — they are filtered and faceted. At the
+`hits` core's 46 string fields and 10 million documents that is 460 MB of nothing.
 
 **3. `omitTermFreqAndPositions="true"` on every string field.**
 Term frequencies and position lists exist to answer "how often" and "how near". An exact
@@ -44,8 +54,9 @@ already defaults to this for `StrField`; it is written out so the decision is vi
 
 **4. No stock sprawl.**
 Solr's default configset ships a `_text_` catchall plus about thirty dynamic fields and a
-`copyField "*" -> "_text_"`. On a schema with sixty named fields that copyField indexes
-every value a second time and `_text_` becomes the largest single component of the index —
+`copyField "*" -> "_text_"`. On a schema with seventy named fields (`hits`; `sessions` has
+106) that copyField indexes every value a second time and `_text_` becomes the largest
+single component of the index —
 for a catchall nothing in Loghound queries. Both are deleted. One catch-all dynamic field
 remains, routing anything unrecognised into a type that indexes and stores nothing; see
 §6 for why that tradeoff was chosen.
@@ -164,8 +175,16 @@ Two layers, not redundant by accident:
 * the `*_txt` fields are what edismax actually searches, via
   `qf = path_txt^3 ua_txt^2 as_org_txt^2 netname_txt^2 rdns_txt city_txt country_txt`.
   Separate fields are what make per-field boosting possible.
-* `text_all` is the single-field fallback used as `df` for a bare query. It duplicates the
-  content of the `*_txt` fields.
+* `text_all` is the single-field fallback used as `df` for a bare query. It is *nearly* a
+  duplicate of the `*_txt` fields, with one deliberate difference on each core: `text_all`
+  also receives `referer_s`, which no `*_txt` field gets, so a bare query can find a session
+  by where it came from.
+
+On `sessions` the sources differ too: `path_txt` and `text_all` are fed from `paths_ss` (the
+capped per-session path list), not from a `path_s` that does not exist there. So a free-text
+path search on the explorer searches the sample of up to 50 paths the scorer kept, and a
+session that touched more than that can be missed by a path query even though the path is
+counted in `uniq_paths_i`.
 
 **If you need to cut, drop `text_all` first.** You keep full search through the `qf` and lose
 only the bare-query fallback. It is about half the catchall's cost.
@@ -202,9 +221,30 @@ count, so nothing is fabricated — but **the UI must label the list a sample**.
 (`uniq_paths_i` itself saturates at 10,000 distinct paths per session; the sessionizer stops
 tracking beyond that. No scoring rule uses a threshold anywhere near it.)
 
-Every identity, network and client field from §2 is denormalised onto the session from its
-first hit. That duplication is the point: one query against a core with 10–20x fewer
-documents answers "bots by ASN" without touching the hit stream.
+The identity, network and client fields the session view needs are denormalised onto the
+session from its first hit. That duplication is the point: one query against a core with
+10–20x fewer documents answers "bots by ASN" without touching the hit stream.
+
+**Not *every* §2 field, though, and the gap is worth knowing about.** The sessions schema
+does not define the per-request fields (`method_s`, `path_s`, `query_s`, `status_i`,
+`kind_s`, `asset_kind_s`, `dur_us_l`, `session_seq_i`, `hit_flags_ss`, `raw_s`, `ts`) —
+correctly, since they describe one request rather than a visit. But it also does not define
+the request-header fields: `accept_s`, `accept_enc_s`, the `sec_ch_*` set, the `sec_fetch_*`
+set, `tls_proto_s` and `tls_cipher_s`.
+
+That second group is a **live schema/code gap, not a design decision**. `Sessionizer::identityOf()`
+puts exactly these ten values into the session's `first` map — `accept_s`, `accept_enc_s`,
+`sec_ch_ua_s`, `sec_ch_platform_s`, `sec_ch_mobile_b`, `sec_fetch_site_s`,
+`sec_fetch_mode_s`, `sec_fetch_dest_s`, `sec_fetch_user_s`, `tls_proto_s`, `tls_cipher_s` —
+and the scorer copies every non-underscore key from it onto the session document, so they
+*are* sent to Solr. There the catch-all
+`<dynamicField name="*" type="ignored" multiValued="true"/>` swallows them without error.
+(`accept_lang_s`, `proto_s`, `host_s`, `src_s`, `ip_ver_i`, `ua_hash_s`, `geo_p` and
+`visitor_s` from the same list *are* defined and land correctly.)
+This is exactly the quiet degradation §6 warns about, happening today. Nothing depends on
+them at the session level (the scoring rules read the hit documents), so the effect is
+wasted bytes on the wire rather than a wrong number — but if you want to facet sessions by
+`sec_ch_ua_s`, the field has to be added to the sessions schema first.
 
 ### Timing — the differentiator
 
@@ -282,18 +322,21 @@ identifies nothing. What it cannot change without breaking the browser it is imp
 the exact header tuple that browser sends. Counting distinct `ip_s` per `fp_hash_s` turns the
 fleet's own evasion into its signature.
 
-**The limitation, stated plainly.** With plain apache `combined`, seven of the eight tuple
-components are not logged and `fp_hash_s` degenerates to roughly a hash of the User-Agent
-plus the protocol version. That still catches a fleet using one UA across many addresses. It
-does **not** catch a fleet that also rotates its Chrome major version: that fleet splits into
-one cluster per version, and each cluster can fall below the ≥5 threshold.
+**The limitation, stated plainly.** The tuple has eleven components. With plain apache
+`combined`, nine of them are not logged — only the User-Agent and the protocol version
+survive — so `fp_hash_s` degenerates to roughly a hash of those two. That still catches a
+fleet using one UA across many addresses. It does **not** catch a fleet that also rotates
+its Chrome major version: that fleet splits into one cluster per version, and each cluster
+can fall below the ≥5 threshold.
 
 This is measured, not theorised. `tests/fixtures/apache_combined_bot_fleet.log` is a real
-capture: 13 IPs, six Chrome major versions between 147 and 152. From `combined` alone the
-largest cluster is five addresses — it trips the rule and those five sessions are correctly
-classified `bot` / `proxy_fleet` — while the remaining eight split into clusters of 3, 2, 1,
-1 and 1 and are not caught on the log plane at all. They are caught immediately once the
-beacon reports (`tests/test_scoring.php` proves both).
+capture: 13 IPs across six distinct User-Agent strings spanning five Chrome major versions
+(147, 148, 150, 151, 152). From `combined` alone the largest cluster is five addresses — it
+trips the rule and those five sessions are correctly classified `bot` / `proxy_fleet` —
+while the remaining eight split into clusters of 3, 2, 1, 1 and 1, fire nothing but
+`single_page_10s` (15), and are therefore scored **`human`**. Not "unknown": human, the same
+verdict a real reader gets. They are caught immediately once the beacon reports
+(`tests/test_scoring.php` proves both).
 
 **What to do about it:** log the recommended LogFormat from SPEC §8. `Accept-Language` alone
 carries enough entropy across real humans to keep the fingerprint discriminating while the
@@ -374,8 +417,10 @@ it runs).
 copies every value into `_text_`, which on this schema can be the largest single component of
 the index — for a field nothing in Loghound queries.
 
-**One catch-all dynamic field remains:** `<dynamicField name="*" type="ignored"/>`. Anything
-not named in the schema is silently dropped rather than indexed.
+**One catch-all dynamic field remains:**
+`<dynamicField name="*" type="ignored" multiValued="true"/>`. Anything not named in the
+schema is silently dropped rather than indexed. `multiValued="true"` is what makes it accept
+an array as well as a scalar, so an unexpected list does not fail the request either.
 
 The tradeoff, stated plainly: a schema/code skew degrades quietly. If a future version writes
 `foo_bar_s` and you have not pushed the new schema, that value vanishes instead of failing

@@ -8,11 +8,41 @@
 #   sudo ./install/install.sh --dry-run           print every action, change nothing
 #   sudo ./install/install.sh --upgrade           refresh code, keep config and data
 #   sudo ./install/install.sh --uninstall         reverse everything, with prompts
+#   sudo ./install/uninstall.sh                   the same thing, by its obvious name
 #   sudo ./install/install.sh --non-interactive   answer every prompt from LOGHOUND_* env
 #
 # End state: a running ingest daemon, an authenticated panel served over HTTPS by
 # whichever web server is already on the box, timers enabled, and documents landing in
 # Solr. No "now edit this file by hand" left over.
+#
+# =============================================================================
+# THE TEARDOWN ORDER, AND WHY IT IS THAT ORDER
+# =============================================================================
+# --uninstall runs the steps below in this sequence. Every one of them is placed where
+# it is because an earlier position would destroy something a later step still needs, or
+# would leave the host in a worse state than it started in:
+#
+#   1. Resolve and VALIDATE the prefix. Everything destructive is gated on the tree
+#      actually looking like a Loghound install. A prefix discovered from a systemd unit
+#      is attacker-influenced input on a box where someone could edit that unit, and
+#      "rm -rf $PREFIX" with an unvalidated variable is how an installer eats /usr.
+#   2. Stop and remove the units and timers FIRST, so nothing is writing to var/,
+#      re-creating the files we are about to shred, or talking to Solr underneath us.
+#   3. Delete the Opensolr indexes BEFORE the configuration is purged. The API key that
+#      authorises the deletion lives in config/loghound.php; purge first and the operator
+#      is left with two orphaned indexes they can no longer name from this box.
+#   4. Web server next: disable the site, validate, reload. Before the FPM pool, so the
+#      server stops routing to a socket that is about to disappear.
+#   5. FPM pool, then the stale socket.
+#   6. Symlinks, cron and logrotate fragments.
+#   7. Shred the secret-bearing files. Offered on its own, separately from "delete the
+#      whole tree", so an operator who wants to keep the data still destroys the
+#      credentials.
+#   8. Remove the tree, if asked.
+#   9. The system user LAST: userdel before the files are gone leaves a tree owned by an
+#      orphaned uid that the next user created on the box inherits, and userdel refuses
+#      while the daemon it owns is still running — which is why step 2 comes first.
+#  10. Report, honestly, everything that was deliberately left behind.
 #
 # =============================================================================
 # THE ONE RULE: NEVER BREAK THE HOST.
@@ -57,6 +87,7 @@ PREFIX_EXPLICIT=0                    # set when --prefix was passed, so discover
 DRY_RUN=0
 NONINTERACTIVE="${LOGHOUND_NONINTERACTIVE:-0}"
 SKIP_TESTS=0
+SKIP_SETUP=0
 ASSUME_YES=0
 
 HOSTNAME_FQDN="${LOGHOUND_HOSTNAME:-}"
@@ -225,7 +256,10 @@ Loghound installer — bare box to working install, in one command.
 Modes
   (default)             full install
   --upgrade             refresh code in place; config/loghound.php and var/ untouched
-  --uninstall           reverse everything, prompting before deleting any data
+  --uninstall           reverse everything, prompting before deleting any data.
+                        install/uninstall.sh is the same thing under an obvious
+                        name. Combine with --dry-run to see the whole teardown
+                        without changing anything.
 
 Options
   --dry-run             print every action and change nothing. Do this first.
@@ -247,14 +281,26 @@ Options
   --tls-cert PATH       with --tls-mode existing
   --tls-key PATH        with --tls-mode existing
   --skip-tests          do not run the test suite
+  --skip-setup          prepare the machine and stop; configure in the browser
+                        instead of in the terminal. The two front ends do the
+                        same work, so pick whichever you want to use.
   -h, --help
 
 Environment overrides (for --non-interactive / Ansible / CI)
   LOGHOUND_PREFIX LOGHOUND_USER LOGHOUND_HOSTNAME LOGHOUND_WEBSERVER
   LOGHOUND_TLS_MODE LOGHOUND_TLS_CERT LOGHOUND_TLS_KEY
+
+Uninstall-only environment overrides
+  LOGHOUND_UNINSTALL_DELETE_TREE=yes      delete the install tree without asking
+  LOGHOUND_UNINSTALL_SHRED_SECRETS=no     keep the credentials on disk (default: shred)
+  LOGHOUND_UNINSTALL_REMOVE_USER=no       keep the system user (default: remove)
+  LOGHOUND_UNINSTALL_DELETE_INDEXES=yes   PERMANENTLY delete the two Opensolr indexes
+                        The index deletion is the only answer --yes does NOT cover.
+                        It is unrecoverable and the names can never be reused, so it
+                        needs this variable, or the word DELETE typed at the prompt.
   plus every LOGHOUND_* variable bin/loghound-setup understands — run
   `bin/loghound-setup --help` or read the header of that file for the full list
-  (panel credentials, Solr mode, Opensolr email/API key/region, privacy mode,
+  (panel credentials, Opensolr email/API key/region, privacy mode,
   retention). The API key is never echoed and never written to the install log.
 
 What it never does
@@ -278,6 +324,7 @@ while [[ $# -gt 0 ]]; do
         --non-interactive)  NONINTERACTIVE=1; shift ;;
         --yes|-y)           ASSUME_YES=1; shift ;;
         --skip-tests)       SKIP_TESTS=1; shift ;;
+        --skip-setup)       SKIP_SETUP=1; shift ;;
         # Both spellings are accepted for every value flag: "--prefix /srv/loghound"
         # and "--prefix=/srv/loghound". People type both, and an installer that
         # rejects one of them for no reason is an installer people stop trusting.
@@ -1130,11 +1177,15 @@ php_admin_flag[display_startup_errors] = off
 php_admin_flag[log_errors]           = on
 php_admin_value[error_log]           = $PREFIX/var/php-error.log
 
+; The cookie attributes are php_value, not php_admin_value: php_admin_value locks
+; the entry, and public/index.php sets samesite Strict and computes secure from
+; whether the request arrived over TLS. Locked, the pool overrode both — shipping
+; Lax where the code asks for Strict, and breaking sign-in on a plain-HTTP install.
 php_admin_value[session.save_path]       = $PREFIX/var/sessions
-php_admin_value[session.cookie_httponly] = 1
-php_admin_value[session.cookie_secure]   = 1
-php_admin_value[session.cookie_samesite] = Lax
 php_admin_value[session.use_strict_mode] = 1
+php_value[session.cookie_httponly] = 1
+php_value[session.cookie_secure]   = 1
+php_value[session.cookie_samesite] = Strict
 
 slowlog = $PREFIX/var/fpm-slow.log
 request_slowlog_timeout = 10s
@@ -1967,9 +2018,20 @@ discover_prefix() {
         found="$(grep -oE '[^ ]*/bin/loghound-score' /etc/cron.d/loghound | head -1 | sed 's#/bin/loghound-score##')"
     fi
 
+    # A unit file, a symlink target and a cron line are all editable by anything that is
+    # already root, and one of them is about to become the argument of an rm. Accept only
+    # an absolute path with no traversal in it, and never '/' — uninstall_validate_prefix()
+    # then decides whether the tree is a Loghound install at all.
+    found="${found%/}"
+    case "$found" in
+        ''|/|*/../*|*/..|../*|..) found="" ;;
+        /*) : ;;
+        *)  found="" ;;
+    esac
+
     if [[ -n "$found" ]] && [[ "$found" != "$PREFIX" ]]; then
         say "discovered a previous installation at $found (not the default $PREFIX)"
-        PREFIX="${found%/}"
+        PREFIX="$found"
     fi
 }
 
@@ -2048,143 +2110,803 @@ git_upgrade() {
 }
 
 # =============================================================================
-# Uninstall
+# Uninstall — bookkeeping
 # =============================================================================
 
+# Set once uninstall_validate_prefix() is satisfied the tree is a Loghound install. Every
+# operation that touches a path under $PREFIX is gated on it.
+PREFIX_LOOKS_LIKE_LOGHOUND=0
+
+# Things deliberately NOT removed, collected as we go and printed at the end. An
+# uninstaller that is silent about what it left is an uninstaller nobody can verify.
+declare -a LEFT_BEHIND=()
+
+# The panel hostname, recovered from the vhost before it is removed, so the closing report
+# can name the exact certificate and the exact beacon tag.
+UNINSTALL_HOSTNAME=""
+
+# How many credential and data files the last shred pass actually removed.
+SHREDDED_COUNT=0
+
+# Record something the operator has to deal with themselves.
+leave_behind() {
+    LEFT_BEHIND+=("$1")
+}
+
+# Prefixes that are never a Loghound install root, whatever a unit file claims.
+#
+# This is a refusal list, not a safety net: the marker check below is what actually
+# establishes that the tree is ours. This exists so that a prefix which is obviously a
+# system directory is rejected loudly rather than reaching the marker check at all.
+UNINSTALL_FORBIDDEN_PREFIXES=(
+    / /bin /boot /dev /etc /home /lib /lib32 /lib64 /libx32 /media /mnt /opt /proc
+    /root /run /sbin /srv /sys /tmp /usr /usr/bin /usr/local /usr/local/bin /usr/sbin
+    /usr/share /var /var/lib /var/log /var/run /var/tmp /var/www /var/www/html
+)
+
+# Decide whether $PREFIX may be written to or removed.
+#
+# REFUSING IS BETTER THAN GUESSING. $PREFIX during an uninstall usually did not come from
+# the command line: discover_prefix() read it out of a systemd unit, a symlink or a cron
+# file. Three gates, all of which must pass before anything under it is touched:
+#
+#   * it is an absolute path with no '..' in it;
+#   * it is not one of the system directories above;
+#   * it contains at least one file only a Loghound install would put there.
+#
+# Failing any of them is not fatal to the uninstall — the system integration is still
+# unwound, which is the part that matters on a shared box — but the tree itself is left
+# strictly alone and named in the closing report.
+uninstall_validate_prefix() {
+    PREFIX_LOOKS_LIKE_LOGHOUND=0
+
+    case "$PREFIX" in
+        ''|*/../*|*/..|../*|..)
+            warn "the install prefix '$PREFIX' is not a usable path — nothing under it will be touched"
+            return 0
+            ;;
+        /*) : ;;
+        *)
+            warn "the install prefix '$PREFIX' is not absolute — nothing under it will be touched"
+            return 0
+            ;;
+    esac
+
+    local forbidden
+    for forbidden in "${UNINSTALL_FORBIDDEN_PREFIXES[@]}"; do
+        if [[ "$PREFIX" == "$forbidden" ]]; then
+            warn "refusing to treat the system directory '$PREFIX' as a Loghound install root"
+            return 0
+        fi
+    done
+
+    if [[ ! -d "$PREFIX" ]]; then
+        info "no install tree at $PREFIX — it has already been removed, or was never created"
+        return 0
+    fi
+
+    local markers=0 marker
+    for marker in config/loghound.php var/state.db var/install-token src/autoload.php \
+                  bin/loghound-tail install/install.sh; do
+        [[ -e "$PREFIX/$marker" ]] && markers=$((markers + 1))
+    done
+
+    if (( markers == 0 )); then
+        warn "$PREFIX contains nothing that identifies it as a Loghound install"
+        info "      Refusing to delete it. If it really is one, remove it by hand."
+        leave_behind "$PREFIX — not recognised as a Loghound install, left untouched"
+        return 0
+    fi
+
+    PREFIX_LOOKS_LIKE_LOGHOUND=1
+    ok "install tree at $PREFIX ($markers Loghound marker(s) present)"
+}
+
+# Overwrite a file's bytes, then unlink it.
+#
+# WHAT THIS DOES AND DOES NOT ACHIEVE. On a classic in-place filesystem (ext4 in its
+# default data=ordered mode, xfs) writing zeros over the file's blocks and then unlinking
+# does overwrite the bytes the secret occupied, which defeats undelete tooling and casual
+# recovery of the raw device.
+#
+# It is NOT a guarantee, and must never be presented as one. On a copy-on-write filesystem
+# (btrfs, ZFS, bcachefs), on an overlayfs upper layer, on any journalling mode that
+# journals data, on a snapshotted volume, on a thin-provisioned LUN, and on every SSD with
+# wear levelling or compression, the write lands somewhere new and the ORIGINAL blocks are
+# still on the media with no way to address them from the filesystem. Backups, VM
+# snapshots and replicated volumes are untouched by definition.
+#
+# The only reliable remedy for a credential that has been on a disk is to ROTATE IT, which
+# is what the closing report tells the operator to do.
+shred_file() {
+    local path="$1"
+
+    [[ -n "$path" ]] || return 0
+    [[ -f "$path" && ! -L "$path" ]] || return 0
+
+    logfile "SHRED $path"
+    if (( DRY_RUN )); then
+        printf '    %sDRY-RUN%s overwrite and remove %s\n' "$C_DIM" "$C_RESET" "$path"
+        return 0
+    fi
+
+    if command -v shred >/dev/null 2>&1; then
+        if shred -u -z -n 1 "$path" >/dev/null 2>&1; then
+            SHREDDED_COUNT=$((SHREDDED_COUNT + 1))
+            return 0
+        fi
+    fi
+
+    local size
+    size="$(wc -c < "$path" 2>/dev/null || echo 0)"
+    size="${size//[^0-9]/}"
+    size="${size:-0}"
+    dd if=/dev/zero of="$path" bs=4096 count=$(( (size + 4095) / 4096 )) conv=notrunc >/dev/null 2>&1 || true
+    rm -f "$path" 2>/dev/null || true
+    SHREDDED_COUNT=$((SHREDDED_COUNT + 1))
+}
+
+# Remove a directory tree, but only one that passed uninstall_validate_prefix().
+#
+# The rm is built from $PREFIX plus a literal relative path, never from anything a caller
+# supplied, and it refuses outright unless the prefix has been validated in this run.
+remove_under_prefix() {
+    local relative="${1:-}"
+    local target="$PREFIX${relative:+/$relative}"
+
+    if (( ! PREFIX_LOOKS_LIKE_LOGHOUND )); then
+        return 0
+    fi
+    case "$relative" in
+        *..*) die "Internal error: refusing a teardown path containing '..': $relative" ;;
+    esac
+    [[ -e "$target" ]] || return 0
+
+    run rm -rf "$target"
+}
+
+# Ask a yes/no question that --yes is allowed to answer, honouring a per-question
+# environment override for unattended runs.
+uninstall_confirm() {
+    local question="$1" default="$2" envvar="$3" envvalue
+
+    envvalue="${!envvar:-}"
+    if [[ "$envvalue" == "yes" ]]; then
+        say "$question -> yes ($envvar=yes)"
+        return 0
+    fi
+    if [[ "$envvalue" == "no" ]]; then
+        say "$question -> no ($envvar=no)"
+        return 1
+    fi
+    confirm "$question" "$default"
+}
+
+# =============================================================================
+# Uninstall — steps
+# =============================================================================
+
+# Stop and remove the units and both timers, then reload systemd.
+#
+# FIRST, always. A running loghound-tail re-creates var/state.db moments after it is
+# removed, keeps writing to Solr while the indexes are being deleted, and holds the
+# service user open so userdel refuses at the end.
+uninstall_units() {
+    step "Services and timers"
+
+    if (( ! HAVE_SYSTEMD )); then
+        skip "no systemd on this box"
+        return 0
+    fi
+
+    local unit installed
+    installed="$(systemctl list-unit-files --no-legend 2>/dev/null | awk '{print $1}' || true)"
+
+    for unit in loghound-tail.service loghound-score.timer loghound-score.service \
+                loghound-retention.timer loghound-retention.service; do
+        if grep -qx "$unit" <<<"$installed"; then
+            if run systemctl disable --now "$unit"; then
+                ok "stopped and disabled $unit"
+            else
+                warn "could not stop or disable $unit — check 'systemctl status $unit'"
+                leave_behind "the unit $unit — it would not stop; check 'systemctl status $unit'"
+            fi
+        elif [[ -e "$SYSTEMD_DIR/$unit" ]]; then
+            info "$unit is present but was never enabled"
+        fi
+        if [[ -e "$SYSTEMD_DIR/$unit" ]]; then
+            run rm -f "$SYSTEMD_DIR/$unit"
+            ok "removed $SYSTEMD_DIR/$unit"
+        fi
+    done
+
+    run systemctl daemon-reload
+    ok "reloaded the systemd manager configuration"
+}
+
+# Delete the two Opensolr indexes this installation provisioned — and nothing else.
+#
+# Runs BEFORE the configuration is purged, because the API key that authorises it is in
+# that configuration. Every ownership decision is made by install/opensolr-teardown.php,
+# which derives the names from solr.install_id, requires them to match the stored config
+# and the platform's own name shape, and cross-checks them against the account's index
+# list. It never accepts a name from anywhere else and it never deletes on a check it
+# could not perform.
+#
+# The confirmation here deliberately ignores --yes. Deleting an Opensolr index destroys
+# the data and burns the name permanently across the entire platform, so it takes either
+# the literal word DELETE at a prompt or LOGHOUND_UNINSTALL_DELETE_INDEXES=yes.
+uninstall_opensolr_indexes() {
+    step "Opensolr indexes"
+
+    local config="$PREFIX/config/loghound.php"
+    local helper="" path name
+    for path in "$SRC_DIR/install/opensolr-teardown.php" "$PREFIX/install/opensolr-teardown.php"; do
+        [[ -f "$path" ]] && { helper="$path"; break; }
+    done
+
+    if (( ! PREFIX_LOOKS_LIKE_LOGHOUND )) || [[ ! -r "$config" ]]; then
+        info "no readable configuration at $config"
+        info "      Nothing can be verified, so no index is touched. If this account still"
+        info "      holds two 'loghound_<id>_hits' / '_sessions' indexes, remove them in the"
+        info "      Opensolr control panel at https://opensolr.com."
+        leave_behind "any Opensolr indexes this install created — the config was gone, so ownership could not be checked"
+        return 0
+    fi
+    if [[ -z "$helper" ]] || [[ -z "$PHP_BIN" ]]; then
+        warn "cannot run the index check (no PHP, or install/opensolr-teardown.php is missing)"
+        leave_behind "the two Opensolr indexes — the ownership check could not be run"
+        return 0
+    fi
+
+    local out="" rc=0
+    out="$("$PHP_BIN" "$helper" --config="$config" --plan 2>&1)" || rc=$?
+
+    local status reason
+    status="$(awk '$1 == "STATUS" { print $2; exit }' <<<"$out")"
+    reason="$(sed -n 's/^REASON //p' <<<"$out" | head -1)"
+
+    local -a names=()
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && names+=("$name")
+    done < <(awk '$1 == "NAME" { print $2 }' <<<"$out")
+
+    case "$status" in
+        custom)
+            say "this installation uses its own Solr, not Opensolr-managed indexes"
+            info "      ${reason:-}"
+            info "      Loghound will not unload a core from a Solr it does not manage:"
+            info "      it cannot tell a dedicated node from one your other applications"
+            info "      also write to. Remove the two cores yourself if you want them gone."
+            leave_behind "the two Solr cores on your own Solr — Loghound never unloads a core it does not manage"
+            return 0
+            ;;
+        ok)
+            : ;;
+        refuse)
+            warn "refusing to delete any index: ${reason:-the configuration does not describe a pair this install provisioned}"
+            leave_behind "the Solr indexes named in $config — ownership could not be established, so nothing was deleted"
+            return 0
+            ;;
+        *)
+            warn "could not establish ownership: ${reason:-the Opensolr control plane could not be reached}"
+            info "      A check that could not be performed is a failed check, so no index"
+            info "      was deleted. Remove them in the Opensolr control panel if you want"
+            info "      them gone: https://opensolr.com"
+            if (( ${#names[@]} > 0 )); then
+                for name in "${names[@]}"; do
+                    info "        $name"
+                done
+            fi
+            leave_behind "the two Opensolr indexes — ownership could not be verified (${reason:-control plane unreachable})"
+            return 0
+            ;;
+    esac
+
+    if (( rc != 0 )) || (( ${#names[@]} != 2 )); then
+        warn "the ownership check did not return two verified index names"
+        leave_behind "the two Opensolr indexes — the ownership check was inconclusive"
+        return 0
+    fi
+
+    printf '\n'
+    warn "############################################################"
+    warn "# The next question DESTROYS DATA, permanently."
+    warn "#"
+    warn "# These two indexes would be deleted from your Opensolr"
+    warn "# account:"
+    for name in "${names[@]}"; do
+        warn "#     $name"
+    done
+    warn "#"
+    warn "# Everything in them is gone, and there is no undo. Opensolr"
+    warn "# index names are unique across the WHOLE PLATFORM and are"
+    warn "# never released, so neither name can ever be created again,"
+    warn "# by you or by anyone else."
+    warn "#"
+    warn "# Nothing else in your account is touched: only these two"
+    warn "# names, and only after the platform confirmed your account"
+    warn "# holds them."
+    warn "############################################################"
+    printf '\n'
+
+    if ! confirm_delete_indexes; then
+        say "keeping the indexes"
+        info "      Delete them later in the Opensolr control panel if you change your mind."
+        leave_behind "the Opensolr indexes ${names[0]} and ${names[1]} — you chose to keep them"
+        return 0
+    fi
+
+    if (( DRY_RUN )); then
+        printf '    %sDRY-RUN%s would delete %s and %s\n' "$C_DIM" "$C_RESET" "${names[0]}" "${names[1]}"
+        return 0
+    fi
+
+    rc=0
+    out="$("$PHP_BIN" "$helper" --config="$config" --delete 2>&1)" || rc=$?
+
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && ok "deleted index $name"
+    done < <(awk '$1 == "DELETED" { print $2 }' <<<"$out")
+
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && info "$name was already gone from the account"
+    done < <(awk '$1 == "ABSENT" { print $2 }' <<<"$out")
+
+    if (( rc != 0 )); then
+        warn "at least one index could not be deleted:"
+        sed -n 's/^FAILED /      /p' <<<"$out" >&2 || true
+        leave_behind "an Opensolr index the platform refused to delete — remove it at https://opensolr.com"
+    fi
+}
+
+# Require the literal word DELETE, or the dedicated environment variable.
+#
+# --yes and --non-interactive both answer NO here on purpose. Every other question in the
+# uninstall is about this machine and is reversible by reinstalling; this one is neither.
+confirm_delete_indexes() {
+    if [[ "${LOGHOUND_UNINSTALL_DELETE_INDEXES:-}" == "yes" ]]; then
+        say "LOGHOUND_UNINSTALL_DELETE_INDEXES=yes — deleting both indexes"
+        return 0
+    fi
+    if [[ "$NONINTERACTIVE" == "1" ]] || [[ ! -e /dev/tty ]]; then
+        say "non-interactive, and LOGHOUND_UNINSTALL_DELETE_INDEXES is not 'yes' — keeping both indexes"
+        return 1
+    fi
+
+    local answer=""
+    read -r -p "    Type DELETE to destroy both indexes permanently, or press Enter to keep them: " answer </dev/tty || answer=""
+    [[ "$answer" == "DELETE" ]]
+}
+
+# Disable and remove the vhost, then validate and reload — in that order, never the other.
+#
+# The configtest is the whole point: this runs on boxes with other people's sites on them,
+# and reloading a web server into a configuration that does not parse takes every one of
+# those sites down. If the test fails the reload is skipped and the operator is told, which
+# leaves the running server serving its last good configuration.
+uninstall_vhost() {
+    step "Web server configuration"
+
+    local removed_apache=0 removed_nginx=0 file
+    local -a candidates=()
+
+    [[ -n "$APACHE_SITES_ENABLED" ]] && candidates+=("apache:$APACHE_SITES_ENABLED/$VHOST_NAME")
+    [[ -n "$APACHE_SITES_AVAIL"   ]] && candidates+=("apache:$APACHE_SITES_AVAIL/$VHOST_NAME")
+    [[ -n "$NGINX_SITES_ENABLED"  ]] && candidates+=("nginx:$NGINX_SITES_ENABLED/$VHOST_NAME")
+    [[ -n "$NGINX_SITES_AVAIL"    ]] && candidates+=("nginx:$NGINX_SITES_AVAIL/$VHOST_NAME")
+
+    local entry server
+    for entry in "${candidates[@]:-}"; do
+        [[ -z "$entry" ]] && continue
+        server="${entry%%:*}"
+        file="${entry#*:}"
+        [[ -e "$file" || -L "$file" ]] || continue
+
+        if [[ -z "$UNINSTALL_HOSTNAME" && -r "$file" ]]; then
+            UNINSTALL_HOSTNAME="$(awk 'tolower($1) ~ /^(servername|server_name)$/ { gsub(/;/, "", $2); print $2; exit }' "$file" 2>/dev/null || true)"
+        fi
+
+        if [[ "$server" == "apache" ]] && [[ "$file" == "$APACHE_SITES_ENABLED/$VHOST_NAME" ]] \
+           && [[ "$APACHE_SITES_ENABLED" != "$APACHE_SITES_AVAIL" ]] \
+           && command -v a2dissite >/dev/null 2>&1; then
+            if run a2dissite "${VHOST_NAME%.conf}"; then
+                ok "disabled the site with a2dissite"
+            else
+                warn "a2dissite failed; removing $file directly"
+                run rm -f "$file"
+            fi
+            if (( ! DRY_RUN )) && [[ -e "$file" || -L "$file" ]]; then
+                run rm -f "$file"
+            fi
+            removed_apache=1
+        else
+            run rm -f "$file"
+            ok "removed $file"
+            [[ "$server" == "apache" ]] && removed_apache=1
+            [[ "$server" == "nginx"  ]] && removed_nginx=1
+        fi
+    done
+
+    if (( ! removed_apache )) && (( ! removed_nginx )); then
+        skip "no Loghound vhost found"
+        return 0
+    fi
+
+    if (( removed_apache )) && [[ -n "$APACHE_BIN" ]]; then
+        if (( DRY_RUN )); then
+            skip "would run '$APACHE_BIN -t' and reload $APACHE_SERVICE only if it passes"
+        elif "$APACHE_BIN" -t >/dev/null 2>&1; then
+            ok "apache configuration is valid without the Loghound vhost"
+            run systemctl reload "$APACHE_SERVICE" || \
+                warn "could not reload $APACHE_SERVICE — reload it yourself"
+            ok "reloaded $APACHE_SERVICE (reload, not restart — other sites undisturbed)"
+        else
+            warn "apache configuration is INVALID — it has NOT been reloaded"
+            info "      The running server is still serving its last good configuration."
+            info "      Find the problem with '$APACHE_BIN -t' before you reload it."
+            leave_behind "an apache configuration that does not pass '$APACHE_BIN -t' — fix it before reloading"
+        fi
+    fi
+
+    if (( removed_nginx )) && command -v nginx >/dev/null 2>&1; then
+        if (( DRY_RUN )); then
+            skip "would run 'nginx -t' and reload nginx only if it passes"
+        elif nginx -t >/dev/null 2>&1; then
+            ok "nginx configuration is valid without the Loghound server block"
+            run systemctl reload nginx || warn "could not reload nginx — reload it yourself"
+            ok "reloaded nginx (reload, not restart — other sites undisturbed)"
+        else
+            warn "nginx configuration is INVALID — it has NOT been reloaded"
+            info "      The running server is still serving its last good configuration."
+            info "      Find the problem with 'nginx -t' before you reload it."
+            leave_behind "an nginx configuration that does not pass 'nginx -t' — fix it before reloading"
+        fi
+    fi
+}
+
+# Remove the dedicated FPM pool, reload the pool manager, and clear the stale socket.
+#
+# Removing the file is not enough on its own: until php-fpm re-reads its configuration the
+# pool is still running, still listening on the socket and still running as a user this
+# script is about to delete. If the reload cannot be done, that is said out loud rather
+# than left for the operator to discover.
+uninstall_fpm_pool() {
+    step "PHP-FPM pool"
+
+    local pool="${FPM_POOL_DIR:+$FPM_POOL_DIR/loghound.conf}"
+    if [[ -z "$pool" ]] || [[ ! -e "$pool" ]]; then
+        skip "no Loghound FPM pool found"
+        return 0
+    fi
+    run rm -f "$pool"
+    ok "removed $pool"
+
+    local reloaded=0
+    if (( HAVE_SYSTEMD )) && [[ -n "$FPM_SERVICE" ]]; then
+        if (( DRY_RUN )); then
+            skip "would validate the pool configuration and reload $FPM_SERVICE"
+            reloaded=1
+        elif [[ -n "$FPM_BIN" ]] && ! "$FPM_BIN" -t >/dev/null 2>&1; then
+            warn "php-fpm's remaining configuration does not validate — NOT reloading it"
+            info "      Run '$FPM_BIN -t'. Until it passes, the Loghound pool keeps running."
+            leave_behind "a php-fpm configuration that does not pass '$FPM_BIN -t' — the Loghound pool is still live until it does"
+        else
+            if run systemctl reload "$FPM_SERVICE"; then
+                ok "reloaded $FPM_SERVICE — the pool is no longer served"
+                reloaded=1
+            else
+                warn "could not reload $FPM_SERVICE; the Loghound pool is still running"
+                leave_behind "a running php-fpm pool — reload $FPM_SERVICE to retire it"
+            fi
+        fi
+    else
+        warn "reload php-fpm yourself, or the Loghound pool keeps running"
+        leave_behind "a running php-fpm pool — reload php-fpm to retire it"
+    fi
+
+    if (( reloaded )) && [[ -n "$FPM_SOCK" ]] && [[ -S "$FPM_SOCK" ]]; then
+        run rm -f "$FPM_SOCK"
+        ok "removed the stale socket $FPM_SOCK"
+    fi
+}
+
+# Remove the /usr/local/bin symlinks, the cron fallback and any logrotate fragment.
+#
+# Only symlinks are removed from /usr/local/bin: install.sh refuses to replace a real file
+# there and says so, so a real file with one of these names belongs to something else.
+# install.sh does not currently write a logrotate fragment; /etc/logrotate.d/loghound is
+# cleared anyway so that an older install, or one an operator added by hand following the
+# documentation, does not survive an uninstall.
+uninstall_fragments() {
+    step "Command links and scheduler fragments"
+
+    local cmd removed=0
+    for cmd in loghound-tail loghound-setup loghound-score loghound-retention; do
+        if [[ -L "/usr/local/bin/$cmd" ]]; then
+            run rm -f "/usr/local/bin/$cmd"
+            ok "removed /usr/local/bin/$cmd"
+            removed=1
+        elif [[ -e "/usr/local/bin/$cmd" ]]; then
+            warn "/usr/local/bin/$cmd is a real file, not our symlink — leaving it alone"
+            leave_behind "/usr/local/bin/$cmd — a real file Loghound did not create"
+        fi
+    done
+    (( removed )) || skip "no Loghound command links found"
+
+    local fragment
+    for fragment in /etc/cron.d/loghound /etc/logrotate.d/loghound; do
+        if [[ -e "$fragment" ]]; then
+            run rm -f "$fragment"
+            ok "removed $fragment"
+        fi
+    done
+}
+
+# Overwrite and remove every file under the prefix that holds a credential or visitor data.
+#
+# This is offered SEPARATELY from "delete the whole tree", and defaults to yes, because the
+# two questions are genuinely different: an operator may have good reasons to keep the
+# install directory, and none of those reasons is a reason to leave the Opensolr API key
+# readable on a decommissioned box.
+#
+# The list is exhaustive by construction rather than by memory. It covers:
+#
+#   credentials   config/loghound.php holds every one of them — the Opensolr API key and
+#                 account email, the beacon HMAC secret, privacy.ip_salt, solr.http_pass
+#                 and the panel's password hash. config/.loghound.*.tmp is the same file
+#                 mid-write: Config::save() writes a 0640 temp file and renames it, so a
+#                 crash between the two leaves a complete second copy of the secrets.
+#                 config/tls-*.key is the self-signed private key install.sh generated.
+#   setup token   var/install-token is a bearer credential for the unauthenticated web
+#                 installer, and var/install-attempts.json is its guess ledger.
+#   sessions      var/sessions/* — a PHP session file IS a signed-in panel session.
+#   job state     var/setup/*.json and var/panel-jobs.db carry provisioning context that
+#                 has held the API key before now, which is why both are in the list.
+#   visitor data  var/state.db (tail offsets, open sessions, beacon staging, enrichment
+#                 caches), var/badlines.log, var/detect.json, var/php-error.log and
+#                 var/fpm-slow.log all contain client addresses and request paths.
+#
+# See shred_file() for exactly how much the overwrite is and is not worth.
+uninstall_secrets() {
+    step "Credentials and local data"
+
+    if (( ! PREFIX_LOOKS_LIKE_LOGHOUND )); then
+        skip "no validated install tree to clean"
+        return 0
+    fi
+
+    printf '\n'
+    warn "The next question is about CREDENTIALS, not about software."
+    say  "$PREFIX/config/loghound.php holds your Opensolr API key and account email, the"
+    say  "beacon HMAC secret, the IP salt, any Solr password and the panel password hash."
+    say  "$PREFIX/var holds the setup token, signed-in panel sessions, and visitor data."
+    printf '\n'
+
+    if ! uninstall_confirm "Overwrite and remove these files?" y LOGHOUND_UNINSTALL_SHRED_SECRETS; then
+        say "kept them"
+        leave_behind "$PREFIX/config/loghound.php and $PREFIX/var — the credentials are still on this disk"
+        return 0
+    fi
+
+    SHREDDED_COUNT=0
+
+    local file
+    for file in "$PREFIX/config/loghound.php" \
+                "$PREFIX/var/install-token" \
+                "$PREFIX/var/install-attempts.json" \
+                "$PREFIX/var/login-attempts.json" \
+                "$PREFIX/var/state.db" "$PREFIX/var/state.db-wal" "$PREFIX/var/state.db-shm" \
+                "$PREFIX/var/panel-jobs.db" "$PREFIX/var/panel-jobs.db-wal" "$PREFIX/var/panel-jobs.db-shm" \
+                "$PREFIX/var/quota.json" \
+                "$PREFIX/var/detect.json" \
+                "$PREFIX/var/badlines.log" \
+                "$PREFIX/var/php-error.log" \
+                "$PREFIX/var/fpm-slow.log" \
+                "$PREFIX/var/install-state.txt"; do
+        shred_file "$file"
+    done
+
+    for file in "$PREFIX"/config/.loghound.*.tmp "$PREFIX"/config/tls-*.key \
+                "$PREFIX"/var/.quota.*.tmp \
+                "$PREFIX"/var/setup/*.json "$PREFIX"/var/setup/.*.tmp \
+                "$PREFIX"/var/sessions/sess_*; do
+        shred_file "$file"
+    done
+
+    remove_under_prefix var/setup
+    remove_under_prefix var/sessions
+
+    if (( DRY_RUN )); then
+        return 0
+    fi
+
+    ok "overwrote and removed $SHREDDED_COUNT credential and data file(s)"
+    info "      Overwriting is not a guarantee on a copy-on-write, journalling or"
+    info "      snapshotted filesystem, or on any SSD. Treat every secret that was in"
+    info "      those files as exposed and ROTATE it — see the report below."
+}
+
+# Remove the install tree itself, if the operator wants it gone.
+uninstall_tree() {
+    step "Install tree"
+
+    if (( ! PREFIX_LOOKS_LIKE_LOGHOUND )); then
+        skip "no validated install tree to remove"
+        return 0
+    fi
+
+    if uninstall_confirm "Delete $PREFIX and everything still in it?" n LOGHOUND_UNINSTALL_DELETE_TREE; then
+        remove_under_prefix ""
+        (( DRY_RUN )) || ok "removed $PREFIX"
+    else
+        say "kept $PREFIX"
+        leave_behind "$PREFIX — you chose to keep the directory"
+    fi
+}
+
+# Remove the service user, after everything it owns is gone.
+#
+# The 'adm' membership is dropped first and separately. If userdel fails — a stray process
+# still running as the user is the usual reason — the account survives, and an account that
+# survives with 'adm' on it keeps read access to every log on the machine.
+uninstall_user() {
+    step "System user"
+
+    if ! id -u "$RUN_USER" >/dev/null 2>&1; then
+        skip "no user '$RUN_USER' on this box"
+        return 0
+    fi
+
+    if ! uninstall_confirm "Remove the system user '$RUN_USER'?" y LOGHOUND_UNINSTALL_REMOVE_USER; then
+        say "kept the user '$RUN_USER'"
+        leave_behind "the system user '$RUN_USER', still a member of '$LOG_GROUP'"
+        return 0
+    fi
+
+    if [[ -n "$LOG_GROUP" ]] && id -nG "$RUN_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$LOG_GROUP"; then
+        if command -v gpasswd >/dev/null 2>&1; then
+            run gpasswd -d "$RUN_USER" "$LOG_GROUP" || \
+                warn "could not remove '$RUN_USER' from '$LOG_GROUP'"
+            ok "removed '$RUN_USER' from the '$LOG_GROUP' group"
+        else
+            warn "gpasswd is not available; '$RUN_USER' keeps its '$LOG_GROUP' membership"
+            leave_behind "'$RUN_USER' is still in '$LOG_GROUP' — it can still read /var/log"
+        fi
+    fi
+
+    if run userdel "$RUN_USER"; then
+        ok "removed the system user '$RUN_USER'"
+    else
+        warn "userdel refused — something is probably still running as '$RUN_USER'"
+        info "      Check with: ps -u $RUN_USER"
+        info "      It is no longer in '$LOG_GROUP', so it can no longer read /var/log."
+        leave_behind "the system user '$RUN_USER' — userdel refused, check 'ps -u $RUN_USER'"
+    fi
+}
+
+# Print everything the uninstall deliberately did not do.
+#
+# The certificate is a judgement call and is never deleted silently: certbot renews it on a
+# timer, other vhosts may already be using it, and re-issuing after a mistaken delete runs
+# into Let's Encrypt rate limits. The operator is given the exact command instead.
+uninstall_report() {
+    local host="${UNINSTALL_HOSTNAME:-}"
+
+    if [[ -n "$host" ]] && [[ -d "/etc/letsencrypt/live/$host" ]]; then
+        leave_behind "the TLS certificate at /etc/letsencrypt/live/$host — kept on purpose; 'certbot delete --cert-name $host' removes it and its renewal timer"
+    fi
+
+    local logfile_path
+    for logfile_path in /var/log/apache2/loghound_access.log /var/log/apache2/loghound_error.log \
+                        /var/log/httpd/loghound_access.log /var/log/httpd/loghound_error.log \
+                        /var/log/nginx/loghound_access.log /var/log/nginx/loghound_error.log; do
+        if [[ -f "$logfile_path" ]]; then
+            leave_behind "$logfile_path — the panel's own access log, holding visitor addresses. Your logrotate owns it; remove it yourself if you want it gone."
+        fi
+    done
+
+    step "What was NOT removed"
+
+    say "Only you can do these."
+    printf '\n'
+
+    if [[ -n "$host" ]]; then
+        say "  THE BEACON TAG on your website. Remove this line from your templates:"
+        say "      <script src=\"https://$host/b.js?v=1\" defer></script>"
+    else
+        say "  THE BEACON TAG on your website — the <script> element pointing at this"
+        say "  panel's /b.js. Only you can take it out of your templates."
+    fi
+    say "  Until it is gone, every page load asks a host that no longer answers."
+    printf '\n'
+
+    say "  ROTATE THE OPENSOLR API KEY at https://opensolr.com if this box is being"
+    say "  decommissioned, sold, or handed to somebody else. Overwriting a file is not"
+    say "  a guarantee on modern storage, and backups and snapshots were never touched."
+    printf '\n'
+
+    if (( ${#LEFT_BEHIND[@]} > 0 )); then
+        local item
+        for item in "${LEFT_BEHIND[@]}"; do
+            say "  - $item"
+        done
+        printf '\n'
+    fi
+
+    say "  Anything you added by hand — a supervisor unit, a firewall rule, a reverse"
+    say "  proxy entry, a monitoring check, a backup job, an entry in your own"
+    say "  logrotate configuration — is untouched. This uninstaller only removes what"
+    say "  install.sh created, and it will not guess at the rest."
+    printf '\n'
+    say "  Your source log files were never written to, and are exactly as they were."
+}
+
+# =============================================================================
+# Uninstall — orchestrator
+# =============================================================================
+
+# Reverse the install, in the order documented in this file's header.
+#
+# Every step tolerates its subject being absent, so a half-finished install — no config, no
+# user, units copied in but never enabled, a prefix that was never created — uninstalls
+# cleanly instead of aborting on the first missing thing.
 do_uninstall() {
     step "Uninstall"
 
-    say "This will remove the Loghound service units, the vhost, the FPM pool and the"
-    say "system user. You will be asked separately before ANY data is deleted."
+    if (( EUID != 0 )) && (( ! DRY_RUN )); then
+        die "The uninstaller must run as root. Re-run with sudo, or use --dry-run first."
+    fi
+
+    uninstall_validate_prefix
+
     printf '\n'
+    say "About to remove, on this machine:"
+    say "  - the loghound units and both timers, and any cron or logrotate fragment"
+    say "  - the Loghound vhost, after proving the web server still validates without it"
+    say "  - the dedicated PHP-FPM pool, and its socket"
+    say "  - the /usr/local/bin command links"
+    say "  - the system user '$RUN_USER' and its '$LOG_GROUP' membership"
+    if (( PREFIX_LOOKS_LIKE_LOGHOUND )); then
+        say "  - the credentials and data under $PREFIX, and optionally the tree itself"
+    fi
+    printf '\n'
+    say "You will be asked separately, and by name, before ANY data is deleted and before"
+    say "any Opensolr index is touched. Your source log files are never written to."
+    if (( DRY_RUN )); then
+        printf '\n'
+        say "This is a DRY RUN: every action is printed and nothing is changed. The"
+        say "questions are still asked so you can walk the whole path before trusting it."
+    fi
+    printf '\n'
+
     if ! confirm "Continue?" n; then
         say "Nothing was changed."
         exit 0
     fi
 
-    # ---- services ----
-    if (( HAVE_SYSTEMD )); then
-        local u
-        for u in loghound-tail.service loghound-score.timer loghound-score.service \
-                 loghound-retention.timer loghound-retention.service; do
-            if systemctl list-unit-files --no-legend 2>/dev/null | grep -q "^$u"; then
-                run systemctl disable --now "$u" || true
-                ok "stopped and disabled $u"
-            fi
-            [[ -e "$SYSTEMD_DIR/$u" ]] && { run rm -f "$SYSTEMD_DIR/$u"; ok "removed $SYSTEMD_DIR/$u"; }
-        done
-        run systemctl daemon-reload
-    fi
-    [[ -e /etc/cron.d/loghound ]] && { run rm -f /etc/cron.d/loghound; ok "removed /etc/cron.d/loghound"; }
-
-    # ---- vhost ----
-    # Track which web server we actually changed, so we reload THAT one and only that
-    # one. Reloading a web server we did not touch is needless risk on a busy box.
-    local removed_apache=0 removed_nginx=0 f
-    for f in "$APACHE_SITES_ENABLED/$VHOST_NAME" "$APACHE_SITES_AVAIL/$VHOST_NAME" \
-             "$NGINX_SITES_ENABLED/$VHOST_NAME" "$NGINX_SITES_AVAIL/$VHOST_NAME"; do
-        [[ -n "$f" && -e "$f" ]] || continue
-        if [[ "$f" == "$APACHE_SITES_ENABLED/$VHOST_NAME" ]] && command -v a2dissite >/dev/null 2>&1; then
-            run a2dissite "${VHOST_NAME%.conf}" || true
-            removed_apache=1
-        else
-            run rm -f "$f"
-            [[ "$f" == "$APACHE_SITES_AVAIL/$VHOST_NAME" || "$f" == "$APACHE_SITES_ENABLED/$VHOST_NAME" ]] && removed_apache=1
-            [[ "$f" == "$NGINX_SITES_AVAIL/$VHOST_NAME"  || "$f" == "$NGINX_SITES_ENABLED/$VHOST_NAME"  ]] && removed_nginx=1
-        fi
-        ok "removed $f"
-    done
-
-    # Validate before reloading, and reload only what we changed. Never leave a broken
-    # host, and never disturb a web server that had nothing to do with Loghound.
-    if (( removed_apache )) && [[ -n "$APACHE_BIN" ]]; then
-        if "$APACHE_BIN" -t >/dev/null 2>&1; then
-            run systemctl reload "$APACHE_SERVICE" || true
-            ok "reloaded $APACHE_SERVICE"
-        else
-            warn "apache configuration is invalid after removing the vhost — NOT reloading"
-            info "      run '$APACHE_BIN -t' and fix it before reloading"
-        fi
-    fi
-    if (( removed_nginx )) && command -v nginx >/dev/null 2>&1; then
-        if nginx -t >/dev/null 2>&1; then
-            run systemctl reload nginx || true
-            ok "reloaded nginx"
-        else
-            warn "nginx configuration is invalid after removing the server block — NOT reloading"
-        fi
-    fi
-
-    # ---- fpm pool ----
-    if [[ -n "$FPM_POOL_DIR" && -e "$FPM_POOL_DIR/loghound.conf" ]]; then
-        run rm -f "$FPM_POOL_DIR/loghound.conf"
-        ok "removed $FPM_POOL_DIR/loghound.conf"
-        if [[ -n "$FPM_BIN" ]] && "$FPM_BIN" -t >/dev/null 2>&1 && (( HAVE_SYSTEMD )) && [[ -n "$FPM_SERVICE" ]]; then
-            run systemctl reload "$FPM_SERVICE" || true
-            ok "reloaded $FPM_SERVICE"
-        fi
-    fi
-
-    # ---- symlinks ----
-    local cmd
-    for cmd in loghound-tail loghound-setup loghound-score loghound-retention; do
-        [[ -L "/usr/local/bin/$cmd" ]] && { run rm -f "/usr/local/bin/$cmd"; ok "removed /usr/local/bin/$cmd"; }
-    done
-
-    # ---- DATA: always prompted, never assumed ----
-    printf '\n'
-    warn "The next question is about DATA, not about software."
-    say  "$PREFIX contains var/state.db (tail offsets, open sessions, beacon staging)"
-    say  "and config/loghound.php (your Opensolr API key and beacon secret)."
-    if confirm "Delete $PREFIX and everything in it?" n; then
-        run rm -rf "$PREFIX"
-        ok "removed $PREFIX"
-    else
-        say "kept $PREFIX"
-    fi
-
-    printf '\n'
-    say "Your Solr indexes have NOT been touched. This installer will not delete an"
-    say "index: it cannot tell a dedicated Loghound index from a shared Solr that"
-    say "something else also writes to, and getting that wrong is unrecoverable."
-    if confirm "Show the commands to remove the Loghound indexes yourself?" n; then
-        # Read the ACTUAL index names out of the config rather than printing a guess.
-        # They carry a random per-installation id (Opensolr index names are unique across
-        # the whole platform), so a hardcoded 'loghound_hits' here would be wrong for
-        # every installation and would send someone to delete somebody else's index.
-        local hits_core="" sess_core=""
-        if [[ -r "$PREFIX/config/loghound.php" ]] && [[ -n "$PHP_BIN" ]]; then
-            hits_core="$("$PHP_BIN" -r 'define("LOGHOUND",1); $c=@require $argv[1]; echo $c["solr"]["hits_core"] ?? "";' \
-                "$PREFIX/config/loghound.php" 2>/dev/null || true)"
-            sess_core="$("$PHP_BIN" -r 'define("LOGHOUND",1); $c=@require $argv[1]; echo $c["solr"]["sessions_core"] ?? "";' \
-                "$PREFIX/config/loghound.php" 2>/dev/null || true)"
-        fi
-        [[ -z "$hits_core" ]] && hits_core="<hits index name from config/loghound.php>"
-        [[ -z "$sess_core" ]] && sess_core="<sessions index name from config/loghound.php>"
-
-        printf '\n'
-        say "  Your indexes are named:"
-        say "    $hits_core"
-        say "    $sess_core"
-        printf '\n'
-        say "  Opensolr managed: delete them in your Opensolr control panel"
-        say "                    (https://opensolr.com — Indexes > Delete)"
-        say "  Your own Solr:    curl 'http://SOLR/solr/admin/cores?action=UNLOAD\\"
-        say "                          &core=$hits_core&deleteIndex=true&deleteDataDir=true'"
-        say "                    and the same for $sess_core"
-        printf '\n'
-    fi
-
-    # ---- user ----
-    if id -u "$RUN_USER" >/dev/null 2>&1; then
-        if confirm "Remove the system user '$RUN_USER'?" y; then
-            run userdel "$RUN_USER" || warn "could not remove the user (files may still be owned by it)"
-            ok "removed user '$RUN_USER'"
-        fi
-    fi
+    uninstall_units
+    uninstall_opensolr_indexes
+    uninstall_vhost
+    uninstall_fpm_pool
+    uninstall_fragments
+    uninstall_secrets
+    uninstall_tree
+    uninstall_user
+    uninstall_report
 
     step "Uninstalled"
+    if (( DRY_RUN )); then
+        say "Dry run complete. Nothing was changed."
+        exit 0
+    fi
+
     say "Log of this run: $INSTALL_LOG"
+    if uninstall_confirm "Remove the install log too?" n LOGHOUND_UNINSTALL_REMOVE_LOG; then
+        rm -f "$INSTALL_LOG" 2>/dev/null || true
+        printf '    %sPASS%s  removed %s\n' "$C_GREEN" "$C_RESET" "$INSTALL_LOG"
+    fi
+    printf '\n'
     exit 0
 }
 
@@ -2253,7 +2975,13 @@ run_tests
 ROLLBACK_ARMED=0
 
 SETUP_OK=1
-run_setup || SETUP_OK=0
+if (( SKIP_SETUP )); then
+    SETUP_OK=0
+    step "Configuration"
+    skip "handing over to the browser instead of the terminal"
+else
+    run_setup || SETUP_OK=0
+fi
 if (( SETUP_OK )); then
     start_and_verify || true
 fi
@@ -2278,11 +3006,26 @@ cat <<EOF
 EOF
 
 if [[ "$WEBSERVER" != "none" ]]; then
+if (( SKIP_SETUP )) || (( ! SETUP_OK )); then
+cat <<EOF
+    FINISH SETUP IN YOUR BROWSER
+      $SCHEME://$HOSTNAME_FQDN/
+
+      The installer mints a one-time token the first time you open that page,
+      to prove whoever is configuring this box can already read files on it.
+      Open the page, then read the token back with:
+
+        sudo cat $PREFIX/var/install-token
+
+      Nothing is ingested and no index is created until you finish there.
+EOF
+else
 cat <<EOF
     PANEL
       $SCHEME://$HOSTNAME_FQDN/
       Sign in with the username and password you chose during setup.
 EOF
+fi
 if [[ "$TLS_MODE" == "selfsigned" ]]; then
 cat <<EOF
       (Self-signed certificate: your browser will warn. Replace it with a real

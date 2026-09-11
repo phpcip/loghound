@@ -44,7 +44,7 @@ The core idea of the product, in four rows:
 |---|---|---|
 | HTML 200 served | no beacon ever arrived | `bot` — non-JS client, certain |
 | HTML 200 served | beacon arrived, headless signals positive | `bot` — headless automation, certain |
-| HTML 200 served | beacon arrived, zero interaction, left in under 15s | `likely_bot` |
+| HTML 200 served | beacon arrived, zero interaction, single page, left in under 10s | `unknown` — 55 points, and deliberately short of a verdict |
 | HTML 200 served | beacon + interaction + plausible timing distribution | `human` |
 
 ---
@@ -65,9 +65,15 @@ fleet changes its exit IP on every request and changes nothing else, because the
 value of the fleet is that it is one automation stack wearing many addresses. Hashing
 everything *except* the address is what collapses the fleet back into a single row.
 
-`fp_ips_24h_i` is the number of distinct IPs that shared a fingerprint within ±12 hours,
-computed by the scorer with one Solr JSON Facet query per distinct fingerprint in the
-batch. It is the single strongest signal in the system.
+`fp_ips_24h_i` is the number of distinct IPs that shared a fingerprint within ±12 hours —
+a 24-hour window, which is where the field name comes from. It is the single strongest
+signal in the system.
+
+It is computed in **as few Solr queries as possible, not one per fingerprint**: sessions
+are bucketed by the hour they ended, every fingerprint in a bucket shares one window, and
+the whole bucket is answered by a single terms facet on `fp_hash_s` with a nested
+`unique(ip_s)`, chunked to stay well under `termsFilter`'s cap of 512 values. A batch of
+four hundred fingerprints is a handful of queries, not four hundred.
 
 How much it is worth depends directly on how many headers you log. With the recommended
 `LogFormat` the tuple has eleven components and is highly discriminating. With plain
@@ -91,9 +97,9 @@ Weights are overridable in `scoring.weights`.
 | Code | Weight | Fires when | Why it is worth that much |
 |---|---|---|---|
 | `automation_marker` | **100** | `navigator.webdriver === true`, a `cdc_`/`$cdc_asdjflasutopfhvcZLmcfl_` property, `__playwright*`, `__puppeteer*`, `__selenium*`, `__nightmare`, `_phantom`, `callPhantom`, `domAutomationController` | These properties do not exist in a browser a person is using. There is no false positive: a page cannot acquire `navigator.webdriver === true` by accident. It is one rule, and on its own it is a verdict. |
-| `beacon_forged` | **90** | The claimed timings are impossible against the HMAC token's issue time — `engaged_ms > visible_ms`, `visible_ms > wall_ms`, or `wall_ms > (now − issued_at + 60s)` | A client claiming four hours of engagement thirty seconds after being issued a token is lying, and **the lie is the evidence**. The payload is recorded rather than discarded, because something that bothers to forge dwell time is not a browser having a bad day. |
+| `beacon_forged` | **90** | The claimed timings are impossible against the HMAC token's issue time — `engaged_ms > visible_ms`, `visible_ms > wall_ms`, or `wall_ms > (now − issued_at + 60s)` — **by more than a 5-second tolerance**. Within that tolerance the number is clamped silently and nothing fires: one-second token resolution plus a heartbeat queued behind a busy main thread produces honest overshoot, and flagging that would be a false accusation. | A client claiming four hours of engagement thirty seconds after being issued a token is lying, and **the lie is the evidence**. The payload is recorded rather than discarded, because something that bothers to forge dwell time is not a browser having a bad day. |
 | `headless_renderer` | **90** | WebGL `UNMASKED_RENDERER` matches `SwiftShader`, `llvmpipe`, `Mesa OffScreen` or `Microsoft Basic Render` | Software rasterisers. Real desktops have a GPU. Not quite 100 because a VM, a remote desktop session, or a machine with broken graphics drivers can legitimately land here — hence 90, which still reaches `bot` alone but leaves room for the verdict to be argued with. |
-| `ua_claim_failed` | **85** | The engine lacks a feature that shipped in the Chrome major version the UA claims, or has one that shipped *after* it | **A spoofed User-Agent cannot retrofit V8.** Changing the UA string is one line; changing what the JavaScript engine implements is not possible at all. `b.js` carries a small table of `chrome_version → feature probe` (~8 probes across a wide version span) and reports the specific mismatch code. Cheap, and very close to definitive. |
+| `ua_claim_failed` | **85** | The engine lacks a feature that shipped in the Chrome major version the UA claims, or has one that shipped *after* it — **with a grace of two majors in each direction**, so a browser mid-upgrade, an enterprise pin or one of Chrome's own UA-reduction quirks never fires it. Chrome-family claims only; iOS browsers are skipped outright, because they are all WebKit in a Chrome-shaped UA. | **A spoofed User-Agent cannot retrofit V8.** Changing the UA string is one line; changing what the JavaScript engine implements is not possible at all. `b.js` carries a table of eight `chrome_version → feature probe` pairs across a wide version span and reports the specific mismatch code. Cheap, and very close to definitive. |
 
 ### Transport plane
 
@@ -109,11 +115,11 @@ Weights are overridable in `scoring.weights`.
 
 | Code | Weight | Fires when | Why |
 |---|---|---|---|
-| `fp_cluster_proxy_fleet` | **80** | `fp_ips_24h_i >= 5` and `as_type_s != mobile` | **The signal this project is built around.** Five or more distinct IPs, on different networks, presenting a byte-identical header fingerprint within a 24-hour window is not a coincidence — it is one automation stack behind a rotating proxy pool. The `mobile` exclusion exists because carrier-grade NAT genuinely puts thousands of real users behind a handful of addresses. |
-| `no_js_on_html` | **70** | An HTML 200 was served, the UA claims a real browser, and no beacon ever arrived | A browser that renders HTML runs JavaScript. Weighted 70 rather than 100 **on purpose**: uBlock Origin, NoScript, Brave shields and Lockdown Mode all produce exactly this pattern from a real human. 70 is below the `bot` threshold, so this cannot condemn anyone on its own. |
-| `periodic_timing` | **45** | `gap_stddev_ms_l` below threshold across 4 or more requests | Humans are irregular. A client whose inter-request gaps have almost no variance is on a timer. Four requests is the minimum at which a standard deviation means anything. |
+| `fp_cluster_proxy_fleet` | **80** | `fp_ips_24h_i >= 5` (tunable: `scoring.fp_fleet_min_ips`) **and** `as_type_s != mobile` **and** not a self-declared crawler whose forward-confirmed rDNS passed | **The signal this project is built around.** Five or more distinct IPs, on different networks, presenting a byte-identical header fingerprint within a 24-hour window is not a coincidence — it is one automation stack behind a rotating proxy pool. The `mobile` exclusion exists because carrier-grade NAT genuinely puts thousands of real users behind a handful of addresses. The third guard exists because a verified Googlebot legitimately crawls from a large address pool with one fingerprint; verified crawlers already carry `ua_declared_bot` and must not also be accused of hiding behind proxies. |
+| `no_js_on_html` | **70** | An HTML 200 was served, the UA claims a real browser, and no beacon ever arrived — **and the beacon is known to be deployed on this site** | A browser that renders HTML runs JavaScript. The deployment gate is not optional: on a site that has never installed the snippet, *every* session looks like this, and the rule would condemn the entire audience. Weighted 70 rather than 100 for the same reason in miniature — uBlock Origin, NoScript, Brave shields and Lockdown Mode all produce exactly this pattern from a real human. 70 is below the `bot` threshold, so this cannot condemn anyone on its own. |
+| `periodic_timing` | **45** | **Four or more inter-request gaps** (so five or more requests), a **median gap of at least 1 second**, and a **coefficient of variation below 0.10** — that is, the spread relative to the median, not an absolute `gap_stddev_ms_l` threshold | Humans are irregular. A client whose inter-request gaps vary by less than 10% of their own median is on a timer. Relative rather than absolute, because a 200 ms rhythm and a 30 s rhythm are equally mechanical; the median floor keeps a burst of asset fetches from looking like a metronome. |
 | `no_interaction` | **40** | A beacon arrived, the session ended, and there were zero interaction events of any kind | Not one scroll, mousemove, keypress, click or touch across a whole session. Possible for a human — a page read on a static screen — which is why it is 40 and not 80. |
-| `no_304_on_repeat` | **30** | Assets were re-requested and no conditional request was ever sent | Browsers cache. A client that re-fetches the same CSS file with a fresh 200 every time has no cache, which means it is not a browser session. |
+| `no_304_on_repeat` | **30** | **At least two** assets were re-requested, no conditional request was ever sent, **and this site is known to answer `304` at all** | Browsers cache. A client that re-fetches the same CSS file with a fresh 200 every time has no cache, which means it is not a browser session. Both extra conditions exist to avoid blaming the client for the server's behaviour: a site that never returns `304` gives every visitor this pattern, and a single re-fetch is noise. |
 | `no_assets` | **25** | HTML was fetched and zero sub-resources followed | The classic `curl`/`requests` signature. Only 25, because a 304-heavy warm cache, a text-only browser or a prefetch can all look like this. |
 | `single_page_10s` | **15** | One page, 10 seconds or less | Weak alone and it is *supposed* to be weak — plenty of humans bounce. It exists to push a session that has already accumulated other signals over a threshold. |
 
@@ -225,8 +231,10 @@ analytics ping, gone.
 
 **Scored:** the Chrome/147 group reaches `bot`, class `proxy_fleet`, with
 `bot_reasons_ss = [fp_cluster_proxy_fleet, single_page_10s]`. The eight IPs in the smaller
-clusters do **not** reach the threshold on plane 1 and 2 alone under `combined`; they land
-in `unknown` or `likely_bot`. That is the honest outcome, and it is exactly the argument
+clusters are **not detectable at all** on plane 1 and 2 alone under `combined`: below the
+five-IP floor the only rule that fires on them is `single_page_10s` (15), which scores them
+`human`. Not "unknown" — **human**, with the same verdict a real reader gets. That is the
+honest outcome, it is the worst case in this whole document, and it is exactly the argument
 for logging more headers.
 
 ### What the recommended LogFormat would have added
@@ -255,7 +263,9 @@ actual job:
 - WebGL renderer `SwiftShader` or `llvmpipe`, which is what headless Chrome in a container
   reports → `headless_renderer`, 90.
 - Feature probes against the claimed Chrome major → `ua_claim_failed`, 85, and a UA
-  rotating across six major versions has six chances to fail this.
+  rotating across five major versions (147, 148, 150, 151, 152) has five chances to fail
+  this. Note the two-major grace: 147 against a real 148 engine would pass, but 147 against
+  a 152 engine would not, and the fleet spans exactly that far.
 - Zero interaction events across the session → `no_interaction`, 40.
 
 Any one of the first three is a `bot` verdict on its own.
@@ -306,7 +316,10 @@ Everything the fleet lacks:
 - **A referer chain that makes sense**: Google → homepage → wiki → billing → pricing. A
   person following their own question.
 
-Scored: no rule fires. `bot_score_f = 0`, `bot_verdict_s = human`, `bot_reasons_ss` empty.
+Scored: no rule fires. `bot_score_f = 0`, `bot_verdict_s = human`, and
+`bot_reasons_ss = [no_bot_signals]`. **The reasons list is never empty** — a session with
+nothing against it says so explicitly, so "no signals fired" and "the scorer did not run"
+are different states on the document rather than the same absence.
 
 The second fixture session (`198.51.100.186`) is even more clearly human — it fills in a
 form, POSTs it, follows a 302, and polls a job status endpoint while waiting. Automation
@@ -326,10 +339,20 @@ indexed 400 pages" with "someone is scraping you from 200 residential IPs" is pr
 what makes existing tools useless for this. They are opposite facts: one is a service you
 want, the other is a cost you are paying.
 
-`ai_crawler_b` is set for GPTBot, ClaudeBot, PerplexityBot, Bytespider, Amazonbot,
-meta-externalagent, Applebot-Extended, CCBot, Diffbot, Omgili, cohere-ai, ImagesiftBot,
-YouBot, Timpibot and Webzio, so "how much of my content is being taken for model
-training" is one facet away.
+`ai_crawler_b` is set for around thirty named agents — GPTBot, OAI-SearchBot, ChatGPT-User,
+ClaudeBot, Claude-Web, Claude-SearchBot, anthropic-ai, PerplexityBot, Perplexity-User,
+Google-Extended, Bytespider, Amazonbot, Applebot-Extended, meta-externalagent,
+meta-externalfetcher, FacebookBot, CCBot, Diffbot, Omgili, Omgilibot, cohere-ai,
+cohere-training-data-crawler, ImagesiftBot, YouBot, Timpibot, Webzio-Extended, AI2Bot,
+DuckAssistBot, MistralAI-User and PetalBot — so "how much of my content is being taken for
+model training" is one facet away. The authoritative list is the table in
+`src/Enrich/Ua.php`; adding a name there is the whole change.
+
+Note that several of these are *user-triggered fetchers* rather than training crawlers —
+`ChatGPT-User`, `Perplexity-User`, `Claude-Web`, `MistralAI-User` fetch a page because a
+person asked an assistant about it. They are grouped here because operators consistently
+want them in the same bucket, but "an AI crawler visited" and "somebody asked an AI about
+your page" are not the same event.
 
 An honest crawler that **fails** forward-confirmed rDNS is a different matter entirely:
 that is `rdns_claim_failed` at 95, class `spoofed_ua`. Claiming to be Googlebot when you
@@ -439,7 +462,8 @@ Weights live in `scoring.weights` in `config/loghound.php`, keyed by rule code:
 
 ```php
 'scoring' => [
-    'rule_version' => 2,
+    // Ships as 1. Bump it yourself when you change a weight by hand.
+    'rule_version' => 1,
     'weights' => [
         // A technical audience blocks the beacon far more often than average.
         'no_js_on_html' => 40,
@@ -449,12 +473,29 @@ Weights live in `scoring.weights` in `config/loghound.php`, keyed by rule code:
     'thresholds' => [
         'bot' => 80, 'likely_bot' => 60, 'unknown' => 40, 'likely_human' => 20,
     ],
+    // The five-IP floor for fp_cluster_proxy_fleet. Raise it on a site with a
+    // large NATed corporate audience; lower it only if you like false positives.
+    'fp_fleet_min_ips' => 5,
 ],
 ```
 
-**Bump `rule_version` whenever you change a weight.** It is written onto every session
-document, so you can tell which ruleset produced a verdict and re-score a window under the
-new one instead of comparing incomparable numbers.
+An **unknown rule code in `weights` is a hard error** — `Rules` throws rather than start
+with a typo'd key that silently does nothing, so a misspelt override stops the scorer
+instead of quietly leaving a rule at its default. A weight is clamped to 0–200, so a
+deliberate override can exceed 100 when you want one signal decisive on its own.
+`fp_fleet_min_ips` has a floor of 2 and is not in `config/loghound.example.php`; add the
+key yourself if you want it.
+
+The Settings page in the panel edits weights and thresholds through a form, but its number
+inputs cap at 100 and it does not expose `fp_fleet_min_ips`; anything beyond that has to be
+set in the file. Thresholds must descend (`bot > likely_bot > unknown > likely_human`) or
+the form refuses the save.
+
+**Bump `rule_version` whenever you change a weight.** It ships as `1`, it is written onto
+every session document, and it is what lets you tell which ruleset produced a verdict and
+re-score a window under the new one instead of comparing incomparable numbers. Saving
+weights through the panel bumps it for you. **Existing documents are not rescored** by
+either route.
 
 Setting a weight to `0` disables a rule. The reason code stops being emitted, which is the
 intended behaviour: a rule contributing nothing should not appear in the explanation.

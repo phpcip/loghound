@@ -270,4 +270,61 @@ return [
         lh_same('a"b', LogFormat::unescape('a\\"b'), 'escaped quote');
         lh_same("a\tb", LogFormat::unescape('a\\x09b'), 'hex escape');
     },
+
+    'a line far longer than the JIT stack still parses, all the way to max_line_bytes'
+        => function (): void {
+        $fmt = \Loghound\LogDetect::formatByName('apache_combined');
+        lh_true($fmt !== null, 'the shipped library format must exist');
+
+        foreach ([1000, 8000, 9000, 12000, 15800] as $pathLength) {
+            $path = '/' . str_repeat('a', $pathLength);
+            $ua   = 'Mozilla/5.0 (X11; Linux x86_64) probe';
+            $line = '198.51.100.7 - - [10/Sep/2026:00:00:00 +0000] "GET ' . $path
+                . ' HTTP/1.1" 200 4096 "-" "' . $ua . '"';
+
+            $record = $fmt->parse($line);
+            lh_true(
+                is_array($record),
+                'a ' . strlen($line) . '-byte line is ordinary traffic and must not be a parse error'
+            );
+            lh_same('198.51.100.7', $record['remote_addr'], 'the address survives the long line');
+            lh_same($ua, $record['header_in.user-agent'], 'and so does the last field on it');
+        }
+
+        lh_same(0, $fmt->backtrackFailures(), 'a linear pattern must never touch the backtrack budget');
+        lh_true($fmt->jitRetries() > 0, 'and the lines past the JIT stack must be counted as what they were');
+    },
+
+    'the no-JIT retry does not disturb the rest of the process' => function (): void {
+        $before = ini_get('pcre.jit');
+
+        $fmt = \Loghound\LogDetect::formatByName('apache_combined');
+        $line = '198.51.100.7 - - [10/Sep/2026:00:00:00 +0000] "GET /' . str_repeat('a', 12000)
+            . ' HTTP/1.1" 200 4096 "-" "probe"';
+        lh_true(is_array($fmt->parse($line)), 'the long line parses');
+
+        lh_same($before, ini_get('pcre.jit'), 'pcre.jit must be exactly as it was found');
+    },
+
+    'a line that genuinely does not match is still a parse error, however long it is'
+        => function (): void {
+        $fmt = \Loghound\LogDetect::formatByName('apache_combined');
+        $before = $fmt->jitRetries();
+
+        $garbage = str_repeat('not a log line at all ', 700);
+        lh_same(null, $fmt->parse($garbage), 'the retry must not turn a non-match into a match');
+        lh_same(
+            $before,
+            $fmt->jitRetries(),
+            'a line that fails on its own merits is not a JIT retry; the counter must only count '
+            . 'lines the retry rescued'
+        );
+    },
+
+    'the no-JIT twin of a pattern matches exactly what the pattern matches' => function (): void {
+        $fmt = LogFormat::fromRegex('~^(?<remote_addr>\S+) (?<status>\d{3})$~');
+
+        lh_same('404', $fmt->parse('203.0.113.9 404')['status'], 'the ordinary path is unchanged');
+        lh_same(null, $fmt->parse('203.0.113.9 4041'), 'and so is the ordinary refusal');
+    },
 ];

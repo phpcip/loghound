@@ -8,8 +8,8 @@
  *   1. Detect webserver configs and log files, show the detected field mapping with
  *      real parsed sample lines and a confidence percentage, and REQUIRE confirmation.
  *      Nothing is ever ingested with a silently guessed format.
- *   2. Ask managed Opensolr or your own Solr. In managed mode: email + API key, pick a
- *      region, create both indexes, push the configsets, verify.
+ *   2. Provision the two indexes on Opensolr: email + API key, pick a region, create both
+ *      indexes, push the configsets, verify.
  *   3. Generate the beacon HMAC secret and the IP hashing salt with random_bytes().
  *   4. Set up panel authentication (password stored as a password_hash, never plaintext).
  *   5. Choose the privacy mode and the retention window.
@@ -44,28 +44,31 @@
  *   LOGHOUND_LOG_PATH              access log path, when detection finds nothing
  *   LOGHOUND_CONFIRM_SOURCES       yes|no — accept the detected sources
  *   LOGHOUND_ALLOW_LOG_ROOTS       yes|no — widen allowed_log_roots when needed
- *   LOGHOUND_SOLR_CHOICE           1 = Opensolr managed, 2 = my own Solr
- *   LOGHOUND_OPENSOLR_EMAIL        managed mode account email
- *   LOGHOUND_OPENSOLR_API_KEY      managed mode API key (never echoed, never logged)
- *   LOGHOUND_OPENSOLR_REGION       managed mode region
- *   LOGHOUND_SOLR_BASE_URL         own-Solr base URL
- *   LOGHOUND_SOLR_HTTP_AUTH        yes|no
- *   LOGHOUND_SOLR_HTTP_USER        own-Solr basic auth user
- *   LOGHOUND_SOLR_HTTP_PASS        own-Solr basic auth password
- *   LOGHOUND_HITS_CORE             own-Solr core name for hits
- *   LOGHOUND_SESSIONS_CORE         own-Solr core name for sessions
+ *   LOGHOUND_OPENSOLR_EMAIL        Opensolr account email
+ *   LOGHOUND_OPENSOLR_API_KEY      Opensolr API key (never echoed, never logged)
+ *   LOGHOUND_OPENSOLR_REGION       Opensolr region
+ *   LOGHOUND_RECONFIGURE_STORAGE   yes|no — re-run provisioning on an install that already
+ *                                  has both indexes; defaults to no
  *   LOGHOUND_IP_MODE               full|truncate|hash
  *   LOGHOUND_RETENTION_DAYS        integer, 0 = never delete
  *   LOGHOUND_RESET_PANEL_AUTH      yes|no — replace existing panel credentials
  *   LOGHOUND_PANEL_USER            panel username
  *   LOGHOUND_PANEL_PASSWORD        panel password (never echoed; hashed immediately)
+ *   LOGHOUND_AUTH_MODE             basic|session — how you sign in to the panel
  *   LOGHOUND_BASE_URL              public URL of the panel, for the beacon snippet
  *   LOGHOUND_ROTATE_BEACON_SECRET  yes|no
  *   LOGHOUND_FORCE_WRITE           yes|no — write even a config that fails validation
  *
- * In managed mode the two index names are GENERATED rather than asked for, because an
- * Opensolr index name is unique across the whole platform and permanent once created;
- * LOGHOUND_HITS_CORE / LOGHOUND_SESSIONS_CORE therefore apply to your own Solr only.
+ * THE TWO INDEX NAMES ARE GENERATED, NEVER ASKED FOR, and there is no variable that can
+ * supply them. An Opensolr index name is unique across the whole platform and permanent once
+ * created, so a name an operator picks is a name that will eventually collide with somebody
+ * else's; Config::coreName() builds one from a random per-installation id instead.
+ *
+ * THERE IS NO "POINT IT AT MY OWN SOLR" ANSWER. Loghound does not merely read and write its
+ * two indexes, it owns them: it creates them, uploads the configsets under solr/hits/conf and
+ * solr/sessions/conf, reloads the cores and verifies them. None of that is possible on a Solr
+ * it does not administer, so offering the option promised something the product could not
+ * deliver. An Opensolr account is a hard requirement.
  *
  * Non-interactive mode answers every prompt from a LOGHOUND_* environment variable or from
  * the offered default. install.sh --non-interactive uses it so the whole install can run
@@ -210,18 +213,9 @@ foreach (Steps::applySources($cfg, $chosen, $widen) as $problem) {
 }
 
 $UI->nl();
-$UI->step(2, 'Where should the index live?');
+$UI->step(2, 'Your two indexes on Opensolr');
 
-$currentMode = (string) $cfg->get('solr.mode', 'opensolr');
-$UI->info('  1) Opensolr managed  — we create and maintain the two indexes for you');
-$UI->info('  2) My own Solr 9     — you already run one');
-$choice = $UI->ask('Choose 1 or 2', $currentMode === 'custom' ? '2' : '1', 'LOGHOUND_SOLR_CHOICE');
-
-if ($choice === '2') {
-    configureOwnSolr($cfg, $UI, $ROOT);
-} else {
-    configureOpensolr($cfg, $UI, $ROOT);
-}
+configureOpensolr($cfg, $UI, $ROOT);
 
 $UI->nl();
 $UI->step(3, 'Secrets');
@@ -449,71 +443,20 @@ function runJob(Config $cfg, Ui $UI, string $root, string $kind, array $params):
 }
 
 /**
- * Collect connection details for a Solr the operator already runs, then test them.
+ * Is this installation already pointing at two provisioned indexes?
  *
- * On your own Solr the namespace is yours, so the generated per-installation names are
- * only a default: a plain `loghound_hits` is fine here and easier to recognise in the
- * Solr admin UI.
+ * The same three keys Setup\Steps::progress() calls the storage step complete on, so the
+ * wizard and the browser installer agree on what "already done" means.
  */
-function configureOwnSolr(Config $cfg, Ui $UI, string $root): void
+function storageIsProvisioned(Config $cfg): bool
 {
-    $installId = (string) $cfg->get('solr.install_id', '');
-    if ($installId === '') {
-        $installId = Config::newInstallId();
-        $cfg->set('solr.install_id', $installId);
-    }
-
-    $defHits = (string) $cfg->get('solr.hits_core', '') !== ''
-        ? (string) $cfg->get('solr.hits_core')
-        : Config::coreName($installId, 'hits');
-    $defSessions = (string) $cfg->get('solr.sessions_core', '') !== ''
-        ? (string) $cfg->get('solr.sessions_core')
-        : Config::coreName($installId, 'sessions');
-
-    while (true) {
-        $base = rtrim(trim($UI->ask(
-            'Solr base URL (e.g. http://127.0.0.1:8983/solr)',
-            (string) $cfg->get('solr.base_url', 'http://127.0.0.1:8983/solr'),
-            'LOGHOUND_SOLR_BASE_URL'
-        )), '/');
-
-        $user = '';
-        $pass = '';
-        if ($UI->confirm(
-            'Does it need HTTP basic auth?',
-            (string) $cfg->get('solr.http_user', '') !== '',
-            'LOGHOUND_SOLR_HTTP_AUTH'
-        )) {
-            $user = $UI->ask('Solr username', (string) $cfg->get('solr.http_user', ''), 'LOGHOUND_SOLR_HTTP_USER');
-            $pass = $UI->askSecret('Solr password (not echoed, blank keeps the current one)', 'LOGHOUND_SOLR_HTTP_PASS');
-        }
-
-        $hits = $UI->ask('Core name for hits', $defHits, 'LOGHOUND_HITS_CORE');
-        $sessions = $UI->ask('Core name for sessions', $defSessions, 'LOGHOUND_SESSIONS_CORE');
-
-        $errors = Storage::saveCustom($cfg, $base, $user, $pass, $hits, $sessions);
-        if ($errors === []) {
-            break;
-        }
-        foreach ($errors as $problem) {
-            $UI->err($problem);
-        }
-        if ($UI->isNonInteractive()) {
-            return;
-        }
-    }
-
-    $UI->nl();
-    $UI->info('Push the configsets from solr/hits/conf and solr/sessions/conf into those');
-    $UI->info('cores before starting ingestion. docs/INSTALL.md has the exact commands');
-    $UI->info('for both a Config Set API upload and a manual copy.');
-    $UI->nl();
-
-    runJob($cfg, $UI, $root, Job::KIND_SOLRTEST, []);
+    return (string) $cfg->get('solr.base_url', '') !== ''
+        && (string) $cfg->get('solr.hits_core', '') !== ''
+        && (string) $cfg->get('solr.sessions_core', '') !== '';
 }
 
 /**
- * Managed-Opensolr path: credentials, region, index creation, configset push, verify.
+ * Provision the two indexes on Opensolr: credentials, region, creation, configset push, verify.
  *
  * The API key is read without echo, stored in the 0640 config and NEVER printed back,
  * not even partially masked — a masked key in a terminal scrollback is still a key in a
@@ -523,9 +466,26 @@ function configureOwnSolr(Config $cfg, Ui $UI, string $root): void
  * across the WHOLE PLATFORM and permanent once created, so a name an operator picks is a
  * name that will collide with somebody; Config::coreName() builds one from a random
  * per-installation id and a collision is retried with a fresh id.
+ *
+ * AN ALREADY-PROVISIONED INSTALL IS LEFT ALONE UNLESS THE OPERATOR SAYS OTHERWISE. Re-running
+ * this wizard to change one privacy setting must not walk back through provisioning, and with
+ * the bring-your-own-Solr answer gone there is no longer an option that means "my storage is
+ * already sorted, move on" — so the question is asked directly, and its default is no. That
+ * matters most to an unattended re-run: install.sh --non-interactive from Ansible or CI takes
+ * the default, so it keeps the working indexes instead of demanding an API key it was not
+ * given. LOGHOUND_RECONFIGURE_STORAGE=yes forces the step to run.
  */
 function configureOpensolr(Config $cfg, Ui $UI, string $root): void
 {
+    if (storageIsProvisioned($cfg)) {
+        $UI->ok('Hits index:     ' . (string) $cfg->get('solr.hits_core'));
+        $UI->ok('Sessions index: ' . (string) $cfg->get('solr.sessions_core'));
+        if (!$UI->confirm('Re-run provisioning against Opensolr?', false, 'LOGHOUND_RECONFIGURE_STORAGE')) {
+            $UI->info('Keeping the indexes this installation already has.');
+            return;
+        }
+    }
+
     while (true) {
         $email = trim($UI->ask(
             'Opensolr account email',
@@ -583,13 +543,41 @@ function configureOpensolr(Config $cfg, Ui $UI, string $root): void
 }
 
 /**
- * Ask for the panel username and password, until they are acceptable.
+ * Ask for the panel username, the password, and how the operator wants to sign in.
+ *
+ * The sign-in mode is asked HERE rather than left to default, because this wizard is the
+ * only setup path some installations ever run: without the question a CLI operator was
+ * pinned to Basic by applyAdmin()'s default and could only reach the sign-in page by
+ * editing config/loghound.php by hand.
+ *
+ * The default stays 'basic' — the existing value when there is one, Basic otherwise — so
+ * a non-interactive run answers exactly as it did before and the CLI and the browser
+ * installer still produce the same configuration from the same answers.
+ *
+ * The choices and their wording come from Steps::authModes(), which is Security::authModes(),
+ * which is the same list the browser installer renders and the same one applyAdmin() and
+ * applyAuthMode() validate against.
  *
  * The plaintext never leaves this function: Steps::applyAdmin hashes it immediately, and
  * the local copy is overwritten before returning.
  */
 function setPanelAccount(Config $cfg, Ui $UI): void
 {
+    $UI->nl();
+    $UI->info('How do you want to sign in to the panel?');
+    foreach (Steps::authModes() as $key => $mode) {
+        $UI->raw('  ' . str_pad((string) $key, 10) . $mode['label'] . ' — ' . $mode['text']);
+        $UI->raw('  ' . str_repeat(' ', 10) . $mode['cost']);
+    }
+
+    $current = (string) $cfg->get('auth.mode', 'basic');
+    $authMode = $UI->choice(
+        'Sign-in method',
+        array_keys(Steps::authModes()),
+        array_key_exists($current, Steps::authModes()) ? $current : 'basic',
+        'LOGHOUND_AUTH_MODE'
+    );
+
     while (true) {
         $user = trim($UI->ask('Panel username', (string) $cfg->get('auth.user', 'admin'), 'LOGHOUND_PANEL_USER'));
         $pass = $UI->askSecret('Panel password (not echoed)', 'LOGHOUND_PANEL_PASSWORD');
@@ -599,7 +587,7 @@ function setPanelAccount(Config $cfg, Ui $UI): void
             $confirm = $UI->askSecret('Repeat the password');
         }
 
-        $errors = Steps::applyAdmin($cfg, $user, $pass, $confirm);
+        $errors = Steps::applyAdmin($cfg, $user, $pass, $confirm, $authMode);
         $pass = str_repeat("\0", 64);
         $confirm = str_repeat("\0", 64);
         unset($pass, $confirm);

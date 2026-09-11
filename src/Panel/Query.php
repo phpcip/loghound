@@ -76,6 +76,19 @@ final class Query
     public const POP_BEACON = 'beacon_b:true';
 
     /**
+     * The sessions core holds two kinds of document: one per session, and the daily rollups
+     * that `privacy.rollup_forever` keeps after the sessions themselves have been deleted.
+     * Every count, facet and delete against that core has to say which it means, or the
+     * rollups are counted as sessions and every total is quietly too high.
+     *
+     * Used by the views that were written against it and by the size-based retention trim,
+     * which must never delete a rollup: they are aggregate counts with nothing in them that
+     * identifies a visitor, they cost almost nothing to keep, and they are the difference
+     * between a 90-day tool and one that can show you last year.
+     */
+    public const SESSION_DOCS = 'doc_type_s:session';
+
+    /**
      * The five overview series, in stacking order (most human at the bottom).
      *
      * @return array<string,string> series key => filter query
@@ -211,6 +224,7 @@ final class Query
     public static function filterFields(): array
     {
         return [
+            'host_s'        => 'Virtual host',
             'bot_verdict_s' => 'Verdict',
             'bot_class_s'   => 'Bot class',
             'as_type_s'     => 'Network type',
@@ -226,7 +240,99 @@ final class Query
             'fp_hash_s'     => 'Fingerprint',
             'ip_s'          => 'IP',
             'session_id_s'  => 'Session',
+            'sec_ch_ua_s'      => 'Client hints (Sec-CH-UA)',
+            'sec_ch_platform_s' => 'Client platform',
+            'tls_proto_s'      => 'TLS version',
         ];
+    }
+
+    /**
+     * The subset of filterFields() the HITS core can answer.
+     *
+     * The two schemas are deliberately different: a verdict, a bot class and the list of
+     * signals that fired are conclusions the scorer reaches about a whole session, and they
+     * exist only on the sessions core. An `fq` naming a field a core does not define matches
+     * nothing at all, so a hits-core view given the full list would answer every filtered
+     * question with zero rather than with the answer it could have given.
+     *
+     * Derived by subtraction rather than by listing what is shared, so a filter added to
+     * filterFields() is available on both cores by default and has to be excluded on
+     * purpose. Adding a session-only field without excluding it here is caught by the test
+     * that checks every name in this list against solr/hits/conf/managed-schema.xml.
+     *
+     * @return array<string,string>
+     */
+    public static function hitFilterFields(): array
+    {
+        $sessionOnly = ['bot_verdict_s', 'bot_class_s', 'bot_reasons_ss'];
+
+        return array_diff_key(self::filterFields(), array_flip($sessionOnly));
+    }
+
+    /**
+     * Sidebar fields that are spelled differently on the sessions core.
+     *
+     * A hit points at the session it belongs to through `session_id_s`; a session document
+     * IS that session, so the same value is its `id`. The sessions core therefore does not
+     * define `session_id_s` at all, and a Session chip taken straight from the sidebar
+     * matched nothing on every sessions-core view — a filter that answers zero rather than
+     * refusing, which reads as "this session has no traffic" instead of "this filter is
+     * broken".
+     *
+     * @return array<string,string>
+     */
+    public static function sessionFilterAliases(): array
+    {
+        return ['session_id_s' => 'id'];
+    }
+
+    /**
+     * The field that names the virtual host a request arrived on.
+     *
+     * `host_s` is on every hit (SPEC §4.1, from `%v`) and on every session document, where
+     * the sessionizer copies it from the first hit. It was missing from filterFields()
+     * above, which meant the dashboard blended every vhost on the machine into one view: on
+     * a box serving six sites, "which of my sites takes the most bot traffic" — the question
+     * a multi-site install actually has — could not be asked at all.
+     *
+     * It is a first-class filter now, so it flows through Controller::filterFqs() and scopes
+     * EVERY query on EVERY view, rather than being a control on one card.
+     */
+    public const HOST_FIELD = 'host_s';
+
+    /**
+     * The facet that lists the hosts present in a range, for the selector.
+     *
+     * The limit is generous but bounded: a machine with more virtual hosts than this has a
+     * different problem, and an unbounded terms facet on a string field is a way to ask Solr
+     * for every distinct value it has ever seen.
+     *
+     * @return array<string,mixed>
+     */
+    public static function hostFacet(int $limit = 200): array
+    {
+        return [
+            'hosts' => [
+                'type'     => 'terms',
+                'field'    => self::HOST_FIELD,
+                'limit'    => Security::clampInt($limit, 1, 500, 200),
+                'mincount' => 1,
+                'sort'     => 'count desc',
+            ],
+        ];
+    }
+
+    /**
+     * The `fq` that scopes a query to one virtual host, or null for "every host".
+     *
+     * An empty selection deliberately produces NO filter rather than a filter matching
+     * nothing: "all hosts" is the default view of a multi-site install, and a selector that
+     * silently emptied the dashboard when nothing was picked would be read as "no traffic".
+     */
+    public static function hostFq(string $host): ?string
+    {
+        $host = trim($host);
+        return $host === '' ? null : self::term(self::HOST_FIELD, $host);
     }
 
     /**
@@ -259,7 +365,7 @@ final class Query
     public static function sessionFl(): string
     {
         return implode(',', [
-            'id', 'ts_start', 'ts_end', 'hits_i', 'pages_i', 'assets_i', 'uniq_paths_i',
+            'id', 'ts_start', 'ts_end', 'host_s', 'hits_i', 'pages_i', 'assets_i', 'uniq_paths_i',
             'bytes_l', 'entry_path_s', 'exit_path_s',
             'status_2xx_i', 'status_3xx_i', 'status_4xx_i', 'status_5xx_i', 'got_304_b',
             'log_span_ms_l', 'wall_ms_l', 'visible_ms_l', 'engaged_ms_l', 'beacon_b',
@@ -280,7 +386,7 @@ final class Query
     public static function hitFl(): string
     {
         return implode(',', [
-            'id', 'ts', 'method_s', 'path_s', 'query_s', 'status_i', 'bytes_l', 'dur_us_l',
+            'id', 'ts', 'host_s', 'method_s', 'path_s', 'query_s', 'status_i', 'bytes_l', 'dur_us_l',
             'kind_s', 'asset_kind_s', 'proto_s', 'referer_s', 'session_seq_i', 'hit_flags_ss',
         ]);
     }

@@ -62,13 +62,19 @@ return [
 
     'solr' => [
         /**
-         * 'opensolr' provisions and manages the indexes through the Opensolr API.
-         * 'custom'   points at any Solr 9 you already run.
+         * 'opensolr', and nothing else. Loghound provisions and manages its own two indexes
+         * through the Opensolr API — it creates them, uploads their configsets and reloads
+         * them — and it cannot do that on a Solr it does not administer, so there is no
+         * option to point it at one. An older configuration saying 'custom' is refused by
+         * Config::validate() with an explanation rather than silently ignored.
          */
         'mode' => 'opensolr',
 
-        // --- 'custom' mode only ---
-        'base_url'  => '',          // e.g. http://127.0.0.1:8983/solr
+        /**
+         * Connection details of the node the provisioned indexes landed on. Filled in during
+         * setup from Opensolr::connectionDetails(); you do not type these.
+         */
+        'base_url'  => '',
         'http_user' => '',
         'http_pass' => '',
 

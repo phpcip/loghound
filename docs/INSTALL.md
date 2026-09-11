@@ -1,6 +1,7 @@
 # Installing Loghound
 
 - [The short version](#the-short-version)
+- [Two installers, one result](#two-installers-one-result)
 - [What the installer actually does](#what-the-installer-actually-does)
 - [Where it installs, and why you might change it](#where-it-installs-and-why-you-might-change-it)
 - [The recommended LogFormat](#the-recommended-logformat)
@@ -36,9 +37,9 @@ PHP-FPM pool and a vhost for whichever web server you already run, validates bot
 enabling them, runs the setup wizard, starts the ingest daemon, and waits for the first
 documents to land before telling you it worked.
 
-Requirements: PHP 8.1+ with `curl`, `json`, `pcre`, `sqlite3` and `mbstring`; a Solr 9
-(your own, or managed); systemd (or cron, with one caveat — see below). No Composer, no
-npm, no build step.
+Requirements: PHP 8.1+ with `curl`, `json`, `pcre`, `sqlite3` and `mbstring`; an Opensolr
+account, whose API provisions and holds the two indexes Loghound writes to; systemd (or
+cron, with one caveat — see below). No Composer, no npm, no build step.
 
 ### A word about running an installer as root
 
@@ -51,6 +52,43 @@ file it would write, and changes nothing. Read that output. Then read the script
 one file, heavily commented, and the reasons for each decision are written down next to
 the decision. If you would rather not run it at all, the
 [manual appendix](#appendix-installing-by-hand) is the same steps by hand.
+
+---
+
+## Two installers, one result
+
+`install/install.sh` prepares the machine — user, files, modes, systemd units, TLS, the
+FPM pool, the vhost. *Configuring* Loghound is a separate thing, and there are two ways to
+do it:
+
+| | |
+|---|---|
+| **In a browser** | Point a vhost at `public/`, open the URL, follow four screens. This is the path most people take, and it has its own document: **[INSTALL-WEB.md](INSTALL-WEB.md)**. |
+| **In a shell** | `bin/loghound-setup` over SSH. This is what `install/install.sh` hands over to, and what unattended installs drive from `LOGHOUND_*` environment variables. This document. |
+
+`install/install.sh` hands over to the shell wizard by default. Pass **`--skip-setup`** to
+stop once the machine is ready and configure in the browser instead; the final report then
+prints the URL and the command that reads the setup token back. The flag exists because
+"either front end" has to be true of the installer as well, not only of the code beneath it.
+
+**Neither is a lesser version of the other.** Both call the same code in `src/Setup/` to
+decide which log files to read, how to grade a format, how to provision the indexes, what a
+valid password is and what happens next — so a configuration written by one is
+indistinguishable from one written by the other. You can start in the browser and finish in
+the shell, or the reverse.
+
+The practical difference is reach, and it goes both ways. The shell wizard is not subject
+to the panel's `open_basedir`, so it can always read `/var/log` and your webserver
+configuration. The browser installer can, provided the FPM pool allows it — the shipped
+`install/php-fpm-pool.conf.example` includes `/var/log`, `/etc/apache2` and `/etc/nginx` in
+`open_basedir` for exactly that reason, and the system check says so plainly when they are
+missing rather than reporting a permission problem that does not exist.
+
+Anything not ready to serve lands on the browser installer: no configuration, half a
+configuration, or a configuration with no way to sign in. Loghound never answers a request
+by printing a configuration error and stopping. The moment the configuration file exists,
+carries a username and a password hash, and names both indexes, every installer route is
+dead and the panel serves instead.
 
 ---
 
@@ -112,6 +150,17 @@ service user, on its own socket. Never the shared `www-data` pool: that would ma
 other site on the box execute as a user that can read your API key. Validated with
 `php-fpm -t` **before** anything is reloaded, and then `reload`ed, never restarted.
 
+`open_basedir` on that pool is `<prefix>:/var/log:/etc/apache2:/etc/nginx:/tmp`. The last
+three are there because the browser installer's first screen reads them: it parses your
+Apache or nginx configuration to find the access logs and their exact format, and shows you
+real sample lines so you can confirm the field mapping before anything is ingested. Leave
+them out and setup still completes, but that screen finds nothing and you are asked to type
+paths by hand. Both directories are **read-only to the pool user by file permissions** —
+`open_basedir` widens what PHP may *attempt*, not what the kernel will allow — and the
+comment in `install/php-fpm-pool.conf.example` says which line to drop for a server that
+does not run one of them. Also on that pool: `file_uploads = off` and a `disable_functions`
+list covering every process-spawning function.
+
 **8. Vhost.** Generated for Apache or nginx with your hostname, prefix, certificate paths
 and socket already filled in. Written as `zzz-loghound.conf` — the name sorts last on
 purpose, because Apache treats the *first* vhost matching an address:port as the default
@@ -121,8 +170,12 @@ silently hijack every unmatched request on the machine. Validated with
 files this run created are removed, the site is disabled, and validation is re-run to
 prove your host is back exactly where it started.
 
-**9. The setup wizard.** Detects your logs, shows you the mapping, asks you to confirm,
-provisions Solr, generates the secrets, sets up panel authentication.
+**9. The setup wizard.** Hands over to `bin/loghound-setup`, running as the service user:
+detects your logs, shows you the mapping, asks you to confirm, provisions Solr, generates
+the secrets, sets up panel authentication. If it does not complete, the install stops and
+tells you how to re-run it; you can also just open the site in a browser and finish there,
+because an unconfigured install serves the installer. See
+[INSTALL-WEB.md](INSTALL-WEB.md).
 
 **10. Start, and prove it.** Starts `loghound-tail`, then waits up to 60 seconds for the
 first documents to reach Solr. If none arrive it says so and prints the diagnostic
@@ -294,23 +347,38 @@ detector will recognise it.
 
 ## The beacon
 
-One line on your site, before `</body>`:
+One line on your site. Put it anywhere — `<head>` is earliest, before `</body>` works too:
 
 ```html
 <script src="https://loghound.example.com/b.js?v=1" defer></script>
 ```
 
 No dependencies, no cookies by default, passive and throttled event listeners. It ships as
-readable, commented source — about 33 KB on disk, roughly 12 KB over the wire once the
-vhost gzips it, which the shipped vhost examples do.
+readable, commented source — 33 KB on disk, about 12 KB gzipped.
+
+**Check that your server compresses it.** The shipped vhost examples set the beacon's cache
+and CORS headers but deliberately do not touch compression, because on both Debian-family
+Apache (`mods-enabled/deflate.conf`) and stock nginx (`gzip on` in `nginx.conf`) it is a
+global setting and a per-vhost override is the kind of thing that surprises people. Confirm
+it rather than assume it:
+
+```bash
+curl -sI -H 'Accept-Encoding: gzip' https://loghound.example.com/b.js | grep -i content-encoding
+```
+
+No `Content-Encoding: gzip` in that output means every visitor is downloading 33 KB instead
+of 12 KB. Turn compression on for `application/javascript` in your server's global config.
 
 **Without it, plane 3 is blind.** Loghound still works — it still does everything on the
 transport and behavioural planes — but headless automation is *inferred* rather than
 *proven*, and time-on-site falls back to `log_span_ms`, the weak log-derived number every
 other log analyser reports. The two things this project exists to do both need the beacon.
 
-The `?v=1` matters: `b.js` is served with a long cache lifetime, so bump the number when
-you upgrade and the new version is a new URL. No stale-beacon problem to debug.
+The `?v=` matters: `b.js` is served with `max-age=604800, immutable`, so the only thing
+that reaches a returning visitor after an upgrade is a new URL. The panel's Settings page
+builds the snippet for you with the beacon file's own modification time in that slot, which
+means there is nothing to remember to bump; if you hand-write the tag instead, bump the
+number yourself when you upgrade.
 
 Everything the beacon sends, every signal code it can emit, and the exact wire protocol
 are in [BEACON.md](BEACON.md).
@@ -319,9 +387,19 @@ are in [BEACON.md](BEACON.md).
 
 ## Solr, and where the two indexes come from
 
-The wizard asks one question: **managed Opensolr, or a Solr you run yourself.**
+The wizard asks nothing about where the index lives: there is one answer. Loghound provisions
+and manages its own two indexes on your Opensolr account, and **an Opensolr account is a hard
+requirement.**
 
-### Managed
+Pointing Loghound at a Solr you run yourself used to be an option and was removed. Loghound
+does not merely read and write these two indexes, it owns them: it creates them, uploads the
+configsets, reloads the cores and verifies them, and later reports and trims them against your
+plan. On a Solr you administer it has no route to create a core or install a configset and no
+way to keep the schema right — so the option promised something the product cannot deliver.
+See [An older configuration on `solr.mode: custom`](#an-older-configuration-on-solrmode-custom)
+if you are upgrading one.
+
+### What it provisions
 
 You give it the email address and API key from your Opensolr control panel and pick a
 region from the list the platform returns — nothing is hardcoded, so a region added by
@@ -354,19 +432,32 @@ scrollback — never written to `/var/log/loghound-install.log`, and stripped ou
 error message the platform echoes back. It lives in `config/loghound.php`, mode `0640`,
 in a `0700` directory the web server user cannot reach.
 
-### Your own Solr
+### The configsets
 
-Base URL, optional HTTP basic auth, and the two core names — which are yours to choose;
-a plain `loghound_hits` and `loghound_sessions` are fine on a Solr only you use. Create
-the cores with the configsets from `solr/hits/conf/` and `solr/sessions/conf/`, either
-through the Config Set API or by copying the directories into place.
+The two configsets under `solr/hits/conf/` and `solr/sessions/conf/` are real, shipped, and
+still the schema Loghound runs on. They are what the wizard **uploads to Opensolr** for you —
+schema first, then `solrconfig.xml` — rather than something you install by hand.
 
-Solr 9.x. The configsets deliberately load no contrib jars and define no `/stream`,
-`/sql`, `/export`, `/replication`, `/update/extract`, `/terms` or `/browse` handlers;
-[SCHEMA.md](SCHEMA.md) §6 says what each of those would hand an attacker.
+Solr 9.x. They deliberately load no contrib jars and define no `/stream`, `/sql`, `/export`,
+`/replication`, `/update/extract`, `/terms` or `/browse` handlers; [SCHEMA.md](SCHEMA.md) §6
+says what each of those would hand an attacker.
 
 **Nothing hardcodes a core name.** Both are read from `solr.hits_core` and
-`solr.sessions_core` in the config, in managed and self-hosted mode alike.
+`solr.sessions_core` in the config, and both are generated by `Config::coreName()`; there is no
+setting, prompt or environment variable that lets you supply one.
+
+### An older configuration on `solr.mode: custom`
+
+An installation made before the option was removed still has `solr.mode => 'custom'` in
+`config/loghound.php`. It is refused, loudly and on purpose: `bin/loghound-tail`,
+`bin/loghound-score` and `bin/loghound-retention` all validate the configuration at startup and
+**refuse to start**, printing what changed, why, and what to do; the panel's Settings page says
+the same at the top of the Solr connection card.
+
+To move: set `solr.mode` to `'opensolr'` and run `bin/loghound-setup`, which provisions the two
+indexes on your Opensolr account. **Nothing migrates your existing documents** — the new
+indexes start empty, and Loghound backfills only as far as your own log retention reaches (see
+below). Your old cores are untouched; delete them when you no longer want them.
 
 ---
 
@@ -485,25 +576,116 @@ one it is doing.
 ## Uninstalling
 
 ```bash
-sudo ./install/install.sh --uninstall
+sudo ./install/uninstall.sh --dry-run    # print the whole teardown, change nothing
+sudo ./install/uninstall.sh              # do it
 ```
 
-Stops and removes the units (or the cron file), removes the vhost and disables the site,
-removes the FPM pool, removes the `/usr/local/bin` symlinks, and reloads only the web
-server it actually changed — after re-validating its configuration.
+`install/uninstall.sh` is a thin wrapper around `install/install.sh --uninstall` — the same
+code path under an obvious name, so there is only one implementation to keep correct. Use
+whichever you prefer; every flag is the same.
 
-It finds the prefix from the installed systemd unit rather than assuming the default, so
-an install to `/var/www/loghound` is uninstalled from `/var/www/loghound`.
+**Do the `--dry-run` first.** It prints every file it would remove, every service it would
+touch, every question it would ask and the exact answer it would take, and changes nothing
+at all. That is the flag to use to decide whether to trust it.
 
-Then it asks, separately and explicitly:
+It finds the prefix from the installed systemd unit rather than assuming the default, so an
+install to `/var/www/loghound` is uninstalled from `/var/www/loghound`. Before anything
+under that prefix is touched, the directory has to look like a Loghound install — an
+absolute path, not a system directory, containing at least one file only this installer
+puts there. If it does not, the system integration is still unwound and the directory is
+left strictly alone.
 
-- **Delete `<prefix>`?** That directory holds `var/state.db` and your `config/loghound.php`.
-  Default is no.
-- **Your Solr indexes.** They are never touched. The installer will not delete an index:
-  it cannot tell a dedicated Loghound index from a shared Solr that something else also
-  writes to, and getting that wrong is unrecoverable. It offers to print the commands so
-  you can do it yourself.
-- **Remove the system user?**
+### The order, and why
+
+1. **Units and both timers** stop first, so nothing re-creates the files about to be
+   removed or holds the service user open.
+2. **The Opensolr indexes**, while `config/loghound.php` still exists — the API key that
+   authorises the deletion is in it.
+3. **The vhost**, after `apachectl -t` / `nginx -t` passes without it. If the test fails,
+   the server is **not** reloaded and keeps serving its last good configuration. This runs
+   on boxes with other people's sites on them.
+4. **The FPM pool**, then its socket.
+5. **The command links**, the cron fallback, any logrotate fragment.
+6. **The credentials**, overwritten before they are unlinked.
+7. **The install tree**, if you say yes.
+8. **The system user** last, with its `adm` membership dropped first and separately — so a
+   `userdel` that fails still leaves an account that can no longer read `/var/log`.
+
+### What it destroys, and what it asks first
+
+Each of these is a separate question, asked by name:
+
+- **Overwrite and remove the credentials?** Default **yes**. This is `config/loghound.php`
+  (the Opensolr API key and account email, the beacon HMAC secret, `privacy.ip_salt`, any
+  Solr password and the panel password hash), `config/.loghound.*.tmp` (the same file
+  mid-write, if `save()` was ever interrupted), the self-signed TLS private key,
+  `var/install-token` and its attempt ledger, the panel's lockout ledger, `var/state.db`,
+  `var/panel-jobs.db` and both their write-ahead logs, `var/setup/*.json`, and every PHP
+  session file — a session file *is* a signed-in panel session.
+
+  Overwriting a file is not a guarantee. On a copy-on-write filesystem (btrfs, ZFS), an
+  overlayfs, a snapshotted volume or any SSD with wear levelling, the write lands in new
+  blocks and the originals remain on the media. Backups and VM snapshots are untouched by
+  definition. **If this box is being decommissioned, sold or handed on, rotate the Opensolr
+  API key.** That is the only reliable remedy.
+
+- **Delete `<prefix>`?** Default **no**.
+
+- **Delete the two Opensolr indexes?** Default **no**, and this one is not something
+  `--yes` can answer — it takes the literal word `DELETE` typed at the prompt, or
+  `LOGHOUND_UNINSTALL_DELETE_INDEXES=yes`. Deleting an index destroys its data and burns
+  its name: Opensolr index names are unique across the entire platform and are never
+  released, so **neither name can ever be created again**, by you or by anyone else.
+
+  Only the two indexes *this installation provisioned* are ever offered. The names are
+  derived from `solr.install_id` by the same function that created them, checked against
+  `^loghound_[a-f0-9]{8}_(hits|sessions)$`, required to match what is stored in the config,
+  and then cross-checked against your account's own index list. No name is ever read from
+  the command line, no prefix is ever swept, and nothing else in your account is touched.
+
+  If any part of that cannot be checked — the control plane is unreachable, the credentials
+  are gone, the config is unreadable, the listing comes back empty — **nothing is deleted.**
+  A check that could not be performed is a failed check. The two names are printed instead,
+  so you can remove them in the Opensolr control panel if you want to.
+
+  On a `solr.mode = custom` install, no core is touched at all: Loghound will not unload a
+  core from a Solr it does not manage.
+
+- **Remove the system user?** Default **yes**.
+
+### What it deliberately does not remove
+
+Printed at the end of every run, so you never have to guess:
+
+- **The beacon `<script>` tag on your site.** Only you can take that out of your templates.
+- **A certbot certificate for the panel hostname.** Never deleted silently: other vhosts may
+  be using it, and re-issuing after a mistake runs into Let's Encrypt rate limits. You get
+  `certbot delete --cert-name <host>` and the decision.
+- **The panel's own `loghound_access.log` / `loghound_error.log`** in your web server's log
+  directory. Your logrotate owns those.
+- Anything you added by hand — a supervisor unit, a firewall rule, a reverse proxy entry, a
+  monitoring check, a backup job. The uninstaller removes what the installer created and
+  refuses to guess at the rest.
+- **Your source log files**, which were never written to in the first place.
+
+A half-finished install — no config, no user, units copied in but never enabled — uninstalls
+cleanly rather than aborting on the first missing thing.
+
+### Unattended
+
+```bash
+sudo LOGHOUND_UNINSTALL_DELETE_TREE=yes \
+     LOGHOUND_UNINSTALL_REMOVE_USER=yes \
+     ./install/uninstall.sh --non-interactive
+```
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LOGHOUND_UNINSTALL_SHRED_SECRETS` | `yes` | set to `no` to leave the credentials on disk |
+| `LOGHOUND_UNINSTALL_DELETE_TREE` | `no` | set to `yes` to remove the install directory |
+| `LOGHOUND_UNINSTALL_REMOVE_USER` | `yes` | set to `no` to keep the service user |
+| `LOGHOUND_UNINSTALL_REMOVE_LOG` | `no` | set to `yes` to remove `/var/log/loghound-install.log` |
+| `LOGHOUND_UNINSTALL_DELETE_INDEXES` | `no` | set to `yes` to permanently delete the two indexes |
 
 ---
 
@@ -515,7 +697,6 @@ Everything is answerable from the environment:
 sudo LOGHOUND_HOSTNAME=loghound.example.com \
      LOGHOUND_PANEL_USER=admin \
      LOGHOUND_PANEL_PASSWORD='...' \
-     LOGHOUND_SOLR_CHOICE=1 \
      LOGHOUND_OPENSOLR_EMAIL=you@example.com \
      LOGHOUND_OPENSOLR_API_KEY='...' \
      LOGHOUND_OPENSOLR_REGION=FINLAND9 \
@@ -528,6 +709,12 @@ sudo LOGHOUND_HOSTNAME=loghound.example.com \
 
 The full list of `LOGHOUND_*` variables is in the header comment of `bin/loghound-setup`.
 The API key is never echoed to the terminal and never written to the install log.
+
+There is **no variable that supplies a Solr address, HTTP credentials or a core name**. The
+connection details come back from Opensolr and the two index names are generated, so an
+unattended install needs the three `LOGHOUND_OPENSOLR_*` answers and nothing else about
+storage. Re-running the wizard on a box that already has both indexes leaves them alone —
+`LOGHOUND_RECONFIGURE_STORAGE=yes` if you really do want provisioning to run again.
 
 `--non-interactive` also switches on automatically when stdin is not a terminal, because
 a wizard that blocks forever on a closed stdin is the worst possible failure mode inside

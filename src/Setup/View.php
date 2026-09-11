@@ -126,7 +126,7 @@ final class View
         static $titles = [
             Installer::STEP_STATUS  => ['Set up Loghound', 'Everything this server needs, checked one item at a time. Anything that needs fixing comes with the command that fixes it.'],
             Installer::STEP_SOURCES => ['Choose your access logs', 'Loghound reads your webserver\'s own log files. Check that it has understood the format before anything is indexed.'],
-            Installer::STEP_STORAGE => ['Where should the index live?', 'Loghound keeps what it learns in two Solr indexes. Let us create them for you, or point at a Solr you already run.'],
+            Installer::STEP_STORAGE => ['Where should the index live?', 'Loghound keeps what it learns in two Solr indexes that it creates and manages for you on your Opensolr account.'],
             Installer::STEP_PRIVACY => ['What to keep about your visitors', 'You decide what is stored and for how long. This is a real choice, not a formality.'],
             Installer::STEP_ADMIN   => ['Create your sign-in', 'Set the username and password you will use to sign in to Loghound.'],
         ];
@@ -184,15 +184,22 @@ final class View
         echo "\n</ol>\n";
     }
 
-    /** The one-shot message from the previous request, if there is one. */
+    /**
+     * The one-shot message from the previous request, if there is one.
+     *
+     * Three severities, matching Installer::flash(). 'warn' exists so a step that stored six
+     * of seven log sources can say so in one banner without either claiming plain success or
+     * shouting failure at an operator whose installation is in fact moving forward.
+     */
     private function flash(): void
     {
         $flash = $this->ctx['flash'] ?? null;
         if (!is_array($flash)) {
             return;
         }
-        $class = $flash['kind'] === 'ok' ? 'banner-good' : 'banner-bad';
-        echo '<div class="banner ' . $class . '" role="' . ($flash['kind'] === 'ok' ? 'status' : 'alert') . '">'
+        $kind = (string) ($flash['kind'] ?? 'error');
+        $class = ['ok' => 'banner-good', 'warn' => 'banner-warn'][$kind] ?? 'banner-bad';
+        echo '<div class="banner ' . $class . '" role="' . ($kind === 'error' ? 'alert' : 'status') . '">'
             . Security::esc((string) $flash['text']) . "</div>\n";
     }
 
@@ -343,6 +350,10 @@ final class View
      * The probe itself is a job rather than an inline call: a firewalled Solr would
      * otherwise hold this page open until the gateway killed it, and a status page that
      * hangs is worse than one that has a button.
+     *
+     * There is no "mode" row any more. There is one storage backend, so a field that always
+     * said the same word was noise; what an operator needs from this panel is the two index
+     * names and whether they answer.
      */
     private function storagePanel(): void
     {
@@ -355,8 +366,6 @@ final class View
         echo '<section class="card">';
         echo '<h2>Search index</h2>';
         echo '<dl class="kv">';
-        echo '<dt>Mode</dt><dd class="mono">'
-            . Security::esc((string) $this->cfg->get('solr.mode', 'opensolr')) . '</dd>';
         echo '<dt>Hits index</dt><dd class="mono">'
             . Security::esc((string) $this->cfg->get('solr.hits_core', '-')) . '</dd>';
         echo '<dt>Sessions index</dt><dd class="mono">'
@@ -386,6 +395,24 @@ final class View
      * Every candidate shows where the format came from, how much of a real sample it
      * parses, the token-to-field mapping, and five real lines rendered as records. Nothing
      * is ingested until a human has looked at that and ticked it.
+     *
+     * THE TWO TICK BOXES ARE NOT THE SAME KIND OF QUESTION AND MUST NOT BE MERGED.
+     *
+     *  - `pick[]` asks "ingest this file?", and every discovered source arrives ticked. The
+     *    operator ran a scan in order to ingest what it finds; the review is there so they
+     *    can untick what looks wrong, not so they can re-select what they just asked for. It
+     *    used to be ticked only for sources inside `allowed_log_roots`, so a file the
+     *    operator's own webserver config pointed at came up unticked, and clicking straight
+     *    through a screen that looked complete silently ingested nothing from it.
+     *  - `widen[]` asks "may Loghound read outside the directories it is allowed to read?",
+     *    and is NEVER pre-ticked. It is the security control that bounds the log-path
+     *    setting away from being an arbitrary-file-read, and a widening nobody consciously
+     *    agreed to is precisely what it exists to prevent. Pre-ticking it would grant, by
+     *    default, the permission it was added to withhold.
+     *
+     * Ticking `pick[]` for an outside-root source without ticking `widen[]` is therefore a
+     * refusal, not a bug: Steps::applySourcesReport() stores everything else and names that
+     * file and its reason.
      */
     private function stepSources(): void
     {
@@ -419,12 +446,11 @@ final class View
             echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_SOURCES) . '" class="card">';
             $this->csrf(Installer::STEP_SOURCES, 'confirm');
             echo '<h2>Confirm</h2>';
-            echo '<p>Tick every file above whose parsed lines look right, then confirm. You can '
-                . 'change this later in Settings.</p>';
+            echo '<p>Everything found is ticked. Untick anything whose parsed lines above look wrong, '
+                . 'then confirm. You can change this later in Settings.</p>';
             foreach ($sources as $i => $src) {
                 $path = (string) ($src['path'] ?? '');
-                echo '<label class="check"><input type="checkbox" name="pick[]" value="' . (int) $i . '"'
-                    . (empty($src['outside_roots']) ? ' checked' : '') . '>'
+                echo '<label class="check"><input type="checkbox" name="pick[]" value="' . (int) $i . '" checked>'
                     . '<span class="mono">' . Security::esc($path) . '</span></label>';
                 if (!empty($src['outside_roots'])) {
                     echo '<label class="check setup-widen"><input type="checkbox" name="widen[]" value="' . (int) $i . '">'
@@ -619,15 +645,15 @@ final class View
     }
 
     /**
-     * The storage step: managed Opensolr, or a Solr the operator already runs.
+     * The storage step: provisioning the two indexes on Opensolr.
      *
-     * Presented as two equal panels with the managed one first, because it is the answer
-     * for anyone who does not already have Solr — which is most people — and it needs no
-     * infrastructure at all.
+     * This screen used to be a fork, with a second panel for pointing Loghound at a Solr the
+     * operator already ran. That option was removed: Loghound creates its two indexes, uploads
+     * their configsets and reloads them, and it can do none of that on a Solr it does not
+     * administer. One flow, no choice to get wrong.
      */
     private function stepStorage(): void
     {
-        $mode = (string) $this->cfg->get('solr.mode', 'opensolr');
         $jobs = (array) ($this->ctx['jobs'] ?? []);
 
         if (isset($jobs[Job::KIND_OPENSOLR])) {
@@ -653,30 +679,33 @@ final class View
             echo '</section>';
         }
 
-        $this->opensolrPanel($mode);
-        $this->customSolrPanel($mode);
+        $this->opensolrPanel();
     }
 
     /**
-     * The managed option.
+     * Provisioning on Opensolr — the only path to storage there is.
      *
      * Two phases, because the region list belongs to the account and cannot be known until
      * the credentials are: enter the account details, then choose from the regions the
      * platform actually returned for it. The API key is a password field, is never
      * re-rendered, and is never placed in a hidden field.
      */
-    private function opensolrPanel(string $mode): void
+    private function opensolrPanel(): void
     {
         $regions = (array) ($this->ctx['regions'] ?? []);
         $haveKey = (string) $this->cfg->get('opensolr.api_key', '') !== '';
         $email = (string) $this->cfg->get('opensolr.email', '');
 
-        echo '<section class="card storage-option' . ($mode === 'opensolr' ? ' on' : '') . '">';
+        echo '<section class="card storage-option on">';
         echo '<h2>Let Opensolr host it</h2>';
         echo '<p><strong>You do not need to run Solr.</strong> Enter your Opensolr account details '
             . 'and Loghound creates both indexes, uploads their configuration and checks that they '
             . 'answer. Backups, downloads and restores are then available in your Opensolr control '
             . 'panel; you never have to learn what a configset is.</p>';
+        echo '<p class="muted">An Opensolr account is required. Loghound provisions and manages its '
+            . 'own two indexes — creating them, uploading their configsets and reloading them — and '
+            . 'it cannot do that on a Solr it does not administer, so there is no option to point it '
+            . 'at one.</p>';
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
         $this->csrf(Installer::STEP_STORAGE, 'credentials');
@@ -717,79 +746,6 @@ final class View
             echo '</form>';
         }
 
-        echo '</section>';
-    }
-
-    /**
-     * A generated core name to pre-fill the form with, or an empty string.
-     *
-     * Config::coreName() refuses an installation id that is not lowercase hex, which is
-     * the correct behaviour for a name that is about to be created on a shared platform.
-     * A form default is not worth propagating that as an exception, so a refusal here
-     * simply means the field is offered empty and the operator names the cores themselves.
-     */
-    private static function suggestedCoreName(string $installId, string $role): string
-    {
-        try {
-            return Config::coreName($installId, $role);
-        } catch (\InvalidArgumentException $e) {
-            return '';
-        }
-    }
-
-    /**
-     * The bring-your-own-Solr option.
-     *
-     * The password field is empty on every render and an empty value means "keep the
-     * stored one", so the form can be re-saved without blanking a working credential and
-     * without the password ever travelling back to the browser.
-     */
-    private function customSolrPanel(string $mode): void
-    {
-        $installId = (string) $this->cfg->get('solr.install_id', '');
-        $hits = (string) $this->cfg->get('solr.hits_core', '');
-        $sessions = (string) $this->cfg->get('solr.sessions_core', '');
-
-        if ($hits === '') {
-            $hits = self::suggestedCoreName($installId, 'hits');
-        }
-        if ($sessions === '') {
-            $sessions = self::suggestedCoreName($installId, 'sessions');
-        }
-
-        echo '<section class="card storage-option' . ($mode === 'custom' ? ' on' : '') . '">';
-        echo '<h2>Use a Solr you already run</h2>';
-        echo '<p>Solr 9 or newer. Loghound needs two cores; create them with the configuration '
-            . 'in <code>solr/hits/conf</code> and <code>solr/sessions/conf</code> from this checkout, '
-            . 'then give the details here.</p>';
-
-        echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
-        $this->csrf(Installer::STEP_STORAGE, 'custom');
-
-        echo '<label for="base_url">Solr address</label>';
-        echo '<input type="url" id="base_url" name="base_url" class="mono" size="40" required '
-            . 'placeholder="http://127.0.0.1:8983/solr" value="'
-            . Security::esc((string) $this->cfg->get('solr.base_url', '')) . '">';
-
-        echo '<label for="http_user">Username <span class="muted">(if it needs one)</span></label>';
-        echo '<input type="text" id="http_user" name="http_user" size="24" autocomplete="off" value="'
-            . Security::esc((string) $this->cfg->get('solr.http_user', '')) . '">';
-
-        echo '<label for="http_pass">Password'
-            . ((string) $this->cfg->get('solr.http_pass', '') !== ''
-                ? ' <span class="chip chip-good">stored</span>' : '') . '</label>';
-        echo '<input type="password" id="http_pass" name="http_pass" size="24" autocomplete="off">';
-
-        echo '<label for="hits_core">Core for hits</label>';
-        echo '<input type="text" id="hits_core" name="hits_core" class="mono" size="30" required value="'
-            . Security::esc($hits) . '">';
-
-        echo '<label for="sessions_core">Core for sessions</label>';
-        echo '<input type="text" id="sessions_core" name="sessions_core" class="mono" size="30" required value="'
-            . Security::esc($sessions) . '">';
-
-        echo '<button type="submit" class="primary">Save and test the connection</button>';
-        echo '</form>';
         echo '</section>';
     }
 
@@ -866,6 +822,8 @@ final class View
         echo '<p class="muted">At least ' . Steps::MIN_PASSWORD . ' characters. Stored as a hash; '
             . 'nobody, including this page, can read it back.</p>';
 
+        $this->authModeChoice();
+
         echo '<h2>Address of this panel</h2>';
         echo '<label for="base_url">Public URL</label>';
         echo '<input type="url" id="base_url" name="base_url" class="mono" size="40" value="'
@@ -873,11 +831,47 @@ final class View
         echo '<p class="muted">Used to build the one-line beacon snippet you add to your site.</p>';
 
         echo '<button type="submit" class="primary">Finish and open the dashboard</button>';
-        echo '<p class="muted">Your browser will ask for the username and password you just chose — '
-            . 'that is Loghound asking you to sign in for the first time.</p>';
+        echo '<p class="muted">Loghound will then ask you to sign in for the first time, with the '
+            . 'username and password you just chose — either through your browser\'s own prompt or '
+            . 'through its sign-in page, depending on which you picked above.</p>';
         echo '</form>';
 
         $this->nextStepsCard();
+    }
+
+    /**
+     * How the operator wants to sign in, as a real choice rather than a default.
+     *
+     * Both options are shown with what they cost, not only what they give: Basic cannot be
+     * styled and has no sign-out, and the sign-in page cannot be used by curl or by a
+     * monitoring check. Neither of those is discoverable after the fact without an
+     * afternoon of confusion, and this is the one screen where saying so is cheap.
+     *
+     * The choice is changeable afterwards, and the text says so, because an operator who
+     * believes a decision is permanent will stall on it.
+     */
+    private function authModeChoice(): void
+    {
+        $current = (string) $this->cfg->get('auth.mode', 'basic');
+        if (!array_key_exists($current, Steps::authModes())) {
+            $current = 'basic';
+        }
+
+        echo '<h2>How you sign in</h2>';
+        echo '<fieldset>';
+        echo '<legend>Which sign-in should Loghound use?</legend>';
+
+        foreach (Steps::authModes() as $key => $mode) {
+            echo '<label class="radio"><input type="radio" name="auth_mode" value="'
+                . Security::esc((string) $key) . '"' . ($key === $current ? ' checked' : '') . '>';
+            echo '<span><strong>' . Security::esc($mode['label']) . '</strong><br>'
+                . Security::esc($mode['text'])
+                . '<br><span class="muted">' . Security::esc($mode['cost']) . '</span></span></label>';
+        }
+
+        echo '</fieldset>';
+        echo '<p class="muted">You can change this later under Settings without setting the password '
+            . 'again.</p>';
     }
 
     /** The commands to run on the server once setup is done. */

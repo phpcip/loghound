@@ -20,7 +20,19 @@ import { api, byId, el, post, reattachJob, runJob, when } from '../core.js';
 const JOB_TITLES = {
     solr_connection: 'Solr connection check',
     opensolr_check: 'Opensolr credential check',
-    retention_preview: 'Retention preview'
+    retention_preview: 'Retention preview',
+    source_rescan: 'Log source scan'
+};
+
+/**
+ * Job kinds whose result is a change to this page, keyed to the flash to land on.
+ *
+ * A scan rewrites the detection report the source review is rendered from, so the markup
+ * on screen is stale the moment it finishes. Reloading is the honest end of that operation;
+ * leaving the old cards up under a green "finished" panel is not.
+ */
+const RELOAD_AFTER = {
+    source_rescan: '?v=settings&ok=sources_rescanned#set-sources'
 };
 
 /**
@@ -38,7 +50,10 @@ function initJobButtons() {
             setJobButtonsBusy(kind, true);
             await runJob(kind, mount, {
                 title: JOB_TITLES[kind] || 'Operation',
-                onDone: () => setJobButtonsBusy(kind, false)
+                onDone: (job) => {
+                    setJobButtonsBusy(kind, false);
+                    reloadIfPageIsNowStale(kind, job);
+                }
             });
             setJobButtonsBusy(kind, false);
         });
@@ -56,6 +71,22 @@ function setJobButtonsBusy(kind, busy) {
 }
 
 /**
+ * Reload the page when a finished job has invalidated what is rendered on it.
+ *
+ * Only on a job that actually succeeded: a failed or cancelled scan leaves the report it was
+ * going to replace exactly as it was, and throwing away the panel that says why it failed
+ * would leave the operator with no explanation at all. The target is a fixed string from
+ * RELOAD_AFTER, never anything the server sent, so nothing here can be steered into becoming
+ * a redirect to somewhere else.
+ */
+function reloadIfPageIsNowStale(kind, job) {
+    const target = RELOAD_AFTER[kind];
+    if (target && job && job.state === 'done') {
+        window.location.assign(target);
+    }
+}
+
+/**
  * Reattach to any operation that was still running when the page was last open.
  *
  * Refreshing mid-operation must not orphan it or start a second one; the server holds the
@@ -64,7 +95,13 @@ function setJobButtonsBusy(kind, busy) {
 function reattachRunningJobs() {
     for (const button of document.querySelectorAll('[data-job]')) {
         const kind = button.dataset.job;
-        reattachJob(kind, button.dataset.mount, { title: JOB_TITLES[kind] || 'Operation' })
+        reattachJob(kind, button.dataset.mount, {
+            title: JOB_TITLES[kind] || 'Operation',
+            onDone: (job) => {
+                setJobButtonsBusy(kind, false);
+                reloadIfPageIsNowStale(kind, job);
+            }
+        })
             .then((found) => {
                 if (found) {
                     setJobButtonsBusy(kind, true);

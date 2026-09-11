@@ -234,10 +234,16 @@ final class Job
      * This is what makes a long step legible: "Creating index loghound_9a411396_hits…"
      * appears while the request that creates it is still in flight, because the note is
      * flushed to the state file immediately and the poller reads that file.
+     *
+     * Redacted on the way in, not at the call sites. Some notes carry text the platform
+     * returned, and the platform echoes request parameters back in some error paths — and
+     * the API key travels as one. The state file is 0600, but the job endpoint serves its
+     * contents to a browser that is not yet authenticated, because the installer runs
+     * before an account exists. A boundary that is only sometimes applied is not one.
      */
     public function note(string $text): void
     {
-        $this->data['notes'][] = ['t' => time(), 'text' => $text];
+        $this->data['notes'][] = ['t' => time(), 'text' => self::redactPatterns($text)];
         if (count($this->data['notes']) > self::MAX_NOTES) {
             $this->data['notes'] = array_slice($this->data['notes'], -self::MAX_NOTES);
         }
@@ -544,6 +550,8 @@ final class Job
      */
     private static function redact(string $text, Config $cfg): string
     {
+        $text = self::redactPatterns($text);
+
         $secrets = [
             (string) $cfg->get('opensolr.api_key', ''),
             (string) $cfg->get('solr.http_pass', ''),
@@ -556,10 +564,21 @@ final class Job
             }
         }
 
-        $text = preg_replace('/\b(api_key|apikey|password|passwd|token|secret)=[^&\s"\']+/i', '$1=[redacted]', $text) ?? $text;
-        $text = preg_replace('#(://[^/\s:@]+):[^/\s:@]+@#', '$1:[redacted]@', $text) ?? $text;
-
         return $text;
+    }
+
+    /**
+     * The half of the redaction that needs no configuration.
+     *
+     * Split out so note() can use it. A note is written from inside an instance, which holds
+     * no Config, and "there is no Config here" is not a reason to write a credential into a
+     * file the job endpoint serves unauthenticated. This catches the shape a leaked key
+     * actually takes — an echoed query string — without needing to know the value.
+     */
+    private static function redactPatterns(string $text): string
+    {
+        $text = preg_replace('/\b(api_key|apikey|password|passwd|token|secret)=[^&\s"\']+/i', '$1=[redacted]', $text) ?? $text;
+        return preg_replace('#(://[^/\s:@]+):[^/\s:@]+@#', '$1:[redacted]@', $text) ?? $text;
     }
 
 }

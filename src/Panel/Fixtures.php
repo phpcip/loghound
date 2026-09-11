@@ -36,6 +36,38 @@ final class Fixtures
     /** Number of synthetic sessions spread over the last 30 days. */
     private const SESSIONS = 1400;
 
+    /**
+     * The virtual hosts the demo machine serves, and what each one is for.
+     *
+     * Three, because the Virtual hosts view is a COMPARISON and a comparison needs something
+     * to compare. One busy site, one much quieter one carrying most of the scraping, and a
+     * small status host that is almost entirely monitors — so the evasive-bot share column,
+     * which is the column an operator actually scans, differs by an order of magnitude
+     * between rows instead of being the same number three times.
+     *
+     * `example.com` is first on purpose: it is the vhost the detection fixture reports and
+     * the host the sample referers point at, so the demo tells one story across both.
+     */
+    private const HOSTS = ['example.com', 'shop.example.com', 'status.example.com'];
+
+    /**
+     * Per-population odds of each host, in HOSTS order, as cumulative percentages.
+     *
+     * Keyed by the bot class the branch assigned, with a default for everything else.
+     * Humans mostly read the main site; the scrapers and the proxy fleet are after the shop's
+     * prices, which is why a shop takes scraping out of proportion to its traffic; monitors
+     * only ever poll the status host, which is what a monitor is for.
+     */
+    private const HOST_ODDS = [
+        'proxy_fleet'      => [30, 96, 100],
+        'headless'         => [34, 95, 100],
+        'scripted'         => [38, 92, 100],
+        'monitor'          => [0, 0, 100],
+        'ai_crawler'       => [62, 94, 100],
+        'declared_crawler' => [60, 92, 100],
+        'default'          => [78, 96, 100],
+    ];
+
     /** @var array<int,array<string,mixed>>|null Lazily built session documents. */
     private static ?array $sessions = null;
 
@@ -387,6 +419,8 @@ final class Fixtures
                 $doc['fp_ips_24h_i'] = mt_rand(1, 3);
             }
 
+            $doc['host_s'] = self::host($i, (string) ($doc['bot_class_s'] ?? 'none'));
+
             $span = (int) round(($doc['hits_i'] - 1) * mt_rand(400, 9000));
             $doc['log_span_ms_l'] = max(0, $span);
             $doc['ts_end'] = self::iso($start + (int) round($span / 1000));
@@ -421,6 +455,12 @@ final class Fixtures
      * is explicit that a fabricated zero is worse than a missing field, and the demo has
      * to obey the same rule or it teaches the wrong thing.
      *
+     * `doc_type_s` is not decoration. The sessions core holds session documents and daily
+     * rollups, so every panel query against it carries `doc_type_s:session` — and a demo
+     * world whose documents did not declare their type matched none of those filters, which
+     * emptied the whole dashboard the moment the filter was introduced. The demo has to
+     * satisfy the same contract the real schema states.
+     *
      * @param array{0:int,1:string,2:string,3:string,4:string,5:string,6:float,7:float} $net
      * @return array<string,mixed>
      */
@@ -443,6 +483,7 @@ final class Fixtures
 
         $doc = [
             'id'         => sha1('lh' . $ip . $start . mt_rand()),
+            'doc_type_s' => 'session',
             'ts_start'   => self::iso($start),
             'hits_i'     => 1,
             'pages_i'    => 1,
@@ -507,6 +548,29 @@ final class Fixtures
         return $doc;
     }
 
+    /**
+     * Which virtual host served a session, drawn from the odds for its population.
+     *
+     * Deterministic from the session's index and DELIBERATELY NOT from mt_rand(): the whole
+     * demo world is generated from one fixed seed so that screenshots are reproducible, and
+     * drawing one more number per session inside that loop would shift every subsequent draw
+     * and silently renumber traffic, timings and addresses that already tell a story. crc32
+     * over the index is uncorrelated with everything else derived from it and costs the
+     * generator nothing.
+     */
+    private static function host(int $i, string $class): string
+    {
+        $odds = self::HOST_ODDS[$class] ?? self::HOST_ODDS['default'];
+        $roll = crc32('host:' . $i) % 100;
+
+        foreach ($odds as $n => $ceiling) {
+            if ($roll < $ceiling) {
+                return self::HOSTS[$n];
+            }
+        }
+        return self::HOSTS[0];
+    }
+
     /** Deterministic IP inside a per-ASN pseudo-range. */
     private static function ip(int $asn): string
     {
@@ -548,6 +612,10 @@ final class Fixtures
      *
      * Capped at 12 hits per session: enough for a legible timeline, small enough that the
      * whole demo world stays a few thousand rows and renders instantly.
+     *
+     * Every hit carries its session's `host_s`, because the virtual-host selector scopes the
+     * hits core as well as the sessions core: a hit set that did not name a host would make
+     * picking a site empty the Performance view while the rest of the dashboard filled.
      *
      * @return array<int,array<string,mixed>>
      */
@@ -602,6 +670,7 @@ final class Fixtures
                     'kind_s'        => $isAsset ? 'asset' : 'html',
                     'asset_kind_s'  => $isAsset ? ['css', 'js', 'img', 'img'][mt_rand(0, 3)] : null,
                     'proto_s'       => 'HTTP/2',
+                    'host_s'        => $s['host_s'],
                     'ip_s'          => $s['ip_s'],
                     'as_type_s'     => $s['as_type_s'],
                     'bot_verdict_s' => $s['bot_verdict_s'] ?? 'unknown',

@@ -87,7 +87,8 @@ function renderHeadline(data) {
         (data.who === 'human' && !data.who_supported
             ? ' NOTE: hit documents in this index carry no verdict, so the "Humans only" filter cannot be applied ' +
               'here and matched nothing. Switch back to "All clients".'
-            : ''));
+            : '') +
+        ignoredFilterNote(data));
 
     if (data.requests > 0 && data.timed === 0) {
         showMissingDuration(data.requests);
@@ -95,6 +96,25 @@ function renderHeadline(data) {
     }
     hideEmpty('pf-nodur');
     return true;
+}
+
+/**
+ * Name the sidebar filters this view could not apply.
+ *
+ * The scorer's session-level conclusions do not exist on the hits core, so a verdict or
+ * signal chip stays lit in the sidebar while doing nothing to these numbers. Saying so is
+ * the whole point: a filter that is silently ignored turns a wrong answer into one the
+ * reader has no reason to doubt.
+ */
+function ignoredFilterNote(data) {
+    const ignored = Array.isArray(data.filters_ignored) ? data.filters_ignored : [];
+    if (ignored.length === 0) {
+        return '';
+    }
+    return ' NOTE: ' + ignored.join(', ') +
+        (ignored.length === 1 ? ' is a session-level filter' : ' are session-level filters') +
+        ' and could not be applied to these numbers, which cover every request in range that ' +
+        'the other filters match.';
 }
 
 /**

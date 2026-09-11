@@ -68,8 +68,14 @@ indexes it; it does not create it.
 | `browser_s` `browser_ver_i` `os_s` `device_s` `ua_bot_*` `ai_crawler_b` | Local UA parsing | Nothing |
 
 Each is individually switchable in `config/loghound.php` under `enrich`. All results are
-cached in SQLite (geo/ASN/whois ≥ 30 days, rDNS ≥ 7), including negative results, so a
-repeat visitor's address is looked up once per cache window rather than once per request.
+cached in SQLite (geo/ASN/whois ≥ 30 days, rDNS ≥ 7) so a repeat visitor's address is looked
+up once per cache window rather than once per request.
+
+**Negative results are cached too, but only for one hour** — a fixed value, not the
+configured TTL. A lookup that fails is usually a rate limit or a network problem, and
+caching "we don't know" for thirty days would permanently blind the enrichment for that
+netblock. An hour is long enough to stop a dead whois server being hammered once per hit,
+short enough to self-heal.
 
 ### From the beacon (plane 3)
 
@@ -86,10 +92,30 @@ Only if you add `b.js` to your site. It is optional and Loghound works without i
 | `webgl_s` | The WebGL `UNMASKED_RENDERER` string |
 | `client_score_f` | The execution-plane sub-score |
 
-**The beacon does not record keystrokes, form contents, clipboard, page text, mouse
-coordinates, or anything you typed.** It records that interaction *happened*, how much, and
-what kind — a count and a scroll depth, not a recording. There is no session replay in
+The payload on the wire also carries these, which are used for the server-side consistency
+cross-checks rather than stored as their own session fields:
+
+| Wire key | What it is |
+|---|---|
+| `u` | **The path only** of the current URL, capped at 512 bytes. The query string and the hash fragment are dropped before the payload is built — real sites routinely carry session tokens, email addresses and password-reset codes in query strings. |
+| `im` | A bitmask of *which* interaction types occurred: mousemove, scroll, keydown, click, pointerdown, touchstart, wheel. Which kinds, never which keys. |
+| `pl` | `navigator.platform` / `userAgentData.platform`, cross-checked against the OS the User-Agent claims |
+| `mt` | `maxTouchPoints` — how many touch points the device supports |
+| `dp` | `devicePixelRatio` |
+| `sw` `sh` `aw` `ah` `ow` `oh` | Screen size, available screen size, and browser window outer size |
+| `tz` | The IANA timezone from `Intl.DateTimeFormat()` |
+
+**The beacon does not record keystrokes, form contents, clipboard, page text, query
+strings, or anything you typed.** It records that interaction *happened*, how much, and what
+kind — a count, a bitmask and a scroll depth, not a recording. There is no session replay in
 Loghound and there is no plan to add one.
+
+**On mouse coordinates, precisely.** No coordinate is ever transmitted. The script does
+sample up to sixteen `clientX`/`clientY` pairs into memory, at most one per second, purely
+to answer one question — do three consecutive points fall on an exactly straight line, which
+is what an interpolating driver produces and a hand never does. Only the verdict leaves the
+browser, as `mouse_linear`, `mouse_static` or `human_mouse_natural`. The coordinates
+themselves are discarded when the page goes away.
 
 ---
 
@@ -190,15 +216,26 @@ Everything, in one list:
 | Team Cymru | visitor IP addresses | `enrich.asn_enabled = false` |
 | RIR whois servers | visitor IP addresses | `enrich.whois_enabled = false` |
 | Your DNS resolver | visitor IP addresses (reverse lookups) | `enrich.rdns_enabled = false` |
-| Your Solr | **everything** — if you use managed Opensolr rather than your own | `solr.mode = 'custom'` |
+| Your two Opensolr indexes | **everything Loghound stores** — every hit and session document | cannot be turned off |
+| `https://opensolr.com/solr_manager/api` | Your account email and API key, and the index names being created or checked — **no visitor data**. Only during setup, and afterwards when you run the Opensolr credential check or the plan-usage figures from the panel. | cannot be turned off |
 
-**With all four enrichers off and your own Solr, nothing leaves the machine.** Loghound
-still works: it loses geo, ASN, netname and rDNS, which costs you the Networks view and
-two of the seventeen rules. Everything on the behavioural and execution planes is
+**The two indexes cannot be moved off Opensolr.** Loghound provisions and manages them —
+creating them, uploading their configsets and reloading them — and it cannot do that on a Solr
+it does not administer, so there is no option to point it at one. An Opensolr account is a hard
+requirement, and **your log-derived data leaves your machine for Opensolr's infrastructure.**
+That is a processor relationship and you should treat it as one in your records. Opensolr's own
+terms and data-protection position are the reference for what happens to it there.
+
+**With all four enrichers off, no visitor IP address leaves the machine for anywhere but your
+own indexes.** Loghound still works: it loses geo, ASN, netname and rDNS, which costs you the
+Networks view and **three** of the seventeen rules — `tz_mismatch` (needs the geo-derived
+timezone), `hosting_asn_browser_ua` (needs the network type) and `rdns_claim_failed` (needs a
+real reverse-DNS answer to fail). Everything else on the behavioural and execution planes is
 unaffected.
 
-**If you use managed Opensolr, your indexes live on Opensolr's infrastructure.** That is a
-processor relationship and you should treat it as one in your records.
+The strongest privacy posture available is therefore all four enrichers off plus
+`privacy.ip_mode = 'hash'`, which means the addresses that reach the index are keyed hashes
+that rotate daily rather than addresses.
 
 ---
 
@@ -208,8 +245,25 @@ processor relationship and you should treat it as one in your records.
 runs daily and issues a real `delete-by-query` — this is a deletion job that actually
 deletes, not a paragraph of documentation saying you ought to.
 
-Also purged: expired enrichment cache entries, closed sessions and merged beacon rows in
-SQLite.
+**It deletes from Solr only.** `bin/loghound-retention` issues two delete-by-query calls,
+one per core, and touches nothing else. **The SQLite state database is not covered by the
+retention window**, and that is a gap you should know about rather than assume away: the
+enrichment caches (which hold IP addresses as keys), the closed-session table, the merged
+beacon staging rows and the rate-limit buckets in `<prefix>/var/state.db` are not purged by
+the timer. The purge routines exist in `src/State.php` — `cachePurgeExpired()`,
+`purgeClosedSessions()`, `purgeBeacons()`, `purgeRateLimits()` — and nothing currently calls
+them.
+
+Practically: cache entries expire (30 days positive, 1 hour negative) and stop being *used*,
+but the rows remain on disk until something removes them. What is in there is enrichment
+keyed by address, plus sessions that have not yet been closed and beacon payloads that have
+not yet been merged — not a second copy of your traffic history, but not nothing either.
+
+If your retention posture has to cover every copy, the honest answer today is that you have
+to do it yourself, and that `var/state.db` is not safe to simply delete: it also holds the
+tailer's byte cursors and the open-session table, so removing it makes the tailer restart
+each source at its current end (losing anything not yet ingested) and orphans every session
+that had not closed. This belongs in the retention job, and it is not there yet.
 
 `privacy.rollup_forever` (default on) keeps the daily rollup documents indefinitely. Those
 are aggregate counts with no per-visitor field in them, so long-term trends survive the
@@ -218,7 +272,8 @@ deletion of the underlying detail.
 **Your web server's own retention is a separate thing, and it is often much shorter.**
 Loghound can only ever see as far back as the log files that exist. Check what your box
 actually does — see the log-retention section of [INSTALL.md](INSTALL.md), including the
-`find -mtime +10 -delete` cron that was on the first box this was deployed to.
+`find /var/log/apache2/ -type f -mtime +10 -exec rm -f {} +` cron that was on the first box
+this was deployed to, and which no logrotate config would have told you about.
 
 **To delete data now**, rather than waiting for the timer:
 

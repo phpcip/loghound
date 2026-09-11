@@ -70,7 +70,13 @@ abstract class Controller
     abstract public function api(string $action): array;
 
     /**
-     * Read a string parameter, restricted to an allowlist when one is given.
+     * Read a string parameter, restricted to an allowlist.
+     *
+     * An EMPTY allowlist admits nothing and yields the default. It used to mean the
+     * opposite — no list, no filtering, raw request value returned — which is a trap for
+     * any caller building the list dynamically: a list that comes back empty because a
+     * feature is unconfigured or an account owns nothing then turned the guard off at
+     * exactly the moment it was most needed. Nothing is allowed until something says it is.
      *
      * @param array<int,string> $allowed
      */
@@ -80,7 +86,7 @@ abstract class Controller
         if (!is_string($v)) {
             return $default;
         }
-        if ($allowed !== [] && !in_array($v, $allowed, true)) {
+        if (!in_array($v, $allowed, true)) {
             return $default;
         }
         return $v;
@@ -144,39 +150,112 @@ abstract class Controller
      * separate fq entries, so they AND together and each is independently cacheable in
      * Solr's filter cache.
      *
+     * Passing `$only` restricts the clauses to fields that exist on the core about to be
+     * queried. The two schemas are not the same shape, and an `fq` naming a field a core
+     * does not define matches nothing, so an unrestricted list would turn a filtered
+     * hits-core view into an empty one.
+     *
+     * `$rename` maps a sidebar field onto the name the target core actually uses, for the
+     * cases where the same fact is spelled differently on each side.
+     *
+     * @param array<int,string>|null   $only   Field names to keep, or null for all active filters.
+     * @param array<string,string>     $rename Sidebar field => field name on the target core.
      * @return array<int,string>
      */
-    protected function filterFqs(): array
+    protected function filterFqs(?array $only = null, array $rename = []): array
     {
         $out = [];
         foreach ($this->filters as $field => $values) {
+            if ($only !== null && !in_array($field, $only, true)) {
+                continue;
+            }
             $parts = [];
             foreach ($values as $v) {
                 $parts[] = Query::quote($v);
             }
-            $out[] = $field . ':(' . implode(' OR ', $parts) . ')';
+            $out[] = ($rename[$field] ?? $field) . ':(' . implode(' OR ', $parts) . ')';
         }
         return $out;
     }
 
     /**
-     * The base `fq` list for a sessions-core query: time range plus active filters.
+     * The labels of active filters a hits-core view cannot honour.
+     *
+     * A verdict, a bot class and a fired signal are conclusions the scorer reaches about a
+     * whole session; they live only on the sessions core. A view that queries hits must say
+     * which filters it ignored rather than print numbers under a filter chip that did
+     * nothing — a silently dropped filter is a wrong answer presented as a right one.
+     *
+     * @return array<int,string>
+     */
+    protected function ignoredHitFilters(): array
+    {
+        $usable = array_keys(Query::hitFilterFields());
+        $labels = Query::filterFields();
+
+        $out = [];
+        foreach (array_keys($this->filters) as $field) {
+            if (!in_array($field, $usable, true)) {
+                $out[] = $labels[$field] ?? $field;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * The filter that keeps a rollup document out of a session count.
+     *
+     * The sessions core holds two document types discriminated by `doc_type_s`: one per
+     * closed session, and one per UTC day written by bin/loghound-score. The schema at
+     * solr/sessions/conf/managed-schema.xml states the contract — every dashboard query must
+     * say which type it wants — and this constant is the panel's half of it.
+     */
+    protected const FQ_SESSION_DOCS = 'doc_type_s:session';
+
+    /**
+     * The base `fq` list for a sessions-core query: document type, time range, filters.
+     *
+     * The document-type clause is not optional. A rollup document carries `ts_start`, so
+     * without it the rollup falls inside the selected range and is counted as a session:
+     * every headline total is inflated by up to one document per day in range — ninety on a
+     * ninety-day window — and the five populations stop summing to the figure printed above
+     * them, because a rollup matches none of them.
+     *
+     * Every sessions-core query reached through a Controller subclass goes through here.
+     * The two queries in Panel\Callers build their own `fq` list and carry the same clause
+     * themselves; Panel\Jobs deliberately counts the whole core, because "how many documents
+     * are in this index" is the question that diagnostic asks.
      *
      * @return array<int,string>
      */
     protected function sessionFqs(): array
     {
-        return array_merge([Query::rangeFq('ts_start', $this->range)], $this->filterFqs());
+        return array_merge(
+            [self::FQ_SESSION_DOCS, Query::rangeFq('ts_start', $this->range)],
+            $this->filterFqs(null, Query::sessionFilterAliases())
+        );
     }
 
     /**
-     * The base `fq` list for a hits-core query.
+     * The base `fq` list for a hits-core query: time range, plus every active filter the
+     * hits core can actually answer.
+     *
+     * This used to return the range alone, so the whole sidebar — the virtual-host selector
+     * included — scoped every sessions-core view and silently did nothing to Performance.
+     * Picking one site and reading its latency gave the latency of every site on the
+     * machine, under a chip saying otherwise.
+     *
+     * Filters the hits core cannot answer are dropped here and reported by
+     * ignoredHitFilters(), which the view surfaces.
      *
      * @return array<int,string>
      */
     protected function hitFqs(): array
     {
-        return [Query::rangeFq('ts', $this->range)];
+        return array_merge(
+            [Query::rangeFq('ts', $this->range)],
+            $this->filterFqs(array_keys(Query::hitFilterFields()))
+        );
     }
 
     /**

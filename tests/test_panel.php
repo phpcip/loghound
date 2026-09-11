@@ -39,6 +39,7 @@ use Loghound\Panel\Overview;
 use Loghound\Panel\Performance;
 use Loghound\Panel\Query;
 use Loghound\Panel\Sessions;
+use Loghound\Panel\Settings;
 use Loghound\Security;
 use Loghound\Solr;
 
@@ -48,7 +49,6 @@ use Loghound\Solr;
 function lh_panel_config(): Config
 {
     $cfg = Config::load('/nonexistent-loghound-config');
-    $cfg->set('solr.mode', 'custom');
     $cfg->set('solr.base_url', 'http://127.0.0.1:65535/solr');
     $cfg->set('solr.hits_core', 'lh_test_hits');
     $cfg->set('solr.sessions_core', 'lh_test_sessions');
@@ -94,6 +94,136 @@ function lh_panel_params(array $request): array
     $params = [];
     parse_str((string) ($request['body'] ?? ''), $params);
     return $params;
+}
+
+/**
+ * Every value of a REPEATED parameter in a captured request body.
+ *
+ * Solr::encodeParams() writes an array parameter as `fq=a&fq=b`, which is what Solr wants
+ * and what parse_str() cannot represent: it keeps only the last one. A test that asks
+ * "does this request carry the document-type filter" has to see all of them, so this
+ * splits the body itself instead.
+ *
+ * @param array<string,mixed> $request
+ * @return array<int,string>
+ */
+function lh_panel_repeated(array $request, string $key): array
+{
+    $out = [];
+    foreach (explode('&', (string) ($request['body'] ?? '')) as $pair) {
+        if ($pair === '') {
+            continue;
+        }
+        [$k, $v] = array_pad(explode('=', $pair, 2), 2, '');
+        if (rawurldecode($k) === $key) {
+            $out[] = rawurldecode($v);
+        }
+    }
+    return $out;
+}
+
+/**
+ * A Gateway whose fake Solr actually HONOURS `fq=doc_type_s:…`.
+ *
+ * The ordinary fake transport returns whatever it was given, which is fine for the
+ * injection tests — they read the request, not the response — and useless for asking
+ * whether a filter does its job. This one applies the document-type filter to a small
+ * in-memory index and reports the count that survives, so a query that forgets the filter
+ * gets back the count that includes the rollup, exactly as a real Solr would hand it over.
+ *
+ * Only `doc_type_s` is evaluated. That is the whole point of the test and anything more
+ * would be a Solr reimplementation with its own bugs.
+ *
+ * @param array<int,array<string,mixed>> $captured
+ * @param array<int,array<string,mixed>> $docs
+ */
+function lh_panel_indexed_gateway(array &$captured, array $docs): Gateway
+{
+    $transport = function (array $request) use (&$captured, $docs): array {
+        $captured[] = $request;
+
+        $matched = $docs;
+        foreach (lh_panel_repeated($request, 'fq') as $fq) {
+            if (preg_match('/^doc_type_s:"?([A-Za-z_]+)"?$/', $fq, $m)) {
+                $want = $m[1];
+                $matched = array_values(array_filter(
+                    $matched,
+                    static fn (array $d): bool => (string) ($d['doc_type_s'] ?? '') === $want
+                ));
+            }
+        }
+
+        return [
+            'status' => 200,
+            'body' => (string) json_encode([
+                'responseHeader' => ['status' => 0],
+                'response' => ['numFound' => count($matched), 'docs' => $matched],
+                'facets' => ['count' => count($matched)],
+            ]),
+            'error' => '',
+        ];
+    };
+
+    $cfg = lh_panel_config();
+    return new Gateway($cfg, new Solr((array) $cfg->get('solr'), $transport), false);
+}
+
+/**
+ * Run a panel action against the document-type-aware fake index.
+ *
+ * @param array<string,mixed>            $get
+ * @param array<int,array<string,mixed>> $docs
+ * @return array{0:array<string,mixed>,1:array<int,array<string,mixed>>}
+ */
+function lh_panel_run_indexed(string $class, string $action, array $get, array $docs): array
+{
+    $saved = $_GET;
+    $_GET = $get;
+    $captured = [];
+    try {
+        $cfg = lh_panel_config();
+        $result = (new $class($cfg, lh_panel_indexed_gateway($captured, $docs)))->api($action);
+    } finally {
+        $_GET = $saved;
+    }
+    return [$result, $captured];
+}
+
+/**
+ * The source text of one method's body, for the tests that assert a SHAPE rather than a
+ * behaviour.
+ *
+ * Some bugs are latent: Settings::post() was correct only because a helper it calls exits
+ * before the next `case` can run, so no input reaches the wrong handler today and no
+ * behavioural test can see the problem. Reading the source is the only way to pin "this
+ * must not depend on that", and it is honest about being a source-shape assertion.
+ */
+function lh_panel_method_body(string $relative, string $signature): string
+{
+    $source = (string) file_get_contents(dirname(__DIR__) . '/' . $relative);
+    $at = strpos($source, $signature);
+    if ($at === false) {
+        lh_fail($signature . ' was not found in ' . $relative);
+    }
+
+    $open = strpos($source, '{', $at);
+    if ($open === false) {
+        lh_fail($signature . ' has no body in ' . $relative);
+    }
+
+    $depth = 0;
+    $length = strlen($source);
+    for ($i = $open; $i < $length; $i++) {
+        if ($source[$i] === '{') {
+            $depth++;
+        } elseif ($source[$i] === '}') {
+            $depth--;
+            if ($depth === 0) {
+                return substr($source, $open + 1, $i - $open - 1);
+            }
+        }
+    }
+    lh_fail($signature . ' has an unbalanced body in ' . $relative);
 }
 
 /**
@@ -496,5 +626,226 @@ return [
             Solr::assertSafeFilter($filter);
         }
         lh_true(true, 'all population filters passed assertSafeFilter');
+    },
+
+    'a rollup document in range is never counted as a session' => function (): void {
+        $docs = [
+            ['id' => 's1', 'doc_type_s' => 'session', 'ts_start' => '2026-09-09T10:00:00Z'],
+            ['id' => 's2', 'doc_type_s' => 'session', 'ts_start' => '2026-09-09T11:00:00Z'],
+            ['id' => 'rollup_daily:2026-09-09', 'doc_type_s' => 'rollup_daily', 'ts_start' => '2026-09-09T00:00:00Z'],
+        ];
+
+        [$result] = lh_panel_run_indexed(Overview::class, 'totals', ['range' => '90d'], $docs);
+
+        lh_same(
+            2,
+            $result['total_sessions'],
+            'the rollup document matched the time range and was counted as a session'
+        );
+    },
+
+    'every sessions-core query the panel issues names the document type it wants' => function (): void {
+        $views = [
+            [Overview::class, ['totals', 'timing', 'series', 'toppages']],
+            [Bots::class, ['split', 'reasons', 'verdicts', 'histogram', 'classes', 'crawlers']],
+            [Networks::class, ['totals', 'asns', 'types', 'netnames', 'geo']],
+            [Fingerprints::class, ['clusters']],
+            [Sessions::class, ['list', 'facets']],
+        ];
+
+        foreach ($views as [$class, $actions]) {
+            foreach ($actions as $action) {
+                [, $captured] = lh_panel_run($class, $action, ['range' => '7d']);
+                foreach ($captured as $request) {
+                    if (!str_contains((string) ($request['url'] ?? ''), 'sessions')) {
+                        continue;
+                    }
+                    $fqs = lh_panel_repeated($request, 'fq');
+                    lh_true(
+                        in_array('doc_type_s:session', $fqs, true),
+                        $class . '::' . $action . ' queried the sessions core without doc_type_s:session, so '
+                        . 'a daily rollup falls inside its range: fq=' . implode(' | ', $fqs)
+                    );
+                }
+            }
+        }
+    },
+
+    'the beacon status card counts sessions, not rollups' => function (): void {
+        $captured = [];
+        $cfg = lh_panel_config();
+        $view = new Settings($cfg, lh_panel_gateway($captured));
+        $view->api('beacon');
+
+        lh_true($captured !== [], 'the beacon check must issue a query');
+        $fqs = lh_panel_repeated($captured[0], 'fq');
+        lh_true(
+            in_array('doc_type_s:session', $fqs, true),
+            'the beacon coverage denominator would otherwise include a rollup per day: '
+            . implode(' | ', $fqs)
+        );
+    },
+
+    'no arm of Settings::post falls through into the next action' => function (): void {
+        $body = lh_panel_method_body('src/Panel/Settings.php', 'public function post()');
+
+        if (!preg_match_all('/^\s*(case\s+[^:]+:|default:)/m', $body, $m, PREG_OFFSET_CAPTURE)) {
+            lh_fail('Settings::post() no longer looks like a switch; re-read this test');
+        }
+
+        $labels = $m[0];
+        $count = count($labels);
+        for ($i = 0; $i < $count; $i++) {
+            $start = $labels[$i][1] + strlen($labels[$i][0]);
+            $end = $i + 1 < $count ? $labels[$i + 1][1] : strlen($body);
+            $arm = substr($body, $start, $end - $start);
+
+            if (trim($arm) === '') {
+                continue;
+            }
+            lh_true(
+                preg_match('/\b(return|throw|break)\b/', $arm) === 1,
+                'this arm of Settings::post() falls through into the next case: '
+                . trim(preg_replace('/\s+/', ' ', $labels[$i][0] . $arm) ?? '')
+            );
+        }
+    },
+
+    'the settings page offers a sign-in method that can actually be saved' => function (): void {
+        $cfg = lh_panel_config();
+        $cfg->set('auth.user', 'operator');
+        $cfg->set('auth.password_hash', password_hash('a-long-enough-password', PASSWORD_DEFAULT));
+        $cfg->set('auth.mode', 'basic');
+
+        $saved = $_GET;
+        $captured = [];
+        try {
+            $_GET = [];
+            ob_start();
+            (new Settings($cfg, lh_panel_gateway($captured)))->body();
+            $html = (string) ob_get_clean();
+        } finally {
+            $_GET = $saved;
+        }
+
+        lh_contains($html, 'name="action" value="auth_mode"', 'the switcher posts the auth_mode action');
+        foreach (array_keys(Security::authModes()) as $mode) {
+            lh_contains(
+                $html,
+                'name="auth_mode" value="' . $mode . '"',
+                'the ' . $mode . ' choice must be offered'
+            );
+        }
+        lh_contains($html, 'value="basic" checked', 'the mode in force must be the one preselected');
+    },
+
+    'the sign-in switcher is not offered before there is an account to sign in with'
+        => function (): void {
+        $cfg = lh_panel_config();
+        $cfg->set('auth.user', '');
+        $cfg->set('auth.password_hash', '');
+
+        $saved = $_GET;
+        $captured = [];
+        try {
+            $_GET = [];
+            ob_start();
+            (new Settings($cfg, lh_panel_gateway($captured)))->body();
+            $html = (string) ob_get_clean();
+        } finally {
+            $_GET = $saved;
+        }
+
+        lh_true(
+            !str_contains($html, 'name="action" value="auth_mode"'),
+            'a form that could only ever be refused must not be shown'
+        );
+    },
+
+    'a bad sign-in mode is refused and a good one is stored' => function (): void {
+        $root = lh_tmpdir('lhauth');
+        $cfg = Config::load($root . '/loghound.php');
+        $cfg->set('auth.user', 'operator');
+        $cfg->set('auth.password_hash', password_hash('a-long-enough-password', PASSWORD_DEFAULT));
+        $cfg->set('auth.mode', 'basic');
+
+        $captured = [];
+        $view = new Settings($cfg, lh_panel_gateway($captured));
+
+        $saved = $_POST;
+        try {
+            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'telepathy'];
+            lh_same('?v=settings&err=bad_auth_mode', $view->post(), 'an invented mode is refused');
+            lh_same('basic', $cfg->get('auth.mode'), 'and nothing is written');
+
+            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'session'];
+            lh_same('?v=settings&ok=auth_saved', $view->post(), 'a real mode is accepted');
+            lh_same('session', $cfg->get('auth.mode'), 'and stored');
+        } finally {
+            $_POST = $saved;
+            lh_rmtree($root);
+        }
+    },
+
+    'the sign-in mode cannot be changed into a panel nobody can reach' => function (): void {
+        $root = lh_tmpdir('lhauth');
+        $cfg = Config::load($root . '/loghound.php');
+        $cfg->set('auth.user', '');
+        $cfg->set('auth.password_hash', '');
+        $cfg->set('auth.mode', 'none');
+
+        $captured = [];
+        $view = new Settings($cfg, lh_panel_gateway($captured));
+
+        $saved = $_POST;
+        try {
+            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'session'];
+            lh_same('?v=settings&err=bad_auth_mode', $view->post(), 'no credentials means no mode to pick');
+            lh_same('none', $cfg->get('auth.mode'), 'and the mode is untouched');
+        } finally {
+            $_POST = $saved;
+            lh_rmtree($root);
+        }
+    },
+
+    'Security::safeUrl refuses a URL that carries credentials' => function (): void {
+        foreach ([
+            'https://user:pass@host/solr',
+            'http://user:pass@host/solr',
+            'https://user@host/solr',
+            'https://ho@st:80@x/',
+        ] as $withCreds) {
+            lh_same('#', Security::safeUrl($withCreds), 'safeUrl refuses ' . $withCreds);
+            lh_true(Security::urlHasUserinfo($withCreds), 'and says why for ' . $withCreds);
+        }
+
+        foreach ([
+            'https://example.com/a',
+            'https://example.com/a@b',
+            'https://example.com/p?q=a@b',
+            'http://127.0.0.1:8983/solr',
+        ] as $clean) {
+            lh_false(Security::urlHasUserinfo($clean), $clean . ' has no userinfo');
+            lh_same($clean, Security::safeUrl($clean), $clean . ' must still render as a link');
+        }
+    },
+
+    'a referer carrying credentials never becomes a live href' => function (): void {
+        $saved = $_GET;
+        try {
+            $_GET = [];
+            $captured = [];
+            $cfg = lh_panel_config();
+            $gateway = lh_panel_gateway($captured, [[
+                'id' => 's1',
+                'ts_start' => '2026-09-09T10:00:00Z',
+                'referer_s' => 'https://victim:hunter2@intranet.example/report',
+            ]]);
+            $result = (new Sessions($cfg, $gateway))->api('list');
+        } finally {
+            $_GET = $saved;
+        }
+
+        lh_same('#', $result['docs'][0]['referer_href'], 'the credentials must not be handed to a click');
     },
 ];

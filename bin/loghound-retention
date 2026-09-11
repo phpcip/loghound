@@ -6,19 +6,36 @@
  * "Configurable retention with a real deletion job, not just docs saying you should."
  * This is that job. Run daily by loghound-retention.timer.
  *
- * What it deletes:
- *   * every document in `hits` whose ts is older than privacy.retention_days;
- *   * every SESSION document in `sessions` whose ts_start is older than the same cutoff.
+ * ---------------------------------------------------------------------------------------
+ * THREE PASSES, IN THIS ORDER, EACH INDEPENDENT
+ * ---------------------------------------------------------------------------------------
  *
- * What it preserves:
- *   * the daily rollup documents, when privacy.rollup_forever is true (the default). They
- *     are aggregate counts with nothing that identifies a visitor, so keeping them is
- *     compatible with a short retention policy — and it is the difference between a
- *     90-day tool and one that can show you last year.
+ * 1. **Time-based retention.** Everything in `hits` older than privacy.retention_days, and
+ *    every SESSION document in `sessions` older than the same cutoff. This is a privacy
+ *    decision: how long you are willing to keep a record of a visitor. Setting it to 0
+ *    disables it entirely, which is a supported configuration — some operators are required
+ *    to keep everything — and the other two passes still run.
  *
- * privacy.retention_days = 0 disables deletion entirely and this script exits without
- * touching anything. That is a supported configuration, not an oversight; some operators
- * are required to keep everything.
+ * 2. **Size-based rolling retention.** The index is brought back under its Opensolr plan's
+ *    disk quota by deleting its oldest data. The ingest daemon does this before it writes,
+ *    which is what keeps the index inside the quota in normal operation; running it here as
+ *    well covers the installation whose tailer has been stopped for a week, and gives an
+ *    operator a `--dry-run` that shows exactly what the rolling window would remove.
+ *
+ *    Retention is therefore TWO limits and whichever bites first wins. They are not
+ *    alternatives and neither replaces the other: one is about visitors, the other about
+ *    capacity.
+ *
+ * 3. **Local state.** The SQLite store under var/ accumulates enrichment cache rows, closed
+ *    sessions, merged beacon payloads and rate-limit buckets. Unbounded local state is the
+ *    same class of problem as an unbounded index — it simply fills a different disk — and
+ *    State exposes purge methods that, until now, nothing called.
+ *
+ * What is preserved: the daily rollup documents, when privacy.rollup_forever is true (the
+ * default). They are aggregate counts with nothing that identifies a visitor, so keeping
+ * them is compatible with a short retention policy — and it is the difference between a
+ * 90-day tool and one that can show you last year. Both the time-based and the size-based
+ * pass restrict themselves to `doc_type_s:session` on the sessions core for that reason.
  *
  * Exit codes: 0 success (including "nothing to do"), 1 configuration error, 2 runtime failure.
  *
@@ -43,12 +60,6 @@
  * from outside this file: retention_days comes from a config file only root and the loghound
  * user can write, and it is cast to int before it is used as arithmetic.
  *
- * The session query is the one that matters for rollup preservation. When rollup_forever is
- * set, the delete is restricted to doc_type_s:session so the handful of rollup documents in
- * the same core survive; when it is not set, the same cutoff is applied to everything in the
- * core. A dry run counts instead of deleting, with rows=0 so nothing is fetched, and prints
- * the exact queries so an operator can see what is about to happen before it happens.
- *
  * Sessions are deleted first. If the run dies between the two deletes, the surviving state is
  * "hits without their session document", which the dashboard tolerates because it queries
  * sessions, rather than "session documents pointing at hits that no longer exist", which
@@ -61,7 +72,8 @@
  * once, and nothing here forces an optimize — a forced merge on a large index rewrites the
  * whole thing, needs double the disk while it runs, and would stall ingestion for minutes. If
  * you genuinely need the space back now, do it from the Opensolr control panel during a quiet
- * period.
+ * period. It is also why the size-based pass does not delete, re-read the size and delete
+ * again: the size it would read back is the size before the merge.
  *
  * @package Loghound
  * @license MIT
@@ -77,6 +89,7 @@ if (PHP_SAPI !== 'cli') {
 require __DIR__ . '/../src/autoload.php';
 
 use Loghound\Config;
+use Loghound\Quota;
 use Loghound\Solr;
 
 $root       = dirname(__DIR__);
@@ -91,22 +104,14 @@ if ($errors !== []) {
 }
 
 $days = (int) $cfg->get('privacy.retention_days', 0);
-if ($days <= 0) {
-    fwrite(STDOUT, "Retention is disabled (privacy.retention_days = 0). Nothing deleted.\n");
-    exit(0);
-}
-
-if ($days < 1) {
-    fwrite(STDERR, "Loghound: privacy.retention_days must be at least 1.\n");
+if ($days < 0) {
+    fwrite(STDERR, "Loghound: privacy.retention_days must be 0 (disabled) or a positive number of days.\n");
     exit(1);
 }
 
-$hitsCore    = (string) $cfg->get('solr.hits_core');
-$sessionCore = (string) $cfg->get('solr.sessions_core');
+$hitsCore      = (string) $cfg->get('solr.hits_core');
+$sessionCore   = (string) $cfg->get('solr.sessions_core');
 $rollupForever = (bool) $cfg->get('privacy.rollup_forever', true);
-
-$cutoffTs  = time() - ($days * 86400);
-$cutoffIso = gmdate('Y-m-d\TH:i:s\Z', $cutoffTs);
 
 try {
     $solr = new Solr((array) $cfg->get('solr', []));
@@ -115,52 +120,229 @@ try {
     exit(1);
 }
 
-$hitsQuery = Solr::rangeFilter('ts', null, $cutoffIso);
-
-$sessionQuery = $rollupForever
-    ? '+' . Solr::termFilter('doc_type_s', 'session') . ' +' . Solr::rangeFilter('ts_start', null, $cutoffIso)
-    : Solr::rangeFilter('ts_start', null, $cutoffIso);
-
-if ($dryRun) {
-    try {
-        $hitsCount = (int) ($solr->query($hitsCore, [
-            'q' => '*:*', 'fq' => [$hitsQuery], 'rows' => 0,
-        ])['response']['numFound'] ?? 0);
-
-        $sessCount = (int) ($solr->query($sessionCore, [
-            'q' => '*:*', 'fq' => [$sessionQuery], 'rows' => 0,
-        ])['response']['numFound'] ?? 0);
-    } catch (\Throwable $e) {
-        fwrite(STDERR, 'Loghound: dry run failed: ' . $e->getMessage() . "\n");
-        exit(2);
-    }
-
-    fwrite(STDOUT, "Retention dry run\n");
-    fwrite(STDOUT, "  cutoff             : " . $cutoffIso . " (" . $days . " days)\n");
-    fwrite(STDOUT, "  hits query         : " . $hitsQuery . "\n");
-    fwrite(STDOUT, "  hits to delete     : " . $hitsCount . "\n");
-    fwrite(STDOUT, "  sessions query     : " . $sessionQuery . "\n");
-    fwrite(STDOUT, "  sessions to delete : " . $sessCount . "\n");
-    fwrite(STDOUT, "  daily rollups      : " . ($rollupForever ? "PRESERVED" : "deleted with everything else") . "\n");
-    exit(0);
-}
-
 $failed = false;
 
-try {
-    $solr->deleteByQuery($sessionCore, $sessionQuery);
-    fwrite(STDOUT, "Deleted sessions older than " . $cutoffIso . "\n");
-} catch (\Throwable $e) {
-    fwrite(STDERR, 'Loghound: session retention failed: ' . $e->getMessage() . "\n");
-    $failed = true;
+/* ---------------------------------------------------------------------------------------
+ * Pass 1 — time-based retention
+ * ------------------------------------------------------------------------------------ */
+
+if ($days <= 0) {
+    fwrite(STDOUT, "Time-based retention is disabled (privacy.retention_days = 0).\n");
+} else {
+    $cutoffIso = gmdate('Y-m-d\TH:i:s\Z', time() - ($days * 86400));
+
+    $hitsQuery = Solr::rangeFilter('ts', null, $cutoffIso);
+
+    $sessionQuery = $rollupForever
+        ? '+' . Solr::termFilter('doc_type_s', 'session') . ' +' . Solr::rangeFilter('ts_start', null, $cutoffIso)
+        : Solr::rangeFilter('ts_start', null, $cutoffIso);
+
+    if ($dryRun) {
+        try {
+            $hitsCount = (int) ($solr->query($hitsCore, [
+                'q' => '*:*', 'fq' => [$hitsQuery], 'rows' => 0,
+            ])['response']['numFound'] ?? 0);
+
+            $sessCount = (int) ($solr->query($sessionCore, [
+                'q' => '*:*', 'fq' => [$sessionQuery], 'rows' => 0,
+            ])['response']['numFound'] ?? 0);
+        } catch (\Throwable $e) {
+            fwrite(STDERR, 'Loghound: dry run failed: ' . $e->getMessage() . "\n");
+            exit(2);
+        }
+
+        fwrite(STDOUT, "Retention dry run\n");
+        fwrite(STDOUT, "  cutoff             : " . $cutoffIso . " (" . $days . " days)\n");
+        fwrite(STDOUT, "  hits query         : " . $hitsQuery . "\n");
+        fwrite(STDOUT, "  hits to delete     : " . $hitsCount . "\n");
+        fwrite(STDOUT, "  sessions query     : " . $sessionQuery . "\n");
+        fwrite(STDOUT, "  sessions to delete : " . $sessCount . "\n");
+        fwrite(STDOUT, "  daily rollups      : " . ($rollupForever ? "PRESERVED" : "deleted with everything else") . "\n");
+    } else {
+        try {
+            $solr->deleteByQuery($sessionCore, $sessionQuery);
+            fwrite(STDOUT, "Deleted sessions older than " . $cutoffIso . "\n");
+        } catch (\Throwable $e) {
+            fwrite(STDERR, 'Loghound: session retention failed: ' . $e->getMessage() . "\n");
+            $failed = true;
+        }
+
+        try {
+            $solr->deleteByQuery($hitsCore, $hitsQuery);
+            fwrite(STDOUT, "Deleted hits older than " . $cutoffIso . "\n");
+        } catch (\Throwable $e) {
+            fwrite(STDERR, 'Loghound: hit retention failed: ' . $e->getMessage() . "\n");
+            $failed = true;
+        }
+    }
 }
 
-try {
-    $solr->deleteByQuery($hitsCore, $hitsQuery);
-    fwrite(STDOUT, "Deleted hits older than " . $cutoffIso . "\n");
-} catch (\Throwable $e) {
-    fwrite(STDERR, 'Loghound: hit retention failed: ' . $e->getMessage() . "\n");
-    $failed = true;
-}
+/* ---------------------------------------------------------------------------------------
+ * Pass 2 — size-based rolling retention
+ * ------------------------------------------------------------------------------------ */
+
+$failed = trimToPlan($cfg, $solr, $hitsCore, $sessionCore, $rollupForever, $dryRun) || $failed;
+
+/* ---------------------------------------------------------------------------------------
+ * Pass 3 — local SQLite state
+ * ------------------------------------------------------------------------------------ */
+
+purgeLocalState($cfg, $dryRun);
 
 exit($failed ? 2 : 0);
+
+/**
+ * Bring both cores back inside their Opensolr plan's disk quota.
+ *
+ * Reports rather than acts under --dry-run, and prints the cutoff and the document count of
+ * every step, because "this would delete 4.2 million hits from before 03/01/2026" is the
+ * only form in which an operator can agree to a rolling window.
+ *
+ * Each core is trimmed against its OWN quota and its OWN timestamp field, passed as a pair.
+ * The sessions core additionally carries `doc_type_s:session`, so a size trim can no more
+ * delete a daily rollup than the time-based pass above can.
+ *
+ * A failure on one core does not stop the other: they have separate quotas on the platform
+ * and one being blocked is a reason to trim the other, not a reason to give up.
+ *
+ * @return bool True when something failed.
+ */
+function trimToPlan(
+    Config $cfg,
+    Solr $solr,
+    string $hitsCore,
+    string $sessionCore,
+    bool $rollupForever,
+    bool $dryRun
+): bool {
+    try {
+        $quota = new Quota($cfg);
+    } catch (\Throwable $e) {
+        fwrite(STDERR, 'Loghound: plan usage is unavailable: ' . $e->getMessage() . "\n");
+        return false;
+    }
+
+    if (!$quota->enabled()) {
+        fwrite(STDOUT, "Size-based retention is switched off (quota.enabled = false).\n");
+        return false;
+    }
+
+    $targets = [
+        [$hitsCore, 'ts', null],
+        [$sessionCore, 'ts_start', $rollupForever ? Solr::termFilter('doc_type_s', 'session') : null],
+    ];
+
+    $failed = false;
+
+    foreach ($targets as [$core, $field, $extraFq]) {
+        if ($core === '') {
+            continue;
+        }
+
+        $probe = $quota->probe($solr, $core);
+        if ($probe['state'] === 'blocked') {
+            fwrite(STDERR, 'Loghound: ' . $core . ': ' . $probe['message'] . "\n");
+            $failed = true;
+            continue;
+        }
+
+        $result = $quota->trim($solr, $core, $field, [
+            'dry_run'  => $dryRun,
+            'extra_fq' => $extraFq,
+            'logger'   => static function (string $m): void {
+                fwrite(STDOUT, '  ' . $m . "\n");
+            },
+        ]);
+
+        fwrite(STDOUT, sprintf(
+            "Plan window for %s: %s — %s\n",
+            $core,
+            $result['state'],
+            $result['message']
+        ));
+
+        foreach ($result['steps'] ?? [] as $step) {
+            fwrite(STDOUT, sprintf(
+                "  step %s%s%s\n",
+                (string) $step['state'],
+                isset($step['cutoff']) ? ' cutoff=' . $step['cutoff'] : '',
+                isset($step['docs'])
+                    ? ' docs=' . $step['docs']
+                    : (isset($step['why']) ? ' (' . $step['why'] . ')' : '')
+            ));
+        }
+
+        if (($result['state'] ?? '') === 'failed') {
+            $failed = true;
+        }
+    }
+
+    $quota->flush();
+    return $failed;
+}
+
+/**
+ * Purge the local SQLite state that grows without a bound of its own.
+ *
+ * Four stores, each with a different reason to be bounded:
+ *
+ *   - the geo/ASN/rDNS caches keep an entry per address and per netblock, including negative
+ *     entries for addresses that resolved to nothing; on a scanned server that is unbounded
+ *     and most of it has expired long ago;
+ *   - closed sessions stay in `sessions_open` after the scorer has written them to Solr, so
+ *     a late beacon can still be matched to one — a day is far longer than that window;
+ *   - merged beacon payloads are the same story, and they hold client-supplied text;
+ *   - rate-limit buckets accumulate one row per address that ever hit the collector.
+ *
+ * None of this is an error path: State's purge methods exist and are correct, they simply
+ * had no caller anywhere in the project. Failure is reported and swallowed — a locked or
+ * read-only state database is not a reason to fail a run whose real work is done.
+ *
+ * The store is located relative to the CONFIG rather than to this script, which is what
+ * \Loghound\Quota and \Loghound\Setup\Detector both do. Deriving it from the script's own
+ * directory would mean that a run pointed at another installation's config purged this
+ * installation's state.
+ */
+function purgeLocalState(Config $cfg, bool $dryRun): void
+{
+    $path = dirname($cfg->path(), 2) . '/var/state.db';
+    if (!is_file($path)) {
+        return;
+    }
+    if (!class_exists('\\Loghound\\State')) {
+        return;
+    }
+    if ($dryRun) {
+        fwrite(STDOUT, "Local state: would purge expired caches, closed sessions, merged beacons and rate limits.\n");
+        return;
+    }
+
+    try {
+        $state = new \Loghound\State($path);
+
+        $cacheDays = max(
+            (int) $cfg->get('enrich.geo_ttl_days', 30),
+            (int) $cfg->get('enrich.asn_ttl_days', 30),
+            (int) $cfg->get('enrich.rdns_ttl_days', 7)
+        );
+
+        $expired  = $state->cachePurgeExpired();
+        $sessions = $state->purgeClosedSessions(86400);
+        $beacons  = $state->purgeBeacons(86400);
+        $limits   = $state->purgeRateLimits(3600);
+
+        $state->close();
+
+        fwrite(STDOUT, sprintf(
+            "Local state: %d expired cache row(s) (TTL up to %d days), %d closed session(s), "
+            . "%d merged beacon(s), %d rate-limit bucket(s).\n",
+            $expired,
+            $cacheDays,
+            $sessions,
+            $beacons,
+            $limits
+        ));
+    } catch (\Throwable $e) {
+        fwrite(STDERR, 'Loghound: local state purge failed: ' . $e->getMessage() . "\n");
+    }
+}

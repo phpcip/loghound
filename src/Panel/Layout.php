@@ -43,6 +43,11 @@ final class Layout
             ['slug' => 'networks',     'label' => 'Networks',     'hint' => 'ASN, netname and geography'],
             ['slug' => 'sessions',     'label' => 'Sessions',     'hint' => 'Search and drill into one visit'],
             ['slug' => 'performance',  'label' => 'Performance',  'hint' => 'Latency percentiles and status codes'],
+            ['slug' => 'hosts',        'label' => 'Virtual hosts','hint' => 'Every site on this machine, side by side'],
+            ['slug' => 'indexes',      'label' => 'Index analytics', 'hint' => 'What your Opensolr search indexes are being asked'],
+            ['slug' => 'queries',      'label' => 'Query analysis',  'hint' => 'Query shapes, and which of them find nothing'],
+            ['slug' => 'callers',      'label' => 'Who is querying', 'hint' => 'Search clients, cross-referenced with web traffic'],
+            ['slug' => 'usage',        'label' => 'Storage & bandwidth', 'hint' => 'How much history your plan holds, and what is left'],
             ['slug' => 'settings',     'label' => 'Settings',     'hint' => 'Log sources, privacy, scoring, beacon'],
         ];
     }
@@ -78,7 +83,7 @@ final class Layout
         echo '<script type="application/json" id="lh-boot">' . Security::escJs($boot) . '</script>' . "\n";
 
         self::skipLink();
-        self::sidebar($siteName, $slug);
+        self::sidebar($siteName, $slug, (string) $cfg->get('auth.mode', 'none') === 'session');
 
         echo '<main id="main">' . "\n";
         self::header($view);
@@ -102,8 +107,15 @@ final class Layout
         echo '<a class="skip" href="#main">Skip to content</a>' . "\n";
     }
 
-    /** The left-hand navigation (a horizontal bar under ~900px, see the stylesheet). */
-    private static function sidebar(string $siteName, string $active): void
+    /**
+     * The left-hand navigation (a horizontal bar under ~900px, see the stylesheet).
+     *
+     * The sign-out control is a real form with a CSRF token rather than a link, because
+     * ending a session changes state: a GET route would let any page on the internet sign
+     * the operator out with an <img> tag. It appears only in session mode — HTTP Basic has
+     * no sign-out to offer, and a button that did nothing would be worse than none.
+     */
+    private static function sidebar(string $siteName, string $active, bool $sessionAuth = false): void
     {
         echo '<nav class="side" aria-label="Views">' . "\n";
         echo '<div class="brand"><span class="brand-mark" aria-hidden="true"></span>'
@@ -118,6 +130,17 @@ final class Layout
         }
         echo "</ul>\n";
         echo '<button type="button" id="theme-toggle" class="theme-toggle" aria-live="polite">Theme: auto</button>' . "\n";
+
+        if ($sessionAuth) {
+            $user = Security::sessionUser();
+            echo '<form method="post" action="?logout=1" class="signout">';
+            echo '<input type="hidden" name="csrf" value="' . Security::esc(Security::csrfToken()) . '">';
+            echo '<button type="submit" class="ghost small">Sign out'
+                . ($user === '' ? '' : ' <span class="signout-who">' . Security::esc($user) . '</span>')
+                . '</button>';
+            echo "</form>\n";
+        }
+
         echo "</nav>\n";
     }
 

@@ -85,12 +85,15 @@ function lh_inst_scaffold(): array
  * A configuration that is complete and valid, so the installer must refuse to serve.
  *
  * Uses a closed loopback port for Solr: valid enough for Config::validate(), unreachable
- * enough that nothing in the suite can accidentally talk to a real server.
+ * enough that nothing in the suite can accidentally talk to a real server. The Opensolr
+ * credentials are the same kind of fiction — validate() requires them to be present and never
+ * contacts anything to check them.
  */
 function lh_inst_valid_config(string $root): Config
 {
     $cfg = Config::load($root . '/config/loghound.php');
-    $cfg->set('solr.mode', 'custom');
+    $cfg->set('opensolr.email', 'operator@example.com');
+    $cfg->set('opensolr.api_key', 'not-a-real-key');
     $cfg->set('solr.base_url', 'http://127.0.0.1:1/solr');
     $cfg->set('solr.hits_core', 'loghound_aabbccdd_hits');
     $cfg->set('solr.sessions_core', 'loghound_aabbccdd_sessions');
@@ -179,6 +182,54 @@ PHP;
     $code = proc_close($proc);
 
     return ['out' => $out, 'code' => $code];
+}
+
+/**
+ * Run `bin/loghound-setup` non-interactively against a scaffolded tree.
+ *
+ * The base answers cover every step except storage. Every answer comes from the environment:
+ * there is no terminal here, and a wizard that blocked on stdin would hang the suite rather
+ * than fail it.
+ *
+ * NO STORAGE ANSWERS ARE SUPPLIED, AND THAT IS THE POINT. Provisioning now runs against
+ * Opensolr and nothing else, so the only way to complete the storage step is over the network;
+ * SPEC §12 forbids that here. With no account email in the configuration and none in the
+ * environment, Storage::saveCredentials() refuses before anything is contacted and the
+ * non-interactive wizard moves on — so the storage step is skipped without a single socket
+ * being opened. LOGHOUND_FORCE_WRITE makes it write the rest anyway, which is what the callers
+ * of this helper are actually asserting on. A caller that needs a complete configuration
+ * pre-seeds the storage keys on disk first; see the CLI/browser parity test.
+ *
+ * @param array<string,string> $extra Environment overrides merged over the base answers.
+ */
+function lh_inst_cli(string $root, array $extra = []): string
+{
+    $env = array_merge([
+        'LOGHOUND_NONINTERACTIVE'  => '1',
+        'LOGHOUND_IP_MODE'         => 'truncate',
+        'LOGHOUND_RETENTION_DAYS'  => '45',
+        'LOGHOUND_PANEL_USER'      => 'operator',
+        'LOGHOUND_PANEL_PASSWORD'  => 'a-long-enough-password',
+        'LOGHOUND_BASE_URL'        => 'https://loghound.example.com',
+        'LOGHOUND_CONFIRM_SOURCES' => 'yes',
+        'LOGHOUND_FORCE_WRITE'     => 'yes',
+        'PATH'                     => (string) getenv('PATH'),
+    ], $extra);
+
+    $cmd = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(lh_inst_root() . '/bin/loghound-setup')
+        . ' --config=' . escapeshellarg($root . '/config/loghound.php')
+        . ' --non-interactive --no-color 2>&1';
+
+    $proc = proc_open($cmd, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $root, $env);
+    if (!is_resource($proc)) {
+        lh_skip('cannot start the CLI wizard here');
+    }
+    $out = (string) stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($proc);
+
+    return $out;
 }
 
 /** Read the configuration back from disk as a plain array. */
@@ -300,6 +351,33 @@ return [
         lh_rmtree($root);
     },
 
+    'the security model docblock describes the gate that is actually implemented'
+        => static function (): void {
+        $source = (string) file_get_contents(dirname(__DIR__) . '/src/Setup/Installer.php');
+        $header = substr($source, 0, (int) strpos($source, 'final class Installer'));
+
+        lh_true(
+            !preg_match('/has a usable sign-in and passes Config::validate\(\)/', $header),
+            'the class docblock says the gate consults Config::validate(); isNeeded() explicitly '
+            . 'does not, and when it did, an ordinary install with an unreadable log directory '
+            . 'served the unauthenticated status page forever'
+        );
+
+        [$root] = lh_inst_scaffold();
+        $cfg = lh_inst_valid_config($root);
+        $cfg->set('sources', [[
+            'path'   => sys_get_temp_dir() . '/access.log',
+            'format' => 'apache_combined',
+        ]]);
+        $cfg->set('allowed_log_roots', [$root . '/logs']);
+        $cfg->save();
+
+        $reloaded = Config::load($root . '/config/loghound.php');
+        lh_true($reloaded->validate() !== [], 'this configuration really does fail validate()');
+        lh_false(Installer::isNeeded($reloaded), 'and it must still not reopen the installer');
+        lh_rmtree($root);
+    },
+
     'demo mode is the one exception and keeps the panel' => static function (): void {
         [$root] = lh_inst_scaffold();
         $cfg = lh_inst_valid_config($root);
@@ -354,11 +432,22 @@ return [
         }
         lh_true($refusals > 0, 'a flood of guesses must eventually be turned away');
 
-        // Even the correct token is refused once the budget is spent: failing closed is
-        // the whole point, and the operator waits or restarts the pool.
+        // Even the correct token is refused once the budget is spent: failing closed is the
+        // whole point. The way out is to wait the window out or delete the ledger file the
+        // refusal names — the counter is on disk, so restarting PHP-FPM does nothing to it.
+        $refusal = $token->verify($real, '203.0.113.9');
         lh_true(
-            str_contains($token->verify($real, '203.0.113.9'), 'Too many attempts'),
+            str_contains($refusal, 'Too many attempts'),
             'the limiter must not have an exemption for a correct guess'
+        );
+        lh_contains(
+            $refusal,
+            'install-attempts.json',
+            'and it must name the file the operator has to delete, not a service to restart'
+        );
+        lh_true(
+            !preg_match('/php-fpm|restart/i', $refusal),
+            'the counter is on disk; a remedy that does not work is worse than none: ' . $refusal
         );
         lh_rmtree($root);
     },
@@ -552,11 +641,19 @@ return [
         lh_rmtree($root);
     },
 
-    'a hostile pattern is refused before it is stored' => static function (): void {
+    'a pattern that cannot compile or would extract nothing is refused before it is stored'
+        => static function (): void {
         [$root, $cfg] = lh_inst_scaffold();
 
-        $evil = Detector::manualSource($cfg, $root . '/logs/access.log', 'custom', '/^(a+)+$/');
-        lh_false($evil['ok'], 'a catastrophically backtracking pattern must be refused');
+        $noGroups = Detector::manualSource($cfg, $root . '/logs/access.log', 'custom', '/^(a+)+$/');
+        lh_false(
+            $noGroups['ok'],
+            'a pattern with no named groups extracts nothing and is refused. This case is here under '
+            . 'its own name because the test that used to cover it claimed the backtracking case and '
+            . 'did not test it: /^(a+)+$/ is refused by LogDetect::formatFromRegex() for having no '
+            . 'named groups, never by the backtracking probe, which accepts it'
+        );
+        lh_contains($noGroups['error'], 'named groups', 'and the refusal must say which problem it is');
 
         $broken = Detector::manualSource($cfg, $root . '/logs/access.log', 'custom', 'not-a-regex');
         lh_false($broken['ok'], 'a pattern that is not even delimited must be refused');
@@ -564,6 +661,37 @@ return [
         $unclosed = Detector::manualSource($cfg, $root . '/logs/access.log', 'custom', '/^(?<ip>\S+/');
         lh_false($unclosed['ok'], 'a pattern that does not compile must be refused');
         lh_rmtree($root);
+    },
+
+    'the save-time regex probe is not, and does not claim to be, a backtracking proof'
+        => static function (): void {
+        lh_same(
+            null,
+            \Loghound\Security::validateUserRegex('/^(a+)+$/'),
+            'an anchored pattern fails the probe\'s single fixed subject in a handful of steps '
+            . 'whatever its internal shape, so the probe learns nothing and accepts it'
+        );
+        lh_same(
+            null,
+            \Loghound\Security::validateUserRegex('/^(?<remote_addr>(a+)+b) (?<status>\d{3})$/'),
+            'including one shaped like a real log pattern, which is therefore storable'
+        );
+
+        $source = (string) file_get_contents(dirname(__DIR__) . '/src/Security.php');
+        $at = strpos($source, 'public static function validateUserRegex');
+        lh_true($at !== false, 'validateUserRegex must exist');
+        $doc = substr($source, (int) strrpos(substr($source, 0, $at), '/**'), 3000);
+        $doc = substr($doc, 0, (int) strpos($doc, '*/'));
+
+        lh_true(
+            !str_contains($doc, 'engineered to expose nested quantifier blowup'),
+            'the docblock still claims the probe exposes catastrophic backtracking'
+        );
+        lh_true(
+            !str_contains($doc, 'anything slow or failing is refused at save time'),
+            'the docblock still claims a failing pattern cannot be saved'
+        );
+        lh_contains($doc, 'LogFormat::parse()', 'it must point at the guard that really contains it');
     },
 
     'an unknown format name is refused' => static function (): void {
@@ -627,27 +755,169 @@ return [
         lh_rmtree($root);
     },
 
-    'own-Solr details are validated' => static function (): void {
+    // -------------------------------------------------------------------------
+    // Storage has exactly one path
+    // -------------------------------------------------------------------------
+
+    /**
+     * The four tests that follow pin a removal rather than a feature.
+     *
+     * Loghound provisions and manages its own two indexes on Opensolr: it creates them,
+     * uploads the configsets under solr/hits/conf and solr/sessions/conf, reloads the cores
+     * and verifies them. It cannot do any of that on a Solr it does not administer, so the
+     * "use a Solr you already run" option was removed rather than left as a promise the
+     * product could not keep. These exist so it cannot come back by accident: not as a form,
+     * not as a POST action, not as an environment variable, and not as a value left in a
+     * configuration file from before the removal.
+     */
+    'the storage screen offers one path and no second one' => static function (): void {
         [$root, $cfg] = lh_inst_scaffold();
+        $cfg->set('sources', [['path' => $root . '/logs/access.log', 'format' => 'apache_combined']]);
+        $cfg->save();
 
-        lh_true(Storage::saveCustom($cfg, 'javascript:alert(1)', '', '', 'a', 'b') !== [], 'only http(s)');
-        lh_true(Storage::saveCustom($cfg, 'http://127.0.0.1:1/solr', '', '', 'a b', 'c') !== [], 'core name charset');
-        lh_true(Storage::saveCustom($cfg, 'http://127.0.0.1:1/solr', '', '', 'same', 'same') !== [], 'cores must differ');
+        $res = lh_inst_request($root, ['setup' => 'storage'], [], 'GET', true);
 
-        lh_same(
-            [],
-            Storage::saveCustom($cfg, 'http://127.0.0.1:1/solr/', '', '', 'lh_hits', 'lh_sessions'),
-            'a sane set of details is accepted'
-        );
-        lh_same('http://127.0.0.1:1/solr', $cfg->get('solr.base_url'), 'the trailing slash is normalised away');
+        lh_contains($res['out'], 'Let Opensolr host it', 'the managed panel must be on the screen');
+
+        foreach ([
+            'Use a Solr you already run',
+            'Solr you already run',
+            'name="hits_core"',
+            'name="sessions_core"',
+            'name="http_user"',
+            'name="http_pass"',
+            'value="custom"',
+        ] as $gone) {
+            lh_false(
+                str_contains($res['out'], $gone),
+                'the storage screen must not offer ' . $gone . ' — there is no second path'
+            );
+        }
+
         lh_rmtree($root);
     },
 
-    'an empty password keeps the stored one' => static function (): void {
+    'no entry point accepts a caller-supplied Solr URL or core name' => static function (): void {
         [$root, $cfg] = lh_inst_scaffold();
-        Storage::saveCustom($cfg, 'http://127.0.0.1:1/solr', 'u', 'secret-pw', 'lh_hits', 'lh_sessions');
-        Storage::saveCustom($cfg, 'http://127.0.0.1:1/solr', 'u', '', 'lh_hits', 'lh_sessions');
-        lh_same('secret-pw', $cfg->get('solr.http_pass'), 're-saving the form must not blank the password');
+        $cfg->set('sources', [['path' => $root . '/logs/access.log', 'format' => 'apache_combined']]);
+        $cfg->save();
+
+        lh_false(
+            method_exists(Storage::class, 'saveCustom'),
+            'Storage::saveCustom() was the only door an operator-supplied base URL and core '
+            . 'names could come through; it must stay gone'
+        );
+
+        lh_inst_request(
+            $root,
+            [],
+            [
+                'step'          => 'storage',
+                'action'        => 'custom',
+                'base_url'      => 'http://attacker.example.test:8983/solr',
+                'http_user'     => 'someone',
+                'http_pass'     => 'hunter2',
+                'hits_core'     => 'lh_planted_hits',
+                'sessions_core' => 'lh_planted_sessions',
+            ],
+            'POST',
+            true
+        );
+
+        $stored = lh_inst_stored($root);
+        lh_same('', (string) $stored['solr']['base_url'], 'no base URL may be planted by a POST');
+        lh_same('', (string) $stored['solr']['http_user'], 'no username either');
+        lh_same('', (string) $stored['solr']['http_pass'], 'nor a password');
+        lh_same('', (string) $stored['solr']['hits_core'], 'and no core name');
+        lh_same('', (string) $stored['solr']['sessions_core'], 'nor the other one');
+        lh_same('opensolr', (string) $stored['solr']['mode'], 'and the mode cannot be moved off opensolr');
+
+        lh_rmtree($root);
+    },
+
+    'the shell wizard has no storage choice, and the variables that served it are dead'
+        => static function (): void {
+        [$root] = lh_inst_scaffold();
+
+        $out = lh_inst_cli($root, [
+            'LOGHOUND_SOLR_CHOICE'    => '2',
+            'LOGHOUND_SOLR_BASE_URL'  => 'http://attacker.example.test:8983/solr',
+            'LOGHOUND_SOLR_HTTP_AUTH' => 'yes',
+            'LOGHOUND_SOLR_HTTP_USER' => 'someone',
+            'LOGHOUND_SOLR_HTTP_PASS' => 'hunter2',
+            'LOGHOUND_HITS_CORE'      => 'lh_planted_hits',
+            'LOGHOUND_SESSIONS_CORE'  => 'lh_planted_sessions',
+        ]);
+
+        if (!is_file($root . '/config/loghound.php')) {
+            lh_fail('the CLI wizard wrote no configuration: ' . substr($out, -600));
+        }
+
+        foreach (['Choose 1 or 2', 'My own Solr', 'Solr base URL', 'Core name for hits'] as $gone) {
+            lh_false(
+                str_contains($out, $gone),
+                'the wizard must not prompt ' . lh_show($gone) . '; got: ' . substr($out, -600)
+            );
+        }
+
+        $stored = lh_inst_stored($root);
+        lh_same('', (string) $stored['solr']['base_url'], 'LOGHOUND_SOLR_BASE_URL must do nothing');
+        lh_same('', (string) $stored['solr']['http_user'], 'LOGHOUND_SOLR_HTTP_USER must do nothing');
+        lh_same('', (string) $stored['solr']['http_pass'], 'LOGHOUND_SOLR_HTTP_PASS must do nothing');
+        lh_same('', (string) $stored['solr']['hits_core'], 'LOGHOUND_HITS_CORE must do nothing');
+        lh_same('', (string) $stored['solr']['sessions_core'], 'LOGHOUND_SESSIONS_CORE must do nothing');
+
+        lh_rmtree($root);
+    },
+
+    'a configuration left on mode: custom is refused, and the refusal says why'
+        => static function (): void {
+        [$root, $cfg] = lh_inst_scaffold();
+
+        $cfg->set('solr.mode', 'custom');
+        $cfg->set('solr.base_url', 'http://127.0.0.1:1/solr');
+        $cfg->set('solr.hits_core', 'lh_hits');
+        $cfg->set('solr.sessions_core', 'lh_sessions');
+        $cfg->set('opensolr.email', 'operator@example.com');
+        $cfg->set('opensolr.api_key', 'not-a-real-key');
+        $cfg->set('beacon.enabled', false);
+        $cfg->set('privacy.ip_mode', 'truncate');
+        $cfg->set('auth.mode', 'basic');
+        $cfg->set('auth.user', 'operator');
+        $cfg->set('auth.password_hash', password_hash('a-long-enough-password', PASSWORD_DEFAULT));
+        $cfg->set('sources', []);
+
+        $errors = implode(' ', $cfg->validate());
+
+        lh_true($errors !== '', 'a stored custom mode must not validate');
+        lh_contains($errors, 'solr.mode', 'the refusal must name the setting');
+        lh_contains($errors, 'no longer supported', 'and say that the option is gone');
+        lh_contains(
+            $errors,
+            'cannot do that on a Solr it does not administer',
+            'and give the reason, not just the fact'
+        );
+        lh_contains($errors, 'bin/loghound-setup', 'and say what to run instead');
+
+        $cfg->set('solr.mode', 'opensolr');
+        lh_same([], $cfg->validate(), 'the same configuration on the one supported mode is valid');
+
+        lh_rmtree($root);
+    },
+
+    'the panel base URL may not carry credentials either' => static function (): void {
+        [$root, $cfg] = lh_inst_scaffold();
+
+        $errors = Steps::applyBaseUrl($cfg, 'https://someone:hunter2@loghound.example.com');
+        lh_true($errors !== [], 'a panel URL with credentials must be refused');
+        lh_true(
+            !str_contains(implode(' ', $errors), 'hunter2'),
+            'and the refusal must not echo the password: ' . implode(' ', $errors)
+        );
+        lh_same('', (string) $cfg->get('base_url', ''), 'and nothing is stored');
+
+        lh_same([], Steps::applyBaseUrl($cfg, 'https://loghound.example.com'), 'a clean URL is accepted');
+        lh_same('https://loghound.example.com', $cfg->get('base_url'), 'and stored');
         lh_rmtree($root);
     },
 
@@ -685,14 +955,29 @@ return [
     // Both installers, one result
     // -------------------------------------------------------------------------
 
+    /**
+     * The two front ends must produce the same configuration from the same answers.
+     *
+     * STORAGE IS PRE-SEEDED IDENTICALLY INTO BOTH TREES RATHER THAN ANSWERED. It is the one
+     * step that now runs only against Opensolr, over the network, which SPEC §12 forbids here.
+     * So both configurations start out looking like provisioning has already happened, and the
+     * CLI wizard's storage step recognises that and keeps what it finds — which is itself the
+     * behaviour that stops an unattended re-run from demanding an API key it was not given.
+     * What this test still proves is what it was always for: sources, privacy, the account, the
+     * sign-in mode, the panel URL and the generated secrets come out the same whichever front
+     * end the operator used, and both results pass Config::validate().
+     */
     'the browser path and the CLI path produce an equivalent configuration' => static function (): void {
-        [$cliRoot] = lh_inst_scaffold();
+        [$cliRoot, $cliCfg] = lh_inst_scaffold();
         [$webRoot, $webCfg] = lh_inst_scaffold();
 
         $answers = [
             'base_url'  => 'http://127.0.0.1:1/solr',
             'hits'      => 'lh_hits',
             'sessions'  => 'lh_sessions',
+            'email'     => 'operator@example.com',
+            'api_key'   => 'not-a-real-key',
+            'region'    => 'FINLAND9',
             'ip_mode'   => 'truncate',
             'retention' => '45',
             'user'      => 'operator',
@@ -700,13 +985,21 @@ return [
             'panel_url' => 'https://loghound.example.com',
         ];
 
+        $provisioned = static function (Config $cfg) use ($answers): void {
+            $cfg->set('solr.base_url', $answers['base_url']);
+            $cfg->set('solr.hits_core', $answers['hits']);
+            $cfg->set('solr.sessions_core', $answers['sessions']);
+            $cfg->set('opensolr.email', $answers['email']);
+            $cfg->set('opensolr.api_key', $answers['api_key']);
+            $cfg->set('opensolr.region', $answers['region']);
+        };
+
+        $provisioned($cliCfg);
+        $cliCfg->save();
+        $provisioned($webCfg);
+
         $env = [
             'LOGHOUND_NONINTERACTIVE'   => '1',
-            'LOGHOUND_SOLR_CHOICE'      => '2',
-            'LOGHOUND_SOLR_BASE_URL'    => $answers['base_url'],
-            'LOGHOUND_SOLR_HTTP_AUTH'   => 'no',
-            'LOGHOUND_HITS_CORE'        => $answers['hits'],
-            'LOGHOUND_SESSIONS_CORE'    => $answers['sessions'],
             'LOGHOUND_IP_MODE'          => $answers['ip_mode'],
             'LOGHOUND_RETENTION_DAYS'   => $answers['retention'],
             'LOGHOUND_PANEL_USER'       => $answers['user'],
@@ -733,7 +1026,6 @@ return [
             lh_fail('the CLI wizard wrote no configuration: ' . substr($out, -600));
         }
 
-        Storage::saveCustom($webCfg, $answers['base_url'], '', '', $answers['hits'], $answers['sessions']);
         Steps::applyPrivacy($webCfg, $answers['ip_mode'], $answers['retention']);
         Steps::applyAdmin($webCfg, $answers['user'], $answers['password'], $answers['password']);
         Steps::applyBaseUrl($webCfg, $answers['panel_url']);
@@ -769,6 +1061,47 @@ return [
 
         lh_rmtree($cliRoot);
         lh_rmtree($webRoot);
+    },
+
+    'the shell wizard can reach the sign-in page, not only Basic' => static function (): void {
+        [$root] = lh_inst_scaffold();
+
+        $out = lh_inst_cli($root, ['LOGHOUND_AUTH_MODE' => 'session']);
+
+        if (!is_file($root . '/config/loghound.php')) {
+            lh_fail('the CLI wizard wrote no configuration: ' . substr($out, -600));
+        }
+
+        $stored = lh_inst_stored($root);
+        lh_same(
+            'session',
+            $stored['auth']['mode'],
+            'a CLI operator who asks for the sign-in page must get it, not Basic. Wizard output: '
+            . substr($out, -400)
+        );
+        lh_true(
+            password_verify('a-long-enough-password', (string) $stored['auth']['password_hash']),
+            'and the account itself must still be written'
+        );
+        lh_rmtree($root);
+    },
+
+    'the shell wizard still defaults to Basic when nobody chooses' => static function (): void {
+        [$root] = lh_inst_scaffold();
+
+        $out = lh_inst_cli($root, []);
+
+        if (!is_file($root . '/config/loghound.php')) {
+            lh_fail('the CLI wizard wrote no configuration: ' . substr($out, -600));
+        }
+
+        lh_same(
+            'basic',
+            lh_inst_stored($root)['auth']['mode'],
+            'the default must not move: it is what every install made before the sign-in page '
+            . 'existed uses, and it is what keeps the CLI and the browser installer in step'
+        );
+        lh_rmtree($root);
     },
 
     'progress is read from the configuration, so setup resumes where it stopped' => static function (): void {
@@ -1024,9 +1357,23 @@ return [
     // End to end
     // -------------------------------------------------------------------------
 
+    /**
+     * The browser installer, start to finish.
+     *
+     * Storage is pre-seeded to look provisioned rather than answered on screen: the only way
+     * to complete that step is to create two indexes on Opensolr, which is a network call, and
+     * SPEC §12 forbids one here. The provisioning state machine itself is covered against a
+     * fake transport by the jobs tests above; what this test is for is the walk — gate, unlock,
+     * sources, privacy, account — and the fact that finishing kills the installer.
+     */
     'a whole install can be completed through the browser, and then the installer is gone'
         => static function (): void {
         [$root, $cfg] = lh_inst_scaffold();
+        $cfg->set('solr.base_url', 'http://127.0.0.1:1/solr');
+        $cfg->set('solr.hits_core', 'lh_hits');
+        $cfg->set('solr.sessions_core', 'lh_sessions');
+        $cfg->set('opensolr.email', 'operator@example.com');
+        $cfg->set('opensolr.api_key', 'not-a-real-key');
         $cfg->save();
 
         $status = lh_inst_request($root, ['setup' => 'status']);
@@ -1048,23 +1395,6 @@ return [
             true
         );
         lh_same(1, count((array) lh_inst_stored($root)['sources']), 'the log source is stored');
-
-        lh_inst_request(
-            $root,
-            [],
-            [
-                'step'          => 'storage',
-                'action'        => 'custom',
-                'base_url'      => 'http://127.0.0.1:1/solr',
-                'http_user'     => '',
-                'http_pass'     => '',
-                'hits_core'     => 'lh_hits',
-                'sessions_core' => 'lh_sessions',
-            ],
-            'POST',
-            true
-        );
-        lh_same('lh_hits', lh_inst_stored($root)['solr']['hits_core'], 'the cores are stored');
 
         lh_inst_request(
             $root,

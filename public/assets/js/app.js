@@ -21,6 +21,11 @@ import networks from './views/networks.js';
 import sessions from './views/sessions.js';
 import performance from './views/performance.js';
 import settings from './views/settings.js';
+import indexes from './views/indexes.js';
+import queries from './views/queries.js';
+import callers from './views/callers.js';
+import usage, { initBandwidthStrip } from './views/usage.js';
+import hosts, { initHostPicker } from './views/hosts.js';
 
 /** View slug → initialiser. The only routing the front end does. */
 const VIEWS = {
@@ -30,14 +35,36 @@ const VIEWS = {
     networks: networks,
     sessions: sessions,
     performance: performance,
-    settings: settings
+    settings: settings,
+    indexes: indexes,
+    queries: queries,
+    callers: callers,
+    usage: usage,
+    hosts: hosts
 };
 
-/** Boot. */
+/**
+ * Boot.
+ *
+ * Two initialisers run on EVERY view rather than on their own page, because both are page
+ * furniture that a per-view module could not provide.
+ *
+ * The bandwidth strip has to be visible wherever the operator happens to be: it is the only
+ * quota that cannot be reclaimed by deleting anything, and once it is exceeded the panel
+ * itself answers 403, so a warning that only appears on the page nobody visits is no warning
+ * at all.
+ *
+ * The host selector scopes the whole dashboard, so it belongs beside the range picker rather
+ * than inside one card. Both insert themselves into the header only when they have something
+ * to say — no Opensolr account, or a single virtual host, means no furniture — and both fail
+ * silently, because neither is a report.
+ */
 function start() {
     initTheme();
     initCopyButtons();
     initCharts();
+    initBandwidthStrip();
+    initHostPicker();
 
     const slug = document.body.dataset.view || boot.view || 'overview';
     const view = VIEWS[slug];

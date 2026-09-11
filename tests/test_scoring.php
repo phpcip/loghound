@@ -959,6 +959,97 @@ $tests['signals: visitor hash changes daily in hash privacy mode'] =
 
 // ============================================================================================
 // Standalone runner
+$tests['the ruleset docblock states the true number of rules that can convict alone'] =
+    static function () use ($rules, $ok, $same) {
+        $threshold = 101;
+        for ($score = 0; $score <= 100; $score++) {
+            if ($rules->verdictFor((float) $score) === 'bot') {
+                $threshold = $score;
+                break;
+            }
+        }
+        $ok($threshold <= 100, 'some score must reach the bot verdict, or this test measures nothing');
+
+        $decisive = array_keys(array_filter(
+            Rules::WEIGHTS,
+            static fn (int $weight): bool => $weight >= $threshold
+        ));
+
+        $source = (string) file_get_contents(dirname(__DIR__) . '/src/Score/Rules.php');
+        $header = substr($source, 0, (int) strpos($source, 'final class Rules'));
+
+        $ok(
+            !preg_match('/Only six rules clear that bar/', $header),
+            'the docblock says six rules reach the bot threshold alone; ' . count($decisive)
+            . ' do: ' . implode(', ', $decisive)
+        );
+
+        foreach ($decisive as $code) {
+            $ok(
+                str_contains($header, $code),
+                'the docblock claims to name every rule that convicts alone but omits ' . $code
+            );
+        }
+
+        $words = [4 => 'Four', 5 => 'Five', 6 => 'Six', 7 => 'Seven', 8 => 'Eight', 9 => 'Nine'];
+        $ok(
+            str_contains($header, $words[count($decisive)] ?? '#none#'),
+            'the docblock must spell out the count it is describing (' . count($decisive) . ')'
+        );
+
+        $same(17, count(Rules::WEIGHTS), 'and the "seventeen readable rules" claim must still hold');
+    };
+
+$tests['the fingerprint docblock states the true size of the tuple it hashes'] =
+    static function () use ($ok) {
+        $source = (string) file_get_contents(dirname(__DIR__) . '/src/Score/Signals.php');
+
+        $at = strpos($source, 'public static function fingerprint');
+        $ok($at !== false, 'Signals::fingerprint() must exist');
+
+        $body = substr($source, $at, 900);
+        $ok(
+            (bool) preg_match('/foreach\s*\(\[(.*?)\]\s*as\s*\$field\)/s', $body, $m),
+            'the tuple must still be a literal list this test can count'
+        );
+        $components = preg_match_all("/'[a-z0-9_]+'/", $m[1]);
+
+        $docblockAt = strrpos(substr($source, 0, $at), '/**');
+        $docblock = substr($source, (int) $docblockAt, $at - (int) $docblockAt);
+
+        $ok(
+            !str_contains($docblock, 'seven of the'),
+            'the docblock counts an eight-component tuple; there are ' . $components
+        );
+        $ok(
+            str_contains($docblock, 'eleven components'),
+            'the docblock must state the real component count (' . $components . ')'
+        );
+
+        $ok(
+            str_contains($docblock, 'nine of them are not logged'),
+            'and the real number of components plain apache combined cannot fill in: it records the '
+            . 'request line, hence the protocol, and the User-Agent, and nothing else in the tuple'
+        );
+    };
+
+$tests['the proxy-fleet sentence describes the window the scorer actually uses'] =
+    static function () use ($rules, $ok) {
+        $why = $rules->fired('fp_cluster_proxy_fleet', sig([], [], [], 9));
+        $ok($why !== null, 'nine addresses on one fingerprint must fire');
+
+        $ok(
+            !str_contains($why, 'within 12 hours'),
+            'the sentence halves the window it is describing: bin/loghound-score counts over '
+            . '±12 hours, which is why the field is called fp_ips_24h_i. Got: ' . $why
+        );
+        $ok(
+            str_contains($why, '24-hour'),
+            'an operator acting on this number has to be told the window it covers. Got: ' . $why
+        );
+        $ok(str_contains($why, '9 distinct IP addresses'), 'and it must still name the count');
+    };
+
 // ============================================================================================
 
 if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === realpath(__FILE__)) {

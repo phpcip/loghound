@@ -700,9 +700,19 @@ const polling = new Set();
 /**
  * Start (or reattach to) a job and drive it to completion, rendering as it goes.
  *
- * @param {string} kind    Job kind, matching Panel\Jobs::KINDS.
+ * `opts.params` are the job's target parameters — the index and time range a scan runs
+ * against. They travel with `job_start` only: the server stores them as the job's initial
+ * context and hands them back to the planner on every poll, so a poll needs nothing but an
+ * id. They also decide the job's target, which is what makes starting a scan of a second
+ * index a second job rather than a handback of the first one's progress.
+ *
+ * `opts.onStep` is called with every polled state, including the first and the last, so a
+ * caller can render partial results as the operation accumulates them rather than waiting
+ * for it to finish. The job's context is on `job.result`.
+ *
+ * @param {string} kind    Job kind the hosting view registered.
  * @param {string} mountId Element id to render the job panel into.
- * @param {Object} [opts]  {title, onDone}
+ * @param {Object} [opts]  {title, params, onStep, onDone}
  */
 export async function runJob(kind, mountId, opts) {
     const options = opts || {};
@@ -712,14 +722,21 @@ export async function runJob(kind, mountId, opts) {
     }
     polling.add(kind);
 
-    try {
-        let job = await post({ action: 'job_start', kind: kind });
+    const step = (job) => {
         renderJob(mount, job, kind, options);
+        if (typeof options.onStep === 'function') {
+            options.onStep(job);
+        }
+    };
+
+    try {
+        let job = await post(Object.assign({ action: 'job_start', kind: kind }, options.params || {}));
+        step(job);
 
         while (job && !job.done) {
             await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_MS));
             job = await post({ action: 'job_poll', id: job.id });
-            renderJob(mount, job, kind, options);
+            step(job);
         }
         if (job && typeof options.onDone === 'function') {
             options.onDone(job);
@@ -753,9 +770,13 @@ export async function reattachJob(kind, mountId, opts) {
     if (!job || !job.job) {
         return false;
     }
-    renderJob(mount, job.job, kind, opts || {});
+    const options = opts || {};
+    renderJob(mount, job.job, kind, options);
+    if (typeof options.onStep === 'function') {
+        options.onStep(job.job);
+    }
     if (!job.job.done) {
-        runJob(kind, mountId, opts);
+        runJob(kind, mountId, options);
     }
     return true;
 }

@@ -132,6 +132,9 @@ final class Detector
                     $sources[(string) $path] = $source;
                     $j->setResult('sources', $sources);
 
+                    if (!empty($source['outside_roots'])) {
+                        return 'Outside the directories Loghound may read — listed, not opened.';
+                    }
                     if ($source['lines_tested'] === 0) {
                         return 'Empty or unreadable — skipped.';
                     }
@@ -244,6 +247,19 @@ final class Detector
     /**
      * Examine one file: sample it, grade the format, render the mapping and the examples.
      *
+     * THE ALLOWED ROOTS ARE PASSED THROUGH UNWIDENED. An earlier version appended the
+     * candidate's own directory to them before calling LogDetect::tailLines(), which meant
+     * the Security::safePath() check inside tailLines() could never fail: the file was read,
+     * and up to five of its lines were rendered on the review screen, before anything looked
+     * at `outside_roots`. Blocking confirmation afterwards does not undo a read.
+     *
+     * So a candidate outside `allowed_log_roots` is now DESCRIBED but never opened: the
+     * path, the vhost and where the candidate came from are all metadata out of the
+     * operator's own webserver configuration, and everything that would require reading the
+     * file — confidence, mapping, missing fields, sample lines — is left empty. Widening the
+     * roots is a separate, explicit decision (Steps::applySources()'s $widen), after which a
+     * re-run of detection samples the file normally.
+     *
      * @param array<string,mixed> $meta From candidates()
      * @return array<string,mixed> One entry of the report's `sources` list.
      */
@@ -269,12 +285,12 @@ final class Detector
             'alternatives'  => [],
         ];
 
-        $sampleRoots = $roots;
-        $real = realpath($path);
-        if ($real !== false) {
-            $sampleRoots[] = dirname($real);
+        if ($source['outside_roots']) {
+            $source['format_name'] = $source['format_name'] !== '' ? $source['format_name'] : 'unknown';
+            return $source;
         }
-        $lines = LogDetect::tailLines($path, self::SAMPLE_LINES, $sampleRoots);
+
+        $lines = LogDetect::tailLines($path, self::SAMPLE_LINES, $roots);
         if ($lines === []) {
             $source['format_name'] = $source['format_name'] !== '' ? $source['format_name'] : 'unknown';
             return $source;

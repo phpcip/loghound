@@ -154,10 +154,11 @@ final class Signals
      * not sent" and "Accept-Language was en-US" must produce different tuples, and simply
      * omitting the absent one would let those two collide with a shifted tuple.
      *
-     * HONEST LIMITATION, and it is a big one: with plain apache `combined`, seven of the
-     * eight components are not logged and this degenerates to a hash of the User-Agent
-     * plus the protocol version. That still catches a fleet that uses one UA across many
-     * addresses, but a fleet that also rotates its Chrome major version splits into one
+     * HONEST LIMITATION, and it is a big one: the tuple below has eleven components, and
+     * with plain apache `combined` nine of them are not logged — the whole Accept, Sec-CH
+     * and Sec-Fetch set — so this degenerates to a hash of the User-Agent plus the protocol
+     * version, the only two `combined` records. That still catches a fleet that uses one UA
+     * across many addresses, but a fleet that also rotates its Chrome major version splits into one
      * cluster per version and can fall below the detection threshold. The recommended
      * LogFormat in SPEC §8 exists precisely to make this field discriminating, and
      * docs/SCHEMA.md says so in the section an operator will actually read.

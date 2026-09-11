@@ -181,6 +181,16 @@ $sourceMeta = [];
 /** @var array<int,array<string,mixed>> Documents waiting to be flushed to Solr. */
 $batch = [];
 
+/**
+ * Bytes of log read into the pending batch.
+ *
+ * Accumulated as the lines arrive, because the length is in hand there for nothing. It
+ * feeds \Loghound\Quota's local projection of the index size between control-plane
+ * refreshes: weighing the encoded documents instead would mean serialising every batch
+ * twice to improve an estimate the next refresh corrects anyway.
+ */
+$batchBytes = 0;
+
 $counters = [
     'started_at'     => time(),
     'lines'          => 0,
@@ -231,6 +241,29 @@ try {
     fwrite(STDERR, 'loghound-tail: cannot build the ingest pipeline: ' . $e->getMessage() . "\n");
     exit(78);
 }
+
+/**
+ * Plan-quota awareness, and the rolling window that keeps the index inside it.
+ *
+ * SELF-PRESERVATION, not a nicety. An Opensolr index that exceeds its disk quota is not
+ * throttled: the platform denies every request to it, reads included, so an unbounded
+ * Loghound eventually fills the plan and switches its own dashboard off. The guard below
+ * runs BEFORE each flush and deletes the oldest data when the index is near the limit, so
+ * ingestion never has to stop and the quota is never crossed.
+ *
+ * Optional by construction. A --dry-run has nothing to protect, a custom-Solr install has no
+ * plan to protect it against, and a Quota that cannot be built must never be the reason a
+ * tailer refuses to start — the daemon's job is to not lose log lines.
+ */
+$quota = null;
+if (!$args['dry_run'] && class_exists('\\Loghound\\Quota')) {
+    try {
+        $quota = new \Loghound\Quota($cfg);
+    } catch (\Throwable $e) {
+        logLine('warn', 'plan-quota retention is unavailable: ' . $e->getMessage());
+    }
+}
+$quotaCore = (string) $cfg->get('solr.hits_core', '');
 
 $badSampleCap = (int) $cfg->get('ingest.badline_sample', 200);
 $badSampler   = new BadLineSampler($BADLINES, $badSampleCap);
@@ -298,6 +331,7 @@ do {
                 $pipeline,
                 $badSampler,
                 &$batch,
+                &$batchBytes,
                 &$counters,
                 &$linesThisPoll
             ): void {
@@ -315,6 +349,7 @@ do {
                 }
 
                 $batch[] = $doc;
+                $batchBytes += strlen($line);
             });
         } catch (\Throwable $e) {
             logLine('error', 'source ' . $path . ': ' . $e->getMessage());
@@ -323,7 +358,7 @@ do {
 
     $now = microtime(true);
     if (count($batch) >= $batchMax || ($batch !== [] && ($now - $lastFlush) * 1000 >= $batchMs)) {
-        flushBatch($pipeline, $batch, $counters, $args['verbose']);
+        flushBatch($pipeline, $batch, $batchBytes, $counters, $args['verbose'], $quota, $quotaCore);
         $lastFlush = $now;
     }
 
@@ -340,7 +375,7 @@ do {
     if ($RELOAD) {
         $RELOAD = false;
         logLine('info', 'SIGHUP: reloading configuration');
-        flushBatch($pipeline, $batch, $counters, $args['verbose']);
+        flushBatch($pipeline, $batch, $batchBytes, $counters, $args['verbose'], $quota, $quotaCore);
 
         $newCfg = Config::load($args['config']);
         $newErrors = $newCfg->validate();
@@ -375,7 +410,7 @@ do {
 } while ($RUNNING);
 
 logLine('info', 'shutting down');
-flushBatch($pipeline, $batch, $counters, $args['verbose']);
+flushBatch($pipeline, $batch, $batchBytes, $counters, $args['verbose'], $quota, $quotaCore);
 foreach ($tails as $t) {
     $t->close();
 }
@@ -383,6 +418,9 @@ writeStatus($STATUS_FILE, $tails, $sourceMeta, $counters, $rateWindow, $batch, $
 $cursors->close();
 if ($state !== null && method_exists($state, 'close')) {
     $state->close();
+}
+if ($quota !== null) {
+    $quota->flush();
 }
 exit(0);
 
@@ -490,13 +528,43 @@ function buildSources(
  * that reads a firehose. The cursors have already advanced, so those specific lines are
  * lost — which is why `solr_errors` is prominent in the status output, and why the
  * systemd unit restarts the daemon on repeated failure.
+ *
+ * THE QUOTA GUARD RUNS FIRST, BEFORE THE WRITE, and the ordering is the entire feature. An
+ * Opensolr index that crosses its disk quota is denied wholesale by the platform — every
+ * request answers 403, reads included — so making room afterwards would be making room
+ * after the blackout. Above the high-water mark the guard deletes the oldest data by date,
+ * in bounded steps, and ingestion continues into the space it freed.
+ *
+ * It is cheap in the common case and has to stay that way: a batch arrives every couple of
+ * seconds and the control-plane call behind these figures is slow, so \Loghound\Quota
+ * answers from its cache except once every few minutes, and the trim itself only happens
+ * near the limit. A guard that failed is logged and ingestion carries on — losing log lines
+ * because the bookkeeping had a bad day is the worse outcome of the two.
+ *
+ * @param int         $batchBytes Log bytes that produced this batch; feeds the local
+ *                                projection of index size between refreshes.
+ * @param object|null $quota      \Loghound\Quota, or null when there is no plan to respect.
  */
-function flushBatch(Pipeline $pipeline, array &$batch, array &$counters, bool $verbose): void
-{
+function flushBatch(
+    Pipeline $pipeline,
+    array &$batch,
+    int &$batchBytes,
+    array &$counters,
+    bool $verbose,
+    ?object $quota = null,
+    string $quotaCore = ''
+): void {
     if ($batch === []) {
+        $batchBytes = 0;
         return;
     }
     $n = count($batch);
+    $bytes = $batchBytes;
+
+    if ($quota !== null && $quotaCore !== '') {
+        guardQuota($quota, $pipeline, $quotaCore, $verbose);
+    }
+
     try {
         $pipeline->index($batch);
         $counters['docs_indexed'] += $n;
@@ -504,11 +572,59 @@ function flushBatch(Pipeline $pipeline, array &$batch, array &$counters, bool $v
         if ($verbose) {
             logLine('info', "indexed $n document(s)");
         }
+        if ($quota !== null && $quotaCore !== '') {
+            $quota->noteWrite($quotaCore, $n, $bytes);
+        }
     } catch (\Throwable $e) {
         $counters['solr_errors']++;
         logLine('error', "batch of $n document(s) failed: " . $e->getMessage());
     }
     $batch = [];
+    $batchBytes = 0;
+}
+
+/**
+ * Make room for the batch about to be written, if the plan says room is needed.
+ *
+ * Everything interesting is in \Loghound\Quota; this is the daemon-side wiring, and it
+ * exists as its own function so that the failure handling — never let this stop ingestion —
+ * is in one place rather than repeated at each of the three flush sites.
+ *
+ * A trim is worth a log line at info level even when it succeeds: deleting an operator's
+ * oldest data is not something that should only ever be visible as a number on a dashboard.
+ */
+function guardQuota(object $quota, Pipeline $pipeline, string $core, bool $verbose): void
+{
+    $solr = $pipeline->solr();
+    if ($solr === null) {
+        return;
+    }
+
+    try {
+        $result = $quota->guardBeforeWrite($solr, $core, 'ts', [
+            'logger' => static function (string $m): void {
+                logLine('info', $m);
+            },
+        ]);
+    } catch (\Throwable $e) {
+        logLine('warn', 'plan-quota check failed, ingesting anyway: ' . $e->getMessage());
+        return;
+    }
+
+    if ($result['action'] === 'failed') {
+        $reason = (string) ($result['reason'] ?? '');
+
+        // Two different failures with two different next steps. Already blocked: the
+        // message explains itself and there is nothing to add. Not yet blocked: say what
+        // it leads to, because that is the part an operator would not otherwise know.
+        logLine('error', str_contains($reason, 'blocked by Opensolr')
+            ? $core . ': ' . $reason
+            : 'could not free space in ' . $core . ': ' . $reason
+              . ' — if the index reaches its quota, Opensolr will block it completely, reads included.');
+    } elseif ($verbose && $result['action'] !== 'none') {
+        logLine('info', 'plan window for ' . $core . ': ' . $result['action']
+            . ' — ' . (string) ($result['reason'] ?? ''));
+    }
 }
 
 /**
@@ -896,7 +1012,9 @@ final class BadLineSampler
  * THE CONTRACT THIS DAEMON CALLS
  * ---------------------------------------------------------------------------------
  *   \Loghound\LogDetect   ::formatByName(string $name): ?LogFormat
+ *                         ::formatFromRegex(string $pattern, string $name): ?LogFormat
  *   \Loghound\LogFormat   ::fromApache(string $fmt, string $name): self
+ *                         ::isDelimitedRegex(string $candidate): bool
  *                         ->parse(string $line): ?array     RAW record (remote_addr, ...)
  *   \Loghound\Parser      ->parseLine(LogFormat $fmt, string $line, string $src,
  *                                      int $offset): ?array  NORMALISED hit, SPEC §4.1 names
@@ -1070,6 +1188,13 @@ final class Pipeline
      * A library name is tried first ('apache_combined', 'nginx_combined', ...). Otherwise the
      * value is the operator's own LogFormat string, copied out of their webserver config by
      * the setup wizard, and an nginx format is recognisable by its $variables.
+     *
+     * A delimited PCRE is recognised before either of those, because it is neither: it is
+     * SPEC §8 step 4, the custom-pattern escape hatch, and setup stores the pattern itself as
+     * the format. Compiled through LogDetect::formatFromRegex() so that it goes through the
+     * same ReDoS vetting and the same group-name translation the review screen used — a
+     * source that parsed during setup has to parse identically here, or the operator
+     * confirmed one thing and got another.
      */
     private function format(string $name): ?object
     {
@@ -1080,7 +1205,13 @@ final class Pipeline
         $fmt = null;
         try {
             $fmt = \Loghound\LogDetect::formatByName($name);
-            if ($fmt === null) {
+            if ($fmt === null && \Loghound\LogFormat::isDelimitedRegex($name)) {
+                $fmt = \Loghound\LogDetect::formatFromRegex($name, 'source');
+                if ($fmt === null) {
+                    logLine('error', 'custom pattern refused (no named groups, or it backtracks): '
+                        . substr($name, 0, 80));
+                }
+            } elseif ($fmt === null) {
                 $fmt = str_contains($name, '$')
                     ? \Loghound\LogFormat::fromNginx($name, 'source')
                     : \Loghound\LogFormat::fromApache($name, 'source');
@@ -1261,6 +1392,19 @@ final class Pipeline
      *
      * @param array<int,array<string,mixed>> $docs
      */
+    /**
+     * The Solr client, or null under --dry-run.
+     *
+     * Exposed for exactly one caller: the plan-quota guard, which has to run a bounds facet
+     * and a delete-by-query against the same node this pipeline writes to. Handing out the
+     * client rather than adding a trim method here keeps the deletion logic in
+     * \Loghound\Quota, where it is unit-tested against a fake, instead of inside a daemon.
+     */
+    public function solr(): ?object
+    {
+        return $this->solr;
+    }
+
     public function index(array $docs): void
     {
         if ($this->dryRun || $this->solr === null) {

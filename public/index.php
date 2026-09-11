@@ -10,11 +10,14 @@
  *   3. Hand over to the installer when this installation is not ready to serve. An
  *      unconfigured or half-configured Loghound never answers with a configuration error;
  *      it answers with the screen that fixes the problem.
- *   4. Authenticate. Fails closed: with no auth configured the panel refuses to serve at
+ *   4. Hand over to the sign-in page for `?login` and `?logout`, in session mode only.
+ *      These are the ONLY two routes that are allowed past step 5 unauthenticated, and
+ *      neither of them can reach a view.
+ *   5. Authenticate. Fails closed: with no auth configured the panel refuses to serve at
  *      all, because an analytics dashboard left open on the internet is a data breach and
  *      defaults decide outcomes.
- *   5. Enforce CSRF on anything that is not a GET or HEAD.
- *   6. Route to exactly one of the seven views, by an allowlist. There is no dynamic
+ *   6. Enforce CSRF on anything that is not a GET or HEAD.
+ *   7. Route to exactly one of the seven views, by an allowlist. There is no dynamic
  *      class resolution from the URL — a route is a key in a map, and an unknown key is a
  *      404, not an attempt to load a class named after user input.
  *
@@ -35,13 +38,23 @@
  * SETUP. Once the configuration exists, has credentials and passes validation,
  * Installer::isNeeded() is false and every installer route is dead.
  *
+ * SIGN-IN. In Basic mode the browser's own prompt is the sign-in, so Login::handles() is
+ * false and `?login` is simply an unrecognised parameter on the dashboard. In session mode
+ * the two routes are handled by Panel\Login, which enforces CSRF and the per-address
+ * attempt limiter itself and always exits — a refused sign-in never falls through to the
+ * authentication step below, and a successful one redirects rather than rendering.
+ *
+ * AUTHENTICATION is given the install prefix's var/ directory, which is where the
+ * failed-attempt ledger lives, and the trusted-proxy list, without which the limiter would
+ * key on the proxy's address and lock out every visitor at once.
+ *
  * CSRF. The check returns immediately for GET and HEAD, and exits 403 for anything else
  * that arrives without a valid token.
  *
  * ROUTING. An unknown view is a typo or a probe, so the operator is sent to the default
  * rather than shown an error page that would tell a prober which slugs exist.
  *
- * State changes arrive as POSTs, only the Settings view accepts them, and it answers with a
+ * State changes arrive as POSTs, only a view implementing JobHost accepts them, and it answers with a
  * redirect target so the browser follows POST/Redirect/GET: a refresh never re-submits, and
  * the page works with JavaScript disabled.
  *
@@ -69,16 +82,24 @@ require __DIR__ . '/../src/autoload.php';
 
 use Loghound\Config;
 use Loghound\Panel\Bots;
+use Loghound\Panel\Callers;
 use Loghound\Panel\Controller;
 use Loghound\Panel\Fingerprints;
 use Loghound\Panel\Gateway;
+use Loghound\Panel\Hosts;
+use Loghound\Panel\Indexes;
+use Loghound\Panel\JobHost;
+use Loghound\Panel\Jobs;
 use Loghound\Panel\Layout;
+use Loghound\Panel\Login;
 use Loghound\Panel\Networks;
 use Loghound\Panel\Overview;
 use Loghound\Panel\Performance;
+use Loghound\Panel\Queries;
 use Loghound\Panel\Query;
 use Loghound\Panel\Sessions;
 use Loghound\Panel\Settings;
+use Loghound\Panel\Usage;
 use Loghound\Security;
 use Loghound\Setup\Installer;
 
@@ -102,7 +123,15 @@ if (Installer::isNeeded($cfg)) {
     (new Installer($cfg, dirname(__DIR__)))->handle();
 }
 
-Security::requireAuth((array) $cfg->get('auth', []));
+if (Login::handles($cfg)) {
+    (new Login($cfg, dirname(__DIR__)))->handle();
+}
+
+Security::requireAuth(
+    (array) $cfg->get('auth', []),
+    dirname(__DIR__) . '/var',
+    (array) $cfg->get('trusted_proxies', [])
+);
 
 Security::requireCsrf();
 
@@ -120,6 +149,11 @@ $routes = [
     'networks'     => Networks::class,
     'sessions'     => Sessions::class,
     'performance'  => Performance::class,
+    'hosts'        => Hosts::class,
+    'indexes'      => Indexes::class,
+    'queries'      => Queries::class,
+    'callers'      => Callers::class,
+    'usage'        => Usage::class,
     'settings'     => Settings::class,
 ];
 
@@ -132,11 +166,11 @@ if (!is_string($slug) || !isset($routes[$slug])) {
 $view = new $routes[$slug]($cfg, $gw);
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-    if ($view instanceof Settings) {
+    if ($view instanceof JobHost) {
         try {
             $target = $view->post();
         } catch (\Throwable $e) {
-            error_log('loghound/panel: POST failed: ' . $e->getMessage());
+            error_log('loghound/panel: POST failed: ' . Jobs::redact($e->getMessage()));
             http_response_code(500);
             header('Content-Type: text/plain; charset=utf-8');
             exit("The action could not be completed. See the server error log for details.\n");
@@ -159,7 +193,7 @@ if (is_string($action) && $action !== '') {
     try {
         $payload = $view->api($action);
     } catch (Throwable $e) {
-        error_log('[loghound-panel] ' . $e->getMessage());
+        error_log('[loghound-panel] ' . Jobs::redact($e->getMessage()));
         json_out(['error' => 'The panel could not complete that request. See the server error log.'], 500);
     }
 

@@ -148,10 +148,17 @@ if (!function_exists('lh_fail')) {
 
     /**
      * Recursively delete a directory created by lh_tmpdir().
+     *
+     * NEVER FOLLOWS A SYMLINK. is_dir() answers true for a link that POINTS AT a
+     * directory, so recursing on it deletes the contents of the target — and a test
+     * fixture that links to somewhere in the checkout would therefore delete part of the
+     * repository when it tidied up. That is not hypothetical: it happened, and it took the
+     * whole of src/ with it. A link is removed with unlink(), which detaches the link and
+     * leaves whatever it pointed at alone.
      */
     function lh_rmtree(string $dir): void
     {
-        if (!is_dir($dir)) {
+        if (is_link($dir) || !is_dir($dir)) {
             @unlink($dir);
             return;
         }
@@ -160,7 +167,7 @@ if (!function_exists('lh_fail')) {
                 continue;
             }
             $path = $dir . '/' . $entry;
-            is_dir($path) ? lh_rmtree($path) : @unlink($path);
+            (is_dir($path) && !is_link($path)) ? lh_rmtree($path) : @unlink($path);
         }
         @rmdir($dir);
     }

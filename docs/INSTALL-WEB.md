@@ -21,10 +21,15 @@ You need:
 * PHP 8.1 or newer with `curl`, `json`, `pcre`, `sqlite3` and `mbstring`
 * a webserver whose document root points at `loghound/public`
 * shell access to the machine — the installer asks you to prove it (see [The setup token](#the-setup-token))
-* either an Opensolr account, or a Solr 9 you already run
+* an Opensolr account — Loghound keeps everything it learns in two indexes it provisions there, and does not run without one
 
-`install/install.sh` sets all of this up including a dedicated PHP-FPM pool. If you would
-rather do it by hand, `install/apache-vhost.conf.example` and
+`install/install.sh` sets all of this up including a dedicated PHP-FPM pool. Run it with
+**`--skip-setup`**: without that flag it hands over to the shell wizard at the end, and a
+configuration finished there leaves the browser installer with nothing to do. With it, the
+machine is prepared and the final report points you at the URL and at the command that
+reads the setup token.
+
+If you would rather do it by hand, `install/apache-vhost.conf.example` and
 `install/nginx-vhost.conf.example` are the vhosts, and `install/php-fpm-pool.conf.example`
 is the pool.
 
@@ -50,12 +55,25 @@ daemon is running" and "the daemon is running and indexing something".
 
 ### If you are behind `open_basedir`
 
-The reference PHP-FPM pool restricts the panel to the application directory and `/tmp`,
-which is correct hardening — and it means this page physically cannot see `/var/log` or
-`/etc/apache2`. The system check says so explicitly rather than reporting a permission
-problem that does not exist. Either widen `open_basedir` for those two directories, or run
+The reference PHP-FPM pool (`install/php-fpm-pool.conf.example`) restricts the panel to the
+application directory and `/tmp` **plus the three directories this screen depends on**:
+
+```
+php_admin_value[open_basedir] = /opt/loghound:/var/log:/etc/apache2:/etc/nginx:/tmp
+```
+
+`/var/log` is where your access logs are; `/etc/apache2` and `/etc/nginx` are where the
+`CustomLog` and `access_log` directives that name them live, which is how the format is
+read exactly rather than guessed. Both are read-only to the pool user by file permissions —
+`open_basedir` widens what PHP may *attempt*, not what the operating system will allow.
+Drop whichever webserver you do not run, and adjust the first path if you installed
+somewhere other than `/opt/loghound`.
+
+If you tightened the pool, or your distribution ships its own, this screen physically
+cannot see those directories. The system check says exactly that rather than reporting a
+permission problem that does not exist. Either widen `open_basedir` for them, or run
 `bin/loghound-setup` in a shell, where the restriction does not apply. The ingest daemon is
-never affected: it is a CLI process.
+never affected either way: it is a CLI process.
 
 ---
 
@@ -112,7 +130,17 @@ backtracking before it is stored, not the first time the daemon meets a hostile 
 
 ### 2. Storage
 
-Two answers, and most people want the first.
+One answer: Loghound provisions and manages its own two indexes on your Opensolr account.
+**An Opensolr account is a hard requirement.**
+
+There used to be a second option — point Loghound at a Solr you already run — and it was
+removed. Loghound does not merely read and write these two indexes, it owns them: it creates
+them, uploads the configsets under `solr/hits/conf` and `solr/sessions/conf`, reloads the
+cores and verifies them, and later reports and trims them against your plan. On a Solr you
+administer yourself it has no route to create a core or install a configset and no way to keep
+the schema right, so the option promised something the product cannot deliver. If your
+configuration still says `solr.mode: custom`, see
+[An older configuration on `solr.mode: custom`](#an-older-configuration-on-solrmode-custom).
 
 **Let Opensolr host it.** You do not need to run Solr. Enter your account email and API key
 (in the Opensolr control panel, under Account) and the installer:
@@ -126,19 +154,46 @@ Two answers, and most people want the first.
 Every one of those is a separate step with its own result, so a failure names the step it
 failed on. The index names are generated rather than chosen because an Opensolr index name
 is unique across the whole platform and permanent once created — a fixed `loghound_hits`
-would work for exactly one person. If a generated name is taken, both names are abandoned
-and retried with a fresh installation id, and anything created during the failed attempt is
-deleted first so you are not billed for an orphan.
+would work for exactly one person.
+
+A generated name that is already taken is handled in one of two ways, and which one depends
+on **who holds it**:
+
+* **Somebody else holds it.** Both names are abandoned and retried with a fresh installation
+  id, because the pair has to share one id to be recognisable as a pair in an account holding
+  hundreds of indexes. Anything created during the abandoned attempt is deleted first, so you
+  are not billed for an orphan.
+* **Your own account already holds it** — which is what a previous attempt of your own leaves
+  behind — the index is **reused**, not abandoned. Loghound asks Opensolr which indexes your
+  account holds before it decides, and if it cannot get an answer it stops and says so rather
+  than guessing, because guessing wrong in that direction leaves you paying for an index
+  nothing points at.
 
 Your API key goes into `config/loghound.php` (mode 0640, outside the document root) and
 nowhere else. It is never shown again, never placed in a hidden field, never written to a
 log, and never included in an error message.
 
-**Use a Solr you already run.** Solr 9 or newer: a base URL, optional HTTP auth, and the
-two core names. Create the cores with the configuration in `solr/hits/conf` and
-`solr/sessions/conf` first. The installer tests the connection and tells you precisely what
-went wrong if it cannot — "Connection refused to `fi.solrcluster.com:443`", not "could not
-connect".
+The connection details of the node your indexes landed on — `solr.base_url`,
+`solr.http_user`, `solr.http_pass` — are written for you from what Opensolr returns. You never
+type them, and there is no form, POST action or environment variable that will accept them from
+you. The setup status page has a **Test the connection** button that queries both indexes and
+tells you precisely what went wrong if it cannot reach them — "Connection refused to
+`fi.solrcluster.com:443`", not "could not connect".
+
+#### An older configuration on `solr.mode: custom`
+
+An installation made before the option was removed still has `solr.mode => 'custom'` in
+`config/loghound.php`. That value is now refused, loudly and on purpose:
+
+* `bin/loghound-tail`, `bin/loghound-score` and `bin/loghound-retention` all validate the
+  configuration at startup and **refuse to start**, printing what changed, why, and what to
+  do about it.
+* The panel's Settings page says the same thing at the top of the Solr connection card.
+
+To move: set `solr.mode` to `'opensolr'` and run `bin/loghound-setup`, which will provision
+the two indexes on your Opensolr account. **Nothing migrates your existing documents** — the
+new indexes start empty, and Loghound backfills only as far as your own log retention reaches.
+Your old cores are untouched; delete them when you no longer want them.
 
 ### 3. Privacy
 
@@ -151,6 +206,21 @@ what it protects. Then a retention window, which a real timer job enforces.
 A username and a password of at least ten characters, stored as a hash. Loghound shows
 every visitor, page and address on your site, so it is never served without one.
 
+The same screen asks **how** you want to sign in, and it is a real choice with a real
+trade-off rather than a default you discover later:
+
+| `auth.mode` | What you get | What it costs |
+|---|---|---|
+| `basic` | The browser's own password prompt, before it shows anything. Every tool that speaks HTTP signs in the same way, so `curl --user` and monitoring checks work. | The prompt is the browser's and cannot be styled, and there is no way to sign out short of closing the browser. |
+| `session` | Loghound's own sign-in page at `?login`, a real session with an idle timeout and an absolute one, and a **Sign out** button at `?logout` that ends it on the server. | It only works in a browser. `curl` and scripts cannot sign in to it, so a monitoring check against the panel has to move to Basic or be dropped. |
+
+Failed attempts are rate limited per address in **both** modes, by the same ledger: too many
+and that address is locked out for a window, answered with `429` and a `Retry-After`. In
+session mode the sign-in form also refuses to say which half was wrong, so it cannot be used
+to enumerate usernames.
+
+You can change the mode later under Settings without setting the password again.
+
 Copy the commands on this screen before you finish — the installer disappears when setup
 completes:
 
@@ -159,8 +229,9 @@ sudo systemctl enable --now loghound-tail.service
 sudo systemctl enable --now loghound-score.timer loghound-retention.timer
 ```
 
-Finishing takes you to the dashboard, where your browser asks for the username and password
-you just chose.
+Finishing takes you to the dashboard, which then asks you to sign in for the first time with
+the username and password you just chose — through your browser's own prompt in `basic`
+mode, or through Loghound's sign-in page in `session` mode.
 
 ---
 
@@ -174,8 +245,30 @@ progress, so you see which step is running, how long it has been going and what 
 right now.
 
 Refreshing mid-provision reattaches to the running job rather than starting a second one.
-Two indexes are never created because somebody double-clicked. A job that fails can be
-retried, and the steps that already succeeded are skipped.
+Two indexes are never created because somebody double-clicked.
+
+### What "Try again" actually does
+
+It does **not** resume the failed job. A job that has failed is no longer running, so there
+is nothing to reattach to: the button starts a **new** job, and every step runs again from
+the top. That is safe because each step is idempotent against work an earlier attempt
+already did, and the two that could have cost you something are explicit about it:
+
+* **Index creation** finds the name already taken — the installation id is stored, so the
+  retry derives the same two names — asks Opensolr whether *your* account is the one holding
+  it, and reuses it. The step says so: "already exists from an earlier attempt — reusing it".
+  A retry after a failed provision therefore does not leave the first attempt's indexes
+  behind for you to find on your next invoice.
+* **Configset upload** re-uploads both files and reloads the index, which is the same
+  operation whether or not it landed the first time.
+
+The rest only read: the credential check lists regions, the connection step re-reads where
+the indexes live, and the verification steps query. So what you see on a retry is every step
+running again and most of them saying "already done" — not a shorter list.
+
+If Opensolr cannot be reached at the moment the retry needs to ask who owns a name, the step
+stops with that as the reason and changes nothing. That is deliberate: the alternative is
+guessing, and guessing wrong there is what abandons an index you are paying for.
 
 The installer needs JavaScript for these screens, and says so. The shell wizard runs the
 identical steps with no JavaScript involved.
@@ -184,9 +277,24 @@ identical steps with no JavaScript involved.
 
 ## When the installer disappears
 
-The moment `config/loghound.php` exists, has a username and password, and passes validation,
-every installer route is dead and the panel serves instead. There is no flag, no query
-parameter and no "re-run setup" button that gets past that check.
+The moment `config/loghound.php` exists, carries a username and a password hash, and names
+both indexes, every installer route is dead and the panel serves instead. There is no flag,
+no query parameter and no "re-run setup" button that gets past that check.
+
+Those three conditions are the whole of it, and the narrowness is deliberate. The check
+runs *before* authentication, so anything that makes it true hands an unauthenticated
+visitor the installer — which means it must depend only on facts that mean "setup never
+finished", never on whether the configuration is otherwise perfect. It used to ask
+`Config::validate()` instead, and `validate()` reports an error for a log directory it
+cannot resolve — the normal state of a panel process under `open_basedir`. A correctly
+installed instance therefore looked unconfigured forever: the status page disclosed the
+environment, the paths and the index names to anyone who asked, and re-minted a live setup
+token on a machine where it had already been destroyed.
+
+Configuration problems that are *not* "setup never finished" — an unreadable log directory,
+a missing beacon secret — show up as a warning banner inside the panel, with a link to
+Settings. That is the right severity for them. The check does not probe Solr either: a
+momentary outage must not bounce you out of your own dashboard and re-open the installer.
 
 To change something afterwards:
 
@@ -205,8 +313,7 @@ and once to read the new token.
 | Screen | Configuration it writes |
 |---|---|
 | Access logs | `sources`, and `allowed_log_roots` when you explicitly agree to widen it |
-| Storage (managed) | `solr.mode`, `solr.install_id`, `solr.hits_core`, `solr.sessions_core`, `solr.base_url`, `solr.http_user`, `solr.http_pass`, `opensolr.email`, `opensolr.api_key`, `opensolr.region` |
-| Storage (your Solr) | `solr.mode`, `solr.base_url`, `solr.http_user`, `solr.http_pass`, `solr.hits_core`, `solr.sessions_core` |
+| Storage | `solr.mode` (always `opensolr`), `solr.install_id`, `solr.hits_core`, `solr.sessions_core`, `solr.base_url`, `solr.http_user`, `solr.http_pass`, `opensolr.email`, `opensolr.api_key`, `opensolr.region` |
 | Privacy | `privacy.ip_mode`, `privacy.retention_days`, `privacy.ip_salt`, `beacon.secret` |
 | Sign-in | `auth.mode`, `auth.user`, `auth.password_hash`, `base_url` |
 

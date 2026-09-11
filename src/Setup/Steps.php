@@ -68,19 +68,57 @@ final class Steps
      * and only to the exact directory needed — never to '/'. That list is a security
      * control: it is what stops the log-path setting from being an arbitrary-file-read.
      *
+     * The flat problem list is what every existing caller wants; a caller that has to tell
+     * a partial success from a total one — the browser installer does, because one refused
+     * source must not block the six that were fine — calls applySourcesReport() instead and
+     * gets the same work described per source.
+     *
      * @param array<int,array<string,mixed>> $chosen  Source entries from the detection report.
      * @param string[]                       $widen   Directories the operator agreed to allow.
      * @return string[] Problems; empty means every chosen source was stored.
      */
     public static function applySources(Config $cfg, array $chosen, array $widen = []): array
     {
-        $errors = [];
-        $roots  = (array) $cfg->get('allowed_log_roots', []);
+        $report = self::applySourcesReport($cfg, $chosen, $widen);
+
+        $problems = $report['widening'];
+        foreach ($report['refused'] as $one) {
+            $problems[] = $one['message'];
+        }
+        return $problems;
+    }
+
+    /**
+     * Confirm a set of detected sources, saying per source what was stored and what was not.
+     *
+     * SAME RULES AS applySources(), WHICH IS A THIN WRAPPER AROUND THIS — there is one
+     * implementation of "may this file be ingested, and with which format", not two.
+     *
+     * The reason this shape exists is that "did it work" is not a yes/no question here. An
+     * operator confirming seven discovered files, one of which sits outside
+     * `allowed_log_roots` and was not explicitly widened, used to be told the whole step had
+     * failed and left with no way forward in the middle of an installation. The six good
+     * ones are stored, the refusals are named individually, and the caller can report both.
+     * A refused source is never quietly dropped and never counted as stored.
+     *
+     * `stored` lists the paths that are now in `sources`. `refused` names every path that is
+     * not, with the sentence explaining why. `widening` holds problems with the directories
+     * the operator asked to allow, which are not attributable to any one source.
+     *
+     * @param array<int,array<string,mixed>> $chosen  Source entries from the detection report.
+     * @param string[]                       $widen   Directories the operator agreed to allow.
+     * @return array{stored:string[],refused:array<int,array{path:string,message:string}>,widening:string[]}
+     */
+    public static function applySourcesReport(Config $cfg, array $chosen, array $widen = []): array
+    {
+        $widening = [];
+        $refused  = [];
+        $roots    = (array) $cfg->get('allowed_log_roots', []);
 
         foreach ($widen as $dir) {
             $real = realpath((string) $dir);
             if ($real === false || !is_dir($real)) {
-                $errors[] = 'Cannot allow ' . $dir . ': there is no such directory.';
+                $widening[] = 'Cannot allow ' . $dir . ': there is no such directory.';
                 continue;
             }
             if (!in_array($real, $roots, true)) {
@@ -90,39 +128,48 @@ final class Steps
         $cfg->set('allowed_log_roots', array_values(array_unique($roots)));
 
         $sources = [];
+        $stored  = [];
         foreach ($chosen as $src) {
             $path = (string) ($src['path'] ?? '');
             if ($path === '') {
                 continue;
             }
             if (Security::safePath(dirname($path), $roots) === null) {
-                $errors[] = $path . ' is outside the directories Loghound may read.';
+                $refused[] = [
+                    'path'    => $path,
+                    'message' => $path . ' is outside the directories Loghound may read.',
+                ];
                 continue;
             }
 
             $format = (string) ($src['format_name'] ?? '');
             if ($format === '' || $format === 'unknown' || $format === 'unrecognised') {
-                $errors[] = 'No usable format was worked out for ' . $path . '.';
+                $refused[] = [
+                    'path'    => $path,
+                    'message' => 'No usable format was worked out for ' . $path . '.',
+                ];
                 continue;
             }
-            $stored = $format;
+            $storedFormat = $format;
             if (!array_key_exists($format, \Loghound\LogDetect::library())
                 && (string) ($src['format_string'] ?? '') !== '') {
-                $stored = (string) $src['format_string'];
+                $storedFormat = (string) $src['format_string'];
             }
 
-            $entry = ['path' => $path, 'format' => $stored, 'confirmed' => true];
+            $entry = ['path' => $path, 'format' => $storedFormat, 'confirmed' => true];
             $host = (string) ($src['vhost'] ?? '');
             if ($host !== '') {
                 $entry['host'] = $host;
             }
             $sources[] = $entry;
+            $stored[]  = $path;
         }
 
         if ($sources !== []) {
             $cfg->set('sources', $sources);
         }
-        return $errors;
+
+        return ['stored' => $stored, 'refused' => $refused, 'widening' => $widening];
     }
 
     /**
@@ -183,16 +230,73 @@ final class Steps
     }
 
     /**
+     * The two ways to sign in, each with its real trade-off.
+     *
+     * A thin pass-through to Security::authModes() so that the installer, the panel and
+     * Config::validate() all read the same list from the same place. Kept here as well
+     * because every other choice the wizard offers is described by a Steps:: method, and a
+     * screen that reaches into a different class for one of its four questions is how the
+     * wording drifts.
+     *
+     * @return array<string,array{label:string,text:string,cost:string}>
+     */
+    public static function authModes(): array
+    {
+        return Security::authModes();
+    }
+
+    /**
+     * Switch between Basic and the sign-in page without touching the credentials.
+     *
+     * Exists so that changing your mind later is a supported operation rather than an
+     * edit to config/loghound.php: Settings calls this, the installer calls applyAdmin(),
+     * and both end up at the same two values. Refuses to move to a mode that would leave
+     * the panel unreachable — a mode that signs people in with a password needs one to
+     * have been set first.
+     *
+     * @return string[] Problems; empty means stored.
+     */
+    public static function applyAuthMode(Config $cfg, string $mode): array
+    {
+        if (!array_key_exists($mode, self::authModes())) {
+            return ['Choose one of the two ways to sign in.'];
+        }
+        if ((string) $cfg->get('auth.password_hash', '') === ''
+            || (string) $cfg->get('auth.user', '') === '') {
+            return ['Set a username and password before choosing how to sign in.'];
+        }
+
+        $cfg->set('auth.mode', $mode);
+        return [];
+    }
+
+    /**
      * Store the username and password used to sign in to Loghound.
      *
      * The password is hashed immediately with password_hash(PASSWORD_DEFAULT) and the
      * plaintext is not kept anywhere — not in the config, not in a session, not in a log.
      *
+     * The mode defaults to 'basic' because that is what every installation made before the
+     * sign-in page existed uses, and because it is the answer that cannot strand anyone:
+     * it needs no cookies, no JavaScript and no session storage. An unrecognised mode is
+     * refused rather than quietly corrected, so a form field that stops matching this list
+     * fails loudly instead of silently changing how the panel authenticates.
+     *
+     * @param string $mode 'basic' or 'session'; see Security::authModes().
      * @return string[] Problems; empty means stored.
      */
-    public static function applyAdmin(Config $cfg, string $user, string $password, string $confirm): array
-    {
+    public static function applyAdmin(
+        Config $cfg,
+        string $user,
+        string $password,
+        string $confirm,
+        string $mode = 'basic'
+    ): array {
         $errors = [];
+
+        if (!array_key_exists($mode, self::authModes())) {
+            $errors[] = 'Choose one of the two ways to sign in.';
+        }
 
         $user = trim($user);
         if ($user === '') {
@@ -215,13 +319,18 @@ final class Steps
 
         $cfg->set('auth.user', $user);
         $cfg->set('auth.password_hash', password_hash($password, PASSWORD_DEFAULT));
-        $cfg->set('auth.mode', 'basic');
+        $cfg->set('auth.mode', $mode);
 
         return [];
     }
 
     /**
      * Store the public URL of this installation, used to build the beacon snippet.
+     *
+     * The userinfo case is separated out because this value is pasted into the beacon
+     * snippet the operator hands to their own site, so credentials typed in here would end
+     * up in the HTML of every page they measure. A bare "that is not a valid URL" would
+     * leave them retyping the same thing.
      *
      * @return string[] Problems; empty means stored (an empty URL is allowed and skipped).
      */
@@ -230,6 +339,10 @@ final class Steps
         $url = rtrim(trim($url), '/');
         if ($url === '') {
             return [];
+        }
+        if (Security::urlHasUserinfo($url)) {
+            return ['The address of this panel must not contain a username or password. '
+                . 'Enter it as https://host/path only.'];
         }
         if (Security::safeUrl($url) === '#') {
             return ['The address of this panel must be a plain http:// or https:// URL.'];

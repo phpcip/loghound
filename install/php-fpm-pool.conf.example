@@ -114,11 +114,33 @@ php_admin_value[error_log]          = /opt/loghound/var/php-error.log
 ; Only used when auth.mode is 'session'. Kept inside the application's own
 ; var/ directory rather than the shared /var/lib/php/sessions, where any other
 ; pool on the box could read the session files.
+;
+; php_admin_value vs php_value, and it matters here:
+;
+;   php_admin_value LOCKS the entry. ini_set() and anything built on it fail
+;                   for the rest of the request. Right for a setting the
+;                   application must not be able to relax.
+;   php_value       is a DEFAULT the application may override at runtime.
+;                   Right for a setting the application computes per request.
+;
+; public/index.php calls session_set_cookie_params() with samesite Strict and
+; secure set from whether THIS request arrived over TLS. Both of those went
+; through php_admin_value here, so both were ignored, and the pool delivered
+; what it said rather than what the application asked for: SameSite=Lax on
+; every install — weaker than the Strict the code requests and cannot raise —
+; and Secure forced on, which is right on HTTPS and silently breaks sign-in on
+; a plain-HTTP install, because the browser is told never to send back the
+; cookie it was just given.
+;
+; So the three cookie attributes are php_value: a correct default for any path
+; that does not set them, overridable by the one that does. save_path and
+; use_strict_mode stay php_admin_value — the application never sets either, and
+; neither should be reachable from application code.
 php_admin_value[session.save_path]   = /opt/loghound/var/sessions
-php_admin_value[session.cookie_httponly] = 1
-php_admin_value[session.cookie_secure]   = 1
-php_admin_value[session.cookie_samesite] = Lax
 php_admin_value[session.use_strict_mode] = 1
+php_value[session.cookie_httponly] = 1
+php_value[session.cookie_secure]   = 1
+php_value[session.cookie_samesite] = Strict
 
 ; ---- Logging --------------------------------------------------------------
 ; Slow requests end up here. A panel page that takes more than 10 seconds is a

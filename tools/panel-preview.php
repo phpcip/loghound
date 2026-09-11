@@ -55,7 +55,7 @@ $config = [
     ],
     'beacon' => ['enabled' => false, 'secret' => ''],
     'solr'   => [
-        'mode'          => 'custom',
+        'mode'          => 'opensolr',
         'base_url'      => 'http://127.0.0.1:8983/solr',
         'hits_core'     => 'loghound_preview_hits',
         'sessions_core' => 'loghound_preview_sessions',

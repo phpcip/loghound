@@ -967,8 +967,17 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
 
 .storage-option.on { border-left: 2px solid var(--accent); padding-left: 20px; }
 
-table.checks td.wrap { min-width: 24ch; }
-table.checks .snippet { margin: 10px 0 0; white-space: pre-wrap; }
+table.checks td.wrap { min-width: 24ch; overflow-wrap: anywhere; }
+table.checks td:nth-child(2) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-width: 34ch;
+}
+table.checks .snippet {
+    margin: 10px 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
 
 .setup > .job { margin-top: 28px; }
 .setup > .job .job-step-label { overflow-wrap: anywhere; }
@@ -980,3 +989,270 @@ table.checks .snippet { margin: 10px 0 0; white-space: pre-wrap; }
     .setup-form input,
     .setup-form select { width: 100%; }
 }
+
+/* The sign-in page (src/Panel/Login.php) and the panel's sign-out control.
+
+   The page borrows the installer's shell — same container, same card, same form rules —
+   so signing in looks like the same product rather than a bare form on a white page. The
+   width is narrower than a setup step because there are two fields on it and a 900px
+   measure for two fields reads as a mistake. */
+
+.setup.login { max-width: 520px; }
+.setup.login h1 { font-size: 34px; }
+.setup.login .setup-lead { font-size: 17px; margin-bottom: 24px; }
+.setup.login > .card:first-of-type { margin-top: 0; }
+.login-form input[type="text"],
+.login-form input[type="password"] { width: 100%; }
+.login-form button { width: 100%; }
+.login-note { margin-top: 24px; font-size: 14px; line-height: 1.6; }
+.setup.login .foot { margin-top: 40px; }
+
+/* Sign out sits under the theme toggle, in the same quiet weight as the nav itself: it is
+   a thing you reach for once a day, not a call to action. */
+
+.side .signout { margin-top: 12px; }
+.side .signout button { width: 100%; text-align: left; }
+.signout-who { color: var(--faint); font-weight: 400; }
+
+@media (max-width: 900px) {
+    .side .signout { margin-top: 0; }
+    .side .signout button { width: auto; }
+}
+
+/* Opensolr index analytics (src/Panel/Indexes.php, Queries.php, Callers.php).
+
+   Appended, never woven in: four agents write in this tree and a rewrite of a shared
+   stylesheet is a merge conflict that silently loses somebody's work. Every rule below is
+   additive and scoped to markup only these three views emit. */
+
+/* A query shape. Monospaced because it is code, and clipped by its cell rather than by a
+   truncated string, so the whole thing stays selectable and readable to a screen reader.
+   The content is attacker-influenced — the field names in it were chosen by whoever queried
+   the index — so it is always set with textContent. */
+
+.shape { background: none; border: 0; padding: 0; font-size: 14px; color: var(--ink); }
+td .shape { white-space: nowrap; }
+
+/* The recorded example inside an expanded shape row. Unlike .snippet this WRAPS: a full
+   Solr request URL is routinely two thousand characters and a horizontal scrollbar on it is
+   unusable. */
+
+.snippet.request {
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 220px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+
+/* Fact pairs above the recorded example. Two columns on anything wider than a phone, one
+   column below, because a definition list that wraps mid-pair is unreadable. */
+
+.kv {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 6px 18px;
+    margin: 0 0 16px;
+    font-size: 14px;
+}
+.kv dt { color: var(--faint); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+.kv dd { margin: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+
+/* The correlation card's state explainer, which is a short piece of prose rather than a
+   one-line caption and needs a heading. */
+
+.note h4 {
+    margin: 0 0 8px;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--ink);
+}
+.note p { margin: 0 0 10px; }
+.note p:last-child { margin-bottom: 0; }
+
+/* The "not connected to Opensolr" explainer lists what the section would show. */
+
+.explain ul { margin: 0 0 16px; padding-left: 22px; max-width: 88ch; font-size: 16px; line-height: 1.6; }
+.explain li { margin-bottom: 6px; color: var(--muted); }
+.explain li strong { color: var(--ink); }
+
+@media (max-width: 640px) {
+    .kv { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+    .kv dd { margin-bottom: 10px; }
+}
+
+/* ---------------------------------------------------------------------------
+   Plan usage: the bandwidth strip, the meters and the retention window.
+
+   The visual weight here is deliberately lopsided and must stay that way.
+   Bandwidth is the only quota that cannot be reclaimed by deleting anything —
+   going over it makes Opensolr deny every request to the index, reads
+   included — so it gets an accent, an alert role and a place in the page
+   header on every view. Disk is managed by the rolling trim and never reaches
+   its quota, so it is rendered as plain type with no colour at all. Giving the
+   two equal weight would tell the operator both need watching, and only one
+   does.
+   --------------------------------------------------------------------------- */
+
+/* The strip in the page header. A quiet line of type until the level says
+   otherwise; the accent appears only at the point action is worth taking. */
+
+.bwstrip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 14px;
+    color: var(--faint);
+}
+.bwstrip-label {
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 600;
+    font-size: 13px;
+}
+.bwstrip .meter { width: 92px; }
+.bwstrip-detail { color: var(--muted); }
+.bwstrip-say { color: var(--accent-ink); font-weight: 600; }
+.bwstrip-link {
+    color: var(--muted);
+    border-bottom: 1px solid var(--hairline);
+    text-decoration: none;
+}
+.bwstrip-link:hover { color: var(--ink); border-bottom-color: var(--ink); text-decoration: none; }
+
+.bwstrip-warn .bwstrip-label,
+.bwstrip-critical .bwstrip-label,
+.bwstrip-blocked .bwstrip-label { color: var(--accent-ink); }
+
+.bwstrip-blocked {
+    border-left: 2px solid var(--accent);
+    padding-left: 12px;
+}
+
+/* The bar fill is a neutral grey while everything is fine, and takes the accent
+   only in a state the operator is meant to act on. Scoped to these two
+   components rather than to .meter-fill globally: other views use the same bar
+   for proportions that are not warnings, and they are not this file's to
+   restyle. */
+
+.bwstrip .meter-fill,
+.meterrow .meter-fill { background: var(--c-declared); }
+.bwstrip .meter-fill-loud,
+.meterrow .meter-fill-loud { background: var(--accent); }
+
+/* One meter per index on the Plan usage view. */
+
+.meters { display: flex; flex-direction: column; gap: 24px; }
+
+.meterrow { display: flex; flex-direction: column; gap: 8px; }
+.meterrow-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.meterrow-name { font-weight: 700; color: var(--ink); }
+.meterrow-role {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+}
+.meterrow-value { margin-left: auto; color: var(--muted); }
+.meterrow-note { margin: 0; font-size: 14px; color: var(--muted); }
+.meterrow .meter { height: 8px; }
+
+.meterrow-warn .meterrow-note,
+.meterrow-critical .meterrow-note,
+.meterrow-blocked .meterrow-note { color: var(--accent-ink); }
+
+/* The retention window. Informational: no colour, no state classes, no alarm.
+   How far back the data goes is a fact about the plan, not a problem. */
+
+.windowrow {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-bottom: 22px;
+    margin-bottom: 22px;
+    border-bottom: 1px solid var(--hairline);
+}
+.windowrow:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+.windowrow-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.windowrow-name { font-weight: 700; color: var(--ink); }
+.windowrow-role {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+}
+.windowrow-say { margin: 0; font-size: 15px; color: var(--muted); max-width: 88ch; }
+
+.stats-tight { gap: 0 28px; }
+
+/* The one disk condition that IS a fault: the trim could not free space and
+   the index is genuinely near the limit, so the blackout really is coming. */
+
+.callout {
+    border-left: 2px solid var(--hairline);
+    padding: 14px 0 14px 16px;
+    margin-bottom: 22px;
+}
+.callout h4 { margin: 0 0 6px; font-size: 15px; font-weight: 700; color: var(--ink); }
+.callout p { margin: 0; color: var(--muted); max-width: 88ch; }
+.callout-bad { border-left-color: var(--accent); }
+.callout-bad h4 { color: var(--accent-ink); }
+
+/* The consequence copy on the bandwidth card carries a rule, because it is the
+   one paragraph on the page an operator makes a decision from. */
+
+.note-hard { border-left-color: var(--accent); }
+
+/* The row of the limits table that is currently doing the deleting. */
+
+.row-on td { color: var(--ink); }
+
+/* ---------------------------------------------------------------------------
+   The vhost dimension.
+   --------------------------------------------------------------------------- */
+
+/* The host selector, in the page header next to the range picker. Rendered by
+   the front end and only when there is more than one host to choose between,
+   so single-site installs never see it. */
+
+.hostpick { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.hostpick label {
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--faint);
+}
+.hostpick select {
+    font: inherit;
+    color: var(--ink);
+    background: var(--page);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius);
+    padding: 4px 8px;
+    max-width: 260px;
+}
+
+/* AI crawlers had no colour of their own in the split bar; the four other
+   populations did, so the fifth was silently drawn as a declared crawler. */
+
+.bar-ai { background: var(--c-ai); }
+
+@media (max-width: 900px) {
+    .bwstrip .meter { width: 64px; }
+    .hostpick select { max-width: 180px; }
+}
+
+/* The mount a stepped scan renders its progress into, inside the card it belongs to.
+   Empty until a job starts and emptied again when one finishes, so a card that has
+   nothing running carries no leftover chrome. */
+
+.job-mount:empty { display: none; }
+.job-mount { margin-bottom: 22px; }
+.job-mount .job { margin: 0; }

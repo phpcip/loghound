@@ -1,10 +1,8 @@
 # The Loghound beacon
 
 `public/b.js` is a dependency-free script that a site embeds in one line. It ships as
-commented source — there is no build step anywhere in this project — which is about
-33 KB on disk and **roughly 12 KB over the wire**, because both shipped vhost examples
-serve it gzipped with a long cache lifetime. It does two things, and refuses to do
-anything else:
+commented source — there is no build step anywhere in this project — which is 33 KB on
+disk and **about 12 KB gzipped**. It does two things, and refuses to do anything else:
 
 1. **Measures how long a visitor was actually there.** Not "the page was open" —
    three separate clocks, never conflated.
@@ -49,7 +47,15 @@ configured values already filled in.
 
 **Serving `b.js`.** Serve it from the Loghound vhost with a long `Cache-Control`
 and a version query string (`b.js?v=3`) so an upgrade actually reaches visitors.
-It needs no special CORS headers itself; only `collect.php` does.
+Both shipped vhost examples do that — `max-age=604800, immutable` — and they also
+set `Access-Control-Allow-Origin: *` and `Timing-Allow-Origin: *` on it, because
+the beacon is embedded on other origins by design.
+
+**Compression is not set by those examples**, deliberately: on both
+Debian-family Apache and stock nginx it is a global setting, and overriding it
+per vhost surprises people. The 12 KB figure above assumes it is on. Check with
+`curl -sI -H 'Accept-Encoding: gzip' https://…/b.js` and look for
+`Content-Encoding: gzip`; without it every visitor downloads 33 KB.
 
 **Content-Security-Policy.** If the host site runs a CSP it needs
 `script-src https://loghound.example.com` and `connect-src
@@ -287,10 +293,9 @@ not evidence of anything. The coordinates never leave the browser.
 ### The hello exchange
 
 The beacon's first call carries no session id and no token, because it has
-neither. The collector derives the same `client_key` the tailer uses
-(`ip_net + sha1(ua)`), attaches to the session already open for it — or mints a
-provisional one, storing `client_key` so `loghound-score` can re-attach later —
-and returns:
+neither. That branch **mints; it does not authorise**, and it is protected by the
+rate limiter alone — which is why the limiter runs before it. The collector
+returns:
 
 ```
 HTTP/1.1 204 No Content
@@ -301,6 +306,24 @@ Access-Control-Expose-Headers: X-LH-S, X-LH-T
 
 Every later call presents both, and a missing, malformed, forged, expired (>12 h)
 or future-dated token is dropped.
+
+**The id it mints is always a fresh random value, never the id of the session
+already open for this client.** That is a deliberate change from an earlier design
+in which the collector looked the real session up by `client_key`
+(`ip_net + sha1(ua)`) and returned it. Returning the real id is a serious hole:
+this endpoint answers with `Access-Control-Allow-Origin: *`, so any page on the
+internet can make a CORS-simple POST from a visitor's browser — their IP, their
+User-Agent, therefore their `client_key` — read `X-LH-S` and `X-LH-T` off the
+response, and then submit whatever it likes about that visitor's *real* session.
+In a bot-detection product the obvious abuse is to report a human as headless
+automation.
+
+A provisional id costs nothing, because the staging row carries `client_key` as
+well as the session id and `State::beaconsFor()` matches on both:
+`loghound-score` re-attaches the staged rows to the real session once the log line
+has been tailed. **No open session is ever created here either** — a public
+endpoint must not be able to insert rows into `sessions_open`. The provisional id
+exists only to bind the HMAC token to something.
 
 > **A note on where SPEC.md is silent.** §6.3 requires the collector to answer
 > `204` with no body, always, so that it can never be used as an oracle for
@@ -318,10 +341,10 @@ otherwise attach that site's cookies to every beacon.
 
 ### Anti-forgery
 
-The token is `HMAC(secret, session_id|issued_at)` with `issued_at` carried in the
-clear and signed. That gives the collector a server-attested "this session began
-no earlier than X" without keeping per-beacon state, and it is what makes the
-timing check possible:
+The token is `HMAC(secret, session_id \0 origin | issued_at)` with `issued_at`
+carried in the clear and signed. That gives the collector a server-attested "this
+session began no earlier than X" without keeping per-beacon state, and it is what
+makes the timing check possible:
 
 ```
 ceiling = (now - issued_at + 60s slack)
@@ -340,6 +363,26 @@ session looking exactly like every other session with no beacon — that is,
 indistinguishable from a visitor on a slow connection. The lie is far more
 informative than the absence: nothing that is not deliberately inflating its dwell
 time ever does this.
+
+### The token is bound to an Origin
+
+`Origin` is part of the signed material, and `verifyToken()` recomputes with the
+`Origin` of the request presenting the token. A token minted for
+`https://example.com` is refused when presented from `https://attacker.example`,
+and the refusal is indistinguishable from any other rejection: same `204`, no
+staging row, no diagnostics.
+
+This is what closes the hole `Access-Control-Allow-Origin: *` would otherwise
+leave open. The endpoint has to be reachable from origins we do not know in
+advance — that is the whole point of a beacon on customer sites — so the allow-list
+cannot do the work, and binding the credential to the origin it was issued to does
+it instead.
+
+The value is lower-cased and capped at 255 bytes so a header differing only in case
+or padded to absurd length cannot mint two tokens that ought to be one. An absent
+`Origin` — a same-origin request, or a client that sends none — normalises to the
+empty string, which is a value like any other: consistent between mint and verify,
+and therefore still bound.
 
 ### Rate limiting
 

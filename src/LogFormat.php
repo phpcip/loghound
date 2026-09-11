@@ -27,6 +27,12 @@
  *  - Generated patterns use only bounded, non-nested quantifiers so they cannot backtrack
  *    catastrophically. A *user-supplied* pattern (`fromRegex`) is the one exception and must
  *    be vetted through Security::validateUserRegex() by the caller before it gets here.
+ *  - That vetting is a USABILITY probe, not a proof: it runs the candidate once against one
+ *    fixed subject, and `/^(?<remote_addr>(a+)+b) .../` passes it trivially while still
+ *    blowing up on an attacker-chosen log line. `parse()` therefore enforces its own
+ *    backtrack budget on every single match and treats exhaustion as a parse failure, so
+ *    the worst a hostile line can cost is one bounded match attempt — whatever the ambient
+ *    `pcre.backtrack_limit` of the process happens to be.
  *
  * @package Loghound
  * @license MIT
@@ -43,6 +49,22 @@ final class LogFormat
 
     /** Compiled to a key-path map applied to a decoded JSON object. */
     public const KIND_JSON = 'json';
+
+    /**
+     * PCRE match steps allowed for ONE line, enforced by parse().
+     *
+     * Sized against the ingest path rather than guessed: the tailer refuses any line longer
+     * than `ingest.max_line_bytes` (16 KB by default) before a parser ever sees it, and the
+     * generated patterns are linear, so a legitimate line of that size costs a few tens of
+     * thousands of steps at the very worst. 200 000 leaves an order of magnitude of headroom
+     * for a real line while cutting a catastrophic pattern off in about a millisecond
+     * instead of letting it run for the age of the universe.
+     *
+     * It is applied to EVERY regex-kind format, not only to operator-supplied ones: the
+     * built-in patterns are believed non-backtracking, and a budget that only guards the
+     * patterns we already trust would guard nothing.
+     */
+    private const BACKTRACK_LIMIT = 200000;
 
     /**
      * Apache directive letter => [canonical field name, pattern type].
@@ -155,6 +177,33 @@ final class LogFormat
     /** @var string[] Field name per capture group, in capture order. */
     private array $fields = [];
 
+    /**
+     * Lines abandoned because they exhausted BACKTRACK_LIMIT.
+     *
+     * Kept per instance so the condition is COUNTED rather than silent: a pattern that trips
+     * this on real traffic is a broken pattern, and the number is what tells an operator
+     * that their custom regex — not their log — is the problem.
+     */
+    private int $backtrackFailures = 0;
+
+    /**
+     * The same regex under a cache key of its own, matched with the JIT switched off.
+     *
+     * See parse() for the failure this exists to survive. Null means "no retry is possible
+     * for this format", which is the state for a JSON format, for a pattern this class could
+     * not take apart, and for one whose derived twin turned out not to compile.
+     */
+    private ?string $patternNoJit = null;
+
+    /**
+     * Lines that only parsed on the no-JIT retry.
+     *
+     * Counted for the same reason as backtrackFailures: it is the number that tells an
+     * operator their traffic contains lines long enough to defeat the PCRE JIT, which is
+     * worth knowing and is invisible otherwise.
+     */
+    private int $jitRetries = 0;
+
     /** @var array<string,string> JSON key path (dotted) => canonical field name. */
     private array $jsonMap = [];
 
@@ -205,6 +254,36 @@ final class LogFormat
         $this->timeFormat = $timeFormat;
         $this->unescape   = $unescape;
         $this->urldecode  = $urldecode;
+
+        if ($kind === self::KIND_REGEX) {
+            $this->patternNoJit = self::twinPattern($pattern);
+        }
+    }
+
+    /**
+     * Derive a textually distinct twin of a delimited regex that matches exactly the same
+     * language.
+     *
+     * PHP caches compiled patterns by their TEXT, and the JIT decision is baked into the
+     * cached entry — `ini_set('pcre.jit', '0')` before a second `preg_match` of the same
+     * pattern string does nothing at all, because the second call is a cache hit on the
+     * entry that was already JIT-compiled. That is measured behaviour, not a guess, and it
+     * is why the retry in parse() needs a different string rather than a different setting.
+     *
+     * `(?#…)` is a PCRE comment: zero-width, inert under every modifier, and legal wherever
+     * an element may appear. It is appended at the END of the body rather than prepended,
+     * because a pattern is allowed to begin with a start-of-pattern verb such as `(*UTF)`
+     * that PCRE requires to be genuinely first, and nothing has that constraint at the tail.
+     *
+     * Returns null when the pattern is not in the delimited form this class produces and
+     * Security::validateUserRegex() enforces, in which case there is simply no retry.
+     */
+    private static function twinPattern(string $pattern): ?string
+    {
+        if (!preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/s', $pattern, $m)) {
+            return null;
+        }
+        return $m[1] . $m[2] . '(?#lh-nojit)' . $m[1] . $m[3];
     }
 
     /**
@@ -386,6 +465,18 @@ final class LogFormat
      * limit, which emits a warning and returns false, and that is a normal expected outcome
      * here rather than an error worth reporting.
      *
+     * The backtrack budget is set immediately around the match and restored immediately
+     * after, whatever the outcome. Doing it here rather than at save time is what makes the
+     * guard real: Security::validateUserRegex() only proves a pattern is quick against ONE
+     * subject, and the subject that matters is chosen by whoever is hitting the origin
+     * server. Doing it per call rather than once at startup keeps the process-wide setting
+     * untouched for every other user of PCRE in the daemon and in the panel.
+     *
+     * Exhausting the budget is a PARSE FAILURE, counted in backtrackFailures() and returned
+     * as null exactly like a line that simply does not match — the tail daemon then counts
+     * it in `parse_errors` and samples it to var/badlines.log, so it is visible and nothing
+     * is lost. It is never an exception: one hostile line must not stop ingestion.
+     *
      * Named groups, which fromRegex() produces, are addressable by name; generated patterns
      * are read by index. Values are percent-decoded only for the formats that declare it,
      * CloudFront being the one that does, so a real path containing a literal '%20' in an
@@ -405,8 +496,22 @@ final class LogFormat
         }
 
         $m = [];
+        $ambient = ini_get('pcre.backtrack_limit');
+        ini_set('pcre.backtrack_limit', (string) self::BACKTRACK_LIMIT);
         $ok = @preg_match($this->pattern, $line, $m);
+        $err = preg_last_error();
+
+        if ($ok !== 1 && $err === PREG_JIT_STACKLIMIT_ERROR) {
+            [$ok, $err, $m] = $this->retryWithoutJit($line);
+        }
+
+        if ($ambient !== false) {
+            ini_set('pcre.backtrack_limit', $ambient);
+        }
         if ($ok !== 1) {
+            if ($err === PREG_BACKTRACK_LIMIT_ERROR) {
+                $this->backtrackFailures++;
+            }
             return null;
         }
 
@@ -425,6 +530,57 @@ final class LogFormat
             $out[$field] = $value;
         }
         return $out;
+    }
+
+    /**
+     * Match one line again with the PCRE JIT switched off. AT MOST ONCE PER LINE.
+     *
+     * The JIT keeps its backtracking frames on a stack of its own, sized by
+     * `pcre.jit_stacklimit` and NOT settable at runtime. With the shipped `apache_combined`
+     * pattern that stack runs out somewhere around 9 KB of line, and `preg_match` then
+     * returns false with PREG_JIT_STACKLIMIT_ERROR — on an entirely ordinary line, a long
+     * URL or a padded User-Agent, that the interpreter parses without difficulty. Since
+     * `ingest.max_line_bytes` defaults to 16384, every line between about 9 KB and that cap
+     * was being counted as a parse error and sampled to var/badlines.log as if the format
+     * were wrong. It is not: the pattern is linear and the line is fine.
+     *
+     * WHY THIS IS NOT A SLOW PATH. It is entered only on that one error code, which no
+     * healthy line produces; it runs exactly one further match and never loops; the
+     * caller's backtrack budget is still in force around it, so the interpreter is bounded
+     * by BACKTRACK_LIMIT exactly as the first attempt was; and the twin pattern is compiled
+     * once and then served from PHP's pattern cache like any other. If the twin turns out
+     * not to compile, it is discarded so the next long line does not try again — one bad
+     * derivation must not put a failing compile in front of every line.
+     *
+     * The ini setting is restored whatever happens, so nothing else in the process — the
+     * panel, the scorer, another format — has its JIT silently turned off.
+     *
+     * @return array{0:int|false,1:int,2:array<int|string,string>} [result, error, matches]
+     */
+    private function retryWithoutJit(string $line): array
+    {
+        if ($this->patternNoJit === null) {
+            return [false, PREG_JIT_STACKLIMIT_ERROR, []];
+        }
+
+        $jit = ini_get('pcre.jit');
+        ini_set('pcre.jit', '0');
+
+        $m = [];
+        $ok = @preg_match($this->patternNoJit, $line, $m);
+        $err = preg_last_error();
+
+        if ($jit !== false) {
+            ini_set('pcre.jit', $jit);
+        }
+
+        if ($ok === 1) {
+            $this->jitRetries++;
+        } elseif ($err === PREG_INTERNAL_ERROR) {
+            $this->patternNoJit = null;
+        }
+
+        return [$ok, $err, $m];
     }
 
     /**
@@ -501,6 +657,46 @@ final class LogFormat
     public function name(): string
     {
         return $this->name;
+    }
+
+    /**
+     * How many lines this parser gave up on for exhausting the backtrack budget.
+     *
+     * Zero on a healthy format. Anything else means the pattern is pathological on the
+     * traffic this site actually receives, and the operator needs to be told which of their
+     * formats it is rather than left with an unexplained parse-error rate.
+     */
+    public function backtrackFailures(): int
+    {
+        return $this->backtrackFailures;
+    }
+
+    /**
+     * How many lines this parser could only match with the JIT switched off.
+     *
+     * Non-zero means the log contains lines long enough to exhaust the JIT's own stack —
+     * see retryWithoutJit(). Every one of them parsed correctly; the number is here so the
+     * condition is visible rather than merely survived.
+     */
+    public function jitRetries(): int
+    {
+        return $this->jitRetries;
+    }
+
+    /**
+     * Does this string look like a delimited PCRE rather than a LogFormat/log_format string?
+     *
+     * The stored `format` of a source is one of three things: a library format name, the
+     * operator's own webserver format string, or — for the SPEC §8 step 4 escape hatch — a
+     * delimited regex with named groups. Only the third is ambiguous with the second, so
+     * every consumer that resolves a stored format has to ask this question, and all of them
+     * must answer it the same way or a source that parses during setup stops parsing during
+     * ingestion. The delimiter set matches the one Security::validateUserRegex() accepts;
+     * this is a SHAPE test only and says nothing about whether the pattern is safe to run.
+     */
+    public static function isDelimitedRegex(string $candidate): bool
+    {
+        return (bool) preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/s', $candidate);
     }
 
     /** KIND_REGEX or KIND_JSON. */

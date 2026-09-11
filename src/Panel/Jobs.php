@@ -47,7 +47,10 @@ final class Jobs
     /** Finished jobs older than this are swept. */
     private const KEEP_SECONDS = 3600;
 
-    /** Job kinds the panel will start. Anything else is refused. */
+    /**
+     * The job kinds this class plans itself. Anything else must be supplied by the view
+     * hosting the job, through the constructor's plan registry.
+     */
     public const KINDS = ['solr_connection', 'opensolr_check', 'retention_preview'];
 
     /**
@@ -62,6 +65,9 @@ final class Jobs
     private Gateway $gw;
     private string $owner;
 
+    /** @var array<string,callable(array<string,mixed>):array<int,array{label:string,run:callable}>> */
+    private array $extraPlans;
+
     /**
      * Open (and if necessary create) the job store.
      *
@@ -69,13 +75,32 @@ final class Jobs
      * the ingest daemons own that schema and a panel table living in it would be a
      * migration collision waiting to happen.
      *
-     * @throws \RuntimeException when `var/` cannot be created.
+     * A view that hosts jobs of its own passes them in as `$extraPlans`, keyed by kind.
+     * The alternative — a closed const listing every kind in the application — meant a new
+     * view could not offer a stepped operation at all without editing this class, which is
+     * exactly the coupling the job store exists to avoid. A planner is handed the job's
+     * stored context so a kind can be parameterised; the view validates those parameters
+     * before `start()` ever sees them, because only the view knows what a valid target is.
+     *
+     * @param array<string,callable(array<string,mixed>):array<int,array{label:string,run:callable}>> $extraPlans
+     * @throws \RuntimeException when `var/` cannot be created, or a supplied kind collides
+     *                           with a built-in one.
      */
-    public function __construct(Config $cfg, Gateway $gw)
+    public function __construct(Config $cfg, Gateway $gw, array $extraPlans = [])
     {
-        $this->cfg   = $cfg;
-        $this->gw    = $gw;
-        $this->owner = self::owner();
+        foreach (array_keys($extraPlans) as $kind) {
+            if (!is_string($kind) || !preg_match('/^[a-z][a-z0-9_]{2,31}$/', $kind)) {
+                throw new \RuntimeException('Job kind is not a valid identifier.');
+            }
+            if (in_array($kind, self::KINDS, true)) {
+                throw new \RuntimeException('Job kind "' . $kind . '" is already built in.');
+            }
+        }
+
+        $this->cfg        = $cfg;
+        $this->gw         = $gw;
+        $this->extraPlans = $extraPlans;
+        $this->owner      = self::owner();
 
         $dir = dirname(__DIR__, 2) . '/var';
         if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
@@ -106,8 +131,28 @@ final class Jobs
                 cancelled INTEGER NOT NULL DEFAULT 0
             )'
         );
-        $this->db->exec('CREATE INDEX IF NOT EXISTS jobs_owner_kind ON jobs (owner, kind, state)');
+        $columns = [];
+        $info = $this->db->query('PRAGMA table_info(jobs)');
+        while ($info !== false && ($column = $info->fetchArray(SQLITE3_ASSOC)) !== false) {
+            $columns[] = (string) $column['name'];
+        }
+        if (!in_array('target', $columns, true)) {
+            $this->db->exec('ALTER TABLE jobs ADD COLUMN target TEXT NOT NULL DEFAULT \'\'');
+        }
+
+        $this->db->exec('CREATE INDEX IF NOT EXISTS jobs_owner_kind ON jobs (owner, kind, target, state)');
         $this->sweep();
+    }
+
+    /**
+     * Every kind this instance will start: the built-ins plus whatever the hosting view
+     * registered. A kind absent from this list is refused before the store is touched.
+     *
+     * @return array<int,string>
+     */
+    public function kinds(): array
+    {
+        return array_merge(self::KINDS, array_keys($this->extraPlans));
     }
 
     /**
@@ -156,31 +201,52 @@ final class Jobs
     }
 
     /**
-     * Start a job, or return the one already running for this kind and owner.
+     * Start a job, or return the one already running for this kind, owner and target.
      *
      * Returning the existing job is the entire idempotency story: a double-clicked button,
      * a refreshed tab and a second window all converge on one job id instead of starting
-     * three copies of the work.
+     * three copies of the work. A parameterised kind narrows that further by target, so
+     * scanning one index does not hand back the job that is still scanning a different
+     * one — which would report the wrong index's progress under the right index's heading.
      *
+     * Parameters are the caller's already-validated values; they are re-checked here as
+     * scalars under a size cap, because the store must not become a place to park
+     * arbitrary structures and because a planner reads them back on every poll.
+     *
+     * @param array<string,scalar|null> $params
      * @return array<string,mixed> The job shaped for the browser, or an `error` key.
      */
-    public function start(string $kind): array
+    public function start(string $kind, array $params = []): array
     {
-        if (!in_array($kind, self::KINDS, true)) {
+        if (!in_array($kind, $this->kinds(), true)) {
             return ['error' => 'Unknown operation.'];
         }
 
+        $clean = self::normaliseParams($params);
+        if ($clean === null) {
+            return ['error' => 'Those operation parameters are not acceptable.'];
+        }
+
+        $target = $clean === [] ? '' : hash('sha256', (string) json_encode($clean));
+
         $stmt = $this->db->prepare(
             'SELECT id FROM jobs
-              WHERE kind = :kind AND owner = :owner AND state IN (\'pending\', \'running\')
+              WHERE kind = :kind AND owner = :owner AND target = :target
+                AND state IN (\'pending\', \'running\')
               ORDER BY created DESC LIMIT 1'
         );
         $stmt->bindValue(':kind', $kind, SQLITE3_TEXT);
         $stmt->bindValue(':owner', $this->owner, SQLITE3_TEXT);
+        $stmt->bindValue(':target', $target, SQLITE3_TEXT);
         $res = $stmt->execute();
         $row = $res ? $res->fetchArray(SQLITE3_ASSOC) : false;
         if (is_array($row)) {
             return $this->get((string) $row['id']);
+        }
+
+        $plan = $this->plan($kind, $clean);
+        if ($plan === []) {
+            return ['error' => 'Unknown operation.'];
         }
 
         $steps = array_map(
@@ -190,26 +256,61 @@ final class Jobs
                 'note'   => null,
                 'detail' => null,
             ],
-            $this->plan($kind)
+            $plan
         );
 
         $id  = bin2hex(random_bytes(12));
         $now = time();
 
         $insert = $this->db->prepare(
-            'INSERT INTO jobs (id, owner, kind, state, step, total, label, steps, context, created, updated)
-             VALUES (:id, :owner, :kind, \'pending\', 0, :total, :label, :steps, \'{}\', :now, :now)'
+            'INSERT INTO jobs (id, owner, kind, target, state, step, total, label, steps, context, created, updated)
+             VALUES (:id, :owner, :kind, :target, \'pending\', 0, :total, :label, :steps, :context, :now, :now)'
         );
         $insert->bindValue(':id', $id, SQLITE3_TEXT);
         $insert->bindValue(':owner', $this->owner, SQLITE3_TEXT);
         $insert->bindValue(':kind', $kind, SQLITE3_TEXT);
+        $insert->bindValue(':target', $target, SQLITE3_TEXT);
         $insert->bindValue(':total', count($steps), SQLITE3_INTEGER);
         $insert->bindValue(':label', $steps[0]['label'] ?? 'Starting', SQLITE3_TEXT);
         $insert->bindValue(':steps', (string) json_encode($steps), SQLITE3_TEXT);
+        $insert->bindValue(':context', (string) json_encode($clean), SQLITE3_TEXT);
         $insert->bindValue(':now', $now, SQLITE3_INTEGER);
         $insert->execute();
 
         return $this->get($id);
+    }
+
+    /**
+     * Reduce job parameters to a flat, bounded, deterministically ordered scalar map.
+     *
+     * Returns null rather than a partial result when anything is out of shape, so a
+     * malformed parameter refuses the job instead of starting one that silently dropped
+     * the field naming its target. Sorting by key makes the target hash stable regardless
+     * of the order the browser sent the fields in.
+     *
+     * @param array<mixed> $params
+     * @return array<string,scalar|null>|null
+     */
+    private static function normaliseParams(array $params): ?array
+    {
+        if (count($params) > 12) {
+            return null;
+        }
+        $clean = [];
+        foreach ($params as $key => $value) {
+            if (!is_string($key) || !preg_match('/^[a-z][a-z0-9_]{0,31}$/', $key)) {
+                return null;
+            }
+            if ($value !== null && !is_scalar($value)) {
+                return null;
+            }
+            if (is_string($value) && strlen($value) > 256) {
+                return null;
+            }
+            $clean[$key] = $value;
+        }
+        ksort($clean);
+        return $clean;
     }
 
     /**
@@ -245,9 +346,9 @@ final class Jobs
             return $this->get($id);
         }
 
-        $plan  = $this->plan((string) $row['kind']);
         $steps = self::decodeArray((string) $row['steps']);
         $ctx   = self::decodeArray((string) $row['context']);
+        $plan  = $this->plan((string) $row['kind'], $ctx);
         $index = (int) $row['step'];
 
         if (!isset($plan[$index])) {
@@ -416,7 +517,7 @@ final class Jobs
      */
     public function latest(string $kind): ?array
     {
-        if (!in_array($kind, self::KINDS, true)) {
+        if (!in_array($kind, $this->kinds(), true)) {
             return null;
         }
         $stmt = $this->db->prepare(
@@ -509,20 +610,54 @@ final class Jobs
             'error'   => $row['error'] !== null ? self::redact((string) $row['error']) : null,
             'elapsed' => max(0, time() - (int) $row['created']),
             'done'    => in_array($row['state'], ['done', 'failed', 'cancelled'], true),
-            'result'  => self::decodeArray((string) $row['context']),
+            'result'  => self::redactDeep(self::decodeArray((string) $row['context'])),
         ];
+    }
+
+    /**
+     * Redact every string inside a structure on its way to the browser.
+     *
+     * `note`, `detail` and `error` were redacted and the job context was not, even though it
+     * is returned to the browser as `result` on every poll and is the one part of a job that
+     * holds whatever a step chose to keep — including, on the Opensolr views, text taken from
+     * the platform's own responses. A redactor applied to three fields out of four is a
+     * redactor somebody will assume covers the fourth.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private static function redactDeep($value)
+    {
+        if (is_string($value)) {
+            return self::redact($value);
+        }
+        if (is_array($value)) {
+            $out = [];
+            foreach ($value as $k => $v) {
+                $out[$k] = self::redactDeep($v);
+            }
+            return $out;
+        }
+        return $value;
     }
 
     /**
      * The step plan for a kind.
      *
      * Rebuilt on every request rather than stored, because a step is a closure and a
-     * closure cannot be serialised. Only a step's outcome is persisted.
+     * closure cannot be serialised. Only a step's outcome is persisted. A registered
+     * planner is consulted before the built-ins and is handed the job's context, which on
+     * the first call is exactly the parameters `start()` was given.
      *
+     * @param array<string,mixed> $ctx
      * @return array<int,array{label:string,run:callable}>
      */
-    private function plan(string $kind): array
+    private function plan(string $kind, array $ctx = []): array
     {
+        if (isset($this->extraPlans[$kind])) {
+            return ($this->extraPlans[$kind])($ctx);
+        }
+
         switch ($kind) {
             case 'solr_connection':
                 return self::planSolrConnection();

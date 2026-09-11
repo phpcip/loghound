@@ -20,6 +20,17 @@ namespace Loghound;
 
 final class Config
 {
+    /**
+     * The only storage backend there is.
+     *
+     * Loghound provisions and manages its own two indexes on Opensolr; it cannot do that on a
+     * Solr it does not administer. The key `solr.mode` survives as a constant so that a
+     * configuration written before the bring-your-own-Solr option was removed — which still
+     * carries `mode: custom` on disk — is refused by validate() with an explanation instead of
+     * being read as "some other backend" and silently ignored.
+     */
+    public const SOLR_MODE = 'opensolr';
+
     /** @var array<string,mixed> */
     private array $data;
 
@@ -47,17 +58,25 @@ final class Config
      * Identity. `base_url` is the panel's own public URL, e.g. https://loghound.example.com,
      * and is used to build the beacon snippet.
      *
-     * Solr backend. `mode` is 'opensolr', which provisions and manages indexes through the
-     * Opensolr API, or 'custom', which points at any Solr 9 the operator already runs;
-     * `base_url` is that Solr's URL in custom mode. The core names are EMPTY by default and
-     * filled in by the setup wizard. They must not be hardcoded: on Opensolr an index name is
-     * unique across the WHOLE PLATFORM, not just within one account, so a fixed default would
-     * collide for the second person who ever installs this — see newInstallId() and
-     * coreName(). `install_id` is the random per-installation token that makes those names
-     * unique; it is generated once at setup and never changed afterwards, because it is part
-     * of the identity of the two indexes and rotating it would orphan the data rather than
-     * rename it. Batching is softCommit only: a hard commit per batch would destroy
-     * throughput and is never needed for near-real-time visibility.
+     * Solr backend. `mode` is 'opensolr' and nothing else. Loghound provisions and manages its
+     * own two indexes through the Opensolr API — it creates them, uploads their configsets and
+     * reloads them — and it cannot do any of that on a Solr it does not administer, so pointing
+     * it at one was a promise the product could not keep. The key is retained rather than
+     * deleted because a configuration written before the removal still carries `mode: custom`
+     * on disk, and only a key that is still read can refuse it; validate() does exactly that.
+     *
+     * `base_url`, `http_user` and `http_pass` are the connection details of the node the
+     * provisioned indexes landed on, filled in from Opensolr::connectionDetails() during setup.
+     * src/Solr.php is mode-agnostic: it talks to a node it has credentials for and does not
+     * care how they got there. The core names are EMPTY by default and filled in by the setup
+     * wizard. They must not be hardcoded: on Opensolr an index name is unique across the WHOLE
+     * PLATFORM, not just within one account, so a fixed default would collide for the second
+     * person who ever installs this — see newInstallId() and coreName(). `install_id` is the
+     * random per-installation token that makes those names unique; it is generated once at
+     * setup and never changed afterwards, because it is part of the identity of the two indexes
+     * and rotating it would orphan the data rather than rename it. Batching is softCommit only:
+     * a hard commit per batch would destroy throughput and is never needed for near-real-time
+     * visibility.
      *
      * Opensolr managed backend. `api_key` is a secret, and `region` must be one of the values
      * returned by GET /regions.
@@ -89,8 +108,16 @@ final class Config
      * Scoring. `weights` holds per-rule overrides keyed by rule code, and an empty map means
      * the built-in weights are used.
      *
-     * Panel. `auth.mode` is none, basic or session. `trusted_proxies` lists the proxies whose
-     * X-Forwarded-For header we are willing to believe.
+     * Panel. `auth.mode` is 'basic' (the browser's own password prompt, which scripts and curl
+     * can also use) or 'session' (Loghound's own sign-in page, with a real sign-out); 'none' is
+     * the pre-setup state and makes the panel refuse to serve at all. `idle_timeout` ends a
+     * session that has done nothing for 30 minutes and `absolute_timeout` ends one 12 hours
+     * after sign-in however busy it has been — both session mode only. `lockout_attempts`
+     * failed sign-ins from one address within `lockout_window` seconds lock that address out
+     * until the window passes, and that applies to BOTH modes. `trusted_proxies` lists the
+     * proxies whose X-Forwarded-For header we are willing to believe, which is also what the
+     * lockout keys on: get it wrong behind a reverse proxy and every visitor shares one
+     * counter.
      *
      * @return array<string,mixed>
      */
@@ -101,7 +128,7 @@ final class Config
             'base_url'  => '',
 
             'solr' => [
-                'mode'          => 'opensolr',
+                'mode'          => self::SOLR_MODE,
                 'base_url'      => '',
                 'http_user'     => '',
                 'http_pass'     => '',
@@ -197,9 +224,27 @@ final class Config
             ],
 
             'auth' => [
-                'mode'          => 'none',
-                'user'          => '',
-                'password_hash' => '',
+                'mode'             => 'none',
+                'user'             => '',
+                'password_hash'    => '',
+                'idle_timeout'     => 1800,
+                'absolute_timeout' => 43200,
+                'lockout_attempts' => 8,
+                'lockout_window'   => 900,
+            ],
+
+            'quota' => [
+                'enabled'           => true,
+                'disk_high_water'   => Quota::DEFAULT_HIGH_WATER,
+                'disk_target'       => Quota::DEFAULT_TARGET,
+                'min_keep_hours'    => Quota::DEFAULT_MIN_KEEP_HOURS,
+                'refresh_sec'       => Quota::DEFAULT_REFRESH_SEC,
+                'refresh_docs'      => Quota::DEFAULT_REFRESH_DOCS,
+                'trim_cooldown_sec' => Quota::DEFAULT_COOLDOWN_SEC,
+                'max_trim_steps'    => Quota::DEFAULT_MAX_STEPS,
+                'bw_warn'           => Quota::DEFAULT_BW_WARN,
+                'bw_critical'       => Quota::DEFAULT_BW_CRITICAL,
+                'upgrade_url'       => 'https://opensolr.com/pricing',
             ],
 
             'trusted_proxies' => [],
@@ -357,6 +402,14 @@ final class Config
      * cannot leave a half-parsed config that locks the operator out. Mode 0640 keeps the
      * API key and HMAC secret away from other local users; the leading exit() guard means
      * a webserver that somehow serves the file as PHP still emits nothing.
+     *
+     * The temp is created with fopen('xb') and chmod'ed BEFORE any content is written:
+     * file_put_contents() would have created it under the umask, leaving a window in which
+     * a file containing every secret was world-readable. Exclusive creation also means an
+     * existing file or a planted symlink at that path is refused rather than followed.
+     *
+     * A shutdown handler and a sweep of older orphans between them make sure a copy of the
+     * secrets does not outlive the write. See sweepStaleTemps().
      */
     public function save(): void
     {
@@ -372,15 +425,61 @@ final class Config
             . "return " . $export . ";\n";
 
         $dir = dirname($this->path);
+        self::sweepStaleTemps($dir);
+
         $tmp = $dir . '/.loghound.' . bin2hex(random_bytes(6)) . '.tmp';
 
-        if (file_put_contents($tmp, $php, LOCK_EX) === false) {
+        $fh = @fopen($tmp, 'xb');
+        if ($fh === false) {
             throw new \RuntimeException('Unable to write config to ' . $dir);
         }
-        chmod($tmp, 0640);
+        @chmod($tmp, 0640);
+
+        register_shutdown_function(static function () use ($tmp): void {
+            if (is_file($tmp)) {
+                @unlink($tmp);
+            }
+        });
+
+        $written = fwrite($fh, $php);
+        fflush($fh);
+        fclose($fh);
+
+        if ($written === false || $written !== strlen($php)) {
+            @unlink($tmp);
+            throw new \RuntimeException('Unable to write config to ' . $dir);
+        }
+
         if (!rename($tmp, $this->path)) {
             @unlink($tmp);
             throw new \RuntimeException('Unable to move config into place: ' . $this->path);
+        }
+    }
+
+    /**
+     * Remove temp files an earlier write died before renaming.
+     *
+     * The temp carries the COMPLETE secret set — Opensolr API key, beacon HMAC secret, IP
+     * salt, Solr password, panel password hash. A fatal error, an OOM kill or a SIGKILL
+     * between the write and the rename used to leave that second copy on disk indefinitely,
+     * unknown to every other part of the system, including the uninstaller. The shutdown
+     * handler registered in save() covers an orderly death; this covers the kind that runs
+     * no handlers.
+     *
+     * Only files older than the grace period are touched, so a concurrent write in another
+     * process is never pulled out from under it.
+     */
+    private static function sweepStaleTemps(string $dir): void
+    {
+        $cutoff = time() - 300;
+
+        foreach ((array) glob($dir . '/.loghound.*.tmp') as $stale) {
+            if (!is_string($stale) || is_link($stale) || !is_file($stale)) {
+                continue;
+            }
+            if ((int) @filemtime($stale) < $cutoff) {
+                @unlink($stale);
+            }
         }
     }
 
@@ -396,6 +495,14 @@ final class Config
      * that the failure surfaces at setup rather than as an opaque API rejection halfway
      * through provisioning. The two cores must be distinct, or the scorer would write session
      * documents into the hits index and every aggregate would be wrong.
+     *
+     * `solr.mode: custom` gets a paragraph of its own rather than a one-line refusal, and this
+     * is the loud failure the removal of the bring-your-own-Solr option promised. An install
+     * that predates the removal has a working, populated config on disk; the three daemons all
+     * call this method at startup and abort on any error, so the operator meets this sentence
+     * the moment they upgrade rather than discovering weeks later that the panel has been
+     * pointed at a Solr Loghound can no longer manage. The message therefore has to say what
+     * changed, why, and what to do — a bare "invalid value" would leave them guessing.
      *
      * Every configured source must resolve inside an allowed root. A glob is expanded at read
      * time, so what is validated now is the literal directory part of it.
@@ -417,19 +524,25 @@ final class Config
     {
         $errors = [];
 
-        $solrMode = $this->get('solr.mode');
-        if (!in_array($solrMode, ['opensolr', 'custom'], true)) {
-            $errors[] = "solr.mode must be 'opensolr' or 'custom'.";
-        }
-        if ($solrMode === 'opensolr') {
+        $solrMode = (string) $this->get('solr.mode');
+        if ($solrMode !== self::SOLR_MODE) {
+            $errors[] = "solr.mode must be '" . self::SOLR_MODE . "'"
+                . ($solrMode === 'custom'
+                    ? ", and this configuration says 'custom'. Pointing Loghound at a Solr you "
+                        . 'run yourself is no longer supported: Loghound provisions and manages its own '
+                        . 'two indexes on Opensolr — creating them, uploading their configsets and '
+                        . 'reloading them — and it cannot do that on a Solr it does not administer. '
+                        . "Set solr.mode to 'opensolr' and re-run bin/loghound-setup to provision the "
+                        . 'two indexes on your Opensolr account. Your existing data is not moved by '
+                        . 'doing so.'
+                    : ', which is the only storage backend there is.');
+        } else {
             if ($this->get('opensolr.email') === '') {
-                $errors[] = 'opensolr.email is required in managed mode.';
+                $errors[] = 'opensolr.email is required — the indexes are provisioned on your Opensolr account.';
             }
             if ($this->get('opensolr.api_key') === '') {
-                $errors[] = 'opensolr.api_key is required in managed mode.';
+                $errors[] = 'opensolr.api_key is required — the indexes are provisioned on your Opensolr account.';
             }
-        } elseif ($solrMode === 'custom' && $this->get('solr.base_url') === '') {
-            $errors[] = 'solr.base_url is required when solr.mode is custom.';
         }
 
         foreach (['hits_core', 'sessions_core'] as $k) {
@@ -460,13 +573,7 @@ final class Config
             $errors[] = 'privacy.ip_salt must be at least 16 characters when ip_mode is hash.';
         }
 
-        $authMode = $this->get('auth.mode');
-        if (!in_array($authMode, ['none', 'basic', 'session'], true)) {
-            $errors[] = "auth.mode must be 'none', 'basic' or 'session'.";
-        }
-        if ($authMode === 'basic' && $this->get('auth.password_hash') === '') {
-            $errors[] = 'auth.password_hash is required when auth.mode is basic.';
-        }
+        $errors = array_merge($errors, $this->validateAuth());
 
         $roots = (array) $this->get('allowed_log_roots', []);
         foreach ((array) $this->get('sources', []) as $i => $src) {
@@ -481,6 +588,69 @@ final class Config
             if (Security::safePath($dir, $roots) === null) {
                 $errors[] = "sources[$i].path is outside allowed_log_roots: " . $src['path'];
             }
+        }
+
+        return $errors;
+    }
+
+    /**
+     * Validate the panel authentication section.
+     *
+     * The mode list is EXACTLY the modes that have an implementation behind them:
+     * Security::authModes() for the two an operator can choose, plus 'none', which is the
+     * pre-setup state and is implemented as "refuse to serve and point at the installer".
+     * Anything else is refused here rather than accepted and discovered later, because a
+     * configuration value that looks supported and does nothing is how an operator ends up
+     * with a panel that answers 403 forever — which is exactly what 'session' did before it
+     * was built.
+     *
+     * A mode that signs people in needs both halves of a credential, so the username is
+     * required alongside the hash. Without it, Security::verifyPassword compares the
+     * submitted name against '' and the account can only be reached by sending an empty
+     * username, which is a confusing way to be locked out.
+     *
+     * The timeouts and lockout numbers are clamped rather than rejected at runtime
+     * (Security::authLimits), so a value outside the range is reported here as the
+     * configuration mistake it is while the panel keeps working on the clamped one.
+     *
+     * @return string[]
+     */
+    private function validateAuth(): array
+    {
+        $errors = [];
+
+        $mode = $this->get('auth.mode');
+        $usable = array_keys(Security::authModes());
+
+        if (!in_array($mode, array_merge(['none'], $usable), true)) {
+            $errors[] = "auth.mode must be 'none', '" . implode("' or '", $usable) . "'.";
+            return $errors;
+        }
+
+        if (in_array($mode, $usable, true)) {
+            if ((string) $this->get('auth.password_hash', '') === '') {
+                $errors[] = 'auth.password_hash is required when auth.mode is ' . $mode . '.';
+            }
+            if ((string) $this->get('auth.user', '') === '') {
+                $errors[] = 'auth.user is required when auth.mode is ' . $mode . '.';
+            }
+        }
+
+        $bounds = [
+            'idle_timeout'     => [60, 86400],
+            'absolute_timeout' => [300, 2592000],
+            'lockout_attempts' => [1, 1000],
+            'lockout_window'   => [60, 86400],
+        ];
+        foreach ($bounds as $key => [$min, $max]) {
+            $value = $this->get('auth.' . $key);
+            if (!is_int($value) || $value < $min || $value > $max) {
+                $errors[] = "auth.$key must be a whole number between $min and $max.";
+            }
+        }
+
+        if ((int) $this->get('auth.absolute_timeout', 0) < (int) $this->get('auth.idle_timeout', 0)) {
+            $errors[] = 'auth.absolute_timeout must not be shorter than auth.idle_timeout.';
         }
 
         return $errors;

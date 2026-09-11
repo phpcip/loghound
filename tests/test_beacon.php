@@ -643,4 +643,55 @@ return [
         }
         return true;
     },
+
+    'the collector defines no function nothing calls' => function (): void {
+        $source = (string) file_get_contents(dirname(__DIR__) . '/public/collect.php');
+
+        preg_match_all('/^function\s+(lh_[a-z_]+)\s*\(/m', $source, $m);
+        lh_true($m[1] !== [], 'the collector should still define its helpers');
+
+        foreach ($m[1] as $name) {
+            $calls = preg_match_all('/\b' . preg_quote($name, '/') . '\s*\(/', $source);
+            lh_true(
+                $calls > 1,
+                $name . '() is defined in public/collect.php and never called. Dead code on the one '
+                . 'unauthenticated write path in the product is code an audit has to reason about '
+                . 'for nothing.'
+            );
+        }
+    },
+
+    'the collector no longer reads the real open session for a client' => function (): void {
+        $source = (string) file_get_contents(dirname(__DIR__) . '/public/collect.php');
+
+        lh_true(
+            !preg_match('/^\s*\$state->findOpenSession\(|->findOpenSession\(/m', $source),
+            'the hello branch mints a provisional id precisely so this endpoint never has to know '
+            . 'a visitor\'s real session id; a call to findOpenSession() here is that hole reopening'
+        );
+    },
+
+    'every docblock in the collector sits on the thing it describes' => function (): void {
+        $lines = explode("\n", (string) file_get_contents(dirname(__DIR__) . '/public/collect.php'));
+
+        $count = count($lines);
+        for ($i = 0; $i < $count; $i++) {
+            if (trim($lines[$i]) !== '*/') {
+                continue;
+            }
+            for ($j = $i + 1; $j < $count; $j++) {
+                $next = trim($lines[$j]);
+                if ($next === '') {
+                    continue;
+                }
+                lh_true(
+                    $next !== '/**',
+                    'line ' . ($j + 1) . ' opens a docblock immediately after another one closes, '
+                    . 'so the first describes nothing. A docblock that has drifted off its function '
+                    . 'is worse than no docblock: it describes the wrong thing with authority.'
+                );
+                break;
+            }
+        }
+    },
 ];

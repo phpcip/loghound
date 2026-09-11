@@ -123,11 +123,16 @@
  * ----------------------------------------------------------------------------
  * STATE ACCESS
  * ----------------------------------------------------------------------------
- * This file uses exactly three State methods, and no other part of the system:
+ * This file uses exactly two State methods, and no other part of the system:
  *
  *   State::rateLimit(string $key, int $perMinute): bool
- *   State::findOpenSession(string $clientKey, int $idleSec, int $nowMs): ?array
  *   State::stageBeacon(?string $sessionId, ?string $clientKey, array $payload): void
+ *
+ * findOpenSession() is deliberately NOT among them. The hello branch used to look up the
+ * client's real open session so it could hand back its id, and the fix for that hole — mint
+ * a provisional id instead, always — left the lookup with no caller. Reinstating it would
+ * reinstate the hole: this endpoint answers every origin, so anything it returns about a
+ * visitor's real session is returned to whoever asked, not to whoever owns it.
  *
  * Every call is wrapped so that a locked, corrupt or read-only database degrades
  * to "no data recorded" instead of a 500 with a stack trace in it. On a public
@@ -227,7 +232,6 @@ $ua = substr((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 512);
 $clientKey = Beacon::clientKey($ip, $ua);
 
 $state = lh_state();
-$idleSec = Security::clampInt($config->get('ingest.session_idle_sec', 1800), 60, 86400, 1800);
 
 $perMin = $beacon->ratePerMin();
 
@@ -334,11 +338,6 @@ function lh_allow(object $state, string $key, int $perMinute): bool
 }
 
 /**
- * Look up the open session for a client key, if the tailer has already opened one.
- *
- * Read-only: this never creates a session. See the hello branch for why.
- */
-/**
  * The Origin this request came from, normalised for use as signed token material.
  *
  * A cross-origin fetch always carries an Origin header, and the beacon is cross-origin
@@ -360,18 +359,6 @@ function lh_origin(): string
         return '';
     }
     return strtolower(substr($origin, 0, 255));
-}
-
-function lh_open_session(object $state, string $clientKey, int $idleSec): ?string
-{
-    try {
-        $row = $state->findOpenSession($clientKey, $idleSec, (int) (microtime(true) * 1000));
-        $id = is_array($row) ? (string) ($row['session_id'] ?? '') : '';
-        return $id !== '' ? $id : null;
-    } catch (\Throwable $e) {
-        error_log('loghound/collect.php: findOpenSession failed: ' . $e->getMessage());
-    }
-    return null;
 }
 
 /**

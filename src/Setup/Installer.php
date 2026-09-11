@@ -17,9 +17,11 @@
  * THE SECURITY MODEL, IN FULL
  *
  *   1. GONE WHEN CONFIGURED. isNeeded() is a hard check at the top of every request. Once
- *      config/loghound.php exists, has a usable sign-in and passes Config::validate(),
- *      every installer route is dead and the panel serves. There is no flag, no query
- *      parameter and no "re-run setup" button that gets past it.
+ *      config/loghound.php exists, has a usable sign-in and names both indexes, every
+ *      installer route is dead and the panel serves. There is no flag, no query parameter
+ *      and no "re-run setup" button that gets past it. The gate is STRUCTURAL and does not
+ *      consult Config::validate() — see isNeeded() for why making it do so was a disclosure
+ *      bug rather than a stricter check.
  *   2. FILESYSTEM PROOF BEFORE ANY WRITE. Before the configuration can be touched, the
  *      operator must paste the token from var/install-token (mode 0600). Reading it
  *      requires shell access as the service user or root. See Setup\Token.
@@ -235,9 +237,6 @@ final class Installer
             case self::STEP_STORAGE . ':provision':
                 $this->doProvision();
                 break;
-            case self::STEP_STORAGE . ':custom':
-                $this->doCustomSolr();
-                break;
             case self::STEP_STORAGE . ':test':
                 $this->startJob(Job::KIND_SOLRTEST, []);
                 break;
@@ -318,6 +317,17 @@ final class Installer
      * The browser sends indexes into the detection report, not paths: a path from a form
      * field would have to be trusted or re-derived, and there is no reason to accept one.
      *
+     * A PARTIALLY SUCCESSFUL CONFIRMATION IS STORED AND DESCRIBED, NOT ABORTED. This step
+     * used to redirect back with an error the moment any single source was refused, which
+     * made one un-widened outside-root file a dead end in the middle of an installation: the
+     * six files that were perfectly fine could not be confirmed, and there was no control on
+     * the screen that changed that. What is storable is now stored, and the refusals are
+     * named one by one with the reason for each — a step that did some of what was asked has
+     * to say exactly which part, rather than claiming success or pretending nothing happened.
+     *
+     * The step only fails outright when NOTHING could be stored, because then there is
+     * genuinely nothing to carry forward to the storage step.
+     *
      * @return never
      */
     private function doConfirmSources(): void
@@ -349,17 +359,50 @@ final class Installer
             }
         }
 
-        $errors = Steps::applySources($this->cfg, $chosen, $widen);
-        if ($errors !== []) {
-            $this->flash('error', implode(' ', $errors));
+        $result = Steps::applySourcesReport($this->cfg, $chosen, $widen);
+
+        if ($result['stored'] === []) {
+            $this->flash('error', self::sourcesOutcome($result));
             $this->redirect(self::STEP_SOURCES);
         }
 
         $this->persist(self::STEP_SOURCES);
         Detector::writeReport($this->cfg, Detector::report($sources, $this->cfg));
 
-        $this->flash('ok', count($chosen) . ' log file(s) confirmed.');
+        $refused = $result['refused'] !== [] || $result['widening'] !== [];
+        $this->flash($refused ? 'warn' : 'ok', self::sourcesOutcome($result));
         $this->redirect(self::STEP_STORAGE);
+    }
+
+    /**
+     * One sentence describing exactly what a confirmation did and did not store.
+     *
+     * Every refused path is named with its own reason rather than folded into a count: the
+     * operator has to be able to act on it — widen the roots, fix the format, remove the
+     * file — and "2 sources were refused" is not something anyone can act on.
+     *
+     * @param array{stored:string[],refused:array<int,array{path:string,message:string}>,widening:string[]} $result
+     */
+    private static function sourcesOutcome(array $result): string
+    {
+        $kept = count($result['stored']);
+        $text = $kept === 0
+            ? 'Nothing was stored.'
+            : $kept . ' log file' . ($kept === 1 ? '' : 's') . ' confirmed.';
+
+        $problems = $result['widening'];
+        foreach ($result['refused'] as $one) {
+            $problems[] = $one['message'];
+        }
+        if ($problems === []) {
+            return $text;
+        }
+
+        $count = count($result['refused']);
+        if ($count > 0) {
+            $text .= ' ' . $count . ($count === 1 ? ' was' : ' were') . ' not stored:';
+        }
+        return $text . ' ' . implode(' ', $problems);
     }
 
     /**
@@ -448,33 +491,6 @@ final class Installer
     }
 
     /**
-     * Store the details of a Solr the operator already runs, and test the connection.
-     *
-     * @return never
-     */
-    private function doCustomSolr(): void
-    {
-        $errors = Storage::saveCustom(
-            $this->cfg,
-            is_string($_POST['base_url'] ?? null) ? $_POST['base_url'] : '',
-            is_string($_POST['http_user'] ?? null) ? $_POST['http_user'] : '',
-            is_string($_POST['http_pass'] ?? null) ? $_POST['http_pass'] : '',
-            is_string($_POST['hits_core'] ?? null) ? $_POST['hits_core'] : '',
-            is_string($_POST['sessions_core'] ?? null) ? $_POST['sessions_core'] : ''
-        );
-
-        if ($errors !== []) {
-            $this->flash('error', implode(' ', $errors));
-            $this->redirect(self::STEP_STORAGE);
-        }
-
-        $this->persist(self::STEP_STORAGE);
-        unset($_POST['http_pass']);
-
-        $this->startJob(Job::KIND_SOLRTEST, []);
-    }
-
-    /**
      * Store the privacy answers and generate the secrets that depend on them.
      *
      * @return never
@@ -517,7 +533,8 @@ final class Installer
             $this->cfg,
             is_string($_POST['user'] ?? null) ? $_POST['user'] : '',
             is_string($_POST['password'] ?? null) ? $_POST['password'] : '',
-            is_string($_POST['password2'] ?? null) ? $_POST['password2'] : ''
+            is_string($_POST['password2'] ?? null) ? $_POST['password2'] : '',
+            is_string($_POST['auth_mode'] ?? null) ? $_POST['auth_mode'] : 'basic'
         ));
 
         unset($_POST['password'], $_POST['password2']);
@@ -744,13 +761,21 @@ final class Installer
      * Held in the session rather than passed through the query string: a message can
      * quote a path or an API error, and neither belongs in a URL that ends up in a browser
      * history or a referer header.
+     *
+     * Three kinds, because two could not describe a step that partly worked: 'ok' did all of
+     * it, 'warn' did some of it and says which part it did not, 'error' did none of it.
+     * Anything unrecognised is an error — the severity a caller did not ask for is the one
+     * that cannot hide a problem.
      */
     private function flash(string $kind, string $text): void
     {
         if (session_status() !== PHP_SESSION_ACTIVE) {
             session_start();
         }
-        $_SESSION['lh_setup_flash'] = ['kind' => $kind === 'ok' ? 'ok' : 'error', 'text' => $text];
+        $_SESSION['lh_setup_flash'] = [
+            'kind' => in_array($kind, ['ok', 'warn'], true) ? $kind : 'error',
+            'text' => $text,
+        ];
     }
 
     /**

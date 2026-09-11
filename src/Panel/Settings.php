@@ -8,6 +8,14 @@
  * rendered as the records they would become, a confidence percentage is printed, and
  * nothing is ingested from that source until someone presses "Looks right".
  *
+ * THE SOURCE LIST IS EDITABLE FOR THE LIFE OF THE INSTALLATION, not only during setup. A
+ * host added three months after the install used to mean hand-editing a PHP file that
+ * deliberately lives outside the document root at mode 0640, so the three actions that make
+ * a full loop are all here: `rescan` re-runs discovery, `confirm_source` starts ingesting a
+ * file, `remove_source` stops. The rescan is a stepped job rather than a plain POST because
+ * it walks the webserver configuration and samples up to twenty files, which is exactly the
+ * kind of work that outlives PHP-FPM's execution limit; see rescanPlan().
+ *
  * The page also owns the settings that change what gets stored about people — IP privacy
  * mode and retention — which are given their own section and plain-language consequences
  * rather than being buried in a list of toggles.
@@ -28,9 +36,13 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\Config;
+use Loghound\LogDetect;
 use Loghound\Security;
+use Loghound\Setup\Detector;
+use Loghound\Setup\Steps;
 
-final class Settings extends Controller
+final class Settings extends Controller implements JobHost
 {
     /**
      * Where `bin/loghound-setup` is expected to leave its detection report.
@@ -42,6 +54,17 @@ final class Settings extends Controller
      * samples:[{raw, parsed:{field:value}}]}]}
      */
     private const DETECT_FILE = __DIR__ . '/../../var/detect.json';
+
+    /**
+     * The job kind that re-runs log discovery, registered by this view rather than built in.
+     *
+     * Not a plain POST action. Discovery walks the Apache and nginx configuration trees,
+     * following every Include, and then tails and grades up to twenty candidate files. On a
+     * box with twenty vhosts that is comfortably capable of outliving the reference install's
+     * `max_execution_time = 60`, and an action that can be killed halfway is an action that
+     * leaves the operator with a dead tab and no idea whether it ran.
+     */
+    private const KIND_RESCAN = 'source_rescan';
 
     public function slug(): string
     {
@@ -77,26 +100,163 @@ final class Settings extends Controller
     }
 
     /**
+     * Every job kind this view will start: the built-ins plus the ones it plans itself.
+     *
+     * The rescan is withheld in demo mode. Demo mode fabricates a traffic world and serves a
+     * fabricated detection report, so a button on it that walked the real machine's webserver
+     * configuration and overwrote the real `var/detect.json` would be doing something the
+     * banner at the top of the page says is not happening. Withholding the kind here refuses
+     * it at start, at poll and at cancel in one place rather than three.
+     *
+     * @return array<int,string>
+     */
+    private function jobKinds(): array
+    {
+        return array_merge(Jobs::KINDS, array_keys($this->jobPlans()));
+    }
+
+    /**
+     * Planners for the job kinds this view supplies, keyed by kind.
+     *
+     * @return array<string,callable(array<string,mixed>):array<int,array{label:string,run:callable}>>
+     */
+    private function jobPlans(): array
+    {
+        if ($this->gw->isDemo()) {
+            return [];
+        }
+        return [self::KIND_RESCAN => static fn (array $ctx): array => self::rescanPlan()];
+    }
+
+    /** The job store for this view, with this view's own planners registered. */
+    private function jobs(): Jobs
+    {
+        return new Jobs($this->cfg, $this->gw, $this->jobPlans());
+    }
+
+    /**
+     * Re-run log discovery and republish the detection report, in two bounded steps.
+     *
+     * SPLIT WHERE THE TIME ACTUALLY GOES. Step one reads the webserver configuration, which
+     * is the unbounded half — it follows Include directives through whatever tree the
+     * operator has — and stores only the small metadata map it produced. Step two samples and
+     * grades each candidate, which is two hundred lines read from the end of each file, and
+     * writes the report. Neither step is anywhere near the execution limit on its own, which
+     * is the entire point of running this as a job.
+     *
+     * Nothing here ingests anything and nothing here changes the configuration: a rescan
+     * republishes what is on the machine, and a source only starts being read when a human
+     * presses "Looks right" (SPEC §8). Confirmations already in the config survive, because
+     * Detector::report() carries them forward.
+     *
+     * Sample log lines are attacker-chosen bytes, so they go into the report file and never
+     * into the job context, which travels back to the browser on every poll.
+     *
+     * @return array<int,array{label:string,run:callable}>
+     */
+    private static function rescanPlan(): array
+    {
+        return [
+            [
+                'label' => 'Looking for access logs',
+                'run'   => static function (array $ctx, Config $cfg, Gateway $gw): array {
+                    $candidates = Detector::candidates($cfg, null);
+                    $found = count($candidates);
+
+                    return [
+                        'note'    => $found . ' candidate file' . ($found === 1 ? '' : 's'),
+                        'detail'  => $found === 0
+                            ? 'Nothing matched your webserver configuration or the usual locations. '
+                                . 'A path can still be added by hand with bin/loghound-setup.'
+                            : 'Read from your webserver configuration where it could be, and from the '
+                                . 'usual locations where it could not.',
+                        'context' => ['candidates' => $candidates],
+                    ];
+                },
+            ],
+            [
+                'label' => 'Reading each file and saving the report',
+                'run'   => static function (array $ctx, Config $cfg, Gateway $gw): array {
+                    $candidates = is_array($ctx['candidates'] ?? null)
+                        ? $ctx['candidates']
+                        : Detector::candidates($cfg, null);
+
+                    $sources = [];
+                    foreach ($candidates as $path => $meta) {
+                        $sources[] = Detector::examine($cfg, (string) $path, (array) $meta);
+                    }
+
+                    $written = Detector::writeReport($cfg, Detector::report($sources, $cfg));
+                    if ($written === null) {
+                        return [
+                            'ok'     => false,
+                            'note'   => 'not saved',
+                            'detail' => 'The detection report could not be written. Check that var/ exists '
+                                . 'and is writable by the user this panel runs as.',
+                        ];
+                    }
+
+                    $examined = count($sources);
+                    return [
+                        'note'    => $examined . ' file' . ($examined === 1 ? '' : 's') . ' examined',
+                        'detail'  => 'The review below has been rebuilt. Nothing is ingested from a new '
+                            . 'file until you confirm it.',
+                        'context' => ['candidates' => [], 'examined' => $examined],
+                    ];
+                },
+            ],
+        ];
+    }
+
+    /**
      * The newest job of a requested kind belonging to this operator.
      *
-     * The kind is checked against Jobs::KINDS before the store is touched, and the store
-     * scopes every lookup to the caller's own session, so this cannot be used to read
+     * The kind is checked against this view's own list before the store is touched, and the
+     * store scopes every lookup to the caller's own session, so this cannot be used to read
      * somebody else's operation.
      *
      * @return array<string,mixed>
      */
     private function latestJob(): array
     {
-        $kind = self::param('kind', Jobs::KINDS, '');
+        $kind = self::param('kind', $this->jobKinds(), '');
         if ($kind === '') {
             return ['error' => 'Unknown operation.'];
         }
         try {
-            $job = (new Jobs($this->cfg, $this->gw))->latest($kind);
+            $job = $this->jobs()->latest($kind);
         } catch (\Throwable $e) {
             return ['error' => 'The job store is unavailable.'];
         }
         return $this->envelope(['job' => $job]);
+    }
+
+    /**
+     * Act on a job only if it is one of THIS view's kinds.
+     *
+     * The store scopes every lookup to the signed-in operator, so an id can only ever name a
+     * job they own — but ownership is not enough. Several views accept POSTs and each
+     * registers a different set of planners, so advancing a job of another view's kind would
+     * rebuild it against a plan that does not contain its steps: the store would find no step
+     * at the job's index and mark an operation that had barely begun as finished. Checking
+     * the kind first turns that into a refusal.
+     *
+     * A job of the wrong kind is reported exactly as one that does not exist, so an id cannot
+     * be probed for which view owns it.
+     *
+     * @param callable(Jobs,string):array<string,mixed> $fn
+     * @return array<string,mixed>
+     */
+    private function onOwnJob(Jobs $jobs, string $id, callable $fn): array
+    {
+        if ($id === '') {
+            return ['error' => 'That operation is no longer available. Start it again.'];
+        }
+        $job = $jobs->get($id);
+        if (!isset($job['kind']) || !in_array($job['kind'], $this->jobKinds(), true)) {
+            return ['error' => 'That operation is no longer available. Start it again.'];
+        }
+        return $fn($jobs, $id);
     }
 
     /**
@@ -107,13 +267,18 @@ final class Settings extends Controller
      * exactly like any other state-changing request. Failure to open the store is
      * reported as a failure, never silently ignored.
      *
+     * Declared `never` rather than `void`: both paths out of this method end in
+     * sendJson(), which exits. Saying so in the signature is what lets post() write
+     * `return $this->jobJson(...)` for each job case and stay exhaustive, instead of
+     * relying on a fall-through that happens to be harmless only because this method
+     * never comes back.
+     *
      * @param callable(Jobs):array<string,mixed> $fn
-     * @return never
      */
-    private function jobJson(callable $fn): void
+    private function jobJson(callable $fn): never
     {
         try {
-            $jobs = new Jobs($this->cfg, $this->gw);
+            $jobs = $this->jobs();
         } catch (\Throwable $e) {
             error_log('[loghound-panel] job store: ' . Jobs::redact($e->getMessage()));
             self::sendJson(['error' => 'The job store could not be opened. Check that var/ is writable.'], 500);
@@ -130,6 +295,16 @@ final class Settings extends Controller
      * once validation passes, so a bad form submission cannot leave a config that stops
      * the daemons from starting.
      *
+     * EVERY arm of the switch returns. The three job cases used to fall through, and were
+     * correct only because jobJson() exits before the next case can run — so moving a case,
+     * or giving jobJson() a way to come back, would have silently started running one
+     * action's handler after another's.
+     *
+     * There is no `rescan` arm. A rescan is started through `job_start` with this view's own
+     * kind, because it is a stepped job — see rescanPlan() for why it cannot be synchronous.
+     * `remove_source` is destructive and is reachable only from here, which is only reachable
+     * on POST: the front controller routes GET to api() and body(), neither of which writes.
+     *
      * @return string The redirect query string to send the browser to.
      */
     public function post(): string
@@ -140,6 +315,9 @@ final class Settings extends Controller
             case 'confirm_source':
                 return $this->confirmSource();
 
+            case 'remove_source':
+                return $this->removeSource();
+
             case 'privacy':
                 return $this->savePrivacy();
 
@@ -149,14 +327,34 @@ final class Settings extends Controller
             case 'ui':
                 return $this->saveUi();
 
+            case 'auth_mode':
+                return $this->saveAuthMode();
+
             case 'job_start':
-                $this->jobJson(fn (Jobs $jobs): array => $jobs->start(self::postParam('kind', Jobs::KINDS)));
+                return $this->jobJson(function (Jobs $jobs): array {
+                    $kind = self::postParam('kind', $this->jobKinds());
+                    return $kind === ''
+                        ? ['error' => 'Unknown operation.']
+                        : $jobs->start($kind);
+                });
 
             case 'job_poll':
-                $this->jobJson(fn (Jobs $jobs): array => $jobs->advance(self::postJobId()));
+                return $this->jobJson(
+                    fn (Jobs $jobs): array => $this->onOwnJob(
+                        $jobs,
+                        self::postJobId(),
+                        static fn (Jobs $j, string $id): array => $j->advance($id)
+                    )
+                );
 
             case 'job_cancel':
-                $this->jobJson(fn (Jobs $jobs): array => $jobs->cancel(self::postJobId()));
+                return $this->jobJson(
+                    fn (Jobs $jobs): array => $this->onOwnJob(
+                        $jobs,
+                        self::postJobId(),
+                        static fn (Jobs $j, string $id): array => $j->cancel($id)
+                    )
+                );
 
             default:
                 return '?v=settings&err=unknown_action';
@@ -218,6 +416,20 @@ final class Settings extends Controller
      * is added to `sources` in the config, which is what actually enables ingestion. The
      * path is re-validated against `allowed_log_roots` on the way in: a detection file is
      * a file on disk, and a file on disk is not automatically trustworthy.
+     *
+     * THE STORED SHAPE IS THE ONE Setup\Steps::applySources() PRODUCES, and it has to be:
+     * the installer and this page are documented as interchangeable, so a source confirmed
+     * in either must ingest identically. `format_name` is stored only when it names a format
+     * in the built-in library; anything else — the operator's own LogFormat/log_format
+     * string copied out of their webserver config, or a custom regex from the SPEC §8 step 4
+     * escape hatch — is stored as `format_string`, which is the actual definition. This page
+     * used to store `format_name` unconditionally, so a custom-regex source confirmed here
+     * ended up with the literal word "custom" as its format and the tailer, which resolves a
+     * stored format by library name and otherwise by compiling it, could make nothing of it.
+     *
+     * A source with no usable format is refused rather than stored with a guess, for the
+     * same reason applySources() refuses it: SPEC §8 forbids ingesting on a guessed format,
+     * and 'combined' was a guess with a friendly name.
      */
     private function confirmSource(): string
     {
@@ -239,11 +451,16 @@ final class Settings extends Controller
             return '?v=settings&err=path_not_allowed';
         }
 
+        $stored = self::storedFormat($found);
+        if ($stored === '') {
+            return '?v=settings&err=no_usable_format';
+        }
+
         $sources = (array) $this->cfg->get('sources', []);
         $already = false;
         foreach ($sources as $i => $s) {
             if (($s['path'] ?? null) === $path) {
-                $sources[$i]['format'] = (string) ($found['format_name'] ?? 'combined');
+                $sources[$i]['format'] = $stored;
                 $sources[$i]['confirmed'] = true;
                 $already = true;
             }
@@ -251,7 +468,7 @@ final class Settings extends Controller
         if (!$already) {
             $sources[] = [
                 'path'      => $path,
-                'format'    => (string) ($found['format_name'] ?? 'combined'),
+                'format'    => $stored,
                 'host'      => (string) ($found['vhost'] ?? ''),
                 'confirmed' => true,
             ];
@@ -268,12 +485,105 @@ final class Settings extends Controller
     }
 
     /**
+     * Stop ingesting one configured log source.
+     *
+     * THE FORM NAMES THE SOURCE BY AN OPAQUE ID, NEVER BY A PATH OR A LIST POSITION, and the
+     * server resolves that id against its own stored list. A path would have to be trusted or
+     * re-derived, and a list index is worse still: the list is rebuilt on every render from a
+     * file on disk, so a stale tab could delete a row nobody was looking at. The id is derived
+     * from the stored path, so an id that matches nothing in the config matches nothing at
+     * all — there is no request that can remove an entry the config does not already hold.
+     *
+     * Both halves of the loop are undone: the entry leaves `sources`, which is what actually
+     * enables ingestion, and the detection report's `confirmed` flag is cleared so the source
+     * reappears in the review below awaiting a decision rather than silently vanishing.
+     * Nothing is deleted from Solr — documents already indexed from that file stay, because
+     * "stop reading this file" and "forget what this file said" are different requests and
+     * only one of them was made.
+     *
+     * Reachable on POST only: the front controller routes GET to api() and body().
+     */
+    private function removeSource(): string
+    {
+        $id = is_string($_POST['source'] ?? null) ? $_POST['source'] : '';
+        if (!preg_match('/^[0-9a-f]{16}$/', $id)) {
+            return '?v=settings&err=no_such_source';
+        }
+
+        $kept = [];
+        $removed = null;
+        foreach ((array) $this->cfg->get('sources', []) as $source) {
+            $path = is_array($source) ? (string) ($source['path'] ?? '') : '';
+            if ($path !== '' && hash_equals(self::sourceId($path), $id)) {
+                $removed = $path;
+                continue;
+            }
+            $kept[] = $source;
+        }
+
+        if ($removed === null) {
+            return '?v=settings&err=no_such_source';
+        }
+
+        $this->cfg->set('sources', array_values($kept));
+
+        $err = $this->persist();
+        if ($err !== null) {
+            return '?v=settings&err=' . $err;
+        }
+
+        $this->markConfirmed($removed, false);
+        return '?v=settings&ok=source_removed';
+    }
+
+    /**
+     * The opaque identifier a stored source is addressed by in a form.
+     *
+     * A truncated keyless digest of the path: stable across renders, so a form posted from a
+     * page that has since been rebuilt still names the same source, and meaningless on its
+     * own, so nothing about the filesystem travels through the browser. It is an addressing
+     * scheme and not a secret — the authorisation is that the id must resolve against a path
+     * ALREADY in this operator's configuration, which is checked at the point of use.
+     */
+    private static function sourceId(string $path): string
+    {
+        return substr(hash('sha256', $path), 0, 16);
+    }
+
+    /**
+     * The value a confirmed source stores in `sources[].format`.
+     *
+     * One implementation of the rule Setup\Steps::applySources() applies, so the browser
+     * installer, the shell wizard and this page cannot drift apart: a library name is stored
+     * as the name, and anything else is stored as the definition it was detected from. An
+     * empty return means the detector never worked out a usable format and the source must
+     * be refused, not stored with a default.
+     *
+     * @param array<string,mixed> $source One entry of the detection report.
+     */
+    private static function storedFormat(array $source): string
+    {
+        $name = (string) ($source['format_name'] ?? '');
+        if ($name === '' || $name === 'unknown' || $name === 'unrecognised') {
+            return '';
+        }
+        $definition = (string) ($source['format_string'] ?? '');
+        if (!array_key_exists($name, LogDetect::library()) && $definition !== '') {
+            return $definition;
+        }
+        return $name;
+    }
+
+    /**
      * Persist the reviewed flag back into the detection report.
      *
-     * Best-effort: the config write above is what matters, and a read-only var/ should
-     * not turn a successful confirmation into an error.
+     * Best-effort: the config write is what matters, and a read-only var/ should not turn a
+     * successful confirmation — or a successful removal — into an error. Clearing the flag is
+     * the same operation in reverse, so it is the same code: a removed source has to go back
+     * to "awaiting review" rather than disappear, or the only way to change your mind again
+     * would be another full rescan.
      */
-    private function markConfirmed(string $path): void
+    private function markConfirmed(string $path, bool $confirmed = true): void
     {
         if (!is_file(self::DETECT_FILE) || !is_writable(self::DETECT_FILE)) {
             return;
@@ -285,7 +595,7 @@ final class Settings extends Controller
         }
         foreach (($data['sources'] ?? []) as $i => $src) {
             if (($src['path'] ?? null) === $path) {
-                $data['sources'][$i]['confirmed'] = true;
+                $data['sources'][$i]['confirmed'] = $confirmed;
             }
         }
         @file_put_contents(self::DETECT_FILE, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
@@ -350,6 +660,84 @@ final class Settings extends Controller
         return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=scoring_saved';
     }
 
+    /**
+     * Switch between Basic authentication and the sign-in page.
+     *
+     * The choice used to exist only during installation, so changing your mind afterwards
+     * meant hand-editing config/loghound.php — on a file the panel deliberately keeps
+     * outside the document root and at mode 0640.
+     *
+     * The decision itself is Setup\Steps::applyAuthMode(), which is also what the installer
+     * calls: it refuses a mode that is not in Security::authModes(), and it refuses to move
+     * to either mode before a username and a password hash exist, so this form cannot leave
+     * the panel with no way in. Nothing here re-implements that check.
+     */
+    private function saveAuthMode(): string
+    {
+        $mode = is_string($_POST['auth_mode'] ?? null) ? $_POST['auth_mode'] : '';
+
+        if (Steps::applyAuthMode($this->cfg, $mode) !== []) {
+            return '?v=settings&err=bad_auth_mode';
+        }
+
+        $err = $this->persist();
+        return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=auth_saved';
+    }
+
+    /**
+     * How you sign in to this panel, changeable after installation.
+     *
+     * The two choices and their wording come from Security::authModes(), the same list the
+     * installer renders and the same list Steps::applyAuthMode() validates against, so the
+     * form can never offer a mode the config would refuse or describe one differently from
+     * the way the wizard described it.
+     *
+     * The username and password are NOT editable here. They are set by the installer or by
+     * bin/loghound-setup, and a form that could change the panel's own credentials while
+     * authenticated by them is a much larger blast radius than this section is worth.
+     */
+    private function authSection(): void
+    {
+        $mode = (string) $this->cfg->get('auth.mode', 'none');
+        $haveAccount = (string) $this->cfg->get('auth.password_hash', '') !== ''
+            && (string) $this->cfg->get('auth.user', '') !== '';
+
+        self::cardOpen(
+            'set-auth',
+            '07',
+            'Sign-in',
+            'Applies to the next request. Changing this does not change your username or password.'
+        );
+
+        if (!$haveAccount) {
+            echo '<div class="banner banner-warn">No username and password are stored, so there is nothing to '
+                . 'sign in with yet. Set them with <code>bin/loghound-setup</code> first.</div>';
+            self::cardEnd();
+            return;
+        }
+
+        echo '<form method="post" action="?v=settings">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="auth_mode">';
+
+        echo '<fieldset><legend>How you sign in</legend>';
+        foreach (Security::authModes() as $val => $meta) {
+            echo '<label class="radio"><input type="radio" name="auth_mode" value="' . Security::esc($val) . '"'
+                . ($mode === $val ? ' checked' : '') . '>';
+            echo '<span><strong>' . Security::esc($meta['label']) . '</strong><br><span class="muted">'
+                . Security::esc($meta['text']) . ' ' . Security::esc($meta['cost'])
+                . '</span></span></label>';
+        }
+        echo '</fieldset>';
+
+        echo '<button type="submit" class="primary">Save sign-in method</button>';
+        echo '</form>';
+        echo '<p class="muted">The sign-in page keeps session files in the directory named by '
+            . '<code>session.save_path</code> in your PHP-FPM pool. If you have never used it, create that '
+            . 'directory and give it to the user this panel runs as before switching.</p>';
+        self::cardEnd();
+    }
+
     /** Save display preferences: timezone used for rendering timestamps. */
     private function saveUi(): string
     {
@@ -387,19 +775,30 @@ final class Settings extends Controller
     {
         $ok = [
             'source_confirmed' => 'Log source confirmed. The tailer will pick it up on its next poll.',
+            'source_removed'   => 'Log source removed. The tailer stops reading it on its next poll; '
+                . 'documents already indexed from it are untouched.',
+            'sources_rescanned' => 'The scan finished and the review below has been rebuilt. Nothing is '
+                . 'ingested from a newly found file until you confirm it.',
             'privacy_saved'    => 'Privacy settings saved.',
             'scoring_saved'    => 'Scoring weights saved. The rule version was bumped so older verdicts stay traceable.',
             'ui_saved'         => 'Display settings saved.',
+            'auth_saved'       => 'Sign-in method saved. It applies to the next request, so you may be asked '
+                . 'to sign in again.',
             'solr_up'          => 'Solr answered. The connection is working.',
         ];
         $err = [
             'solr_down'       => 'Solr did not answer. Check the base URL, credentials and firewall.',
-            'no_such_source'  => 'That log source is not in the detection report any more. Re-run loghound-setup.',
+            'no_such_source'  => 'That log source is not in the detection report or the configuration any '
+                . 'more. Run a scan to rebuild the list.',
             'path_not_allowed' => 'That path is outside allowed_log_roots and was refused.',
+            'no_usable_format' => 'No usable log format was worked out for that file, so it was not '
+                . 'stored. Set one by hand with bin/loghound-setup rather than ingesting on a guess.',
             'save_failed'     => 'The configuration file could not be written. Check ownership and mode 0640 on config/loghound.php.',
             'bad_ip_mode'     => 'Unknown IP privacy mode.',
             'bad_thresholds'  => 'Thresholds must descend: bot > likely_bot > unknown > likely_human.',
             'bad_timezone'    => 'Unknown timezone.',
+            'bad_auth_mode'   => 'That sign-in method was refused. Choose one of the two offered, and note that '
+                . 'neither can be selected before a username and password have been set.',
             'unknown_action'  => 'Unknown action.',
         ];
 
@@ -428,11 +827,17 @@ final class Settings extends Controller
         $this->privacySection();
         $this->retentionSection();
         $this->scoringSection();
+        $this->authSection();
         $this->displaySection();
     }
 
     /**
      * The log-format review. The single most important control on this page.
+     *
+     * Three controls, which together are the whole life cycle of a log source: scan for
+     * files, start reading one, stop reading one. Before these existed the list was whatever
+     * the installer had left behind, and a vhost added months later meant editing a PHP file
+     * by hand outside the document root.
      */
     private function sourcesSection(): void
     {
@@ -453,15 +858,19 @@ final class Settings extends Controller
             . 'the known-format library where it is not. Nothing is ingested until you confirm the mapping below.'
         );
 
+        $this->rescanControl();
+
         if ($sources === []) {
             echo '<div class="empty show">';
             echo '<h3>No log sources detected yet</h3>';
-            echo '<p>Run the setup command on the server. It reads your Apache or nginx configuration, finds the '
-                . '<code>CustomLog</code> / <code>access_log</code> directives, works out the exact format for each '
-                . 'one, and writes the result to <code>var/detect.json</code>:</p>';
+            echo '<p>Use <strong>Scan this server again</strong> above, or run the setup command. Either one reads '
+                . 'your Apache or nginx configuration, finds the <code>CustomLog</code> / <code>access_log</code> '
+                . 'directives, works out the exact format for each one, and writes the result to '
+                . '<code>var/detect.json</code>:</p>';
             echo '<pre class="snippet mono">sudo -u loghound php bin/loghound-setup detect</pre>';
             echo '<p>Then reload this page to review what it found.</p>';
             echo '</div>';
+            $this->orphanSources($sources);
             self::cardEnd();
             return;
         }
@@ -554,10 +963,103 @@ final class Settings extends Controller
                 echo '<input type="hidden" name="path" value="' . Security::esc($path) . '">';
                 echo '<button type="submit" class="primary">Looks right — start ingesting this file</button>';
                 echo '</form>';
+            } elseif (isset($configured[$path])) {
+                self::removeForm($path, 'Stop ingesting this file');
             }
             echo '</article>';
         }
+
+        $this->orphanSources($sources);
         self::cardEnd();
+    }
+
+    /**
+     * The button that re-runs discovery, and the panel its progress renders into.
+     *
+     * A stepped job rather than a form, for the reason rescanPlan() gives: this walks the
+     * webserver configuration and samples up to twenty files, and a synchronous POST that can
+     * exceed the execution limit is a gateway timeout with no way to tell whether it ran.
+     * The page reattaches to a running scan after a refresh, so closing the tab is safe.
+     *
+     * Withheld in demo mode, where the detection report on screen is fabricated and there is
+     * nothing honest for a real scan of this machine to do with it.
+     */
+    private function rescanControl(): void
+    {
+        if ($this->gw->isDemo()) {
+            echo '<p class="muted">Scanning is switched off while the panel is showing demo data.</p>';
+            return;
+        }
+
+        echo '<div class="job-actions">';
+        echo '<button type="button" data-job="' . Security::esc(self::KIND_RESCAN) . '" data-mount="job-rescan">'
+            . 'Scan this server again</button>';
+        echo '</div>';
+        echo '<div id="job-rescan"></div>';
+        echo '<p class="muted">Reads your webserver configuration and the usual log locations, then grades a '
+            . 'sample of every file it finds. It changes nothing on its own: a newly found file is added to the '
+            . 'review below and is ingested only once you confirm it.</p>';
+    }
+
+    /**
+     * Configured sources that the last scan did not find.
+     *
+     * A source can be in `sources` and absent from the report — added by
+     * `bin/loghound-setup`, or left behind by a file that has since been moved or deleted.
+     * Without this it would be ingesting (or failing to) with no representation anywhere in
+     * the panel and no way to remove it short of editing the config by hand, which is the
+     * whole problem this section exists to fix.
+     *
+     * @param array<int,array<string,mixed>> $reported The detection report's sources.
+     */
+    private function orphanSources(array $reported): void
+    {
+        $known = [];
+        foreach ($reported as $src) {
+            $known[(string) ($src['path'] ?? '')] = true;
+        }
+
+        $orphans = [];
+        foreach ((array) $this->cfg->get('sources', []) as $source) {
+            $path = is_array($source) ? (string) ($source['path'] ?? '') : '';
+            if ($path !== '' && !isset($known[$path])) {
+                $orphans[$path] = (string) ($source['format'] ?? '');
+            }
+        }
+        if ($orphans === []) {
+            return;
+        }
+
+        echo '<h3>Configured, but not found by the last scan</h3>';
+        echo '<p class="muted">These are being read by the tailer and were not in the last detection run — they '
+            . 'were added by <code>bin/loghound-setup</code>, or the file has moved since.</p>';
+        foreach ($orphans as $path => $format) {
+            echo '<article class="source">';
+            echo '<div class="source-head"><h3 class="mono">' . Security::esc($path) . '</h3>';
+            echo '<span class="chip chip-warn">Not in the last scan</span></div>';
+            echo '<dl class="kv"><dt>Format</dt><dd><code class="mono wrap">'
+                . Security::esc($format) . '</code></dd></dl>';
+            self::removeForm($path, 'Stop ingesting this file');
+            echo '</article>';
+        }
+    }
+
+    /**
+     * The form that removes one configured source.
+     *
+     * The source travels as the opaque id sourceId() derives from its path, never as the path
+     * itself and never as a position in the list: the server resolves the id against the
+     * configuration it already holds, so a crafted or stale submission can only ever name
+     * something that is already there — or nothing at all.
+     */
+    private static function removeForm(string $path, string $label): void
+    {
+        echo '<form method="post" action="?v=settings" class="confirm-form">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="remove_source">';
+        echo '<input type="hidden" name="source" value="' . Security::esc(self::sourceId($path)) . '">';
+        echo '<button type="submit">' . Security::esc($label) . '</button>';
+        echo '</form>';
     }
 
     /**
@@ -567,29 +1069,40 @@ final class Settings extends Controller
      * operator starts, because a ping to an unreachable host and a document count on a
      * large index are exactly the operations that used to hang a request until PHP-FPM
      * killed it. Credentials are reported as present or absent and never printed.
+     *
+     * There is one storage backend and the panel says so. A configuration left over from
+     * before the bring-your-own-Solr option was removed still carries `solr.mode: custom`, and
+     * that is reported here as the refusal it is rather than as a second kind of install:
+     * Loghound provisions and manages its own two indexes on Opensolr, and it cannot do that on
+     * a Solr it does not administer. Config::validate() refuses the same value, which is what
+     * stops the daemons; this is the half of the message an operator sees in the browser.
      */
     private function solrSection(): void
     {
-        $mode = (string) $this->cfg->get('solr.mode', 'opensolr');
+        $mode = (string) $this->cfg->get('solr.mode', Config::SOLR_MODE);
 
         self::cardOpen('set-solr', '02', 'Solr connection');
-        echo '<dl class="kv">';
-        echo '<dt>Mode</dt><dd class="mono">' . Security::esc($mode) . '</dd>';
-        if ($mode === 'opensolr') {
-            echo '<dt>Account</dt><dd class="mono">'
-                . Security::esc((string) $this->cfg->get('opensolr.email', '—')) . '</dd>';
-            echo '<dt>Region</dt><dd class="mono">'
-                . Security::esc((string) $this->cfg->get('opensolr.region', '—')) . '</dd>';
-            echo '<dt>API key</dt><dd>' . ($this->cfg->get('opensolr.api_key')
-                ? '<span class="chip chip-good">Set</span>'
-                : '<span class="chip chip-warn">Missing</span>') . '</dd>';
-        } else {
-            echo '<dt>Base URL</dt><dd class="mono">'
-                . Security::esc((string) $this->cfg->get('solr.base_url', '—')) . '</dd>';
-            echo '<dt>HTTP auth</dt><dd>' . ($this->cfg->get('solr.http_user')
-                ? '<span class="chip chip-good">Configured</span>'
-                : '<span class="chip">None</span>') . '</dd>';
+
+        if ($mode !== Config::SOLR_MODE) {
+            echo '<p class="pop">This configuration is not usable.</p>';
+            echo '<p>It sets <code>solr.mode</code> to <code class="mono">' . Security::esc($mode)
+                . '</code>. Loghound provisions and manages its own two indexes on your Opensolr '
+                . 'account — creating them, uploading their configsets and reloading them — and it '
+                . 'cannot do that on a Solr it does not administer, so pointing it at one is no '
+                . 'longer supported. Set <code>solr.mode</code> to <code class="mono">'
+                . Security::esc(Config::SOLR_MODE) . '</code> in <code>config/loghound.php</code> and '
+                . 'run <code>bin/loghound-setup</code> to provision the two indexes. The ingest, '
+                . 'scoring and retention daemons refuse to start until you do.</p>';
         }
+
+        echo '<dl class="kv">';
+        echo '<dt>Account</dt><dd class="mono">'
+            . Security::esc((string) $this->cfg->get('opensolr.email', '—')) . '</dd>';
+        echo '<dt>Region</dt><dd class="mono">'
+            . Security::esc((string) $this->cfg->get('opensolr.region', '—')) . '</dd>';
+        echo '<dt>API key</dt><dd>' . ($this->cfg->get('opensolr.api_key')
+            ? '<span class="chip chip-good">Set</span>'
+            : '<span class="chip chip-warn">Missing</span>') . '</dd>';
         echo '<dt>Hits core</dt><dd class="mono">' . Security::esc($this->gw->hitsCore()) . '</dd>';
         echo '<dt>Sessions core</dt><dd class="mono">' . Security::esc($this->gw->sessionsCore()) . '</dd>';
         echo '<dt>Query timeout</dt><dd class="mono">'
@@ -603,10 +1116,8 @@ final class Settings extends Controller
         echo '<div class="job-actions">';
         echo '<button type="button" class="primary" data-job="solr_connection" data-mount="job-solr">'
             . 'Run connection check</button>';
-        if ($mode === 'opensolr') {
-            echo '<button type="button" data-job="opensolr_check" data-mount="job-solr">'
-                . 'Validate Opensolr credentials</button>';
-        }
+        echo '<button type="button" data-job="opensolr_check" data-mount="job-solr">'
+            . 'Validate Opensolr credentials</button>';
         echo '</div>';
         echo '<div id="job-solr"></div>';
         echo '<p class="muted">Each check runs as a sequence of steps with its own progress, so it cannot time '
@@ -683,7 +1194,9 @@ final class Settings extends Controller
      * beacon data recently, and when did the most recent one arrive.
      *
      * The query is deliberately NOT bounded by the page's time-range selector — the
-     * question is "does this work at all", not "what happened in the last hour".
+     * question is "does this work at all", not "what happened in the last hour". It is
+     * still bounded to `doc_type_s:session`, because the daily rollup documents that share
+     * this core also carry `ts_start` and would otherwise be counted in the denominator.
      *
      * @return array{ever:int,hour:int,day:int,last:?string,coverage:?float}
      */
@@ -691,7 +1204,7 @@ final class Settings extends Controller
     {
         $f = $this->gw->facet('settings.beacon', $this->gw->sessionsCore(), [
             'q'  => '*:*',
-            'fq' => ['ts_start:[NOW-30DAY TO NOW]'],
+            'fq' => [self::FQ_SESSION_DOCS, 'ts_start:[NOW-30DAY TO NOW]'],
         ], [
             'withBeacon' => ['type' => 'query', 'q' => Query::POP_BEACON, 'facet' => [
                 'last' => 'max(ts_start)',
@@ -1020,7 +1533,7 @@ final class Settings extends Controller
     {
         $tz = (string) $this->cfg->get('ui.timezone', 'UTC');
 
-        self::cardOpen('set-display', '07', 'Display');
+        self::cardOpen('set-display', '08', 'Display');
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="ui">';
