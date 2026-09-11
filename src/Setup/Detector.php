@@ -217,6 +217,10 @@ final class Detector
             if (!@is_file((string) $path)) {
                 continue;
             }
+            if (self::isProxyOrigin((string) ($meta['listen'] ?? ''))) {
+                continue;
+            }
+
             $out[(string) $path] = [
                 'origin'        => 'webserver config (' . basename((string) ($meta['config'] ?? '?')) . ')',
                 'server'        => (string) ($meta['server'] ?? 'apache'),
@@ -242,6 +246,52 @@ final class Detector
         }
 
         return array_slice($out, 0, 20, true);
+    }
+
+    /**
+     * Is this vhost the origin behind a proxy rather than a site of its own?
+     *
+     * A vhost bound only to a loopback address is not reachable from outside the machine, so
+     * nothing on the internet ever asked it for anything directly: everything in its log
+     * arrived through something in front of it. On the standard three-layer setup —
+     * Apache terminating TLS, a cache such as Varnish behind it, Apache again serving the
+     * application — BOTH Apache layers write an access log, and with RemoteIP restoring the
+     * client address the two files are line-for-line the same traffic.
+     *
+     * Ingesting both counts every visit twice. Every share, every percentage and every
+     * per-site total is then diluted by an amount that depends on which sites happen to sit
+     * behind a cache, which is the worst kind of wrong number: plausible and unattributable.
+     *
+     * So the origin is not offered as a log source. The front vhost carries the same requests
+     * with the same client addresses, and it is the one the operator recognises by name.
+     *
+     * Judged from the bind address rather than from the file name or the ServerName, because
+     * the bind address is what makes the vhost unreachable and is therefore the actual
+     * evidence. A name like `drupal-backend.internal` is a convention someone chose; 127.0.0.1
+     * is a fact about the socket.
+     */
+    private static function isProxyOrigin(string $listen): bool
+    {
+        $listen = trim($listen);
+        if ($listen === '' || $listen === '*' || str_starts_with($listen, '*:')) {
+            return false;
+        }
+
+        $host = $listen;
+        if ($host[0] === '[') {
+            $end  = strpos($host, ']');
+            $host = $end === false ? substr($host, 1) : substr($host, 1, $end - 1);
+        } elseif (substr_count($host, ':') === 1) {
+            $host = substr($host, 0, (int) strpos($host, ':'));
+        }
+
+        $ip = @inet_pton($host);
+        if ($ip === false) {
+            return false;
+        }
+
+        return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE) === false
+            && (str_starts_with($host, '127.') || $host === '::1');
     }
 
     /**

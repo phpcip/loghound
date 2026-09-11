@@ -110,6 +110,7 @@ final class LogDetect
             'files'      => 0,
             'serverRoot' => '',
             'vhost'      => [],
+            'vhostAddr'  => [],
         ];
 
         foreach ($configFiles as $f) {
@@ -158,6 +159,7 @@ final class LogDetect
             'seen'    => [],
             'files'   => 0,
             'vhost'   => [],
+            'vhostAddr' => [],
             'prefix'  => '/etc/nginx',
         ];
 
@@ -998,10 +1000,14 @@ final class LogDetect
 
                 case '<virtualhost':
                     $st['vhost'][] = null;
+                    $st['vhostAddr'][] = isset($args[1])
+                        ? self::expandVars(rtrim($args[1]['v'], '>'), $st['defines'])
+                        : '';
                     break;
 
                 case '</virtualhost>':
                     array_pop($st['vhost']);
+                    array_pop($st['vhostAddr']);
                     break;
 
                 case 'servername':
@@ -1101,6 +1107,8 @@ final class LogDetect
             }
         }
 
+        $listen = $st['vhostAddr'] === [] ? '' : (string) end($st['vhostAddr']);
+
         if (isset($st['results'][$target])) {
             if ($vhost !== null && !in_array($vhost, $st['results'][$target]['vhosts'], true)) {
                 $st['results'][$target]['vhosts'][] = $vhost;
@@ -1113,6 +1121,7 @@ final class LogDetect
             'format_name' => $formatName,
             'vhost'       => $vhost,
             'vhosts'      => $vhost === null ? [] : [$vhost],
+            'listen'      => $listen,
             'server'      => 'apache',
             'config'      => $configFile,
         ];
