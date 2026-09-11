@@ -183,6 +183,7 @@ declare(strict_types=1);
 
 use Loghound\Beacon;
 use Loghound\Config;
+use Loghound\Exclusions;
 use Loghound\Security;
 
 require_once dirname(__DIR__) . '/src/autoload.php';
@@ -296,6 +297,18 @@ if ($site !== '' && $state !== null) {
     if (!lh_allow($state, $hostKey, $beacon->ratePerMinHost())) {
         lh_end();
     }
+}
+
+/* EXCLUDED ON BOTH PLANES OR ON NEITHER. The same rules the tailer applies to a log line are
+   applied here to a beacon payload, because an operator who excludes /health and still sees
+   beacon sessions for it has been told something untrue by the settings card. Refused before
+   anything is staged, so the payload leaves no trace at all — and answered with the same 204
+   as every other outcome, because the collector never tells a visitor's browser what this
+   installation does or does not keep. */
+$exclusions = Exclusions::fromConfig($config);
+if (!$exclusions->isEmpty()
+    && $exclusions->excludes($site, (string) ($payload['path'] ?? ''), $ip, $ua)) {
+    lh_end();
 }
 
 $sessionId = (string) $payload['session_id'];

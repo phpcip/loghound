@@ -302,6 +302,32 @@ return [
     // host, ip, path, query, method, status, ua, browser.
     // =====================================================================
 
+    // =====================================================================
+    // Traffic this installation refuses to record, per hostname
+    //
+    // A rule here means NEVER STORED: not a hit, not folded into a session, not counted in
+    // any total, not present in any facet. Both planes are covered — the access log and the
+    // beacon — because a rule that only stopped one of them would be a promise this product
+    // does not keep.
+    //
+    // To merely tidy the live page, that is a different setting and it stores everything:
+    // `live.exclusions` below.
+    //
+    // Each rule is a hostname, a field, a pattern and whether it is on. Fields: path, ip, ua.
+    // The pattern is a regular expression BODY — no delimiters, no flags, case-insensitive.
+    // An empty hostname means EVERY hostname. The exact pattern `*` on `path` excludes that
+    // hostname entirely, and it is the only place a literal star means anything.
+    //
+    // Empty in a new installation: nothing is refused until you say so.
+    // =====================================================================
+
+    'exclusions' => [
+        // ['host' => '', 'field' => 'path', 'pattern' => '^/wp-login\.php', 'enabled' => true],
+        // ['host' => '', 'field' => 'path', 'pattern' => '^/xmlrpc\.php',   'enabled' => true],
+        // ['host' => '', 'field' => 'ua',   'pattern' => 'uptimerobot|pingdom', 'enabled' => true],
+        // ['host' => 'staging.example.com', 'field' => 'path', 'pattern' => '*', 'enabled' => true],
+    ],
+
     'live' => [
         'exclusions' => [
             // ['field' => 'path', 'pattern' => '^/solr_manager/', 'enabled' => true],

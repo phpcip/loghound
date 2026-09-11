@@ -44,6 +44,7 @@ use Loghound\Beacon\Doc;
 use Loghound\Cache;
 use Loghound\Config;
 use Loghound\Diagnostics;
+use Loghound\Exclusions;
 use Loghound\Install\OpensolrTeardown;
 use Loghound\LogDetect;
 use Loghound\Opensolr;
@@ -908,6 +909,9 @@ final class Settings extends Controller implements JobHost, Sections
 
             case 'opensolr_indexes':
                 return $this->chooseIndexes();
+
+            case 'exclusions':
+                return $this->saveExclusions();
 
             case 'add_source':
                 return $this->addSource();
@@ -3011,8 +3015,14 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'the installer with nothing carried across.',
             'incidents_cleared' => 'The recorded failures were cleared. Anything still broken is '
                 . 'reported again below, because that is measured rather than remembered.',
+            'exclusions_saved' => 'Exclusions saved. The beacon collector applies them from the very '
+                . 'next request; the reader picks them up when it is next reloaded, not mid-file. '
+                . 'Anything already indexed is untouched — this decides what is recorded from now on.',
         ];
         $err = [
+            'exclusion_refused' => 'Some rules were not saved, because a pattern is not a regular '
+                . 'expression PCRE will accept or a hostname is not a hostname. Everything valid was '
+                . 'kept: the rows missing from the list below are the ones that were refused.',
             'solr_down'       => 'Solr did not answer. Check the base URL, credentials and firewall.',
             'no_such_source'  => 'That log source is not in the detection report or the configuration any '
                 . 'more. Run a scan to rebuild the list.',
@@ -3126,6 +3136,7 @@ final class Settings extends Controller implements JobHost, Sections
         ['set-ops', 'Running it', 'operationsSection'],
         ['set-check', 'System check', 'systemCheckSection'],
         ['set-sources', 'Log sources', 'sourcesSection'],
+        ['set-exclusions', 'Exclusions', 'exclusionsSection'],
         ['set-solr', 'Solr', 'solrSection'],
         ['set-cache', 'Cached queries', 'cacheSection'],
         ['set-beacon', 'Beacon', 'beaconSection'],
@@ -4610,6 +4621,175 @@ final class Settings extends Controller implements JobHost, Sections
      * out altogether rather than hedged into meaninglessness, and when it is printed it is
      * printed as an approximation, because TLS framing is not counted.
      */
+    /**
+     * Traffic this installation refuses to record.
+     *
+     * THE STRONGEST SETTING IN THE PRODUCT, and the card says so before it says anything else.
+     * Everything else here changes how data is read, kept or shown; this decides that a
+     * request never existed. There is no undo, because there is nothing to undo from — an
+     * excluded request leaves no row to restore.
+     *
+     * NOT THE LIVE PAGE'S FILTER, and the two are one click apart in the navigation, so the
+     * difference is stated rather than implied. Live hides rows and stores everything; this
+     * stores nothing and hides nothing that was already collected.
+     *
+     * BOTH PLANES. The same rules are applied by the tailer to a log line and by the collector
+     * to a beacon payload, which is the only reading of "excluded" that does not eventually
+     * surprise somebody.
+     */
+    private function exclusionsSection(): void
+    {
+        $rules = Exclusions::fromConfig($this->cfg);
+        $stored = $rules->all();
+
+        self::cardOpen(
+            'set-exclusions',
+            self::sectionNum('set-exclusions'),
+            'Exclusions',
+            'Requests this installation will not record at all, per hostname.'
+        );
+
+        echo '<div class="note"><p><strong>This is not a filter, it is a refusal.</strong> A request '
+            . 'matched here is never stored: not as a request, not folded into a visit, not counted in '
+            . 'any total and not present in any dimension. It cannot be recovered afterwards, because '
+            . 'nothing was written down. To merely tidy what you are watching, the live page has a '
+            . 'filter of its own that stores everything.</p></div>';
+
+        echo '<p>Both planes are covered. The reader applies these to every log line, and the beacon '
+            . 'collector applies the same rules to every payload before it is staged &mdash; so a path '
+            . 'you exclude cannot come back through the other door.</p>';
+
+        echo '<form method="post" action="?v=settings">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="exclusions">';
+
+        echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
+            . '<col style="width:24%"><col style="width:18%"><col style="width:36%">'
+            . '<col style="width:11%"><col style="width:11%"></colgroup><thead><tr>'
+            . '<th scope="col">Hostname</th>'
+            . '<th scope="col">Field</th>'
+            . '<th scope="col">Pattern</th>'
+            . '<th scope="col">On</th>'
+            . '<th scope="col">Remove</th>'
+            . '</tr></thead><tbody>';
+
+        $i = 0;
+        foreach ($stored as $rule) {
+            self::exclusionRow($i, $rule);
+            $i++;
+        }
+        self::exclusionRow($i, ['host' => '', 'field' => 'path', 'pattern' => '', 'enabled' => true]);
+
+        echo '</tbody></table></div>';
+
+        echo '<p class="muted">Leave the hostname empty to apply a rule to <strong>every</strong> host. '
+            . 'The pattern is a regular expression &mdash; no slashes, no flags, and matching ignores '
+            . 'case. The single pattern <code class="mono">*</code> on <em>Request path</em> excludes '
+            . 'that hostname entirely, and it is the only place a bare star means anything.</p>';
+
+        echo '<p class="muted"><strong>The reader picks these up when it is next reloaded</strong>, not '
+            . 'mid-file, so a rule added now applies from the next restart or reload of the ingest '
+            . 'daemon. The beacon collector applies them immediately, because it reads the '
+            . 'configuration on every request.</p>';
+
+        echo '<p><button type="submit" class="small">Save exclusions</button> '
+            . '<span class="muted">' . Security::esc((string) $rules->activeCount())
+            . ' in force now.</span></p>';
+        echo '</form>';
+
+        self::cardEnd();
+    }
+
+    /**
+     * One editable rule.
+     *
+     * Rendered by index rather than by identity because the whole list is posted and rewritten
+     * in one go: there is no rule id to keep stable, and a list short enough to read is short
+     * enough to send whole.
+     *
+     * `enabled` carries a hidden zero in front of the checkbox, because an unchecked box sends
+     * nothing at all and the difference between "turned off" and "not submitted" would
+     * otherwise be invisible on the server.
+     *
+     * @param array{host:string,field:string,pattern:string,enabled:bool} $rule
+     */
+    private static function exclusionRow(int $i, array $rule): void
+    {
+        $name = 'rules[' . $i . ']';
+
+        echo '<tr>';
+        echo '<td><input type="text" name="' . $name . '[host]" value="'
+            . Security::esc($rule['host']) . '" placeholder="every host" autocomplete="off"'
+            . ' spellcheck="false" class="live-find"></td>';
+
+        echo '<td><select name="' . $name . '[field]">';
+        foreach (Exclusions::FIELDS as $slug => $label) {
+            echo '<option value="' . Security::esc($slug) . '"'
+                . ($rule['field'] === $slug ? ' selected' : '') . '>'
+                . Security::esc($label) . '</option>';
+        }
+        echo '</select></td>';
+
+        echo '<td><input type="text" name="' . $name . '[pattern]" value="'
+            . Security::esc($rule['pattern']) . '" placeholder="^/wp-login\.php" autocomplete="off"'
+            . ' spellcheck="false" class="live-find mono"></td>';
+
+        echo '<td><input type="hidden" name="' . $name . '[enabled]" value="0">'
+            . '<input type="checkbox" name="' . $name . '[enabled]" value="1"'
+            . ($rule['enabled'] ? ' checked' : '') . '></td>';
+
+        echo '<td><input type="checkbox" name="' . $name . '[remove]" value="1"></td>';
+        echo '</tr>';
+    }
+
+    /**
+     * Save the exclusion list.
+     *
+     * The whole list is rewritten from what was posted, so removing a rule is removing its row
+     * rather than a separate action with its own confirmation.
+     *
+     * A PATTERN THE ENGINE REFUSES IS REPORTED, NOT DROPPED IN SILENCE. Exclusions::sanitise()
+     * discards anything it cannot compile, which is what keeps the matching path clean — but a
+     * rule that vanishes without a word reads as a save that did not work. The two counts are
+     * compared and the difference is named.
+     */
+    private function saveExclusions(): string
+    {
+        $back = '&s=exclusions';
+        $posted = is_array($_POST['rules'] ?? null) ? $_POST['rules'] : [];
+
+        $wanted = [];
+        foreach ($posted as $row) {
+            if (!is_array($row) || !empty($row['remove'])) {
+                continue;
+            }
+            $pattern = is_string($row['pattern'] ?? null) ? trim($row['pattern']) : '';
+            if ($pattern === '') {
+                continue;
+            }
+            $wanted[] = [
+                'host'    => is_string($row['host'] ?? null) ? $row['host'] : '',
+                'field'   => is_string($row['field'] ?? null) ? $row['field'] : '',
+                'pattern' => $pattern,
+                'enabled' => !empty($row['enabled']),
+            ];
+        }
+
+        $clean = Exclusions::sanitise($wanted);
+        $this->cfg->set(Exclusions::CONFIG_KEY, $clean);
+
+        $err = $this->persist();
+        if ($err !== null) {
+            return '?v=settings&err=' . $err . $back;
+        }
+
+        if (count($clean) < count($wanted)) {
+            return '?v=settings&err=exclusion_refused' . $back;
+        }
+
+        return '?v=settings&ok=exclusions_saved' . $back;
+    }
+
     private function cacheSection(): void
     {
         $cache = $this->gw->cache();

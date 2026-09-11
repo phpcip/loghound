@@ -80,6 +80,7 @@ declare(strict_types=1);
 namespace Loghound\Bin;
 
 use Loghound\Config;
+use Loghound\Exclusions;
 use Loghound\Security;
 use Loghound\Tail;
 
@@ -1197,6 +1198,9 @@ final class Pipeline
      */
     private bool $indexAssets = false;
 
+    /** Traffic this installation refuses to record at all. Read once, applied per line. */
+    private Exclusions $exclusions;
+
     public function __construct(Config $cfg, bool $dryRun, bool $verbose, ?object $state = null)
     {
         $this->cfg      = $cfg;
@@ -1204,6 +1208,7 @@ final class Pipeline
         $this->verbose  = $verbose;
         $this->hitsCore = (string) $cfg->get('solr.hits_core', 'loghound_hits');
         $this->indexAssets = (bool) $cfg->get('ingest.index_assets', false);
+        $this->exclusions = Exclusions::fromConfig($cfg);
 
         $this->initParser();
         $this->initEnrichers($state);
@@ -1508,6 +1513,16 @@ final class Pipeline
 
         if (!isset($hit['host_s']) && !empty($meta['host'])) {
             $hit['host_s'] = $meta['host'];
+        }
+
+        /* AFTER THE PARSE, BEFORE THE ENRICHMENT, and both halves matter. The fields a rule
+           tests only exist once the line is parsed; and refusing here means an excluded
+           request never reaches geolocation, ASN, rDNS, the sessionizer or the batch, so it
+           costs one preg_match and nothing else. Returning null is the same path a malformed
+           line takes, which is exactly right: as far as everything downstream is concerned,
+           this line was never read. */
+        if (!$this->exclusions->isEmpty() && $this->exclusions->excludesHit($hit)) {
+            return null;
         }
 
         $ip = (string) ($hit['ip_s'] ?? '');
