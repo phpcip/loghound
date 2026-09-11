@@ -943,8 +943,18 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
 .setup-missing { margin: 12px 0 0; padding-left: 20px; font-size: 15px; }
 .setup-missing li { margin-bottom: 8px; }
 
+/*
+ * Field layout for every setup form.
+ *
+ * Three selectors, because a setup form appears in three shapes: one carrying .setup-form,
+ * one nested inside a .card, and one that IS the card (<form class="card">). The third was
+ * missing, so on those screens label and input stayed inline elements and ran together in a
+ * single line across the paragraphs above and below them. Matching the shape rather than
+ * remembering to add a class at every call site is what stops it happening again.
+ */
 .setup-form label,
-.setup .card > form label {
+.setup .card > form label,
+.setup form.card label {
     display: block;
     margin: 18px 0 6px;
     font-size: 14px;
@@ -959,10 +969,26 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
 .setup .card > form input[type="url"],
 .setup .card > form input[type="email"],
 .setup .card > form input[type="password"],
-.setup .card > form select {
+.setup .card > form select,
+.setup form.card input[type="text"],
+.setup form.card input[type="url"],
+.setup form.card input[type="email"],
+.setup form.card input[type="password"],
+.setup form.card select {
+    display: block;
     max-width: 100%;
 }
-.setup-form button { margin-top: 20px; }
+.setup-form button,
+.setup form.card button { margin-top: 20px; }
+
+/*
+ * A hint that belongs to the field above it, not to the next one.
+ *
+ * The default paragraph margin puts equal space on both sides, which reads as though the
+ * sentence introduces whatever follows. Pulling it up binds it to the input it explains.
+ */
+.setup form.card input + .muted,
+.setup-form input + .muted { margin-top: 6px; }
 .setup-widen { margin: 0 0 16px 30px; font-size: 14px; color: var(--muted); }
 
 .storage-option.on { border-left: 2px solid var(--accent); padding-left: 20px; }
@@ -987,7 +1013,9 @@ table.checks .snippet {
     .setup-rail li a,
     .setup-rail li span { padding-right: 12px; }
     .setup-form input,
-    .setup-form select { width: 100%; }
+    .setup-form select,
+    .setup form.card input,
+    .setup form.card select { width: 100%; }
 }
 
 /* The sign-in page (src/Panel/Login.php) and the panel's sign-out control.
