@@ -363,7 +363,8 @@ final class Layout
 
             $listId = 'lh-nav-' . $item['slug'];
 
-            echo '<li class="navgroup' . ($current ? ' is-current' : '') . '">';
+            echo '<li class="navgroup' . ($current ? ' is-current' : '')
+                . ($sections !== [] ? ' has-sub' : '') . '">';
             echo '<span class="navrow">';
             echo '<a class="navlink' . ($current ? ' on' : '') . '"'
                 . ' href="' . Security::esc($href) . '"'
@@ -381,6 +382,7 @@ final class Layout
 
             if ($sections !== []) {
                 echo '<ul class="navsub" id="' . Security::esc($listId) . '"' . ($current ? '' : ' hidden') . '>';
+                echo '<li class="navsub-head" aria-hidden="true">' . Security::esc($item['label']) . '</li>';
                 foreach ($sections as $entry) {
                     $on = $current && $entry['id'] === $section;
                     echo '<li><a class="navsub-link' . ($on ? ' on' : '') . '"'
