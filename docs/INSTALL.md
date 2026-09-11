@@ -607,7 +607,32 @@ of your own.
 `data-hb` and `data-idle` to change the two clocks, `data-endpoint` for a collector that is
 not a sibling of the script, `window.LoghoundIdent` / `window.LoghoundSignedIn` for a
 template that cannot add an attribute, and `window.loghound.identify()` for a sign-in that
-happens after the page loaded. What each one defaults to, what it accepts, and whether
+happens after the page loaded. All nine, in code:
+
+```html
+<!-- The two globals are read ONCE, at the moment b.js executes, so they go above it.
+     Setting them after the tag has run sets them for nothing. -->
+<script>
+  window.LoghoundIdent = "<?= htmlspecialchars($user->email, ENT_QUOTES) ?>";
+  window.LoghoundSignedIn = <?= $user->isSignedIn() ? 'true' : 'false' ?>;
+</script>
+
+<script src="https://loghound.example.com/b.js?v=1757000000"
+        data-endpoint="https://loghound.example.com/collect.php"
+        data-hb="30000"
+        data-idle="60000"
+        data-ident="<?= htmlspecialchars($user->email, ENT_QUOTES) ?>"
+        data-signed-in="<?= $user->isSignedIn() ? '1' : '0' ?>"
+        data-params="q,category,sort"
+        defer></script>
+
+<!-- For an identity that only arrives later, in a single-page application. -->
+<script>window.loghound.identify(user.email, true);</script>
+```
+
+Nothing there is required: the `src` alone is a complete installation, and
+`data-endpoint` in particular is only for a script served from a CDN or another path.
+What each one defaults to, what it accepts, and whether
 *this* installation stores what it sends:
 
 ```

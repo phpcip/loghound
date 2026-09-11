@@ -3482,6 +3482,10 @@ final class Settings extends Controller implements JobHost, Sections
         }
         echo '</dl>';
 
+        echo '<h4>What has to be in the page before b.js runs</h4>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('ordering', 'globals')) . '</p>';
+        echo '<p class="muted">' . Doc::inlineHtml(Doc::para('ordering', 'late')) . '</p>';
+
         echo '<p class="muted"><strong>An identity is capped at ' . Security::esc((string) \Loghound\Beacon::MAX_IDENT)
             . ' bytes</strong> and anything longer is truncated to it. That holds any email address, customer '
             . 'number or account id anybody sensibly uses as one; it is there because the collector is public, '
@@ -3506,7 +3510,7 @@ final class Settings extends Controller implements JobHost, Sections
      * The strings carry the inline markup described in Beacon\Doc, never HTML, so the same entry
      * renders correctly in a browser, in a terminal and in a Markdown file.
      *
-     * @return array<int,array{name:string,kind:string,what:string,default:string,limits:string,switch:?string}>
+     * @return array<int,array{name:string,kind:string,what:string,default:string,limits:string,example:string,switch:?string}>
      */
     public static function beaconOptions(): array
     {
@@ -3534,6 +3538,7 @@ final class Settings extends Controller implements JobHost, Sections
             . '<th scope="col">What it does</th>'
             . '<th scope="col">Default</th>'
             . '<th scope="col">Accepted</th>'
+            . '<th scope="col">In code</th>'
             . '<th scope="col">Stored here?</th>'
             . '</tr></thead><tbody>';
 
@@ -3544,6 +3549,7 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<td>' . Doc::inlineHtml($opt['what']) . '</td>';
             echo '<td>' . Doc::inlineHtml($opt['default']) . '</td>';
             echo '<td>' . Doc::inlineHtml($opt['limits']) . '</td>';
+            echo '<td><pre class="snippet mono">' . Security::esc($opt['example']) . '</pre></td>';
             echo '<td>' . $this->beaconOptionState($opt['switch']) . '</td>';
             echo '</tr>';
         }

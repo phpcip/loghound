@@ -120,7 +120,7 @@ final class Doc
      * The strings carry the inline markup described in this file's header, never HTML, so the
      * same entry renders correctly in a browser, in a terminal and in a Markdown file.
      *
-     * @return array<int,array{name:string,kind:string,what:string,default:string,limits:string,switch:?string}>
+     * @return array<int,array{name:string,kind:string,what:string,default:string,limits:string,example:string,switch:?string}>
      */
     public static function options(): array
     {
@@ -131,6 +131,7 @@ final class Doc
                 'what'    => 'Collector URL, when it is not a sibling of `b.js`.',
                 'default' => 'the script’s own `src` with `' . self::FILE . '` → `' . self::COLLECTOR . '`',
                 'limits'  => 'Any URL. Set it only if you serve the script from a CDN or a different path.',
+                'example' => 'data-endpoint="https://loghound.example.com/collect.php"',
                 'switch'  => null,
             ],
             [
@@ -141,6 +142,7 @@ final class Doc
                 'default' => '15000',
                 'limits'  => 'Integer, clamped to 2 000–300 000. Anything else is ignored and the default '
                     . 'is used.',
+                'example' => 'data-hb="30000"',
                 'switch'  => null,
             ],
             [
@@ -150,6 +152,7 @@ final class Doc
                     . 'milliseconds. This is the definition of the **Engaged** clock.',
                 'default' => '30000',
                 'limits'  => 'Integer, clamped to 1 000–600 000.',
+                'example' => 'data-idle="60000"',
                 'switch'  => null,
             ],
             [
@@ -160,6 +163,7 @@ final class Doc
                 'default' => 'absent, and absent is not empty',
                 'limits'  => 'Free text, truncated to ' . \Loghound\Beacon::MAX_IDENT . ' bytes. Control '
                     . 'characters stripped, invalid UTF-8 repaired.',
+                'example' => 'data-ident="<?= htmlspecialchars($user->email, ENT_QUOTES) ?>"',
                 'switch'  => 'beacon.store_identity',
             ],
             [
@@ -173,6 +177,7 @@ final class Doc
                     . 'template that renders nothing for a visitor who is not signed in — is read as '
                     . '**false**, so `data-signed-in="{{ user.id }}"` works unchanged for both. Any '
                     . 'other value is read as not reported.',
+                'example' => 'data-signed-in="<?= $user->isSignedIn() ? \'1\' : \'0\' ?>"',
                 'switch'  => 'beacon.store_signed_in',
             ],
             [
@@ -184,6 +189,7 @@ final class Doc
                 'limits'  => 'Comma separated. At most ' . \Loghound\Beacon::MAX_TERMS . ' names, each at '
                     . 'most 40 characters of `a-z 0-9 _ - . [ ]`. Each value is capped at '
                     . \Loghound\Beacon::MAX_TERM . ' characters and dropped, not truncated, if longer.',
+                'example' => 'data-params="q,category,sort"',
                 'switch'  => 'beacon.query_params',
             ],
             [
@@ -194,6 +200,7 @@ final class Doc
                 'default' => 'unset',
                 'limits'  => 'A string. Must be set **before** b.js executes — with `defer` that means '
                     . 'anywhere in the document. The attribute wins if both are present.',
+                'example' => '<script>window.LoghoundIdent = "ada@example.com";</script>',
                 'switch'  => 'beacon.store_identity',
             ],
             [
@@ -203,6 +210,7 @@ final class Doc
                 'default' => 'unset — not reported',
                 'limits'  => 'A real boolean, or the same strings the attribute accepts. Must be set '
                     . 'before b.js executes.',
+                'example' => '<script>window.LoghoundSignedIn = true;</script>',
                 'switch'  => 'beacon.store_signed_in',
             ],
             [
@@ -215,6 +223,7 @@ final class Doc
                 'limits'  => 'Both arguments optional and independent. **Makes no request of its own:** '
                     . 'the values ride the heartbeat that is already scheduled. Safe to call with '
                     . 'anything — it cannot throw into your code.',
+                'example' => 'window.loghound.identify(user.email, true);',
                 'switch'  => 'beacon.store_identity / beacon.store_signed_in',
             ],
         ];
@@ -342,6 +351,24 @@ final class Doc
                         . 'and it cannot reach your log-backed data — and it is exactly why a session '
                         . 'measured by the beacon alone is stored as `planes_s:beacon_only` and shown as '
                         . 'single-plane wherever it is counted.',
+                ],
+            ],
+            [
+                'key'   => 'ordering',
+                'title' => 'What has to be in the page before b.js runs',
+                'paras' => [
+                    'globals' => 'The six `data-` attributes are read off the script tag itself, so where they sit '
+                        . 'in the document cannot be wrong. The two globals can be: '
+                        . '`window.LoghoundIdent` and `window.LoghoundSignedIn` are read **once**, at the '
+                        . 'moment b.js executes, so a script that sets them after that has set them for '
+                        . 'nothing — the beacon has already sent its first payload and neither value is '
+                        . 'in it. With `defer` on the tag, b.js runs only after the document is parsed, '
+                        . 'which means anywhere in the page is early enough.',
+                    'late' => 'For a value that genuinely is not known until later — a single-page application '
+                        . 'that signs somebody in without a navigation — the globals are the wrong '
+                        . 'instrument and `window.loghound.identify(ident, signedIn)` is the right one. It '
+                        . 'may be called at any point after b.js has run, and it sends nothing by itself: '
+                        . 'the values ride the next heartbeat.',
                 ],
             ],
             [
@@ -605,6 +632,7 @@ final class Doc
             $out[] = self::wrap(self::inlineText($opt['what']), 6);
             $out[] = self::wrap('Default: ' . self::inlineText($opt['default']), 6);
             $out[] = self::wrap('Accepted: ' . self::inlineText($opt['limits']), 6);
+            $out[] = '      In code: ' . $opt['example'];
             $out[] = self::wrap('Stored here: ' . self::stateLabel($state['state']) . ' — '
                 . self::inlineText($state['detail']), 6);
             $out[] = '';
@@ -651,7 +679,10 @@ final class Doc
      */
     public static function markdownOptions(): string
     {
-        $rows = ['| Option | Kind | What it does | Default | Accepted | Stored |', '|---|---|---|---|---|---|'];
+        $rows = [
+            '| Option | Kind | What it does | Default | Accepted | In code | Stored |',
+            '|---|---|---|---|---|---|---|',
+        ];
 
         foreach (self::options() as $opt) {
             $stored = 'always — the script uses it itself';
@@ -662,7 +693,7 @@ final class Doc
             $rows[] = '| `' . $opt['name'] . '` | ' . $opt['kind'] . ' | '
                 . self::inlineMarkdown($opt['what']) . ' | '
                 . self::inlineMarkdown($opt['default']) . ' | '
-                . self::inlineMarkdown($opt['limits']) . ' | ' . $stored . ' |';
+                . self::inlineMarkdown($opt['limits']) . ' | `' . $opt['example'] . '` | ' . $stored . ' |';
         }
 
         return implode("\n", $rows);
