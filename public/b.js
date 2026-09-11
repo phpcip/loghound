@@ -312,12 +312,20 @@
      * Collapse the two possible sources into 1, 0 or undefined.
      *
      * The attribute is a string and the global may be a real boolean, so both spellings of
-     * each state are accepted. Anything else — a typo, an empty attribute, a template that
-     * rendered nothing — is undefined, which the payload omits and the server reads as "not
+     * each state are accepted. An attribute that is present but empty is an answer and reads
+     * as 0. Anything else — a typo, a value neither spelling covers, an attribute the site
+     * never wrote — is undefined, which the payload omits and the server reads as "not
      * reported" rather than as "anonymous".
      */
     function tri(a, b) {
-        var v = (a === null || a === undefined || a === '') ? b : a;
+        /* AN EMPTY ATTRIBUTE IS AN ANSWER, AND THE ANSWER IS NO. A template that renders
+           `data-signed-in="{{ user.signed_in }}"` writes an empty string for a visitor who is
+           not signed in — the site DID answer, and collapsing that into "not reported" threw
+           away the one case the boolean exists for. Absent is still absent: an attribute the
+           site never wrote falls through to the global and then to undefined, which is the
+           third state the panel shows as "not reported". */
+        if (a === '') { return 0; }
+        var v = (a === null || a === undefined) ? b : a;
         if (v === true || v === 1 || v === '1' || v === 'true') { return 1; }
         if (v === false || v === 0 || v === '0' || v === 'false') { return 0; }
         return undefined;

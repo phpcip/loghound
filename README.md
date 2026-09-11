@@ -200,6 +200,14 @@ And add one line to your site, in `<head>`:
 <script src="https://loghound.example.com/b.js?v=1789104523" defer></script>
 ```
 
+**On a site this machine has no access log for** — a search page, a marketing site, anything
+on another server — that same line is the whole installation, with one extra step: add that
+hostname to `beacon.allowed_hosts` in `config/loghound.php`. Until it is listed the beacon
+stages a row and nothing more, so no session is created and no search term is kept. It is a
+permission rather than a password: a browser cannot forge `Origin`, so an ordinary page
+cannot impersonate a host you listed, but anything that is not a browser can — which is why
+a session measured by the beacon alone is stored and shown as single-plane.
+
 **Do not copy that version.** `b.js` is served with a long immutable cache, so the `?v=` is
 what makes an upgrade reach a returning visitor at all — and a snippet pinned to a literal
 never will. Take the line from the panel's Settings → Beacon card, or from

@@ -167,9 +167,12 @@ final class Doc
                 'kind'    => 'attribute',
                 'what'    => 'Whether the visitor was signed in. Splits every number in the panel into '
                     . 'signed-in and anonymous.',
-                'default' => 'absent — which means **not reported**, never “no”',
-                'limits'  => '`1`/`0` or `true`/`false`. Anything else, including an empty attribute a '
-                    . 'template rendered blank, is read as not reported.',
+                'default' => 'absent — which means **not reported**, never “no”. An attribute that is '
+                    . 'present but empty is an answer, and the answer is **no**',
+                'limits'  => '`1`/`0` or `true`/`false`. An empty attribute — the usual shape of a '
+                    . 'template that renders nothing for a visitor who is not signed in — is read as '
+                    . '**false**, so `data-signed-in="{{ user.id }}"` works unchanged for both. Any '
+                    . 'other value is read as not reported.',
                 'switch'  => 'beacon.store_signed_in',
             ],
             [

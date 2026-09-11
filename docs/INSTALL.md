@@ -558,6 +558,23 @@ document. Both work; one starts sooner.
 No dependencies, no cookies by default, passive and throttled event listeners. It ships as
 readable, commented source — 33 KB on disk, about 12 KB gzipped.
 
+**Putting it on a host this machine has no log for.** The same line is the whole installation
+on another server — a hosted search page, a marketing site — but that hostname has to be
+listed in `beacon.allowed_hosts` in `config/loghound.php` first:
+
+```php
+'beacon' => [
+    'allowed_hosts' => ['search.example.com', 'shop.example.com'],
+],
+```
+
+Until it is listed the beacon stages a row and stops there: no session is created and no
+search term is kept, with nothing on screen to say why. It is a permission rather than a
+password — a browser cannot forge `Origin`, so an ordinary page cannot impersonate a host you
+listed, but anything that is not a browser can, which is why a session measured by the beacon
+alone is stored as `planes_s:beacon_only` and shown as single-plane wherever it is counted.
+`docs/BEACON.md` §3.3 is the full account.
+
 **Check that your server compresses it.** The shipped vhost examples set the beacon's cache
 and CORS headers but deliberately do not touch compression, because on both Debian-family
 Apache (`mods-enabled/deflate.conf`) and stock nginx (`gzip on` in `nginx.conf`) it is a
