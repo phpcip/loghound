@@ -1,0 +1,991 @@
+/*
+ * Loghound — the phone and tablet stylesheet.
+ *
+ * Loaded AFTER public/assets/css/panel.css, and it owns nothing that panel.css owns. Three
+ * agents are writing in this tree at once, so every rule here is additive, every new class is
+ * prefixed `lh-`, and no declaration in panel.css is edited to make one below work.
+ *
+ * ---------------------------------------------------------------------------------------
+ * WHAT THIS FILE IS FOR
+ * ---------------------------------------------------------------------------------------
+ * The panel was built at desk width and given breakpoints afterwards. Measured at 375, 390,
+ * 414 and 768 CSS pixels, that left five classes of defect, and the sections below are
+ * organised by them rather than by view:
+ *
+ *   1. The page scrolled sideways. `repeat(auto-fit, minmax(380px, 1fr))` cannot fit a 380px
+ *      track in a 343px column, so the track wins and the document grows past the viewport.
+ *      Fixed once, structurally, with minmax(min(100%, …)) — for every such grid, not only
+ *      the two where it was noticed.
+ *   2. The view navigation cost 317px of a phone screen — 41% of the viewport before a single
+ *      number — because twelve links wrapped into a block. It is a bar with a drawer now.
+ *   3. A nine or ten column table was a 900px canvas inside a 343px window: two and a half
+ *      screens of sideways scrolling per row, with the Verdict column off the edge. Those
+ *      tables become a list of records, every column kept, each labelled.
+ *   4. Controls were built for a cursor: 20px range links, 18px facet rows, 24px expanders,
+ *      a 21px password field. Nothing pressable is under 44px on a touch pointer now.
+ *   5. The session facet rail was a 5,000px column above the results, so the first session
+ *      was five screens down. It is a disclosure, closed on arrival, holding the same lists.
+ *
+ * ---------------------------------------------------------------------------------------
+ * HOW THE BREAKPOINTS ARE CHOSEN, AND WHY IT IS NOT ALL max-width
+ * ---------------------------------------------------------------------------------------
+ * Three kinds of rule, three kinds of query, deliberately:
+ *
+ *   - **No query at all** for anything that was simply wrong at every width: a 13px label
+ *     under the 14px floor, a grid track wider than its container, an unpadded password
+ *     field. Narrowing those to a phone query would leave the bug standing on a desktop.
+ *   - **`(pointer: coarse), (max-width: 900px)`** for touch sizing. The pointer query is the
+ *     honest test — a 768px tablet needs a thumb target and a 900px laptop window does not —
+ *     and the width is kept alongside it so that a desktop browser dragged to phone width
+ *     shows the phone build, which is how this gets reviewed.
+ *   - **`(max-width: 900px)`** for the three layout-mode switches (navigation, tables,
+ *     facet rail). These override a desktop-first base that belongs to another file: writing
+ *     them unscoped and "restoring" desktop above 901px would mean copying somebody else's
+ *     sidebar geometry into this file and keeping the copy correct. Scoping the switch is the
+ *     change that cannot silently break the wide layout.
+ *
+ * 900px is the boundary already used by panel.css for the detail dialog and the facet rail,
+ * so there is no fourth breakpoint in the panel.
+ *
+ * ---------------------------------------------------------------------------------------
+ * THE RULES THIS FILE KEEPS
+ * ---------------------------------------------------------------------------------------
+ * Flat, 2px corners, hairlines instead of boxes, one accent, no gradient and no shadow. Every
+ * colour is a token from panel.css — there is not one literal colour in this file, so both
+ * themes and any future retoning follow automatically. Nothing is set below 14px; where
+ * something had to fit, it was reshaped, never shrunk. Every animation is inside a
+ * prefers-reduced-motion guard.
+ *
+ * Nothing is hidden without a way to reach it. The navigation, the theme control, the sign
+ * out button and every facet value are all one tap away at 375px, and no column is dropped
+ * from a table — the row becomes taller instead.
+ *
+ * Two behaviours need script, and both are gated on a class that
+ * public/assets/js/responsive.js adds to <html>: `.lh-nav-js` for the drawer and
+ * `table.lh-stack` for a stacked table. With script off the panel keeps exactly the layout it
+ * has today — wrapped nav, tables scrolling inside their wrapper — rather than a broken half
+ * of this one.
+ */
+
+/* ===========================================================================
+   Tokens this file introduces.
+
+   Two, both dimensions. --lh-tap is the one number that decides every touch
+   target, so raising it raises all of them; --lh-topbar-h is written from the
+   measured height of the navigation bar by responsive.js, because the bar is
+   fixed and three other things (the page top padding, the sticky section nav
+   and every card's jump offset) have to agree with whatever height the font
+   the browser actually resolved gives it. The value here is the first-paint
+   and no-script fallback.
+   =========================================================================== */
+
+:root {
+    --lh-tap: 44px;
+    --lh-topbar-h: 0px;
+}
+
+/* ===========================================================================
+   1. FOUNDATIONS — true at every width, so no media query.
+   =========================================================================== */
+
+/*
+ * The 14px floor, enforced where it had been broken.
+ *
+ * Four labels were set at 13px: the bandwidth strip in the page header, the two role
+ * captions on the plan usage view, and the host picker's label. All four are uppercase
+ * tracked-out type, which is the hardest thing on the page to read small, and all four sit
+ * next to a number a reader is checking. 14px is the floor for the panel and it has no
+ * per-component exceptions.
+ */
+
+.bwstrip-label,
+.hostpick label,
+.meterrow-role,
+.windowrow-role {
+    font-size: 14px;
+}
+
+/*
+ * Grid tracks that cannot be wider than the space they are in.
+ *
+ * `repeat(auto-fit, minmax(380px, 1fr))` is read as "never narrower than 380px", so in a
+ * 343px column the track stays 380px and the document scrolls sideways. Measured on Bot
+ * forensics and Networks at 375 and 390: the document was 396px wide, the two charts ended
+ * 21px past the right edge, and the whole page slid under the thumb.
+ *
+ * `minmax(min(100%, 380px), 1fr)` keeps the intent — two columns as soon as two will fit —
+ * and gives up the minimum rather than the viewport when they will not. Applied to every
+ * grid in the panel built this way, including the ones that happen to fit at 375 today and
+ * would not on a 320px device.
+ */
+
+.grid-2                { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
+.split-card            { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
+.planes                { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
+.collects              { grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); }
+.fpanel                { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+.fpanel .facet-groups  { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.lf-rail               { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+.stats                 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); }
+.timing-grid           { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+
+/*
+ * A flex or grid child refuses to shrink below its content by default, which is how one long
+ * unbroken string in a card pushes the card past the screen. These four containers hold
+ * exactly that — a fingerprint hash, a User-Agent, a request URL — so their children are told
+ * they may shrink, and the string wraps instead of the page growing.
+ */
+
+.view > *,
+.card > *,
+.card-content > *,
+.head-tools > * {
+    min-width: 0;
+}
+
+/*
+ * Unbreakable strings that were breaking the page instead.
+ *
+ * Measured: the sign-in page scrolled 3px sideways at 375 because the <code> holding the
+ * path to bin/loghound-setup cannot wrap at a hyphen or a slash by default, and the
+ * installer clipped the end of a token hint the same way. `anywhere` is right for these
+ * three: they are paths, addresses and identifiers, where a break anywhere is legible and
+ * running off the screen is not.
+ */
+
+code,
+.login-note code,
+.check-row .muted,
+.finish-text .muted,
+.job-step-label {
+    overflow-wrap: anywhere;
+}
+
+/*
+ * Every text input the panel has, not the four that were listed.
+ *
+ * panel.css pads `search`, `number`, `text` and `select`. `password`, `email` and `url` were
+ * not on the list, so they fell back to the browser default: the sign-in page's password
+ * field measured 21px tall against a 40px username field directly above it. Matching the
+ * declarations rather than adding a height keeps the two fields identical.
+ */
+
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="tel"],
+textarea {
+    font: 400 15px/1.3 var(--font-ui);
+    padding: 9px 12px;
+    color: var(--ink);
+    background: var(--page);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius);
+}
+
+/*
+ * Nothing in a form may be narrower than its container. A `size="28"` attribute is a
+ * character count from 1995 and on a 343px column it resolves wider than the column.
+ */
+
+.setup-form input,
+.setup form.card input,
+.login-form input,
+.facet-q,
+.searchbar input[type="search"] {
+    max-width: 100%;
+}
+
+/*
+ * The per-view hint, off by default.
+ *
+ * responsive.js renders each navigation link's title attribute as a second line inside the
+ * link, because a phone has no hover and that sentence has never been readable on one. The
+ * desktop sidebar still shows the tooltip, so the line itself must not appear there — hence
+ * a base rule that hides it and one rule inside the drawer that does not.
+ */
+
+.lh-navhint { display: none; }
+
+/* ===========================================================================
+   2. TOUCH SIZING — every pressable thing, on a coarse pointer or a narrow window.
+
+   One block, one number. The panel's controls were laid out for a cursor and
+   measured between 18px and 31px tall: range links 29x20, facet rows 18px,
+   the fingerprint expander 24x24, sort headers 27px, the dialog's close
+   button 64x31. A thumb contact patch is about 9mm, which is why 44px is the
+   published minimum on both mobile platforms, and everything below is brought
+   to it.
+
+   The method matters: padding and min-height, never a font size. Type stays at
+   14px and above, and a control grows around its label instead of the label
+   shrinking to fit a control. Inline links inside a value — an address that is
+   also a filter — get vertical padding with a matching negative margin, so the
+   hit box reaches 44px without moving the line it sits on by a pixel.
+   =========================================================================== */
+
+@media (pointer: coarse), (max-width: 900px) {
+
+    /* The generic floor. Scoped to controls, so it cannot inflate a layout box. */
+
+    button,
+    .btn,
+    select,
+    summary,
+    input[type="text"],
+    input[type="search"],
+    input[type="password"],
+    input[type="email"],
+    input[type="url"],
+    input[type="number"] {
+        min-height: var(--lh-tap);
+    }
+
+    button.small,
+    button.ghost.small,
+    .copy-btn,
+    .facet-more,
+    #lh-dialog-close {
+        min-height: var(--lh-tap);
+        padding-top: 8px;
+        padding-bottom: 8px;
+    }
+
+    #lh-dialog-close { min-width: var(--lh-tap); }
+
+    /* The time range picker: the most-used control in the panel and, at 29x20, the
+       smallest. It keeps its shape — type on a rule, not a button — and gains height. */
+
+    .ranges { gap: 4px 18px; }
+    .ranges a {
+        display: inline-flex;
+        align-items: center;
+        min-height: var(--lh-tap);
+        padding: 0 2px 4px;
+    }
+
+    /* The host picker and the section nav live in the same header strip. */
+
+    .hostpick select,
+    #lh-host { min-height: var(--lh-tap); }
+
+    /* Facet values, in all three places the panel shows them: the explorer rail, the
+       Opensolr filter rail, and the identity panel. The whole row is the target. */
+
+    .facet-opt,
+    .facet-group li a,
+    .lf-rail li a,
+    .fgroup li a {
+        min-height: var(--lh-tap);
+        align-items: center;
+        padding-top: 6px;
+        padding-bottom: 6px;
+    }
+
+    /* Chips that remove a filter. Small type, large target, unchanged appearance. */
+
+    .fchip,
+    .lf-active a,
+    .lf-outcomes a,
+    .active-filters a {
+        min-height: var(--lh-tap);
+        align-items: center;
+        padding-top: 6px;
+        padding-bottom: 6px;
+    }
+
+    /* Tabs and segmented toggles keep their underline and gain a thumb's worth of room. */
+
+    .tab,
+    .toggle button {
+        min-height: var(--lh-tap);
+        padding-top: 10px;
+    }
+
+    /* A radio or checkbox row: the label is the target, and the box itself is drawn big
+       enough to see which of five scoring modes is selected. */
+
+    label.radio,
+    label.check {
+        min-height: var(--lh-tap);
+        align-items: center;
+        padding: 4px 0;
+    }
+    label.radio input,
+    label.check input {
+        width: 20px;
+        height: 20px;
+        margin-top: 0;
+    }
+
+    /* The fingerprint cluster expander: 24x24, and the only way to see the addresses
+       inside a fleet. */
+
+    .expander {
+        width: var(--lh-tap);
+        height: var(--lh-tap);
+    }
+
+    /* Sortable column headers. They are the sort control, so they are sized like one
+       whether the table is stacked or still a table. */
+
+    th.sortable {
+        min-height: var(--lh-tap);
+        padding-top: 8px;
+        padding-bottom: 8px;
+    }
+
+    /* Pager links, the installer's step rail, and the two links inside the bandwidth
+       strip — all measured between 18px and 20px tall. */
+
+    .pager a,
+    .setup-rail li a,
+    .bwstrip-link,
+    #usage-upgrade {
+        display: inline-flex;
+        align-items: center;
+        min-height: var(--lh-tap);
+    }
+
+    /* An inline link that is also a value: the identity filters in a table cell, and the
+       "what to do" links inside a banner. The negative margin means the hit box grows and
+       the line box does not, so a paragraph keeps its leading. */
+
+    a.dim,
+    .banner a,
+    .caveat a,
+    .note a {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        margin-top: -10px;
+        margin-bottom: -10px;
+    }
+}
+
+/* ===========================================================================
+   3. THE PAGE SHELL at phone width — gutters, safe areas, and the fixed bar's
+   share of the top of the screen.
+   =========================================================================== */
+
+@media (max-width: 900px) {
+
+    /*
+     * Gutters that survive a notch. The panel's own padding is kept and max()'d against the
+     * device's safe inset, so a landscape iPhone does not put the first character of a
+     * hostname under the camera housing. Nothing loses padding it had.
+     */
+
+    main {
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+        padding-bottom: max(60px, calc(40px + env(safe-area-inset-bottom)));
+    }
+
+    /* Room for the fixed navigation bar. Zero until responsive.js measures the bar, so a
+       page with script off is not pushed down by a bar that is not fixed. */
+
+    .lh-nav-js main { padding-top: calc(var(--lh-topbar-h) + 20px); }
+
+    /*
+     * The sticky section nav starts below the navigation bar rather than under it, and the
+     * card jump offset accounts for both. panel.css derives that offset from --set-nav-h
+     * alone, which was correct when the bar above it scrolled away.
+     */
+
+    .lh-nav-js .set-nav { top: var(--lh-topbar-h); }
+    .lh-nav-js .card { scroll-margin-top: calc(var(--set-nav-h) + var(--lh-topbar-h) + 16px); }
+
+    /* The section nav's negative gutters mirror main's padding, which now has a safe-area
+       term in it, so they have to as well or the bar stops being full bleed. */
+
+    .set-nav {
+        margin-left: calc(max(16px, env(safe-area-inset-left)) * -1);
+        margin-right: calc(max(16px, env(safe-area-inset-right)) * -1);
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+    }
+
+    /*
+     * One scrolling row of jump links, sized for a thumb and snapped so a flick lands on an
+     * entry rather than between two. The row already scrolled; what it lacked was height —
+     * 29px — and any indication that it scrolls, which the snap and the momentum give it.
+     */
+
+    .set-nav { scroll-snap-type: x proximity; scroll-padding-left: 16px; }
+    .set-nav a {
+        min-height: var(--lh-tap);
+        align-items: center;
+        padding: 0 12px;
+        scroll-snap-align: start;
+    }
+
+    /*
+     * The page head. The H1 clamp already scales; the lead was still set at 19px against a
+     * 375px measure, which is 32 characters a line. 17px reads better and stays well clear
+     * of the floor.
+     */
+
+    .head { margin-bottom: 24px; }
+    .head .sub { font-size: 17px; }
+    .head-tools { gap: 10px 16px; margin-top: 18px; }
+
+    /* A card heading and its tools stop competing for one line. */
+
+    .card-head { gap: 8px 16px; }
+
+    /* Banners are read on a phone at arm's length, so they get their measure back. */
+
+    .banner { padding: 12px 14px; }
+}
+
+/* ===========================================================================
+   4. THE VIEW NAVIGATION — a bar with a drawer, not a block of twelve links.
+
+   THE DEFECT. `.side` at 375px measured 375x317: twelve links wrapped into
+   rows, a brand, a theme button and a sign-out form, all of it above the H1 on
+   every page. 317px of a 780px viewport is 41%, and on a phone whose browser
+   chrome leaves about 640px it is closer to half. The reader paid that on
+   every navigation to read two numbers.
+
+   THE SHAPE. A 56px bar carrying the brand and one control, fixed to the top
+   of the screen so it is reachable from the bottom of a 19,000px settings
+   page without scrolling back up. Pressing it slides the same twelve links
+   down as a sheet, each a 48px row, with the theme control and sign out at the
+   end of the list where they belong — they are things you touch once a day.
+
+   WHAT IS NOT HIDDEN. Nothing. Every link, the theme control and the sign-out
+   button are all one press away, the sheet is a list rather than a menu of
+   icons, and each entry keeps the hint text the title attribute carries on
+   desktop — a hint nobody has ever seen on a phone, because there is no hover.
+
+   GATED ON SCRIPT. The drawer needs a button that does not exist in the
+   markup, so responsive.js creates it and marks <html> with .lh-nav-js. With
+   script off none of this applies and the navigation stays the wrapped block
+   panel.css produces: worse, but whole.
+   =========================================================================== */
+
+@media (max-width: 900px) {
+
+    .lh-nav-js .side {
+        position: fixed;
+        inset: 0 0 auto 0;
+        z-index: 45;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0 12px;
+        max-height: 100dvh;
+        padding: 8px max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left));
+        overflow: hidden;
+        background: var(--page);
+        border-bottom: 1px solid var(--hairline);
+    }
+
+    .lh-nav-js .side .brand { margin: 0 auto 0 0; padding: 0; }
+
+    /* The control that opens the sheet. Ink border, page fill, one accent when open: the
+       same vocabulary as every other button in the panel. */
+
+    .lh-navbtn {
+        order: 1;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: var(--lh-tap);
+        padding: 0 14px;
+        font: 700 14px/1 var(--font-ui);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink);
+        background: transparent;
+        border: 1px solid var(--ink);
+        border-radius: var(--radius);
+        cursor: pointer;
+    }
+    .lh-navbtn[aria-expanded="true"] {
+        color: var(--on-accent);
+        background: var(--accent);
+        border-color: var(--accent);
+    }
+
+    /* The two bars of the control, drawn rather than typed, because an icon font or an
+       emoji would be the only outside asset in the panel. They become a cross when the
+       sheet is open, so the control says what pressing it will do. */
+
+    .lh-navbtn-mark {
+        position: relative;
+        width: 14px;
+        height: 10px;
+        flex: none;
+    }
+    .lh-navbtn-mark::before,
+    .lh-navbtn-mark::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        width: 14px;
+        height: 2px;
+        background: currentColor;
+    }
+    .lh-navbtn-mark::before { top: 0; }
+    .lh-navbtn-mark::after  { bottom: 0; }
+    .lh-navbtn[aria-expanded="true"] .lh-navbtn-mark::before { top: 4px; transform: rotate(45deg); }
+    .lh-navbtn[aria-expanded="true"] .lh-navbtn-mark::after  { bottom: 4px; transform: rotate(-45deg); }
+
+    /* Closed: the bar is the brand and the control. Open: the list, the theme control and
+       sign out fill the rest of the screen and scroll on their own. */
+
+    .lh-nav-js .side > ul,
+    .lh-nav-js .side > .theme-toggle,
+    .lh-nav-js .side > .signout { display: none; }
+
+    .lh-nav-js .side.is-open {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding-bottom: max(16px, env(safe-area-inset-bottom));
+    }
+    .lh-nav-js .side.is-open > ul,
+    .lh-nav-js .side.is-open > .theme-toggle,
+    .lh-nav-js .side.is-open > .signout {
+        display: block;
+        flex-basis: 100%;
+    }
+
+    .lh-nav-js .side.is-open > ul {
+        order: 2;
+        margin-top: 8px;
+        border-top: 1px solid var(--hairline);
+    }
+
+    /* A row per view: the label, then the hint underneath in the muted tone. The hint is
+       written into the markup as a title attribute and is put on screen by responsive.js,
+       because a phone has no hover and a sentence explaining what a view answers is worth
+       more there than anywhere. */
+
+    .lh-nav-js .side.is-open li a {
+        display: block;
+        min-height: 48px;
+        padding: 11px 4px;
+        border-left: 0;
+        border-bottom: 1px solid var(--hairline);
+        font-size: 16px;
+        line-height: 1.3;
+    }
+    .lh-nav-js .side.is-open li a.on {
+        border-left: 0;
+        border-bottom-color: var(--hairline);
+        box-shadow: inset 2px 0 0 0 var(--accent);
+        padding-left: 12px;
+    }
+    .lh-navhint {
+        display: block;
+        margin-top: 2px;
+        font-size: 14px;
+        font-weight: 400;
+        color: var(--faint);
+    }
+
+    .lh-nav-js .side.is-open > .theme-toggle {
+        order: 3;
+        margin: 14px 0 0;
+        min-height: var(--lh-tap);
+    }
+    .lh-nav-js .side.is-open > .signout { order: 4; margin-top: 10px; }
+    .lh-nav-js .side.is-open > .signout button { width: 100%; min-height: var(--lh-tap); }
+
+    /* The page behind the sheet. A press on it closes — the gesture everybody tries first. */
+
+    .lh-scrim {
+        position: fixed;
+        inset: 0;
+        z-index: 44;
+        background: var(--ink);
+        opacity: 0.4;
+        border: 0;
+        border-radius: 0;
+        padding: 0;
+        cursor: pointer;
+    }
+    .lh-scrim:hover { background: var(--ink); }
+
+    html.lh-nav-open { overflow: hidden; }
+}
+
+/* The bar is a phone shape. Above 900px panel.css owns the sidebar again, and the two
+   elements this file introduced have no business being on screen. */
+
+@media (min-width: 901px) {
+    .lh-navbtn,
+    .lh-scrim { display: none; }
+}
+
+/* ===========================================================================
+   5. TABLES AS RECORDS.
+
+   THE DEFECT, measured. `table.table-fixed { min-width: 900px }` against a
+   343px wrapper: Fingerprints is ten columns and 900px wide inside 343, the
+   two Networks tables are nine, Virtual hosts is eight, the Performance paths
+   table resolves to 725px. That is two and a half screens of horizontal
+   scrolling per row, inside a box that also scrolls vertically, on a surface
+   where the two gestures are the same gesture. The last columns — Verdict,
+   Bot score, the thing the row is for — are the ones off the edge.
+
+   THE SHAPE. One row becomes one record. The first cell is the record's
+   headline, set larger with a rule under it; every other cell is a label and a
+   value on one line, the label taken from the column header. No column is
+   dropped and no value is truncated: the card grows instead. Ten columns is
+   about 250px of card, and forty of them scroll vertically, which is the
+   gesture the device is for.
+
+   THE SORT CONTROL SURVIVES. Hiding the header row would take sorting with
+   it, so the header becomes a wrapping row of sort chips above the records —
+   the same th elements, the same handler in sorttable.js, the same arrow
+   marks. Headers that are not sortable carry no information once their text is
+   on every cell, so those are the only cells hidden anywhere in this file.
+
+   WHICH TABLES. The ones that do not fit, decided by measuring rather than by
+   counting columns: responsive.js compares the table's natural width with its
+   wrapper and adds `lh-stack` when it is wider. So the three-column Top pages
+   table stays a table at 375px, where it fits and reads better as one, and the
+   two-column parsed-sample tables in Settings are never touched.
+
+   GATED ON SCRIPT, because the labels are the column headings copied onto
+   every cell as data-lh-col, and only script can do that for rows the views
+   render from JSON after the page has loaded.
+   =========================================================================== */
+
+@media (max-width: 900px) {
+
+    /* The wrapper stops being a horizontal scroller for a table that no longer needs one:
+       a nested scroll region that scrolls nothing is a scroll trap. */
+
+    .table-wrap:has(> table.lh-stack) { overflow-x: visible; }
+
+    table.lh-stack {
+        display: block;
+        min-width: 0;
+        table-layout: auto;
+        font-size: 15px;
+    }
+
+    table.lh-stack colgroup { display: none; }
+
+    /* The sort bar. */
+
+    table.lh-stack thead { display: block; }
+    table.lh-stack thead tr {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 0 0 12px;
+        background: none;
+        border-bottom: 1px solid var(--ink);
+    }
+    table.lh-stack thead th { display: none; }
+    table.lh-stack thead th.sortable {
+        position: static;
+        display: inline-flex;
+        align-items: center;
+        min-height: var(--lh-tap);
+        padding: 0 26px 0 10px;
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius);
+        white-space: nowrap;
+    }
+    table.lh-stack thead th.sortable .sort-mark { right: 8px; }
+    table.lh-stack thead th.sorted-asc,
+    table.lh-stack thead th.sorted-desc { border-color: var(--accent); }
+
+    /* A record. */
+
+    table.lh-stack tbody { display: block; }
+    table.lh-stack tbody tr {
+        display: block;
+        padding: 12px 14px;
+        margin-top: 12px;
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius);
+    }
+    table.lh-stack tbody tr:hover td { background: none; }
+
+    /* A row that opens something keeps saying so: the accent rule on the left is the same
+       device the panel uses for "this is the one that matters". */
+
+    table.lh-stack tbody tr.row-link { border-left: 2px solid var(--accent); }
+
+    /* A cell: label left, value right, both allowed to wrap. The label column is 96px,
+       which is eleven characters of the 14px uppercase face — enough for FIRST SEEN,
+       COUNTRY, VERDICT and SESSIONS, and the rest wrap to a second line rather than
+       truncating, because a truncated label is not a label. */
+
+    table.lh-stack tbody td,
+    table.lh-stack tbody th {
+        display: grid;
+        grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
+        gap: 4px 12px;
+        align-items: baseline;
+        padding: 6px 0;
+        border: 0;
+        border-top: 1px solid var(--hairline);
+        text-align: left;
+        white-space: normal;
+        overflow: visible;
+        overflow-wrap: anywhere;
+        max-width: none;
+        text-overflow: clip;
+    }
+
+    table.lh-stack tbody td::before {
+        content: attr(data-lh-col);
+        font: 600 14px/1.4 var(--font-ui);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--faint);
+    }
+
+    /* The headline cell. No label — the column heading for a record's identity says
+       nothing a reader needs twice — and no rule above it, because it is the top of the
+       card. */
+
+    table.lh-stack tbody td:first-child {
+        display: block;
+        padding: 0 0 10px;
+        margin-bottom: 4px;
+        border-top: 0;
+        border-bottom: 1px solid var(--hairline);
+        font-size: 16px;
+        font-weight: 700;
+    }
+    table.lh-stack tbody td:first-child::before { content: none; }
+
+    /* A cell that spans the row is a panel of its own — the expanded members list under a
+       fingerprint cluster, an empty-state message, a recorded request. It is not a
+       label-and-value pair and must not be drawn as one. */
+
+    table.lh-stack tbody td[colspan] {
+        display: block;
+        padding: 10px 0 0;
+    }
+    table.lh-stack tbody td[colspan]::before { content: none; }
+
+    table.lh-stack tbody tr.members {
+        padding: 0;
+        margin-top: 0;
+        border: 0;
+        border-radius: 0;
+    }
+    table.lh-stack tbody tr.members > td { background: var(--band); }
+
+    /* Things sized for a column, inside a card that has no columns. */
+
+    table.lh-stack .bar-col,
+    table.lh-stack .bar,
+    table.lh-stack .meter { width: auto; min-width: 60px; }
+    table.lh-stack .spark { width: 100%; max-width: 180px; }
+    table.lh-stack .chip { max-width: 100%; white-space: normal; }
+    table.lh-stack .clip-line,
+    table.lh-stack .client > div,
+    table.lh-stack .shape {
+        white-space: normal;
+        overflow: visible;
+        overflow-wrap: anywhere;
+        text-overflow: clip;
+    }
+
+    /* A number keeps its tabular figures but stops being right-aligned: in a two-column
+       label-and-value row there is nothing to line it up against. */
+
+    table.lh-stack td.num { text-align: left; }
+
+    /* A stacked table's rows are cards, so the sticky positioning that kept a header on
+       screen while a long table scrolled has nothing left to do. */
+
+    table.lh-stack thead th { position: static; }
+}
+
+/* ===========================================================================
+   6. THE SESSION FACET RAIL as a disclosure.
+
+   THE DEFECT, measured at 375px. `.explorer` is declared
+   `grid-template-columns: 292px minmax(0, 1fr)` at the END of panel.css,
+   after the max-width:1000px rule that collapses it, so the collapse never
+   happens: the facet rail keeps its 292px and the results column is left
+   19px wide. The nine-column results table was rendering into nineteen
+   pixels, and a session row could not be pressed at all, so the detail dialog
+   was unreachable on a phone. That single declaration is also why the page
+   scrolled sideways there.
+
+   THE SHAPE. One column, rail first — but the rail measured 5,023px tall, so
+   stacked above the results it would put the first session five screens down.
+   It becomes a disclosure instead: a 48px control saying how many filters are
+   active, closed on arrival, opening the identical lists in place. The results
+   are what you see when the page loads, which is what the view is for, and the
+   filters are one press away with their state on the button.
+   =========================================================================== */
+
+@media (max-width: 900px) {
+
+    /* The collapse the appended rule cancelled. */
+
+    .explorer {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 24px;
+    }
+
+    /* The rail's own scroll container and its borders belong to a column layout. */
+
+    .explorer .facets {
+        border-right: 0;
+        padding-right: 0;
+    }
+
+    /*
+     * Closed, the rail is its heading and its control and nothing else.
+     *
+     * The rule is written as "hide while closed" rather than "hide, then show when open",
+     * deliberately: an open rail then carries no display declaration of this file's at all,
+     * so the loading row's flex, the skeleton's column and the `hidden` attribute that the
+     * front end toggles on the content and the empty state all keep working exactly as they
+     * do at desk width. A `display: block` from here would have overridden every one of them.
+     *
+     * responsive.js puts the control in and marks <html>, so with script off the rail is
+     * simply the first block in the column — long, but complete.
+     */
+
+    .lh-facets-js .explorer .facets > .card { border-bottom: 1px solid var(--hairline); }
+    .lh-facets-js .explorer .facets:not(.is-open) > .card > *:not(.card-head):not(.lh-facetbtn) {
+        display: none;
+    }
+
+    .lh-facetbtn {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        min-height: 48px;
+        padding: 10px 0;
+        font: 700 14px/1.3 var(--font-ui);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--ink);
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        cursor: pointer;
+        text-align: left;
+    }
+    .lh-facetbtn:hover { background: transparent; color: var(--accent-ink); }
+    .lh-facetbtn-state {
+        font: 400 14px/1.3 var(--font-mono);
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--faint);
+    }
+    .lh-facetbtn[aria-expanded="true"] .lh-facetbtn-state { color: var(--accent-ink); }
+}
+
+/* ===========================================================================
+   7. CHARTS, DIALOGS AND THE REST OF THE CHROME at phone width.
+   =========================================================================== */
+
+@media (max-width: 900px) {
+
+    /*
+     * A chart is as wide as its card and no wider. It already resized on rotate — measured:
+     * the canvas follows the container through 375 to 780 and back, because charts.js
+     * observes each container rather than the window — so the only thing needed here is a
+     * floor under the height, since a 340px-tall chart declared for a desk is fine but a
+     * chart whose card is narrow must not be allowed to become a letterbox.
+     */
+
+    .chart { max-width: 100%; min-height: 200px; }
+
+    /*
+     * The detail dialog is already a full-screen sheet under 900px. What it lacked was the
+     * bottom safe area — on a phone with a gesture bar the last row of the trail sat under
+     * it — and a scroll that stops at its own edge instead of handing the gesture to the
+     * page underneath, which is how a modal ends up scrolling the list behind it.
+     */
+
+    .lh-dialog-body {
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: max(28px, calc(16px + env(safe-area-inset-bottom)));
+    }
+    .lh-dialog-head {
+        padding: 14px max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+        gap: 12px;
+    }
+    .lh-dialog-head h2 { font-size: 20px; }
+
+    /* The close control is the one thing in a sheet that must always be findable, so it
+       does not scroll away and it does not shrink. */
+
+    .lh-dialog-head #lh-dialog-close { flex: none; }
+
+    /* Definition lists: a label column sized by its longest term leaves nothing for the
+       value at 343px. One column per pair, label above value. */
+
+    dl.kv {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+    }
+    dl.kv dt { border-bottom: 0; padding-bottom: 0; }
+    dl.kv dd { padding-top: 2px; }
+
+    /* Snippets and command blocks keep their horizontal scroll — a shell command must not
+       be re-wrapped, because a wrapped command is a command somebody will paste wrong —
+       but the copy button stops eating a third of the line. */
+
+    .snippet-block .snippet { padding-right: 14px; padding-bottom: 52px; }
+    .copy-btn { top: auto; bottom: 8px; right: 8px; }
+
+    /* The footer's three facts stack rather than crowd. */
+
+    .foot { gap: 8px 20px; margin-top: 40px; }
+
+    /* The installer and the sign-in page: the same shell, the same gutters. */
+
+    .setup {
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+        padding-bottom: max(64px, calc(40px + env(safe-area-inset-bottom)));
+    }
+    .setup-lead { font-size: 17px; }
+    .setup-rail { gap: 0 4px; }
+    .setup.login h1 { font-size: 28px; }
+}
+
+/* ===========================================================================
+   8. MOTION.
+
+   The drawer is the only thing this file animates, and it does not animate for
+   a reader who has asked the platform not to. panel.css already flattens every
+   duration under the same query; this adds the two properties it cannot know
+   about.
+   =========================================================================== */
+
+@media (prefers-reduced-motion: no-preference) {
+    .lh-nav-js .side { transition: max-height .18s ease-out; }
+    .lh-navbtn-mark::before,
+    .lh-navbtn-mark::after { transition: transform .18s ease-out, top .18s ease-out, bottom .18s ease-out; }
+}
+
+/*
+ * PRINT.
+ *
+ * panel.css already hides every `button` on paper, which is all three of the controls this
+ * file introduces, so there is nothing to hide here. The one thing that has to be undone is
+ * the collapsed facet rail: a printout is not interactive and a control nobody can press must
+ * not be the only way to see what the page was filtered by. A4 portrait is 794px, inside the
+ * phone breakpoint, so the stacked tables print as records — which is the right shape for a
+ * ten-column table on paper anyway, and is left alone on purpose.
+ */
+
+@media print {
+    .lh-facets-js .explorer .facets:not(.is-open) > .card > .pop,
+    .lh-facets-js .explorer .facets:not(.is-open) > .card > .card-content:not([hidden]) {
+        display: block;
+    }
+}

@@ -81,6 +81,9 @@ final class Layout
         echo '<meta name="robots" content="noindex, nofollow">' . "\n";
         echo '<title>' . Security::esc($view->title() . ' — ' . $siteName) . '</title>' . "\n";
         echo '<link rel="stylesheet" href="' . Security::esc($v('assets/css/panel.css')) . '">' . "\n";
+        echo '<link rel="icon" href="' . Security::esc($v('favicon.svg')) . '" type="image/svg+xml">' . "\n";
+        echo '<link rel="icon" href="' . Security::esc($v('favicon.ico')) . '" sizes="any">' . "\n";
+        echo '<link rel="apple-touch-icon" href="' . Security::esc($v('apple-touch-icon.png')) . '">' . "\n";
         echo '<script src="' . Security::esc($v('assets/js/theme.js')) . '"></script>' . "\n";
         echo '</head>' . "\n";
         echo '<body data-view="' . Security::esc($slug) . '">' . "\n";

@@ -254,6 +254,9 @@ final class Login
         echo '<meta name="robots" content="noindex, nofollow">' . "\n";
         echo '<title>' . Security::esc('Sign in — ' . $siteName) . '</title>' . "\n";
         echo '<link rel="stylesheet" href="' . Security::esc($asset('assets/css/panel.css')) . '">' . "\n";
+        echo '<link rel="icon" href="' . Security::esc($asset('favicon.svg')) . '" type="image/svg+xml">' . "\n";
+        echo '<link rel="icon" href="' . Security::esc($asset('favicon.ico')) . '" sizes="any">' . "\n";
+        echo '<link rel="apple-touch-icon" href="' . Security::esc($asset('apple-touch-icon.png')) . '">' . "\n";
         echo '<script src="' . Security::esc($asset('assets/js/theme.js')) . '"></script>' . "\n";
         echo "</head>\n<body class=\"setup-body\">\n";
 
