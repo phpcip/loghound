@@ -545,7 +545,11 @@ final class Performance extends Controller
         );
         self::skeleton('pf-paths', 'rows', 0, 'Computing per-path percentiles');
 
-        echo '<div class="table-wrap"><table id="pf-paths-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="pf-paths-table" class="table-fixed"'
+            . ' style="--table-min:940px"><colgroup>'
+            . '<col style="width:28%"><col style="width:10%"><col style="width:9%"><col style="width:9%">'
+            . '<col style="width:9%"><col style="width:17%"><col style="width:9%"><col style="width:9%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Path</th>'
             . '<th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="num">p50</th>'
@@ -572,7 +576,9 @@ final class Performance extends Controller
         self::skeleton('pf-status', 'chart', 320, 'Faceting response codes');
 
         echo '<div class="chart" id="pf-heat" style="height:320px"></div>';
-        echo '<div class="table-wrap"><table id="pf-status-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="pf-status-table" class="table-fixed"><colgroup>'
+            . '<col style="width:12%"><col style="width:44%"><col style="width:18%"><col style="width:26%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Status</th>'
             . '<th scope="col">Meaning</th>'
             . '<th scope="col" class="num">Requests</th>'

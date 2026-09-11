@@ -2347,6 +2347,64 @@ tr.lf-pick a:hover { background: none; color: var(--accent-ink); text-decoration
    window this panel is used at, and a table that genuinely needs more sets --table-min
    itself. */
 
+/* NINE OPTIONS WITH PROSE AND CODE IN THEM ARE NOT TABULAR DATA, and forcing them into a table
+   proved it: seven columns inside the content column gave each one about 80px, which broke
+   `data-endpoint` across three lines and cut `collect.php` in half. A card carries the name and
+   whether this installation stores it on one line, the sentence under it, the code at full
+   width, and the two short facts as a label/value pair. It reflows to one column on a phone
+   instead of scrolling sideways.
+
+   PREFIXED `bopt-`, AND THAT IS NOT DECORATION. `.opt`, `.opt-meta` and `.optlist` already
+   belong to Settings::option() — the radio rows behind the install pairs, the authentication
+   modes and the address modes. Reusing those names would have given every one of them this
+   card's border and turned an inline `<span class="opt-meta">` into a grid. */
+.boptlist { display: grid; gap: 14px; margin: 14px 0 6px; }
+
+.bopt {
+    padding: 14px 16px;
+    background: var(--page);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+}
+
+.bopt-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 10px;
+    margin-bottom: 8px;
+}
+
+.bopt-name { font-size: 14px; font-weight: 700; }
+.bopt-kind { text-transform: uppercase; letter-spacing: .06em; font-size: 12px; }
+/* Pushed to the far end on a wide card, and simply wraps under the name on a narrow one. */
+.bopt-state { margin-left: auto; }
+.bopt-what { margin: 0 0 10px; }
+.bopt-code { margin: 0 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.bopt-meta {
+    display: grid;
+    grid-template-columns: fit-content(12ch) minmax(0, 1fr);
+    gap: 4px 14px;
+    margin: 0;
+}
+
+.bopt-meta dt {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+    white-space: normal;
+}
+
+.bopt-meta dd { margin: 0; }
+
+@media (max-width: 640px) {
+    .bopt-meta { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .bopt-meta dd { margin-bottom: 6px; }
+}
+
 table.table-fixed { table-layout: fixed; min-width: var(--table-min, 680px); }
 table.table-fixed td,
 table.table-fixed th { overflow: hidden; text-overflow: ellipsis; }

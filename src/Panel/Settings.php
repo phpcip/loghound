@@ -3518,43 +3518,45 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
-     * Render the option reference, with a live column saying what this installation will keep.
+     * Render the option reference, each option saying what this installation will keep.
      *
-     * The live column is the reason the table is worth having in the application at all rather
-     * than only in `docs/BEACON.md`. A reference that lists `data-ident` without saying that
+     * NOT A TABLE, AND THAT WAS MEASURED RATHER THAN PREFERRED. Seven columns of prose and code
+     * inside the content column gave each one about 80px: `data-endpoint` broke across three
+     * lines and `collect.php` was cut in half. Nine options carrying a sentence, a snippet and
+     * two short facts are a list of cards, which also reflows on a phone instead of scrolling.
+     *
+     * The live state is the reason this reference is worth having in the application at all
+     * rather than only in `docs/BEACON.md`. A reference that lists `data-ident` without saying that
      * `beacon.store_identity` is off HERE sends an operator away to paste a snippet, see
      * nothing, and have no way to find out why. The document cannot know; this page can.
      */
-    private function beaconOptionsTable(): void
+    private function beaconOptionsList(): void
     {
         echo '<h3>Every option the beacon reads</h3>';
-        echo '<p class="muted">The complete list. The last column is <strong>this installation</strong>, read '
+        echo '<p class="muted">The complete list. The state beside each name is <strong>this installation</strong>, read '
             . 'from <code>config/loghound.php</code> as the page was rendered &mdash; so an option whose value '
             . 'would be thrown away here says so, instead of being discovered by pasting a snippet and seeing '
             . 'nothing appear.</p>';
 
-        echo '<div class="table-wrap"><table><thead><tr>'
-            . '<th scope="col">Option</th>'
-            . '<th scope="col">What it does</th>'
-            . '<th scope="col">Default</th>'
-            . '<th scope="col">Accepted</th>'
-            . '<th scope="col">In code</th>'
-            . '<th scope="col">Stored here?</th>'
-            . '</tr></thead><tbody>';
+        echo '<div class="boptlist">';
 
         foreach (self::beaconOptions() as $opt) {
-            echo '<tr>';
-            echo '<td><code class="mono">' . Security::esc($opt['name']) . '</code>'
-                . '<br><span class="faint">' . Security::esc($opt['kind']) . '</span></td>';
-            echo '<td>' . Doc::inlineHtml($opt['what']) . '</td>';
-            echo '<td>' . Doc::inlineHtml($opt['default']) . '</td>';
-            echo '<td>' . Doc::inlineHtml($opt['limits']) . '</td>';
-            echo '<td><pre class="snippet mono">' . Security::esc($opt['example']) . '</pre></td>';
-            echo '<td>' . $this->beaconOptionState($opt['switch']) . '</td>';
-            echo '</tr>';
+            echo '<article class="bopt">';
+            echo '<div class="bopt-head">'
+                . '<code class="mono bopt-name">' . Security::esc($opt['name']) . '</code>'
+                . '<span class="faint bopt-kind">' . Security::esc($opt['kind']) . '</span>'
+                . '<span class="bopt-state">' . $this->beaconOptionState($opt['switch']) . '</span>'
+                . '</div>';
+            echo '<p class="bopt-what">' . Doc::inlineHtml($opt['what']) . '</p>';
+            echo '<pre class="snippet mono bopt-code">' . Security::esc($opt['example']) . '</pre>';
+            echo '<dl class="bopt-meta">'
+                . '<dt>Default</dt><dd>' . Doc::inlineHtml($opt['default']) . '</dd>'
+                . '<dt>Accepted</dt><dd>' . Doc::inlineHtml($opt['limits']) . '</dd>'
+                . '</dl>';
+            echo '</article>';
         }
 
-        echo '</tbody></table></div>';
+        echo '</div>';
     }
 
     /**
@@ -3962,7 +3964,9 @@ final class Settings extends Controller implements JobHost, Sections
             $mapping = (array) ($src['mapping'] ?? []);
             if ($mapping !== []) {
                 self::foldOpen('src-mapping', 'Field mapping', count($mapping) . ' tokens');
-                echo '<div class="table-wrap"><table class="tight"><thead><tr>'
+                echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
+                    . '<col style="width:22%"><col style="width:30%"><col style="width:48%">'
+                    . '</colgroup><thead><tr>'
                     . '<th scope="col">Log token</th><th scope="col">Loghound field</th><th scope="col">Example</th>'
                     . '</tr></thead><tbody>';
                 foreach ($mapping as $m) {
@@ -5136,7 +5140,10 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         echo '<h4>Where this installation actually stands</h4>';
-        echo '<div class="table-wrap"><table class="grid"><thead><tr>';
+        echo '<div class="table-wrap"><table class="grid table-fixed"><colgroup>'
+            . '<col style="width:26%"><col style="width:14%"><col style="width:16%">'
+            . '<col style="width:16%"><col style="width:28%">'
+            . '</colgroup><thead><tr>';
         foreach (['Index', 'Used', 'Plan quota', 'Of quota', 'History it buys'] as $th) {
             echo '<th scope="col">' . Security::esc($th) . '</th>';
         }
@@ -5501,7 +5508,7 @@ final class Settings extends Controller implements JobHost, Sections
          * others: a site on another server, search terms, and the CSP a measured site needs.
          */
         $this->beaconIdentityBlock();
-        $this->beaconOptionsTable();
+        $this->beaconOptionsList();
         $this->beaconHostsBlock($allowed, $collected);
 
         echo '<h3>What it collects, exactly</h3>';
@@ -5636,7 +5643,9 @@ final class Settings extends Controller implements JobHost, Sections
         self::csrfField();
         echo '<input type="hidden" name="action" value="scoring">';
 
-        echo '<div class="table-wrap"><table class="tight"><thead><tr>'
+        echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
+            . '<col style="width:28%"><col style="width:56%"><col style="width:16%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Rule</th><th scope="col">Fires when</th><th scope="col" class="num">Weight</th>'
             . '</tr></thead><tbody>';
         foreach ($catalogue as $code => $meta) {

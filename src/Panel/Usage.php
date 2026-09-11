@@ -575,7 +575,9 @@ final class Usage extends Controller
         );
         self::skeleton('usage-limits', 'rows', 0, 'Comparing the retention limits');
 
-        echo '<div class="table-wrap"><table id="usage-limits-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="usage-limits-table" class="table-fixed"><colgroup>'
+            . '<col style="width:30%"><col style="width:22%"><col style="width:20%"><col style="width:28%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Limit</th>'
             . '<th scope="col">Set by</th>'
             . '<th scope="col" class="num">Window</th>'

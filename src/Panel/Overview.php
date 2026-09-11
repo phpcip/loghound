@@ -598,7 +598,9 @@ final class Overview extends Controller
         );
         self::skeleton('ov-searches', 'rows', 0, 'Faceting search terms');
 
-        echo '<div class="table-wrap"><table id="ov-searches-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="ov-searches-table" class="table-fixed"><colgroup>'
+            . '<col style="width:18%"><col style="width:42%"><col style="width:16%"><col style="width:24%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Parameter</th>'
             . '<th scope="col">Search term</th>'
             . '<th scope="col" class="num">Sessions</th>'
@@ -764,7 +766,9 @@ final class Overview extends Controller
         self::cardOpen('ov-pages', '04', 'Top pages', '', $tools);
         self::skeleton('ov-pages', 'rows', 0, 'Counting requests by path');
 
-        echo '<div class="table-wrap"><table id="ov-pages-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="ov-pages-table" class="table-fixed"><colgroup>'
+            . '<col style="width:46%"><col style="width:18%"><col style="width:18%"><col style="width:18%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Path</th>'
             . '<th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="num">Sessions</th>'

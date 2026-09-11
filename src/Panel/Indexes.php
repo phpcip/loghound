@@ -367,13 +367,17 @@ final class Indexes extends OpensolrView
             . 'neither your search box nor a crawler — an ingest or callback path, say — is a caller '
             . 'worth naming, and clicking a row filters the whole page to it.</p>'
             . '<div class="chart" id="ix-paths-chart" style="height:240px"></div>'
-            . '<div class="table-wrap"><table id="ix-paths-table"><thead><tr>'
+            . '<div class="table-wrap"><table id="ix-paths-table" class="table-fixed"><colgroup>'
+            . '<col style="width:50%"><col style="width:22%"><col style="width:28%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Handler</th><th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="bar-col">Share</th></tr></thead><tbody></tbody></table></div></div>';
         echo '<div class="split-half"><h2>Status codes</h2>'
             . '<p class="split-note">Anything other than 200 is the index refusing or failing.</p>'
             . '<div class="chart" id="ix-status-chart" style="height:240px"></div>'
-            . '<div class="table-wrap"><table id="ix-status-table"><thead><tr>'
+            . '<div class="table-wrap"><table id="ix-status-table" class="table-fixed"><colgroup>'
+            . '<col style="width:20%"><col style="width:30%"><col style="width:50%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Status</th><th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="bar-col">Share</th></tr></thead><tbody></tbody></table></div></div>';
         echo '</div>';
