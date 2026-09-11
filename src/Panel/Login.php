@@ -457,20 +457,31 @@ final class Login
         echo '<input type="password" id="password" name="password" size="28" '
             . 'autocomplete="current-password" required>';
 
+        /* THE SENTENCE STATES WHAT IS CONFIGURED, not what the default happens to be. It said
+           "with no timeout at all" and "stays signed in indefinitely" unconditionally, while
+           `auth.persistent_lifetime` can be set as low as a single day — so on an installation
+           that had tightened it, the form promised the opposite of what it would do. The
+           describedby is what connects the consequence to the control for a screen reader;
+           a paragraph merely sitting after a checkbox is not announced with it. */
+        $days = (int) floor(Persistence::lifetime((array) $this->cfg->get('auth', [])) / 86400);
+        $howLong = $days >= 3650
+            ? 'It does not expire on a clock: the only way back out is the Sign out button.'
+            : 'It lasts ' . $days . ' day' . ($days === 1 ? '' : 's') . ' on this installation, '
+              . 'and the Sign out button ends it sooner.';
+
         echo '<label class="check"><input type="checkbox" id="remember" name="'
-            . Security::esc(Persistence::FIELD) . '" value="1">'
+            . Security::esc(Persistence::FIELD) . '" value="1" aria-describedby="remember-note">'
             . '<span>Stay signed in on this browser</span></label>';
-        echo '<p class="setup-widen">Keeps you signed in after you close the browser or restart the '
-            . 'machine, with no timeout at all. Whoever has this browser profile stays signed in to this '
-            . 'panel indefinitely, and the only way back out is the Sign out button. Leave it unticked on '
-            . 'a shared or portable machine.</p>';
+        echo '<p class="setup-widen" id="remember-note">Keeps you signed in after you close the browser '
+            . 'or restart the machine. ' . Security::esc($howLong) . ' Whoever has this browser profile '
+            . 'is signed in to this panel, so leave it unticked on a shared or portable machine.</p>';
 
         echo '<button type="submit" class="primary">Sign in</button>';
         echo '</form>' . "\n";
 
         echo '<p class="muted login-note">Forgotten it? There is no reset by email — Loghound has no '
             . 'mail path and would not use one for this. Run <code>'
-            . Security::esc($this->root . '/bin/loghound-setup')
+            . 'bin/loghound-setup'
             . '</code> on the server and answer yes when it offers to set a new username and password. '
             . 'Being able to run that is already proof enough of who you are.</p>' . "\n";
 
@@ -513,7 +524,7 @@ final class Login
 
         echo '<p class="muted login-note">Lost the phone? Type one of the recovery codes you saved when '
             . 'you turned two-factor on into the same field. Each one works once. If those are gone too, '
-            . 'run <code>' . Security::esc($this->root . '/bin/loghound-setup')
+            . 'run <code>' . 'bin/loghound-setup'
             . '</code> on the server to set a new password, which also turns two-factor off.</p>' . "\n";
 
         $this->foot();
@@ -536,13 +547,20 @@ final class Login
             return;
         }
 
+        /* THE PATH IS RELATIVE, and the three in this file changed together. It used to be the
+           absolute install root, which was the better instruction and the wrong disclosure: this
+           page is public, so an unauthenticated visitor was being told where the application
+           lives on disk and whether it is a symlinked deploy. `bin/loghound-setup` is
+           unambiguous to anyone who can already reach a shell on the machine, which is the only
+           person the sentence is for. */
         echo '<div class="banner banner-bad" role="alert">'
             . Security::esc(
                 'A "stay signed in" token for this panel was presented twice. That can only happen if a '
                 . 'copy of it was taken, so every one of those tokens has been destroyed and every browser '
-                . 'has to sign in again. Sign in now, then change your password with bin/loghound-setup if '
-                . 'you cannot account for it.'
+                . 'has to sign in again. Sign in now, then change your password with '
             )
+            . '<code>' . 'bin/loghound-setup' . '</code>'
+            . Security::esc(' if you cannot account for it.')
             . "</div>\n";
     }
 
@@ -563,8 +581,13 @@ final class Login
 
         $text = $messages[$why]['text'];
         if ($why === 'locked') {
+            /* NO ABSOLUTE PATH ON A PUBLIC PAGE. This banner is rendered to whoever loads
+               ?login=1 after a lockout, with no credentials, and it used to print the full
+               filesystem path of the attempt ledger — deployment root and layout handed to an
+               anonymous prober. Security::requireAuth() logs the exact file for the operator. */
             $text .= ' Try again in ' . max(1, (int) ceil($retry / 60)) . ' minute(s). '
-                . 'To clear it now, delete ' . Security::ledgerPath($this->varDir()) . ' on the server.';
+                . 'To clear it now, delete var/' . Security::LOGIN_LEDGER . ' inside your Loghound '
+                . 'installation; the server error log names its full path.';
         }
 
         $class = 'banner-' . ($messages[$why]['kind'] === 'good' ? 'good'

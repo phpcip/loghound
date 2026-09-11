@@ -130,7 +130,7 @@ final class Parser
         $this->opts['search_params'] = Beacon::normaliseParamNames((array) $this->opts['search_params']);
 
         $installId = (string) $this->opts['install_id'];
-        $this->opts['install_id'] = preg_match('/^[a-f0-9]{4,32}$/', $installId) === 1 ? $installId : '';
+        $this->opts['install_id'] = preg_match('/^[a-f0-9]{4,32}$/D', $installId) === 1 ? $installId : '';
     }
 
     /**
@@ -417,9 +417,18 @@ final class Parser
             self::put($doc, 'ip_s', self::sanitizeText($ip, 255));
         }
 
+        /* RANGE-CHECKED, NOT MERELY CAST. `status_i` is a `pint` — 32 bits — and PHP's (int)
+           is 64, so a format that does not itself bound the field (a quoted "%>s", any JSON
+           format, a generated pattern whose slot is `(?<status>\S+)`) could carry a value above
+           2147483647 straight into an update that Solr rejects WHOLE. bin/loghound-tail drops
+           the entire batch on a failed flush, so one crafted line loses up to batch_max good
+           documents. 100..599 is what a status code is; anything else is not a status. */
         $status = $raw['status'] ?? null;
-        if (is_string($status) && ctype_digit($status)) {
-            $doc['status_i'] = (int) $status;
+        if (is_string($status) && ctype_digit($status) && strlen($status) <= 3) {
+            $code = (int) $status;
+            if ($code >= 100 && $code <= 599) {
+                $doc['status_i'] = $code;
+            }
         }
 
         $bytes = $raw['bytes'] ?? ($raw['bytes_out'] ?? null);
@@ -598,7 +607,7 @@ final class Parser
         }
 
         if (preg_match(
-            '~^(\d{1,2})/([A-Za-z]{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:\s*([+-]\d{4}))?$~',
+            '~^(\d{1,2})/([A-Za-z]{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:\s*([+-]\d{4}))?$~D',
             $value,
             $m
         )) {
@@ -622,7 +631,7 @@ final class Parser
             }
         }
 
-        if (preg_match('~^(\d{9,19})(?:\.(\d+))?$~', $value, $m)) {
+        if (preg_match('~^(\d{9,19})(?:\.(\d+))?$~D', $value, $m)) {
             $digits = strlen($m[1]);
             $intPart = $m[1];
             $micro   = 0;
@@ -702,16 +711,10 @@ final class Parser
 
         $request = $raw['request'] ?? null;
         if (is_string($request) && $request !== '' && $request !== '-') {
-            if (preg_match('~^(\S+)\s+(.*?)\s+(HTTP/[0-9.]+)$~i', $request, $m)) {
-                $method = $m[1];
-                $target = $m[2];
-                $proto  = $m[3];
-            } elseif (preg_match('~^(\S+)\s+(.+)$~', $request, $m)) {
-                $method = $m[1];
-                $target = $m[2];
-            } else {
-                $target = $request;
-            }
+            $split = self::splitRequestLine($request);
+            $method = $split['method'];
+            $target = $split['target'];
+            $proto  = $split['proto'];
         }
 
         if ($target === null) {
@@ -768,6 +771,79 @@ final class Parser
             'proto'  => is_string($proto) ? $proto : null,
             'host'   => $host,
         ];
+    }
+
+    /**
+     * Longest request line this parser will decompose into method / target / protocol.
+     *
+     * A real one is bounded by the origin server: Apache's LimitRequestLine is 8190 by
+     * default and nginx's large_client_header_buffers is 8k. Anything past that was not a
+     * request any server answered, so there is nothing to decompose — it is kept whole as
+     * the target, which is what the surrounding docblock means by "preserves the evidence".
+     */
+    private const MAX_REQUEST_LINE = 8192;
+
+    /**
+     * Split a `"%r"` request line into method, target and protocol, in linear time.
+     *
+     * THIS WAS A REGULAR EXPRESSION AND IT WAS A DENIAL OF SERVICE. The pattern was
+     * `~^(\S+)\s+(.*?)\s+(HTTP/[0-9.]+)$~i`, in which `.*?` and the `\s+` on either side of
+     * it all match whitespace: for every way of splitting a run of spaces, the lazy group
+     * re-walks the remainder, and the trailing literal denies PCRE the required-substring
+     * short-circuit that would otherwise cut the search off. A request line of `GET`, six
+     * thousand spaces and `HTTP/1.1x` is 6 KB — inside every server's own line limit and
+     * inside `ingest.max_line_bytes` — and measured at 13 ms against 0.04 ms for an ordinary
+     * line: a 300-fold collapse in ingest throughput, from one request, repeatable at line
+     * rate. `%r` is logged verbatim even for a request the server answered 400, so an
+     * attacker does not need a valid request to get their bytes in here.
+     *
+     * It was also silently WRONG under the same input. `preg_match` returns `false` when the
+     * backtrack limit is exhausted, which is falsy and therefore indistinguishable from "did
+     * not match", so the line fell through to the second pattern and the protocol token was
+     * stored as the request path.
+     *
+     * A request line is `METHOD SP TARGET SP PROTOCOL` and needs no search at all: the method
+     * ends at the first whitespace and the protocol begins after the last. `strcspn` and
+     * `strrpos` answer both in one pass each, with no backtracking to exhaust, and the result
+     * is identical to the pattern's on every well-formed line. Garbage stays garbage and is
+     * kept as the target exactly as before.
+     *
+     * @return array{method:?string,target:?string,proto:?string}
+     */
+    private static function splitRequestLine(string $request): array
+    {
+        $none = ['method' => null, 'target' => $request, 'proto' => null];
+
+        if (strlen($request) > self::MAX_REQUEST_LINE) {
+            return $none;
+        }
+
+        $head = strcspn($request, " \t");
+        if ($head === 0 || $head >= strlen($request)) {
+            return $none;
+        }
+
+        $method = substr($request, 0, $head);
+        $rest   = ltrim(substr($request, $head), " \t");
+        if ($rest === '') {
+            return $none;
+        }
+
+        $sp  = strrpos($rest, ' ');
+        $tab = strrpos($rest, "\t");
+        $cut = max($sp === false ? -1 : $sp, $tab === false ? -1 : $tab);
+
+        if ($cut >= 0) {
+            $tail = substr($rest, $cut + 1);
+            if (preg_match('~^HTTP/[0-9.]{1,8}$~iD', $tail) === 1) {
+                $target = rtrim(substr($rest, 0, $cut), " \t");
+                if ($target !== '') {
+                    return ['method' => $method, 'target' => $target, 'proto' => $tail];
+                }
+            }
+        }
+
+        return ['method' => $method, 'target' => $rest, 'proto' => null];
     }
 
     /**
@@ -857,7 +933,7 @@ final class Parser
 
         if ($lower === '/robots.txt' || $lower === '/ads.txt' || $lower === '/app-ads.txt'
             || $lower === '/security.txt' || str_starts_with($lower, '/.well-known/')
-            || preg_match('~^sitemap.*\.xml(\.gz)?$~', $base) === 1
+            || preg_match('~^sitemap.*\.xml(\.gz)?$~D', $base) === 1
             || $lower === '/sitemap_index.xml') {
             return ['robots', null];
         }
@@ -983,7 +1059,7 @@ final class Parser
             return null;
         }
         $host = strtolower($host);
-        if (!preg_match('/^[a-z0-9._\-\[\]:]{1,253}$/', $host)) {
+        if (!preg_match('/^[a-z0-9._\-\[\]:]{1,253}$/D', $host)) {
             return null;
         }
         return $host;

@@ -320,7 +320,7 @@ return [
             $view = lh_life_settings($cfg);
             $saved = $_POST;
             try {
-                $_POST = ['action' => 'remove_source', 'source' => lh_life_source_id($inside)];
+                $_POST = ['action' => 'remove_source', 'source' => lh_life_source_id($inside), 'csrf' => lh_csrf()];
                 lh_same('?v=settings&ok=source_removed', $view->post(), 'the removal is accepted');
             } finally {
                 $_POST = $saved;
@@ -350,7 +350,7 @@ return [
                     'an id that is not an id' => ['source' => '../../etc/passwd'],
                     'nothing at all'          => [],
                 ] as $why => $extra) {
-                    $_POST = array_merge(['action' => 'remove_source'], $extra);
+                    $_POST = array_merge(['action' => 'remove_source', 'csrf' => lh_csrf()], $extra);
                     lh_same(
                         '?v=settings&err=no_such_source',
                         $view->post(),
@@ -377,7 +377,7 @@ return [
         $view = lh_life_settings($cfg);
         $saved = $_POST;
         try {
-            $_POST = ['action' => 'rescan'];
+            $_POST = ['action' => 'rescan', 'csrf' => lh_csrf()];
             lh_same(
                 '?v=settings&err=unknown_action',
                 $view->post(),

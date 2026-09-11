@@ -86,6 +86,16 @@ final class Vocabulary
      * from it, and it is the one that matters: a consumer browser User-Agent arriving from
      * hosting address space is the `hosting_asn_browser_ua` signal.
      *
+     * THIS LIST IS EXACTLY WHAT THE CLASSIFIER CAN PRODUCE, and it has to stay that way. The
+     * value browser offers every entry here as a filter, so a value the classifier cannot emit
+     * is a filter that returns nothing on every index, for ever, with no way for the operator
+     * to tell that from "no such traffic this week". There was one: `business`, which no branch
+     * of Asn::classifyOrg() can return — it answers with a key of TYPE_KEYWORDS, a value of
+     * TYPE_OVERRIDES, or `unknown`. It is gone rather than added to the classifier, because
+     * inventing a new network class changes what `hosting_asn_browser_ua` and the
+     * `fp_cluster_proxy_fleet` mobile exclusion see, and nobody asked for a scoring change.
+     * A test asserts the two sets are identical.
+     *
      * @var array<string,array{label:string,why:string}>
      */
     private const AS_TYPES = [
@@ -95,7 +105,6 @@ final class Vocabulary
         'vpn'      => ['label' => 'VPN / anonymiser', 'why' => 'A commercial VPN, a private relay or a Tor exit.'],
         'edu'      => ['label' => 'Education', 'why' => 'A university, school or research network.'],
         'gov'      => ['label' => 'Government', 'why' => 'A public-sector or military network.'],
-        'business' => ['label' => 'Business', 'why' => 'Corporate address space.'],
         'unknown'  => ['label' => 'Unclassified', 'why' => 'The AS organisation name did not match any known pattern.'],
     ];
 
@@ -247,8 +256,10 @@ final class Vocabulary
      * authority for nothing but the drawing and falls back to a generic shape for a value it
      * does not recognise.
      *
-     * Small: six closed vocabularies and nineteen reason codes, a few kilobytes, on a page that
-     * is behind authentication and never cached.
+     * Small: six closed vocabularies and twenty reason codes — the seventeen weighted rules plus
+     * `provisional_session`, `beacon_only_session` and `no_bot_signals`, which are worth no
+     * points and are emitted anyway so a verdict can explain itself. A few kilobytes, on a page
+     * that is behind authentication and never cached.
      *
      * @return array<string,array<string,array{label:string,why:string}>>
      */

@@ -140,9 +140,21 @@ body {
     -webkit-font-smoothing: antialiased;
     color: var(--ink);
     background: var(--page);
-
-    overflow-x: hidden;
 }
+
+/*
+ * NOTE WHAT IS NOT HERE: `overflow-x: hidden`.
+ *
+ * It was on `body`, and it is exactly the pattern mobile.css's own header bans — the panel was
+ * measured at 375px, found to be laying out a 396px document, and the causes were fixed. With
+ * this declaration in place that overflow would have been CLIPPED rather than scrolled, so the
+ * measurement that found it could not have found it again, and the next regression would have
+ * been invisible instead of obvious. The test that was supposed to guard this looked for the
+ * string on `html`, in the other stylesheet, and therefore never saw it.
+ *
+ * A page that scrolls sideways is a bug to see. Every width from 375 up is now measured with
+ * nothing hiding it.
+ */
 
 h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
 h1 { font-size: clamp(28px, 3.2vw, 38px); line-height: 1.05; }
@@ -211,8 +223,14 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
 
 .side ul { list-style: none; margin: 0; padding: 0; flex: 1; }
 .side li a {
-    display: block;
-    padding: 9px 24px;
+    /* 40px, measured. 9px of padding on a 15px/1.55 line came out at 38px — two pixels under
+       the floor, on the twelve links that are the panel's primary navigation and the control a
+       reader uses most. Flex rather than more padding, so the icon rail's centred variant and
+       the drawer's two-line hint both keep working from the same box. */
+    display: flex;
+    align-items: center;
+    min-height: 40px;
+    padding: 6px 24px;
     color: var(--muted);
     font-weight: 500;
     font-size: 15px;
@@ -254,13 +272,26 @@ main {
     border-top: 1px solid var(--hairline);
 }
 
-.ranges { display: flex; flex-wrap: wrap; gap: 18px; }
+/*
+ * The range picker.
+ *
+ * MEASURED: "1H" was a 24px-wide target, "7D" 25px and "6H" 26px, at every width including a
+ * phone — full height, but a quarter of the 44px the rest of the panel is held to across. A
+ * minimum width and symmetric padding fix it without changing how the row reads, because the
+ * gap absorbs most of the added box.
+ */
+.ranges { display: flex; flex-wrap: wrap; gap: 8px; }
 .ranges a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 40px;
+    padding: 0 10px 4px;
     font: 600 14px/1 var(--font-ui);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--faint);
-    padding-bottom: 4px;
     border-bottom: 2px solid transparent;
 }
 .ranges a:hover { background: none; color: var(--ink); text-decoration: none; }
@@ -490,7 +521,18 @@ tbody td, tbody th {
 tbody td:first-child, tbody th:first-child { padding-left: 0; }
 tbody td:last-child, tbody th:last-child { padding-right: 0; }
 tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
-tbody tr:hover td { background: var(--band); color: var(--ink); }
+/*
+ * HOVER FEEDBACK IS FOR A ROW THAT DOES SOMETHING. This was unscoped, so the scoring-weights
+ * table, the system-check tables and every pivot row lit up under the pointer exactly as a
+ * drillable row does, and the only thing telling the two apart was the cursor. A row that
+ * highlights itself and then ignores the click is a false affordance; a row that highlights
+ * itself and opens a record is the affordance working.
+ *
+ * `.lf-pick` is the request-log picker: its first cell is a real link and the row reacts with
+ * it, which is why it is named here rather than left to the generic rule.
+ */
+tbody tr.row-link:hover td,
+tbody tr.lf-pick:hover td { background: var(--band); color: var(--ink); }
 
 th.num, td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 td.mono, th.mono, table .mono { font-family: var(--font-mono); font-size: 14px; font-variant-numeric: tabular-nums; }
@@ -723,6 +765,16 @@ button.primary[disabled]:hover { background: var(--accent); color: var(--on-acce
 .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 15px; }
 .controls label { color: var(--faint); font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
 
+/*
+ * The colour square in a chart's key.
+ *
+ * A class rather than the inline `display:inline-block;width:10px;height:10px` the network-type
+ * legend used to carry: the only thing that varies per entry is the fill, and a dimension that
+ * lives in three JS string concatenations is a dimension that drifts. The square is decorative
+ * and the entries mark it aria-hidden — the word beside it carries the whole meaning.
+ */
+.swatch { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--hairline); }
+
 select, input[type="search"], input[type="number"], input[type="text"] {
     font: 400 15px/1.3 var(--font-ui);
     padding: 9px 12px;
@@ -804,7 +856,19 @@ tr.members > td { padding: 0; background: var(--band); }
 
 .pager { display: flex; gap: 18px; align-items: center; margin-top: 18px; font-size: 14px; color: var(--faint); font-family: var(--font-mono); }
 
+/*
+ * A drillable row.
+ *
+ * IT NEEDS ITS OWN FOCUS RING. It is tabbable, and the universal `:focus-visible` rule at the
+ * top of this file does `outline: none` before substituting a border colour and a box-shadow —
+ * neither of which a `<tr>` in a `border-collapse: collapse` table paints. So the single most
+ * numerous interactive element in the panel had its focus indicator removed and nothing
+ * visible put back. `outline` on the row works in the collapsed border model where `box-shadow`
+ * does not, and `-2px` keeps it inside the row rather than over the row above.
+ */
 tr.row-link { cursor: pointer; }
+tr.row-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+tr.row-link:focus-visible > td { background: var(--band); color: var(--ink); }
 
 .detail dl.kv { margin: 0; }
 .timeline { list-style: none; margin: 0; padding: 0; }
@@ -1067,6 +1131,23 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
 .setup-missing li { margin-bottom: 8px; }
 
 /*
+ * The link that ends a missing-list line.
+ *
+ * Measured at 51x18 at every width, in both themes — on the links that are the entire call to
+ * action of the first screen anybody sees, and well under the 40px floor the rest of the panel
+ * holds to. Padding with a matching negative margin, which is the technique mobile.css already
+ * uses for an inline link inside a banner: the hit box grows to 40px and the line box does not
+ * move, so the list keeps its leading and nothing reflows. inline-block rather than inline-flex
+ * because this link sits at the end of a sentence and has to stay in the text flow.
+ */
+.setup-missing a {
+    display: inline-block;
+    padding: 11px 8px;
+    margin: -11px -2px;
+    font-weight: 600;
+}
+
+/*
  * Field layout for every setup form.
  *
  * Three selectors, because a setup form appears in three shapes: one carrying .setup-form,
@@ -1135,9 +1216,12 @@ table.checks .snippet {
     .setup { padding: 32px 16px 64px; }
     .setup-rail li a,
     .setup-rail li span { padding-right: 12px; }
-    .setup-form input,
+    /* NOT THE TICK BOXES. `width: 100%` on every input in the form stretched the installer's
+       checkboxes across the whole card — a full-width tick box reads as a text field and puts
+       its own label a screen away from it. Text-shaped controls are what wanted the width. */
+    .setup-form input:not([type="checkbox"]):not([type="radio"]),
     .setup-form select,
-    .setup form.card input,
+    .setup form.card input:not([type="checkbox"]):not([type="radio"]),
     .setup form.card select { width: 100%; }
 }
 
@@ -1470,7 +1554,7 @@ td .shape { white-space: nowrap; }
  * The installer shows these in a table; here they are stacked, because a failing check is
  * read one at a time and its fix is a command block that has no business inside a cell.
  */
-.check-row { padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.check-row { padding: 14px 0; border-bottom: 1px solid var(--hairline); }
 .check-row:last-child { border-bottom: 0; }
 .check-row p { margin: 0 0 4px; font-size: 14px; }
 .check-row .muted { overflow-wrap: anywhere; }
@@ -1650,7 +1734,19 @@ td .shape { white-space: nowrap; }
 /* A clickable table row that filters the page to its own value. Underlined on hover only, so
    a table of them does not read as a wall of links. */
 
-tr.lf-pick td:first-child { cursor: pointer; }
+/*
+ * The pointer belongs to the link, not to the cell around it.
+ *
+ * The cell has 8px/14px of padding and the control inside it is an inline <a>, so the whole
+ * remainder of the cell showed a pointer cursor and did nothing when pressed. Making the link
+ * fill the cell is the honest fix: the surface that looks pressable is the surface that is.
+ */
+tr.lf-pick td:first-child { padding: 0; }
+tr.lf-pick td:first-child > a {
+    display: block;
+    padding: 8px 14px 8px 0;
+    cursor: pointer;
+}
 tr.lf-pick a { color: inherit; text-decoration: none; }
 tr.lf-pick a:hover { background: none; color: var(--accent-ink); text-decoration: underline; }
 
@@ -1869,10 +1965,50 @@ thead th { position: relative; }
  * mark. A numeric header is right-aligned, so there the mark leads instead of trails.
  */
 
-th.sortable { cursor: pointer; user-select: none; }
+/*
+ * The sort control is a real button filling its header.
+ *
+ * The `<th>` used to BE the control — tabindex, a keydown handler, a pointer cursor and no
+ * role — so a screen reader announced a column header and nothing about pressing it. A button
+ * inside the header keeps the cell a columnheader (which is what associates it with the cells
+ * below), gets Enter, Space and a focus ring from the platform, and is announced as a control.
+ *
+ * It inherits the header's type rather than the form face, is full width so the whole header
+ * is the target, and carries no border or background of its own: on screen this must still
+ * read as a column heading, not as a button someone dropped into a table.
+ */
+th.sortable { cursor: pointer; user-select: none; padding-top: 0; }
+th.sortable > .sort-btn {
+    display: inline-flex;
+    align-items: baseline;
+    width: 100%;
+    min-height: 40px;
+    padding: 0;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    text-align: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    cursor: pointer;
+}
+th.num.sortable > .sort-btn { justify-content: flex-end; }
 th.sortable:hover,
-th.sortable:focus-visible { background: var(--page); color: var(--accent-ink); }
-th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+th.sortable:has(> .sort-btn:hover),
+th.sortable:has(> .sort-btn:focus-visible) { background: var(--page); color: var(--accent-ink); }
+th.sortable > .sort-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; box-shadow: none; }
+
+/*
+ * A chart slot that is saying why it has nothing to draw.
+ *
+ * Keeps the declared height so the card does not jump when a range with data is selected, and
+ * centres one muted sentence in it. The alternative — an ECharts instance with no series —
+ * renders as an empty axis box, which reads as broken rather than as empty.
+ */
+.chart.chart-note { display: flex; align-items: center; justify-content: center; text-align: center; }
+.chart.chart-note p { margin: 0; max-width: 42ch; font-size: 14px; }
 
 /*
  * The mark takes no width.
@@ -1884,6 +2020,7 @@ th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
  */
 .sort-mark { display: inline-block; width: 0; margin-left: 6px; font-size: 14px; }
 th.sortable .sort-mark::after { content: "\2195"; color: var(--field-border); }
+th.num.sortable .sort-mark { margin-left: 0; margin-right: 6px; order: -1; }
 th.sorted-asc  .sort-mark::after { content: "\25B2"; color: var(--accent-ink); }
 th.sorted-desc .sort-mark::after { content: "\25BC"; color: var(--accent-ink); }
 th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
@@ -1985,7 +2122,22 @@ table .sub,
 .facet-opt:hover,
 .facet-opt:focus-visible { border-color: var(--field-border); background: var(--band); color: var(--ink); }
 .facet-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/*
+ * A static facet row is NOT a control, and must not behave like one under the pointer.
+ *
+ * The generic `.facet-opt:hover` gives every row a border and a band background. The static
+ * row is a <span> with no href, no handler and no tabindex — it exists to say why a value is
+ * being shown without offering to filter by it — and it was picking up the full interactive
+ * hover anyway, so a border appeared out of nowhere under the pointer on an inert row.
+ */
 .facet-opt.is-static { color: var(--muted); }
+.facet-opt.is-static:hover,
+.facet-opt.is-static:focus-visible {
+    border-color: transparent;
+    background: none;
+    color: var(--muted);
+    cursor: default;
+}
 
 .facet-fill {
     position: absolute; left: 0; top: 2px; bottom: 2px;
@@ -2065,9 +2217,12 @@ table .sub,
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
+    /* MEASURED at 28x44 on a phone: the touch rule in mobile.css sets a min-height on every
+       button and nothing set a min-width, so the one control that is unambiguously "open this
+       record" was a quarter-inch wide. Square, and square at the touch floor. */
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 4px;
     font: 700 18px/1 var(--font-ui);
     color: var(--faint);
     background: transparent;
@@ -2116,7 +2271,11 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         align-items: center;
         gap: 10px;
         width: 100%;
-        min-height: 34px;
+        /* 40px, not 34px. This rule is inside a min-width:901px block and `.lh-railbtn` is
+           more specific than the bare `button` in mobile.css's touch section, so on a
+           coarse-pointer tablet at 1024px the 34px won and the control that collapses the whole
+           navigation was under the floor. */
+        min-height: 40px;
         margin: 0 0 14px;
         padding: 6px 24px;
         font: 600 14px/1.2 var(--font-ui);
@@ -2143,7 +2302,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         border-right: 1.5px solid currentColor;
         transform: rotate(-135deg);
     }
-    .lh-railbtn[aria-expanded="false"] .lh-railbtn-mark { transform: rotate(45deg); }
+    .lh-railbtn[aria-pressed="true"] .lh-railbtn-mark { transform: rotate(45deg); }
 
     .lh-rail .side li a {
         display: flex;
@@ -2278,7 +2437,12 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
 .recovery-codes {
     list-style: none;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    /* `min(100%, …)`, like every other auto-fit grid in the panel. A bare `minmax(190px, …)`
+       cannot shrink below its floor, so on a narrow viewport it pushes the page out sideways
+       instead of collapsing to one column. The recovery codes were the last grid still
+       written the old way — mobile.css overrides the other nine, and the test that pins the
+       pattern only reads mobile.css, so a bare floor in this file was invisible to it. */
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
     gap: 8px;
     margin: 16px 0;
     padding: 0;
@@ -2939,6 +3103,18 @@ p > .chip-accent { color: var(--accent-ink); }
     list-style: none;
 }
 .fold > summary::-webkit-details-marker { display: none; }
+
+/*
+ * Every OTHER disclosure in the product, so none is left on the fallback.
+ *
+ * `.fold` and `.finish-all` each have their own rule; a `<details class="card">` — the
+ * installer's "point this installation at different indexes" panel — matched neither, so it was
+ * the one summary in the codebase with no pointer cursor and only the generic `:focus-visible`
+ * ring, which on a native summary is a box-shadow that its own disclosure triangle sits outside
+ * of. The native triangle is kept, because a card-shaped disclosure has no drawn marker.
+ */
+details > summary { cursor: pointer; }
+details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: none; }
 .fold > summary:hover { background: none; color: var(--ink); }
 .fold > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 

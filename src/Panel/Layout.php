@@ -324,8 +324,13 @@ final class Layout
                 . '</div>' . "\n";
         }
 
+        /* The heading is a placeholder the front end rewrites. Two different systems can fail
+           here — the search index the panel reads, and the Opensolr control plane the analytics
+           views ask — and they have different next steps, so a fixed "Solr is not answering"
+           sent an operator to check the wrong one half the time. assets/js/core.js's
+           raiseConnectionBanner() decides which, from the diagnosis it was given. */
         echo '<div class="banner banner-bad" id="lh-conn" role="alert" hidden>'
-            . '<strong>Solr is not answering.</strong> '
+            . '<strong>A service this panel depends on is not answering.</strong> '
             . '<span id="lh-conn-detail"></span> '
             . 'Run the connection check under <a href="?v=settings">Settings</a>, or set '
             . '<code>LOGHOUND_DEMO=1</code> to explore the panel with sample data.'
@@ -419,8 +424,33 @@ final class Layout
                 continue;
             }
             foreach ($raw as $field => $values) {
-                if (is_string($field) && isset($allowed[$field]) && Security::isSafeFieldName($field)) {
-                    $params[$key][$field] = array_values(array_filter((array) $values, 'is_string'));
+                if (!is_string($field) || !isset($allowed[$field]) || !Security::isSafeFieldName($field)) {
+                    continue;
+                }
+
+                /* THE OPERATOR TRAVELS WITH THE VALUES, AND IT DID NOT. `f[field][op]=none` lives
+                   in the same array as the values (Panel\Facets, "the URL is the state"), and
+                   array_values() re-indexed it — so changing the time range turned an exclusion
+                   into an inclusion AND added the literal string "none" as a value. The chips
+                   still said "None of" while the numbers underneath were the exact opposite: a
+                   silently inverted filter, which is the worst shape a wrong number can take. */
+                $clean = [];
+                foreach ((array) $values as $k => $value) {
+                    if (!is_string($value)) {
+                        continue;
+                    }
+                    if ($k === 'op') {
+                        if (in_array($value, Facets::OPERATORS, true)) {
+                            $clean['op'] = $value;
+                        }
+                        continue;
+                    }
+                    if (is_int($k) || ctype_digit((string) $k)) {
+                        $clean[] = $value;
+                    }
+                }
+                if ($clean !== []) {
+                    $params[$key][$field] = $clean;
                 }
             }
         }

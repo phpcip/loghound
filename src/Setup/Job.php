@@ -141,7 +141,7 @@ final class Job
      */
     public static function load(string $dir, string $id): ?self
     {
-        if (!preg_match('/^[a-f0-9]{16}$/', $id)) {
+        if (!preg_match('/^[a-f0-9]{16}$/D', $id)) {
             return null;
         }
         $path = rtrim($dir, '/') . '/' . $id . '.json';

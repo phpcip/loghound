@@ -32,28 +32,15 @@
 'use strict';
 
 import {
-    api, bytes, dec, dur, durUs, el, fill, num, pct, shortHash, when
+    api, bytes, dec, dur, durUs, el, fill, num, pct, populationLabel, shortHash, when
 } from './core.js';
 import { closeDialog, dialogFail, isCurrent, openDialog, registerOpener } from './dialog.js';
-import { clientNode, countryNode, dimLabel, dimValue, flagNode, networkNode } from './identity.js';
+import { clientNode, countryNode, dimLabel, dimValue, flagNode, networkNode, verdictChip } from './identity.js';
 import { markSortable } from './sorttable.js';
 import { countryName } from './geo.js';
 
 /** Population keys in the order every other chart in the panel stacks them. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
-
-/**
- * The verdict chip, coloured the same way it is everywhere else.
- *
- * A verdict is a word, not an identifier whose characters
- * have to line up, and monospace on everything was making prose read as code.
- */
-function verdictChip(verdict) {
-    return el('span', {
-        class: 'chip v-' + String(verdict || 'unknown'),
-        text: verdict || 'unknown'
-    });
-}
 
 /**
  * A definition list from [label, value, mono] triples, skipping the empty ones.
@@ -367,7 +354,13 @@ function renderSession(body, data) {
  * the session explorer does exactly that.
  */
 export async function openSession(id) {
-    const handle = openDialog('Session ' + String(id).slice(0, 12), 'Loading the visit and its request trail…');
+    /* THE WHOLE ID IS IN THE SUBTITLE. The heading is a 12-character prefix because a full
+       session id does not fit one, and on the failure path that prefix was all that stayed on
+       screen — so an operator reporting "this visit will not open" had nothing to quote. */
+    const handle = openDialog(
+        'Session ' + String(id).slice(0, 12),
+        'Loading the visit and its request trail\u2026 · ' + String(id)
+    );
     try {
         const data = await api('sessions', 'detail', { id: id });
         if (!isCurrent(handle.generation)) {
@@ -384,7 +377,7 @@ export async function openSession(id) {
         markSortable(body);
     } catch (err) {
         if (isCurrent(handle.generation)) {
-            dialogFail(handle.body, err);
+            dialogFail(handle.body, err, () => openSession(id));
         }
     }
 }
@@ -399,7 +392,7 @@ function mixBar(mix, total) {
     return el('span', { class: 'bar bar-split' }, ORDER.map((key) => el('span', {
         class: 'bar-' + key,
         style: 'width:' + (((mix[key] || 0) / denominator) * 100).toFixed(2) + '%',
-        title: key + ': ' + num(mix[key] || 0) + ' (' + pct(mix[key] || 0, denominator) + ')'
+        title: populationLabel(key) + ': ' + num(mix[key] || 0) + ' (' + pct(mix[key] || 0, denominator) + ')'
     })));
 }
 
@@ -431,8 +424,7 @@ function visitorTable(rows) {
         const tr = el('tr', {
             class: 'row-link',
             tabindex: '0',
-            role: 'button',
-            dataset: { lhOpen: 'session', id: v.id },
+                dataset: { lhOpen: 'session', id: v.id },
             title: 'Open this visit'
         });
         tr.appendChild(el('td', { class: 'mono nowrap', text: when(v.ts_start), 'data-sort': v.ts_start || '' }));
@@ -465,11 +457,17 @@ function visitorTable(rows) {
     }
 
     const table = el('table', { class: 'tight table-fixed' }, [
+        /* ONE UNIT, AND THEY SUM TO 100. This colgroup mixed `ch` with `%` and left the
+           seventh <col> with no width at all. On `table-layout: fixed` with a 680px
+           min-width that over-constrains the table: 56ch plus 36% demanded more than the
+           table had, and the width-less Page column resolved to ZERO — measured at 0px for
+           every column in the rendered dialog. Percentages only, adding to 100, is the rule
+           the nine server-rendered colgroups already follow. */
         el('colgroup', {}, [
-            el('col', { style: 'width:13ch' }), el('col', { style: 'width:10ch' }),
-            el('col', { style: 'width:16ch' }), el('col', { style: 'width:20%' }),
-            el('col', { style: 'width:16%' }), el('col', { style: 'width:6ch' }),
-            el('col'), el('col', { style: 'width:11ch' })
+            el('col', { style: 'width:11%' }), el('col', { style: 'width:13%' }),
+            el('col', { style: 'width:16%' }), el('col', { style: 'width:17%' }),
+            el('col', { style: 'width:15%' }), el('col', { style: 'width:6%' }),
+            el('col', { style: 'width:12%' }), el('col', { style: 'width:10%' })
         ]),
         el('thead', {}, [el('tr', {}, [
             el('th', { scope: 'col', text: 'Started' }),
@@ -610,7 +608,7 @@ export async function openDimension(field, value) {
         markSortable(body);
     } catch (err) {
         if (isCurrent(handle.generation)) {
-            dialogFail(handle.body, err);
+            dialogFail(handle.body, err, () => openDimension(field, value));
         }
     }
 }

@@ -1,0 +1,320 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Loghound — bring a live index's schema up to date after an upgrade.
+ *
+ * ---------------------------------------------------------------------------------------
+ * WHAT GOES WRONG WITHOUT THIS
+ * ---------------------------------------------------------------------------------------
+ * A release adds a field. You upgrade the code. Your two indexes are still running the
+ * configset that was uploaded when you installed, and the only dynamic field either schema
+ * declares is `*` mapped to the `ignored` type. So the tailer writes the new field, Solr
+ * accepts the document, the value is discarded, and NOTHING REPORTS AN ERROR — not the
+ * daemons, not the platform, not the panel. Months later a facet is empty and there is no
+ * trace of why, and the values that were dropped are not recoverable.
+ *
+ * Run this after every upgrade. It is one read per index and it changes nothing without
+ * --apply.
+ *
+ * ---------------------------------------------------------------------------------------
+ * USAGE
+ * ---------------------------------------------------------------------------------------
+ *   loghound-schema                 compare, change nothing (the default)
+ *   loghound-schema --check         the same, spelled out
+ *   loghound-schema --apply         upload this release's configsets where they are missing
+ *                                   fields, then re-check
+ *   loghound-schema --quiet         print only what is wrong, and the verdict
+ *   loghound-schema --help
+ *
+ * EXIT CODES, which is the half a deployment script reads:
+ *
+ *   0  up to date — every field this release writes is declared by both live schemas
+ *      (and, after --apply, the push succeeded)
+ *   1  this installation is not usable: bad flags, unusable configuration, no indexes yet
+ *   2  failed — a schema could not be read, or an upload was rejected
+ *   3  out of date — at least one index is missing at least one field (--check only;
+ *      --apply never leaves this state, it either fixes it or exits 2)
+ *
+ *   if loghound-schema --check; then deploy; else echo "run --apply first"; fi
+ *
+ * The verdict is also written to `var/schema-check.json` — the same file the panel's Settings
+ * page reads, so running this on the shell updates what the browser shows.
+ *
+ * ---------------------------------------------------------------------------------------
+ * WHAT IT WILL NOT DO
+ * ---------------------------------------------------------------------------------------
+ * It never pushes to an index whose live schema it could not read. A push replaces the whole
+ * configset, so pushing blind to an index that might be running a NEWER schema would delete
+ * the fields that newer release writes — the same silent data loss this tool exists to stop,
+ * caused by the tool. It refuses and says so instead; re-run it when the platform answers.
+ *
+ * An extra field — one the index declares and this release does not write — is not an error
+ * and is never "fixed". That is a newer schema, or a field a later release dropped, and it
+ * costs nothing.
+ *
+ * Refuses to run under a web SAPI. --apply reconfigures and reloads a live index, and an
+ * unauthenticated HTTP route to that is not something to leave lying around because of where
+ * somebody copied this file to.
+ *
+ * The Opensolr API key is read from config/loghound.php and is never printed, not by this
+ * script and not by anything it calls: every message from the control plane goes through
+ * Opensolr::redact() before it can reach a terminal.
+ *
+ * @package Loghound
+ * @license MIT
+ */
+
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+require __DIR__ . '/../src/autoload.php';
+
+use Loghound\Config;
+use Loghound\Setup\Schema;
+
+const LH_SCHEMA_OK        = 0;
+const LH_SCHEMA_CONFIG    = 1;
+const LH_SCHEMA_FAILED    = 2;
+const LH_SCHEMA_OUTDATED  = 3;
+
+$root       = dirname(__DIR__);
+$configPath = getenv('LOGHOUND_CONFIG') ?: $root . '/config/loghound.php';
+
+$apply = false;
+$quiet = false;
+
+foreach (array_slice($argv, 1) as $arg) {
+    switch ($arg) {
+        case '--apply':
+            $apply = true;
+            break;
+        case '--check':
+            break;
+        case '--quiet':
+            $quiet = true;
+            break;
+        case '--help':
+        case '-h':
+            lh_schema_usage();
+            exit(LH_SCHEMA_OK);
+        default:
+            fwrite(STDERR, 'loghound-schema: unknown option ' . $arg . "\n");
+            lh_schema_usage(STDERR);
+            exit(LH_SCHEMA_CONFIG);
+    }
+}
+
+$cfg = Config::load($configPath);
+$errors = $cfg->validate();
+if ($errors !== []) {
+    fwrite(STDERR, "Loghound: configuration is not usable:\n  - " . implode("\n  - ", $errors) . "\n");
+    exit(LH_SCHEMA_CONFIG);
+}
+
+$say = static function (string $line) use ($quiet): void {
+    if (!$quiet) {
+        fwrite(STDOUT, $line . "\n");
+    }
+};
+
+try {
+    $report = Schema::inspect($cfg, $root);
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'Loghound: ' . $e->getMessage() . "\n");
+    exit(LH_SCHEMA_FAILED);
+}
+
+$say('Loghound schema check');
+$say('  installation : ' . $root);
+$say('  release      : ' . $report['release']);
+$say('');
+lh_schema_table($report, $say);
+
+if ($report['state'] === Schema::UNCONFIGURED) {
+    Schema::writeCache($cfg, $report);
+    fwrite(STDERR, "\nThis installation has no indexes yet. Run bin/loghound-setup first.\n");
+    exit(LH_SCHEMA_CONFIG);
+}
+
+if (!$apply) {
+    $saved = Schema::writeCache($cfg, $report);
+    lh_schema_verdict($report, $root, $saved, false);
+
+    exit(match ($report['state']) {
+        Schema::CURRENT => LH_SCHEMA_OK,
+        Schema::BEHIND  => LH_SCHEMA_OUTDATED,
+        default         => LH_SCHEMA_FAILED,
+    });
+}
+
+if ($report['state'] === Schema::CURRENT) {
+    $saved = Schema::writeCache($cfg, $report);
+    lh_schema_verdict($report, $root, $saved, false);
+    fwrite(STDOUT, "Nothing to apply.\n");
+    exit(LH_SCHEMA_OK);
+}
+
+$say('');
+$say('Applying this release\'s configsets.');
+
+try {
+    $result = Schema::apply($cfg, $root, $report, null, $say);
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'Loghound: the push failed: ' . $e->getMessage() . "\n");
+    exit(LH_SCHEMA_FAILED);
+}
+
+$say('');
+foreach ($result['indexes'] as $row) {
+    $line = '  ' . str_pad((string) $row['role'], 10) . strtoupper((string) $row['state']) . "\n"
+        . '      ' . wordwrap((string) $row['message'], 84, "\n      ", true);
+    if ($row['state'] === 'failed' || $row['state'] === 'refused') {
+        fwrite(STDERR, $line . "\n");
+        continue;
+    }
+    $say($line);
+}
+
+if ($result['state'] === 'failed') {
+    Schema::writeCache($cfg, Schema::inspect($cfg, $root));
+    fwrite(STDERR, "\nThe push did not finish. Nothing above is a guess: each line names what happened "
+        . "to that index and what state it is in now.\n");
+    exit(LH_SCHEMA_FAILED);
+}
+
+/**
+ * Re-read the live schemas after a push, rather than assuming it landed.
+ *
+ * The platform accepted the upload and reloaded the core, which is not the same statement as
+ * "the core came back up running these fields". This costs one more read per index and it is
+ * the difference between reporting what was sent and reporting what is there.
+ */
+try {
+    $after = Schema::inspect($cfg, $root);
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'Loghound: the configsets were uploaded, but the result could not be re-read: '
+        . $e->getMessage() . "\n");
+    exit(LH_SCHEMA_FAILED);
+}
+
+$say('');
+lh_schema_table($after, $say);
+$saved = Schema::writeCache($cfg, $after);
+lh_schema_verdict($after, $root, $saved, true);
+
+exit(match ($after['state']) {
+    Schema::CURRENT => LH_SCHEMA_OK,
+    default         => LH_SCHEMA_FAILED,
+});
+
+/**
+ * Print one line per index: role, name, verdict, and what is missing.
+ *
+ * @param array<string,mixed> $report
+ */
+function lh_schema_table(array $report, callable $say): void
+{
+    foreach ($report['indexes'] as $row) {
+        $state = (string) $row['state'];
+        $line = '  ' . str_pad((string) $row['role'], 10)
+            . str_pad((string) ($row['core'] === '' ? '(none)' : $row['core']), 32) . ' '
+            . str_pad(strtoupper($state), 13);
+
+        if ($state === Schema::BEHIND) {
+            $line .= count((array) $row['missing']) . ' missing: '
+                . Schema::namedList((array) $row['missing']);
+        } elseif ($state === Schema::CURRENT) {
+            $line .= (int) $row['expected'] . ' fields, all present';
+        }
+
+        if ($state === Schema::BEHIND || $state === Schema::UNREADABLE || $state === Schema::UNCONFIGURED) {
+            fwrite(STDERR, $line . "\n");
+            fwrite(STDERR, '      ' . wordwrap((string) $row['message'], 84, "\n      ", true) . "\n");
+            continue;
+        }
+        $say($line);
+    }
+}
+
+/**
+ * The closing paragraph: what this means, and the exact command that fixes it.
+ *
+ * Printed to stderr when something is wrong and stdout when nothing is, so a cron that
+ * only mails stderr stays quiet on a healthy installation and is loud on a broken one.
+ *
+ * @param array<string,mixed> $report
+ */
+function lh_schema_verdict(array $report, string $root, ?string $saved, bool $applied): void
+{
+    $where = $saved === null
+        ? 'The result could not be saved to var/, so the panel will still ask you to check.'
+        : 'Saved to ' . $saved . ', which is what the panel\'s Settings page reads.';
+
+    $stamp = gmdate('m/d/Y H:i:s', (int) $report['checked_at']) . ' UTC';
+
+    if ($report['state'] === Schema::CURRENT) {
+        fwrite(STDOUT, "\n" . ($applied
+            ? 'Done. Both indexes now declare every field this release writes.'
+            : 'Up to date. Both indexes declare every field this release writes.')
+            . "\nChecked at " . $stamp . '. ' . $where . "\n");
+        return;
+    }
+
+    if ($report['state'] === Schema::BEHIND && $applied) {
+        fwrite(STDERR, "\nUploaded, and still behind. Opensolr ACCEPTED the configsets and re-reading the\n"
+            . "live schemas still shows fields missing, so the files landed and the index is not\n"
+            . "running them — the core did not reload onto the new configset. Running this again\n"
+            . "will upload the same files to the same effect. Open this index in your Opensolr\n"
+            . "control panel and reload it there.\n"
+            . 'Checked at ' . $stamp . '. ' . $where . "\n");
+        return;
+    }
+
+    if ($report['state'] === Schema::BEHIND) {
+        fwrite(STDERR, "\nOut of date. Solr accepts a document carrying a field its schema does not\n"
+            . "declare and throws that value away without an error, so this will not surface as a\n"
+            . "failure anywhere — it surfaces as a facet that is permanently empty.\n\n"
+            . "Fix it with:\n  " . Schema::command($root) . " --apply\n\n"
+            . "That is additive: it uploads this release's configsets and reloads the cores. It does\n"
+            . "not touch a document already in the index.\n"
+            . 'Checked at ' . $stamp . '. ' . $where . "\n");
+        return;
+    }
+
+    fwrite(STDERR, "\nCould not tell. A schema that cannot be read is never reported as matching, so\n"
+        . "this is being reported as unknown rather than as fine. Run it again; if it keeps\n"
+        . "happening, check in your Opensolr control panel that the account still owns both\n"
+        . "indexes.\n"
+        . 'Checked at ' . $stamp . '. ' . $where . "\n");
+}
+
+/** The help text, on stdout for --help and on stderr for a bad flag. */
+function lh_schema_usage($stream = STDOUT): void
+{
+    fwrite($stream, <<<'TEXT'
+loghound-schema — check, and fix, the schema your live indexes are running.
+
+  loghound-schema                compare this release against both live schemas, change nothing
+  loghound-schema --check        the same, spelled out
+  loghound-schema --apply        upload this release's configsets where fields are missing
+  loghound-schema --quiet        print only what is wrong
+  loghound-schema --help         this
+
+Exit codes:
+  0  up to date
+  1  unusable configuration, unknown flag, or no indexes provisioned yet
+  2  failed: a schema could not be read, or an upload was rejected
+  3  out of date: an index is missing a field this release writes (--check only)
+
+Run it after every upgrade. A field this release writes that the live schema does not declare
+is accepted by Solr and silently discarded, with no error anywhere.
+
+The verdict is written to var/schema-check.json, which is what the panel's Settings page shows.
+Set LOGHOUND_CONFIG to run against a configuration file somewhere other than config/.
+
+TEXT);
+}

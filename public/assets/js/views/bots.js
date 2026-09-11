@@ -13,7 +13,7 @@
 'use strict';
 
 import {
-    api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, tbody, when
+    api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, setPop, tbody, when
 } from '../core.js';
 import { barsHStacked, donut, histogram, tokens } from '../charts.js';
 import { dimRow, dimValue, valueText } from '../identity.js';
@@ -262,7 +262,7 @@ export default function init() {
         loadCard('bf-pivot', 'Cross-tabulating the filtered population', async () => {
             const data = await split;
             if (!renderPivot('bf-pivot', data.pivot)) {
-                noDataYet('bf-pivot', 'No session in this range has both a bot class and a network type.');
+                noPivotYet('bf-pivot-empty', 'both a bot class and a network type');
             }
         });
     }

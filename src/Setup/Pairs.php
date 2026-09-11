@@ -62,7 +62,7 @@ final class Pairs
      */
     public static function parse(string $name): ?array
     {
-        if (preg_match('/^loghound_([a-f0-9]{4,32})_(hits|sessions)$/', $name, $m) !== 1) {
+        if (preg_match('/^loghound_([a-f0-9]{4,32})_(hits|sessions)$/D', $name, $m) !== 1) {
             return null;
         }
         return ['install_id' => $m[1], 'role' => $m[2]];
@@ -273,7 +273,7 @@ final class Pairs
      */
     public static function find(array $pairs, string $installId): ?array
     {
-        if (!preg_match('/^[a-f0-9]{4,32}$/', $installId)) {
+        if (!preg_match('/^[a-f0-9]{4,32}$/D', $installId)) {
             return null;
         }
         foreach ($pairs as $pair) {

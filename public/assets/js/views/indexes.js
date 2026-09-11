@@ -14,15 +14,23 @@
 'use strict';
 
 import {
-    api, bytes, byId, dec, dur, el, hideEmpty, loadCard, num, pct, setPop, tbody
+    api, bytes, byId, dec, dur, el, hideEmpty, loadCard, num, pct, setPop, tbody, tip
 } from '../core.js';
 import { barsH, donut, draw } from '../charts.js';
 import {
-    chartOrEmpty, fieldSetter, handleState, histPercentile, lfAdd, lfRemove, renderFilters,
-    renderVolume, resolveCore, shareBar, stateMessage, tokens
+    chartOrEmpty, fieldSetter, handleState, histPercentile, lfAdd, lfRemove, plotOrNote,
+    renderFilters, renderVolume, resolveCore, shareBar, stateMessage, tokens
 } from './opensolr.js';
 
-/** Plain-English meaning for the status codes an index actually answers with. */
+/**
+ * Plain-English meaning for the status codes an index actually answers with.
+ *
+ * DELIBERATELY NOT THE SAME TABLE as the one in views/performance.js. That one describes a
+ * WEBSERVER's answers to a visitor; this describes a SEARCH INDEX's answers to a caller, and
+ * "403" means two different things in the two places — blocked by the origin, against blocked
+ * by the index firewall. Each entry here is the shared phrase plus what it means on an index,
+ * so a reader moving between the two views never meets a code described two different ways.
+ */
 const STATUS_MEANING = {
     200: 'OK',
     400: 'Bad request — the query was malformed',
@@ -31,7 +39,7 @@ const STATUS_MEANING = {
     404: 'Not found — no such core or handler',
     413: 'Payload too large',
     429: 'Too many requests — rate limited',
-    500: 'Internal error inside Solr',
+    500: 'Internal server error — inside Solr',
     502: 'Bad gateway — the node did not answer',
     503: 'Service unavailable — the node was busy or down',
     504: 'Gateway timeout'
@@ -114,7 +122,7 @@ function renderQtime(data) {
             axisPointer: { type: 'shadow', shadowStyle: { color: theme.sunken } },
             formatter: (params) => {
                 const p = params[0];
-                return String(p.name) + ' ms<br><strong>' + num(p.value) + '</strong> requests';
+                return tip`${p.name} ms<br><strong>${num(p.value)}</strong> requests`;
             }
         },
         xAxis: {
@@ -189,17 +197,20 @@ function renderHandlers(data) {
     const statusTotal = statuses.reduce((sum, key) => sum + data.statuses[key], 0);
     const t = tokens();
 
-    barsH('ix-paths-chart', paths.slice(0, 10).map((path) => ({
-        label: path,
-        value: data.paths[path],
-        extra: pct(data.paths[path], pathTotal) + ' of requests'
-    })));
+    if (!plotOrNote('ix-paths-chart', paths.length,
+        'The request log recorded no handler for these requests, so there is no endpoint to plot.')) {
+        barsH('ix-paths-chart', paths.slice(0, 10).map((path) => ({
+            label: path,
+            value: data.paths[path],
+            extra: pct(data.paths[path], pathTotal) + ' of requests'
+        })));
+    }
 
     tbody(byId('ix-paths-table'), paths.map((path) => ({
         attrs: { class: 'lf-pick' },
         cells: [
             Object.assign(pickCell('path', path, data.active), { mono: true, clip: true }),
-            { text: num(data.paths[path]), num: true },
+            { text: num(data.paths[path]), num: true, sort: data.paths[path] },
             { node: shareBar(data.paths[path], pathTotal) }
         ]
     })));
@@ -208,11 +219,14 @@ function renderHandlers(data) {
        request has exactly one status — and the centre carries the total. Colour is the one
        accent for anything at or above 400 and the neutral population ramp below it, because
        the design system has no red to reach for. */
-    donut('ix-status-chart', statuses.map((status) => ({
-        label: status + (STATUS_MEANING[Number(status)] ? ' · ' + STATUS_MEANING[Number(status)] : ''),
-        value: data.statuses[status],
-        color: Number(status) >= 400 ? t.pop.evasive : t.pop.human
-    })), 'requests', num(statusTotal));
+    if (!plotOrNote('ix-status-chart', statuses.length,
+        'The request log recorded no status code for these requests, so there is nothing to break down.')) {
+        donut('ix-status-chart', statuses.map((status) => ({
+            label: status + (STATUS_MEANING[Number(status)] ? ' · ' + STATUS_MEANING[Number(status)] : ''),
+            value: data.statuses[status],
+            color: Number(status) >= 400 ? t.pop.evasive : t.pop.human
+        })), 'requests', num(statusTotal));
+    }
 
     tbody(byId('ix-status-table'), statuses.map((status) => ({
         attrs: { class: 'lf-pick' },
@@ -228,7 +242,7 @@ function renderHandlers(data) {
                     text: status
                 })
             },
-            { text: num(data.statuses[status]), num: true },
+            { text: num(data.statuses[status]), num: true, sort: data.statuses[status] },
             {
                 node: el('span', { class: 'bar', title: STATUS_MEANING[Number(status)] || '' }, [
                     el('span', {
@@ -278,7 +292,7 @@ function renderNodes(data) {
         attrs: { class: 'lf-pick' },
         cells: [
             Object.assign(pickCell('param_hostname', name, data.active), { mono: true, clip: true }),
-            { text: num(data.nodes[name]), num: true },
+            { text: num(data.nodes[name]), num: true, sort: data.nodes[name] },
             { node: shareBar(data.nodes[name], total) }
         ]
     })));

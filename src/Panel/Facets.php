@@ -187,7 +187,7 @@ final class Facets
         string $exclusion = self::EXCLUDE_TAGGED,
         array $aliases = []
     ) {
-        $this->ns = preg_match('/^[a-z]{1,4}$/', $ns) === 1 ? $ns : 'f';
+        $this->ns = preg_match('/^[a-z]{1,4}$/D', $ns) === 1 ? $ns : 'f';
         $this->labels = array_filter(
             $labels,
             static fn (string $field): bool => Security::isSafeFieldName($field),
@@ -381,7 +381,7 @@ final class Facets
             return false;
         }
         return match ($this->kind($field)) {
-            'int'  => preg_match('/^-?\d{1,19}$/', $value) === 1,
+            'int'  => preg_match('/^-?\d{1,19}$/D', $value) === 1,
             'bool' => $value === 'true' || $value === 'false',
             default => true,
         };
@@ -590,7 +590,7 @@ final class Facets
         if (!is_string($raw)) {
             return '';
         }
-        $term = trim((string) preg_replace('/[\x00-\x1F\x7F]/u', '', $raw));
+        $term = trim((string) preg_replace('/[\x00-\x1F\x7F]/', '', $raw));
         if (mb_strlen($term) < self::MIN_SEARCH) {
             return '';
         }
@@ -630,7 +630,7 @@ final class Facets
         if (!Security::isSafeFieldName($outer) || !Security::isSafeFieldName($inner) || $outer === $inner) {
             return [];
         }
-        if (!preg_match('/^[A-Za-z0-9_]{1,64}$/', $key)) {
+        if (!preg_match('/^[A-Za-z0-9_]{1,64}$/D', $key)) {
             return [];
         }
 
@@ -1090,7 +1090,7 @@ final class Facets
         $out = [];
         foreach (self::PAGE_PARAMS as $key) {
             $value = $get[$key] ?? null;
-            if (is_string($value) && $value !== '' && preg_match('/^[^\x00-\x1F\x7F]{1,200}$/u', $value) === 1) {
+            if (is_string($value) && $value !== '' && preg_match('/^[^\x00-\x1F\x7F]{1,200}$/uD', $value) === 1) {
                 $out[$key] = $value;
             }
         }
@@ -1111,7 +1111,7 @@ final class Facets
     public function urlFor(array $selection, ?string $view = null): string
     {
         $params = $this->page;
-        if ($view !== null && preg_match('/^[a-z0-9_-]{1,32}$/', $view) === 1) {
+        if ($view !== null && preg_match('/^[a-z0-9_-]{1,32}$/D', $view) === 1) {
             $params['v'] = $view;
         }
 

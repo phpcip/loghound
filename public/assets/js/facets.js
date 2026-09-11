@@ -414,7 +414,20 @@ function load(panel) {
         renderFacetPanel(panel, data.dimensions);
     }).catch((err) => {
         loaded = false;
-        fill(panel, [el('p', { class: 'muted', text: 'The dimension list could not be loaded: ' + err.message })]);
+
+        /* A RETRY THAT IS ON SCREEN. `loaded = false` meant a second try was possible — by
+           closing the panel and opening it again, which is not a thing any reader would guess.
+           The message is still a muted line rather than a banner, because the bar is a control
+           and a Solr hiccup populating it must not put an error across a page whose cards work. */
+        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        again.addEventListener('click', () => {
+            again.disabled = true;
+            load(panel);
+        });
+        fill(panel, [
+            el('p', { class: 'muted', text: 'The dimension list could not be loaded: ' + err.message }),
+            el('div', { class: 'card-error-actions' }, [again])
+        ]);
     });
 }
 

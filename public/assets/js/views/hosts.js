@@ -19,7 +19,9 @@
 
 'use strict';
 
-import { api, byId, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody } from '../core.js';
+import {
+    api, byId, dec, el, hideEmpty, loadCard, noDataYet, num, pct, populationLabel, setPop, tbody
+} from '../core.js';
 import { barsH, tokens } from '../charts.js';
 import { dimRow, dimValue } from '../identity.js';
 
@@ -84,8 +86,25 @@ export function initHostPicker() {
         ]);
 
         tools.insertBefore(wrap, byId('lh-page-status') || null);
-    }).catch(() => {
-        /* No selector. See the docblock: this is page furniture, not a report. */
+    }).catch((err) => {
+        /* The selector scopes the WHOLE dashboard, so its absence changes what every number on
+           the page means. Still not a report — it does not take a card's failure state — but a
+           multi-site operator who is quietly being shown all hosts at once has to be told the
+           control they use to narrow that is missing, and given something to paste. */
+        window.console.error('loghound: the virtual-host selector could not load', err);
+        const tools = document.querySelector('.head-tools');
+        if (!tools || byId('lh-hostpick-failed')) {
+            return;
+        }
+        tools.insertBefore(
+            el('span', {
+                class: 'job-meta',
+                id: 'lh-hostpick-failed',
+                title: String(err && err.message ? err.message : err),
+                text: 'Host filter unavailable — these figures cover every host'
+            }),
+            byId('lh-page-status') || null
+        );
     });
 }
 
@@ -107,14 +126,26 @@ function renderTable(data) {
         return;
     }
 
+    /* ONE EMPTY STATE, NOT TWO CONTRADICTING EACH OTHER. This used to reveal the server-rendered
+       "no virtual host is being recorded — your log format does not carry it" card AND print the
+       generic "nothing has been indexed yet, check the tailer is running" state underneath it.
+       One said the cause is known and everything else is fine; the other said nothing is indexed
+       and the reader should go and check a daemon. The explainer is the more specific of the two
+       and it is the one that survives. */
     if (!data.rows.length) {
         tbody(table, []);
         const none = byId('hosts-none');
         if (none) {
             none.hidden = false;
+            hideEmpty('hosts-table-empty');
+        } else {
+            noDataYet('hosts-table-empty', 'sessions with a virtual host');
         }
-        noDataYet('hosts-table-empty', 'sessions with a virtual host');
         return;
+    }
+    const none = byId('hosts-none');
+    if (none) {
+        none.hidden = true;
     }
     hideEmpty('hosts-table-empty');
 
@@ -124,6 +155,7 @@ function renderTable(data) {
             { node: planeName(row), clip: true, title: row.host, sort: row.host },
             { text: num(row.sessions), num: true, sort: row.sessions },
             { text: num(row.counts.human), num: true, sort: row.counts.human },
+            { text: num(row.counts.unknown), num: true, sort: row.counts.unknown },
             { text: num(row.counts.evasive), num: true, sort: row.counts.evasive },
             { text: num(row.counts.ai), num: true, sort: row.counts.ai },
             { text: num(row.counts.declared), num: true, sort: row.counts.declared },
@@ -138,9 +170,13 @@ function renderTable(data) {
 
     const singlePlane = data.rows.filter((row) => row.beacon_only > 0).length;
 
+    /* "SCORED SESSIONS" WAS THE WRONG POPULATION: `total` is every session the range and the
+       filters matched, scored or not. The five population columns are what is scored, and they
+       now add up on the row because the fifth one is finally printed. */
     setPop('hosts-table', num(data.rows.length) + ' virtual hosts, ' + num(data.total) +
-        ' scored sessions in the selected range. The five populations are mutually exclusive, ' +
-        'so they add up to the session count on each row.' +
+        ' sessions in the selected range. The five population columns are mutually exclusive, ' +
+        'so they add up to the session count on each row. Automation is the share of the row ' +
+        'that is not human, which is the last three columns together.' +
         (singlePlane
             ? ' ' + num(singlePlane) + ' of these hosts carry sessions measured by the beacon alone, with no ' +
               'access log behind them: their verdicts rest on one plane, and one plane is the plane a ' +
@@ -178,13 +214,20 @@ function planeName(row) {
     ]);
 }
 
-/** A single bar split into the five population colours, in stacking order. */
+/**
+ * A single bar split into the five population colours, in stacking order.
+ *
+ * The tooltip names the population in WORDS and states both the count and the share, matching
+ * the identical bar on Networks and in the visitor dialog. It read "evasive: 12%" — a raw
+ * population key — while the server had been shipping Query::populationLabels() in the boot
+ * payload the whole time and this file never read it.
+ */
 function splitBar(row) {
     const total = row.sessions || 1;
     return el('span', { class: 'bar bar-split' }, ORDER.map((key) => el('span', {
         class: 'bar-' + key,
         style: 'width:' + ((row.counts[key] || 0) / total * 100) + '%',
-        title: key + ': ' + pct(row.counts[key], total)
+        title: populationLabel(key) + ': ' + num(row.counts[key] || 0) + ' (' + pct(row.counts[key], total) + ')'
     })));
 }
 
@@ -208,7 +251,7 @@ function renderChart(data) {
         value: row.evasive_share === null ? 0 : row.evasive_share,
         color: th.accent,
         extra: num(row.counts.evasive) + ' of ' + num(row.sessions) + ' sessions'
-    })), { labelWidth: 190, format: (v) => v + '%' });
+    })), { labelWidth: 190, format: (v) => dec(v, 1) + '%' });
 
     setPop('hosts-share', 'Share of each host\'s scored sessions that were evasive automation — ' +
         'clients that did not declare themselves. Declared crawlers and AI crawlers are excluded ' +

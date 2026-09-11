@@ -146,7 +146,7 @@ $_SERVER['HTTP_HOST']      = 'loghound.test';
 
 $_SESSION['lh_csrf'] = 'test-csrf-token';
 if (getenv('LH_UNLOCKED') === '1') {
-    $_SESSION['lh_setup_unlocked'] = true;
+    $_SESSION['lh_setup_unlocked'] = time();
 } else {
     unset($_SESSION['lh_setup_unlocked']);
 }

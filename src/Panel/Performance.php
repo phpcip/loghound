@@ -392,8 +392,13 @@ final class Performance extends Controller
             echo '<span class="stat-hint">' . Security::esc($hint) . '</span></div>';
         }
         echo '</div>';
-        echo '<div class="empty" id="pf-nodur" hidden></div>';
 
+        /* NO SECOND EMPTY SLOT. This card used to carry its own `pf-nodur` div inside the
+           content wrapper, so the "no durations are being logged" explanation appeared BELOW
+           four em-dash stat tiles rather than in place of them — and the hideEmpty() that was
+           meant to clear it looked for `pf-nodur-content`, which never existed, so the tiles
+           were never hidden either. cardClose() already emits the one empty slot every other
+           card in the panel uses, and it hides the content for you. */
         self::cardClose('pf-headline');
     }
 

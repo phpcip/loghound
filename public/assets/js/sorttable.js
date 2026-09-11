@@ -49,17 +49,48 @@ function mark(root) {
         }
         head.dataset.lhSort = '1';
         for (const th of head.querySelectorAll('th')) {
-            if (th.classList.contains('w-expand') || th.textContent.trim() === '') {
+            /* A COLUMN WITH NO VISIBLE HEADING IS NOT SORTABLE. The test was `textContent`,
+               which includes a visually-hidden label — so the row-opener column, whose heading
+               is `<span class="sr-only">Open</span>` over a 6px-wide column, was given a sort
+               control 6 pixels across. There is nothing in that column to sort by either. */
+            const visible = Array.from(th.childNodes)
+                .filter((n) => !(n.nodeType === 1 && n.classList && n.classList.contains('sr-only')))
+                .map((n) => n.textContent || '')
+                .join('')
+                .trim();
+            if (th.classList.contains('w-expand') || visible === '') {
                 continue;
             }
+            /* THE HEADER STAYS A COLUMN HEADER; A BUTTON INSIDE IT IS THE CONTROL. The `<th>`
+               itself used to carry `tabindex="0"` and a keydown handler with no role at all, so
+               a screen reader announced "column header, Requests" and gave the reader no reason
+               to think it could be pressed — the classic control that reads as text. Putting
+               `role="button"` on the `<th>` instead would have been worse: it stops being a
+               columnheader, and a button takes presentational children, which would strip the
+               header's own text from the accessibility tree. The ARIA authoring practice for a
+               sortable table is exactly this — `aria-sort` on the header, a real button inside
+               it — and it is what gets Enter, Space and a focus ring for free.
+
+               The delegated listener matches on `th.sortable`, which still holds, because the
+               press originates inside the header. */
             th.classList.add('sortable');
-            th.setAttribute('tabindex', '0');
             th.setAttribute('aria-sort', 'none');
-            th.setAttribute('title', 'Sort by ' + th.textContent.trim());
+            th.removeAttribute('tabindex');
+
+            const label = th.textContent.trim();
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'sort-btn';
+            button.title = 'Sort by ' + label;
+            while (th.firstChild) {
+                button.appendChild(th.firstChild);
+            }
+
             const mark = document.createElement('span');
             mark.className = 'sort-mark';
             mark.setAttribute('aria-hidden', 'true');
-            th.appendChild(mark);
+            button.appendChild(mark);
+            th.appendChild(button);
         }
     }
 }
@@ -167,9 +198,6 @@ function sortBy(table, index, direction) {
  * a header. Clicking the same column again reverses it.
  */
 function onActivate(event) {
-    if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') {
-        return;
-    }
     const target = event.target;
     if (!target || typeof target.closest !== 'function') {
         return;
@@ -204,9 +232,13 @@ function onActivate(event) {
  * needs no re-wiring because the listener is on the document.
  */
 export function initSortableTables() {
+    /* CLICK ONLY. The control inside each header is a real <button>, and a button fires a
+       click for Enter and for Space by itself. Keeping a keydown listener as well meant one
+       press sorted twice — once on the key, once on the click the browser synthesised from
+       it — which toggles the direction straight back and reads as a header that does nothing
+       when operated from the keyboard. */
     mark(document);
     document.addEventListener('click', onActivate);
-    document.addEventListener('keydown', onActivate);
 }
 
 /** Mark tables a view created after boot, e.g. inside a dialog. */

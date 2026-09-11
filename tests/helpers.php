@@ -50,6 +50,19 @@ if (!function_exists('lh_fail')) {
         return strlen($out) > 300 ? substr($out, 0, 300) . '…' : $out;
     }
 
+    /**
+     * Seed a matching CSRF pair so a test may drive a state-changing panel action.
+     *
+     * Panel\Settings::post() and Panel\OpensolrView::post() both re-assert the token that the
+     * front controller already checked, so a test that calls one of them directly has to
+     * present one exactly as a browser would. Returns the token for the caller to put in $_POST.
+     */
+    function lh_csrf(): string
+    {
+        $_SESSION['lh_csrf'] = 'lh-test-csrf';
+        return 'lh-test-csrf';
+    }
+
     /** Assert a value is truthy. */
     function lh_true($value, string $what = 'value'): void
     {

@@ -142,6 +142,16 @@ final class Geo
     /** Country-of-last-resort source; built on first use from the same config and cache. */
     private ?Asn $asn = null;
 
+    /**
+     * Most entries the in-process memo will hold.
+     *
+     * Bounded for the reason Enrich\Asn::MEMO_MAX is: the key is an address an attacker
+     * chooses, the tail daemon runs for weeks, and an uncapped per-address map grows without
+     * limit under a scanner rotating addresses. Forgetting an entry costs one cache read and
+     * can never change an answer.
+     */
+    private const MEMO_MAX = 4096;
+
     /** In-process memo, so a burst of hits from one address makes at most one DB read. */
     private array $memo = [];
 
@@ -219,7 +229,7 @@ final class Geo
             $hit = false;
             $cached = $this->state->cacheGet('geo', $ip, $hit);
             if ($hit) {
-                return $this->memo[$ip] = ($cached ?? []);
+                return $this->remember($ip, $cached ?? []);
             }
         }
 
@@ -235,7 +245,22 @@ final class Geo
             );
         }
 
-        return $this->memo[$ip] = $fields;
+        return $this->remember($ip, $fields);
+    }
+
+    /**
+     * Write one entry into the bounded memo and return it.
+     *
+     * @param array<string,mixed> $fields
+     * @return array<string,mixed>
+     */
+    private function remember(string $ip, array $fields): array
+    {
+        if (count($this->memo) >= self::MEMO_MAX) {
+            $this->memo = array_slice($this->memo, intdiv(self::MEMO_MAX, 2), null, true);
+        }
+        $this->memo[$ip] = $fields;
+        return $fields;
     }
 
     /**
@@ -471,7 +496,7 @@ final class Geo
     public static function timezoneForCountry(string $cc): ?string
     {
         $cc = strtoupper(trim($cc));
-        if (!preg_match('/^[A-Z]{2}$/', $cc)) {
+        if (!preg_match('/^[A-Z]{2}$/D', $cc)) {
             return null;
         }
 
@@ -507,6 +532,20 @@ final class Geo
             FILTER_VALIDATE_IP,
             FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
         ) !== false;
+    }
+
+    /**
+     * Does this hostname resolve to somewhere on the public internet, and only there?
+     *
+     * DELEGATES, because this exists in Security now. It was written here first, for the
+     * geolocation endpoint, and then `opensolr.api_base` turned out to need exactly the same
+     * check — and Security's own docblock says there must be one implementation of each of
+     * these in the codebase. Kept as a name because this is where the geolocation code reaches
+     * for it and because `isPublicIp` next door is the address-level half of the same idea.
+     */
+    public static function hostIsPublic(string $host): bool
+    {
+        return Security::hostIsPublic($host);
     }
 
     /**
@@ -573,6 +612,9 @@ final class Geo
             || isset($parts['query']) || isset($parts['fragment'])) {
             return null;
         }
+        if (!self::hostIsPublic((string) $parts['host'])) {
+            return null;
+        }
         return $url;
     }
 
@@ -620,7 +662,7 @@ final class Geo
             return null;
         }
         $cc = strtoupper(trim($cc));
-        return preg_match('/^[A-Z]{2}$/', $cc) === 1 ? $cc : null;
+        return preg_match('/^[A-Z]{2}$/D', $cc) === 1 ? $cc : null;
     }
 
     /**
@@ -643,7 +685,7 @@ final class Geo
         if ($tz === '' || strlen($tz) > 64) {
             return null;
         }
-        if (!preg_match('~^[A-Za-z][A-Za-z0-9_+\-]*(?:/[A-Za-z0-9_+\-]+){0,2}$~', $tz)) {
+        if (!preg_match('~^[A-Za-z][A-Za-z0-9_+\-]*(?:/[A-Za-z0-9_+\-]+){0,2}$~D', $tz)) {
             return null;
         }
 

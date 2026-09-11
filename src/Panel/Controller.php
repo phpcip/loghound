@@ -136,7 +136,7 @@ abstract class Controller
         if (!is_string($v)) {
             return '';
         }
-        $v = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $v) ?? '';
+        $v = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $v) ?? '';
         return mb_substr(trim($v), 0, $max);
     }
 

@@ -111,9 +111,15 @@ final class Rules
      * half the guarantee; this is the other half, and both are needed. Without it,
      * Signals::fromSession() would read the absent counters back as the zeros PHP hands out,
      * and `assets == 0` and `pages == 1` are not neutral values here — they are two of the
-     * accusations in the ruleset. `no_assets` alone would fire on every single visitor of a
-     * standalone site, at 55 points, for fetching sub-resources that were never observable
-     * from here.
+     * accusations in the ruleset. `no_assets` is 25 points for fetching sub-resources that were
+     * never observable from here, and `no_304_on_repeat` and `single_page_10s` read the same
+     * absent counters, so the arithmetic is not the whole of the risk either.
+     *
+     * Each of those rules also has a guard of its own that happens to decline on a beacon-only
+     * session — ruleNoAssets() needs `html_200`, ruleSinglePage10s() needs a hit count — and
+     * that is EXACTLY why the list exists rather than being left to them. A rule that is inert
+     * because of a predicate written for another purpose is one edit away from firing, and the
+     * edit would look harmless. This list makes it a guarantee instead of a coincidence.
      *
      * A rule firing on evidence that was never collected is the exact failure this project
      * exists to stop publishing, and it is worse than a missed detection: it is a finding

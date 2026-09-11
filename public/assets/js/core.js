@@ -9,9 +9,10 @@
  * made the request, and a scraper that wants to attack the operator looking at the
  * dashboard will happily send a User-Agent full of markup. So:
  *
- *   - DOM is built with document.createElement and textContent. Never innerHTML with
- *     data. The one exception is `html()` below, which exists for the handful of
- *     authored static strings, and which is never handed a value from an API response.
+ *   - DOM is built with document.createElement and textContent. There is no innerHTML in
+ *     this front end at all — not as a convention, as a fact: the one sink that existed,
+ *     `el(tag, {html})`, had no callers and has been removed, so there is nothing left to
+ *     reach for by accident.
  *   - Chart tooltips are the one place the panel does build markup from data, because
  *     ECharts renders a formatter's return value as HTML and there is no DOM node to set
  *     textContent on. Every dynamic value interpolated into a formatter in charts.js goes
@@ -26,6 +27,8 @@
  */
 
 'use strict';
+
+import { initCopyButtons } from './copy.js';
 
 /**
  * Read the JSON island the server rendered.
@@ -51,9 +54,15 @@ export const boot = readBoot();
 /**
  * Create an element.
  *
- * `attrs.text` sets textContent (the safe default for every value from an API).
- * `attrs.html` sets innerHTML and is only ever passed a string authored in this
- * repository — see the comment at the top of the file.
+ * `attrs.text` sets textContent, which is the only way this function puts a value into the
+ * document.
+ *
+ * THERE IS NO `attrs.html`. There was, it set innerHTML, and it had ZERO callers in the whole
+ * front end — so it was not a feature anybody was using, it was the one unguarded markup sink
+ * in the universal element constructor, waiting for the first author who reached for it with a
+ * Solr value in hand. A sink with no callers is free to delete, and deleting it is what makes
+ * the rule at the top of this file structural instead of a convention. Authored markup that
+ * genuinely has to be built as a string is what `tip` is for, and `tip` escapes.
  *
  * @param {string} tag
  * @param {Object} [attrs]
@@ -70,8 +79,6 @@ export function el(tag, attrs, children) {
             }
             if (key === 'text') {
                 node.textContent = String(value);
-            } else if (key === 'html') {
-                node.innerHTML = String(value);
             } else if (key === 'class') {
                 node.className = String(value);
             } else if (key === 'dataset') {
@@ -114,6 +121,56 @@ export function esc(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+/**
+ * A fragment that is already markup and must not be escaped again.
+ *
+ * The only way to get one is markup() below, so an ordinary value can never be mistaken
+ * for one: `tip` escapes everything that is not an instance of this class.
+ */
+class Markup {
+    constructor(value) {
+        this.value = String(value === null || value === undefined ? '' : value);
+    }
+}
+
+/**
+ * Declare that a string is authored markup and may pass through `tip` unescaped.
+ *
+ * There are two legitimate uses and no others: the coloured swatch ECharts hands a
+ * formatter as `params.marker`, and a fragment this repository wrote itself. A value that
+ * came off the wire is never one of those.
+ */
+export function markup(value) {
+    return new Markup(value);
+}
+
+/**
+ * Build a markup fragment with every interpolated value escaped by default.
+ *
+ * ECharts renders a tooltip formatter's return value as HTML and hands it no DOM node, so
+ * a formatter is the one place in this panel that has to produce markup from data. Built by
+ * hand with `+`, the escaping is correct only for as long as every author remembers it —
+ * and it was not: an AS organisation name, a network type and a free-form `extra` string all
+ * reached a tooltip raw, sitting between two values that were escaped.
+ *
+ * A tagged template inverts the default. Everything interpolated is escaped unless it is
+ * wrapped in markup(), so forgetting is safe and remembering is the exception that has to be
+ * written down. Used as:
+ *
+ *     tip`<strong>${p.name}</strong><br>${num(p.value)}`
+ *
+ * @param {Array<string>} strings The literal parts, which are authored here.
+ * @param {...*} values The interpolated parts, which are not.
+ */
+export function tip(strings, ...values) {
+    let out = strings[0];
+    for (let i = 0; i < values.length; i++) {
+        const value = values[i];
+        out += (value instanceof Markup ? value.value : esc(value)) + strings[i + 1];
+    }
+    return out;
 }
 
 /** Remove every child of a node. */
@@ -224,22 +281,159 @@ export function hideEmpty(id) {
 }
 
 /**
- * The standard "nothing has been indexed yet" state, used by every view.
+ * How many filter values are in force on this page, and what they are called.
  *
- * Deliberately actionable: the two reasons a fresh install is empty are that the tailer
- * is not running and that no log source has been confirmed, and both have a next step.
+ * Read from the boot payload, which carries the server's own reading of the query string —
+ * the same object the chips are drawn from. Parsing the URL again here would be a second set
+ * of reading rules that knows nothing about the per-dimension operator.
+ *
+ * @returns {{count: number, dimensions: string[]}}
+ */
+export function activeFilterSummary() {
+    const state = boot.filters || {};
+    const dims = Array.isArray(state.dimensions) ? state.dimensions : [];
+
+    /* `active` is Panel\Facets::flat(), which is a MAP of field to its chosen values — not a
+       flat list, whatever the name suggests. Reading it as an array answered zero for every
+       filtered page, which is the one case this function exists to detect. Both shapes are
+       accepted so a future change to either side cannot quietly turn the count back to zero. */
+    const active = state.active;
+    let count = 0;
+    if (Array.isArray(active)) {
+        count = active.length;
+    } else if (active && typeof active === 'object') {
+        for (const field of Object.keys(active)) {
+            const values = active[field];
+            count += Array.isArray(values) ? values.length : 1;
+        }
+    }
+
+    return {
+        count: count,
+        dimensions: dims.map((d) => String(d.label || d.field)).filter(Boolean)
+    };
+}
+
+/**
+ * The URL for this page with every filter removed, in the namespace this view filters in.
+ *
+ * Built here rather than imported from facetfilter.js so core.js keeps no import of its own:
+ * it is the root module every other one depends on, and a cycle through it is a hazard the
+ * whole front end would carry for the sake of four lines.
+ */
+export function clearFiltersUrl() {
+    const ns = String((boot.filters || {}).ns || 'f');
+    const params = new URLSearchParams(window.location.search);
+    for (const key of Array.from(params.keys())) {
+        if (key.startsWith(ns + '[')) {
+            params.delete(key);
+        }
+    }
+    params.delete('start');
+    return '?' + params.toString();
+}
+
+/**
+ * The standard "there is nothing to draw" state, used by every view.
+ *
+ * IT NAMES THE REASON RATHER THAN LISTING THE CANDIDATES. It used to say "Either nothing has
+ * been indexed yet, or nothing matched the selected range and filters", which is an admission
+ * that the panel did not look — and the panel does know: the boot payload carries the filters
+ * the server applied. So a page with filters in force says the filters excluded everything and
+ * offers the control that undoes them, and a page with none says the range is empty and points
+ * at the two things that make a fresh install empty. A reader is never left to guess which of
+ * the two they are in, and neither branch is a dead end.
+ *
+ * @param {string} id   The `.empty` slot's element id, as emitted by Controller::cardClose().
+ * @param {string} what A PLURAL NOUN naming the population — "sessions", "netblocks". Never a
+ *                      sentence: it is interpolated into "No <what> in this time range".
  */
 export function noDataYet(id, what) {
+    const active = activeFilterSummary();
+
+    if (active.count > 0) {
+        const named = active.dimensions.slice(0, 3).join(', ');
+        showEmpty(id, 'No ' + what + ' match your filters', [
+            'The selected time range holds data, but nothing in it matches the ' +
+                active.count + ' filter value' + (active.count === 1 ? '' : 's') +
+                (named ? ' you have set on ' + named : ' you have set') + '.',
+            el('p', {}, [
+                'Remove a value from the filter bar above, or ',
+                el('a', { href: clearFiltersUrl(), text: 'clear every filter' }),
+                ' and start again.'
+            ])
+        ]);
+        return;
+    }
+
     showEmpty(id, 'No ' + what + ' in this time range', [
-        'Either nothing has been indexed yet, or nothing matched the selected range and filters. Try a wider range first.',
+        'Nothing in the selected range produced a row. Try a wider range first — the range buttons are at the top of the page.',
         el('p', {}, [
             'If this is a fresh install: confirm a log source under ',
             el('a', { href: '?v=settings', text: 'Settings' }),
-            ', then check that the tailer is running with ',
-            el('code', { text: 'systemctl status loghound-tail' }),
-            '.'
+            ', then check that the reader is running. Under systemd that is ',
+            el('code', { text: 'systemctl status loghound-tail.service' }),
+            '; under any other supervisor, check the job you gave ',
+            el('code', { text: 'bin/loghound-tail' }),
+            ' to.'
         ])
     ]);
+}
+
+/**
+ * The empty state for a cross-tabulation, which needs BOTH of its dimensions set on a row.
+ *
+ * Kept beside noDataYet() rather than expressed through it: "no session has both a bot class
+ * and a network type" is a different fact from "there are no sessions", and the three pivot
+ * cards used to pass that sentence as noDataYet()'s noun — producing "No No session in this
+ * range has both … in this time range", into an element id that did not exist, so nothing was
+ * ever rendered at all.
+ *
+ * @param {string} id   The `.empty` slot's element id.
+ * @param {string} both What a row needs both of, e.g. "a bot class and a network type".
+ */
+export function noPivotYet(id, both) {
+    const active = activeFilterSummary();
+    showEmpty(id, 'Nothing to cross-tabulate', [
+        'A row needs ' + both + ', and no session in this range carries both.',
+        active.count > 0
+            ? el('p', {}, [
+                'Your filters may be excluding the sessions that do — ',
+                el('a', { href: clearFiltersUrl(), text: 'clear every filter' }),
+                ' to check.'
+            ])
+            : 'Both are recorded once a session has been scored, so a range with only unscored sessions in it produces no rows here.'
+    ]);
+}
+
+/** Counter behind the ids snippet() mints, so two snippets on one page cannot collide. */
+let snippetSeq = 0;
+
+/**
+ * A command or configuration line the operator is meant to run, WITH its copy control.
+ *
+ * The same `.snippet-block` + `<pre class="snippet mono">` + `[data-copy]` markup that
+ * Settings::commandBlock() and Setup\View::commandBlock() emit, so a snippet built by the
+ * front end is the same object as a snippet built by the server. It was not: the one snippet
+ * a view module rendered — the LogFormat line on Performance — was a bare `<pre>` with no way
+ * to copy it, next to a page full of snippets that all had one.
+ *
+ * copy.js is idempotent and removes a button whose target it cannot copy, so calling
+ * initCopyButtons() again after this lands is safe and a browser with no clipboard access
+ * gets no dead control.
+ */
+export function snippet(text) {
+    snippetSeq += 1;
+    const id = 'lh-snip-' + snippetSeq;
+    const block = el('div', { class: 'snippet-block' }, [
+        el('pre', { class: 'snippet mono', id: id, text: text }),
+        el('button', { type: 'button', class: 'copy-btn', 'data-copy': id, 'aria-live': 'polite', text: 'Copy' })
+    ]);
+    /* Wired on the microtask after this returns, because copy.js scans the DOCUMENT for
+       `[data-copy]` and the caller has not inserted the block yet. A microtask runs after the
+       caller's synchronous append and before paint. */
+    window.queueMicrotask(initCopyButtons);
+    return block;
 }
 
 /* -------------------------------------------------------------------------
@@ -429,6 +623,22 @@ function isoParts(iso, opts, join) {
     return join(parts);
 }
 
+/**
+ * The words for one of the five populations, from the server's own table.
+ *
+ * `human`, `declared`, `ai`, `evasive` and `unknown` are keys in a facet payload and in the
+ * palette's class names. They are not words: a bar tooltip reading "evasive: 12%" and a legend
+ * reading "ai" are the same defect as printing a verdict slug. Query::populationLabels() is the
+ * one table and it already rides in the boot payload; this is how the front end reads it.
+ *
+ * An unrecognised key answers as itself rather than blank — a population added on the server
+ * before the labels catch up should read oddly, not disappear.
+ */
+export function populationLabel(key) {
+    const table = boot.labels || {};
+    return table[String(key)] || String(key);
+}
+
 /** Shorten a hash for display while keeping enough of it to be identifiable. */
 export function shortHash(hash, keep) {
     const h = String(hash || '');
@@ -561,7 +771,20 @@ export async function post(fields) {
         throw new Error('The panel returned a response that was not JSON (HTTP ' + res.status + ').');
     }
     if (data.error) {
-        throw new Error(data.error);
+        const err = new Error(data.error);
+        err.transport = /solr|timed out|timeout|refused|resolve|unreachable|credentials/i.test(String(data.error));
+        throw err;
+    }
+
+    /* THE STATUS IS CHECKED, which api() always did and this never did. Without it a 500 whose
+       body happened to be `{}` came back as a successful result — and the job loop below treats
+       a result with no `done` as "still running", so it polled every 700ms forever, rendering
+       "step NaN of undefined · undefineds" and never stopping. A response that is not OK is a
+       failure whatever shape its body took. */
+    if (!res.ok) {
+        const err = new Error('The operation failed with HTTP ' + res.status + '.');
+        err.transport = res.status >= 500;
+        throw err;
     }
     return data;
 }
@@ -580,16 +803,43 @@ const inFlight = new Set();
 /** Seconds after which a card starts showing how long it has been going. */
 const SHOW_ELAPSED_AFTER = 5;
 
-/** Reveal the page-level connection banner once, with the first real diagnosis. */
+/**
+ * Reveal the page-level connection banner, with the diagnosis that raised it.
+ *
+ * THE HEADING IS WRITTEN FROM THE MESSAGE, not fixed in the markup. It said "Solr is not
+ * answering." for every transport failure — and the regex that decides a failure IS one matches
+ * the substring `solr`, which "The Opensolr API could not be reached." contains. So an outage
+ * of the Opensolr CONTROL PLANE, which has nothing to do with the local search index, raised a
+ * page-wide banner blaming the local search index and pointed the operator at the wrong check.
+ * Two different failures with two different next steps.
+ *
+ * It also refused to update itself once shown, so a first diagnosis that happened to be the
+ * less useful of two stayed on screen while the accurate one was discarded. A later message
+ * replaces an earlier one of the SAME kind and upgrades a generic heading to a specific one.
+ */
 function raiseConnectionBanner(message) {
     const banner = byId('lh-conn');
-    if (!banner || !banner.hidden) {
+    const detail = byId('lh-conn-detail');
+    if (!banner || !detail) {
         return;
     }
-    const detail = byId('lh-conn-detail');
-    if (detail) {
-        detail.textContent = message;
+
+    const platform = /opensolr/i.test(String(message));
+    const heading = banner.querySelector('strong');
+    const was = banner.dataset.kind || '';
+    const kind = platform ? 'platform' : 'index';
+
+    if (!banner.hidden && was === kind) {
+        return;
     }
+    banner.dataset.kind = kind;
+
+    if (heading) {
+        heading.textContent = platform
+            ? 'The Opensolr API is not answering.'
+            : 'Your search index is not answering.';
+    }
+    detail.textContent = message;
     banner.hidden = false;
 }
 
@@ -660,9 +910,18 @@ export async function loadCard(id, label, loader) {
         if (skel) {
             skel.remove();
         }
-        renderCardError(id, label, err, () => loadCard(id, label, loader));
+
+        /* THE BANNER IS RAISED FIRST, and the error box is drawn inside its own try. A throw
+           while drawing the failure used to take the page-wide diagnosis down with it, which
+           is precisely the moment an operator needs one. Ordering this way means the worst a
+           broken renderer can do is cost one card its box, never the whole page its warning. */
         if (err && err.transport) {
             raiseConnectionBanner(String(err.message || ''));
+        }
+        try {
+            renderCardError(id, label, err, () => loadCard(id, label, loader));
+        } catch (e) {
+            window.console.error('loghound: could not render the failure of card ' + id, e, err);
         }
     } finally {
         window.clearInterval(ticker);
@@ -693,12 +952,31 @@ function renderCardError(id, label, err, retry) {
         el('div', { class: 'card-error-actions' }, [button])
     ]);
 
+    /* INSERT INTO WHATEVER NOW HOLDS THE CONTENT, not into the card.
+       MEASURED DEFECT, and the worst one in the panel. responsive.js turns every card into an
+       accordion by MOVING everything after the head into a new `.card-region` wrapper. After
+       that the content element is a grandchild of the card, and `card.insertBefore(box,
+       content)` throws NotFoundError — from inside loadCard()'s own catch block. The card was
+       then left with its skeleton removed, its progress line hidden and nothing put in their
+       place: a blank box, no message, no retry, and no connection banner either, because the
+       throw jumped over the line that raises it. Every card on every view except whichever one
+       happened to fail before the accordion ran. */
     const content = byId(id + '-content');
-    if (content) {
-        card.insertBefore(box, content);
+    const host = content && content.parentNode ? content.parentNode : (card.querySelector('.card-region') || card);
+    if (content && content.parentNode === host) {
+        host.insertBefore(box, content);
     } else {
-        card.appendChild(box);
+        host.appendChild(box);
     }
+
+    /* A COLLAPSED CARD MUST NOT SWALLOW ITS OWN FAILURE. The accordion decides what is open
+       when the page loads, and it consults the card for trouble at that moment — but every
+       card loads its data AFTER that, so a card the operator had collapsed (or any card but
+       the first, on arrival) could fail into a region with `display: none` and show nothing at
+       all: no error, no retry, no hint on the collapsed heading that anything had happened.
+       responsive.js listens for this and opens the card. It is a notification and not a
+       direct call because core.js must keep working on a page where the accordion never ran. */
+    document.dispatchEvent(new CustomEvent('lh:card-trouble', { detail: { id: id } }));
 }
 
 /**
@@ -781,20 +1059,33 @@ export async function runJob(kind, mountId, opts) {
 
     try {
         let job = await post(Object.assign({ action: 'job_start', kind: kind }, options.params || {}));
+        requireJob(job);
         step(job);
 
-        while (job && !job.done) {
+        while (!job.done) {
             await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_MS));
             job = await post({ action: 'job_poll', id: job.id });
+            requireJob(job);
             step(job);
         }
         if (job && typeof options.onDone === 'function') {
             options.onDone(job);
         }
     } catch (err) {
+        /* A FAILED OPERATION OFFERS TO RUN AGAIN. It offered nothing: the mount was replaced
+           with a message and the control that had started the job was gone with it, so the only
+           way to retry a scan that lost its connection halfway was to reload the page. `polling`
+           is released in the finally below before the button can be pressed, so the retry is a
+           genuine restart and not a second loop over the first. */
+        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        again.addEventListener('click', () => {
+            again.disabled = true;
+            runJob(kind, mountId, options);
+        });
         mount.replaceChildren(el('div', { class: 'card-error', role: 'alert' }, [
             el('h4', { text: 'The operation could not run' }),
-            el('p', { text: String(err && err.message ? err.message : err) })
+            el('p', { text: String(err && err.message ? err.message : err) }),
+            el('div', { class: 'card-error-actions' }, [again])
         ]));
     } finally {
         polling.delete(kind);
@@ -829,6 +1120,19 @@ export async function reattachJob(kind, mountId, opts) {
         runJob(kind, mountId, options);
     }
     return true;
+}
+
+/**
+ * Refuse a poll response that is not a job, rather than looping on it.
+ *
+ * `while (!job.done)` treats anything without a `done` as still running, so a malformed or
+ * empty payload was an unbreakable 700ms loop that rendered "step NaN of undefined". A payload
+ * that cannot be a job is an error the operator can see and act on.
+ */
+function requireJob(job) {
+    if (!job || typeof job !== 'object' || typeof job.id !== 'string' || job.id === '') {
+        throw new Error('The panel did not answer with a usable job state, so the operation cannot be followed. Reload the page and start it again.');
+    }
 }
 
 /** Draw a job's progress bar, step list and controls. */
@@ -875,10 +1179,27 @@ function renderJob(mount, job, kind, options) {
             try {
                 await post({ action: 'job_cancel', id: job.id });
             } catch (e) {
-                cancel.textContent = 'Cancel failed';
+                /* A CANCEL THAT FAILS CAN BE TRIED AGAIN. The button used to become the words
+                   "Cancel failed" and stay disabled forever — a dead control reporting a dead
+                   end, on the one operation the operator was trying to stop. */
+                cancel.disabled = false;
+                cancel.textContent = 'Cancel failed — try again';
+                cancel.title = String(e && e.message ? e.message : e);
             }
         });
         actions.appendChild(cancel);
+    }
+
+    /* A JOB THAT ENDED BADLY SAYS SO, AND OFFERS THE WAY FORWARD. `job.state` carried the word
+       into a meta line beside the elapsed time and nothing else did anything with it, so a scan
+       that failed on the server looked exactly like one that had finished. */
+    if (!running && String(job.state) === 'failed') {
+        const again = el('button', { type: 'button', class: 'small', text: 'Run it again' });
+        again.addEventListener('click', () => {
+            again.disabled = true;
+            runJob(kind, mount.id, options);
+        });
+        actions.appendChild(again);
     }
 
     mount.replaceChildren(el('div', { class: 'job' }, [
@@ -1018,4 +1339,4 @@ export function initTheme() {
  * behaviour and does not load this module, so the implementation lives in copy.js and both
  * front ends import it from there. Panel code keeps importing it from core.js.
  */
-export { initCopyButtons } from './copy.js';
+export { initCopyButtons };

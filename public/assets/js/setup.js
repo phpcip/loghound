@@ -218,6 +218,15 @@ function finish(panel, status) {
  *
  * @param {HTMLElement} panel
  */
+/**
+ * How many advances the runner will drive before handing back to the operator.
+ *
+ * One advance is one bounded server-side step, so this is a ceiling on a single page's worth of
+ * work and not on the job: reloading resumes it. Named rather than a literal in the loop,
+ * because the message shown when it is reached has to be written for whatever it is.
+ */
+const MAX_ADVANCES = 60;
+
 async function drive(panel) {
     const id = panel.dataset.jobId;
     if (!id) {
@@ -232,11 +241,22 @@ async function drive(panel) {
     }, 1000);
 
     let guard = 0;
-    while (guard < 60) {
+    while (guard < MAX_ADVANCES) {
         guard += 1;
         const status = await jobRequest(id, 'run');
         if (!isJobStatus(status)) {
-            break;
+            /* THE INSTALLER MUST NEVER FREEZE ON ITS LAST FRAME. `jobRequest` answers null for
+               every transport failure — the box rebooting mid-provision, a session that has
+               expired, a reverse proxy that gave up — and this loop simply broke, the poller
+               was cleared, and the operator was left looking at a progress bar that had stopped
+               moving with no message and no way to tell whether anything was still happening.
+               An installer that does that is worse than one that fails, because a failure can
+               be acted on. */
+            window.clearInterval(polling);
+            stall(panel, 'The server stopped answering while this step was running. It may still be '
+                + 'going, or it may have stopped. Reload this page to find out — the installer picks '
+                + 'up where it left off and will not start anything twice.');
+            return;
         }
         paint(panel, status);
         if (status.state !== 'running') {
@@ -246,7 +266,41 @@ async function drive(panel) {
         }
     }
 
+    /* Out of advances rather than out of work: the same dead end by a different route. */
     window.clearInterval(polling);
+    stall(panel, 'This step is taking more turns than the installer is willing to drive in one go. '
+        + 'Reload this page to carry on from where it is.');
+}
+
+/**
+ * Replace a job panel's progress with a worded halt and the way forward.
+ *
+ * Never silent, and never a bare message: reloading is what resumes the job, so the control
+ * that does it is part of the message rather than something the operator has to think of.
+ */
+function stall(panel, message) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'primary';
+    button.textContent = 'Reload and carry on';
+    button.addEventListener('click', function () {
+        window.location.reload();
+    });
+
+    const box = document.createElement('div');
+    box.className = 'banner banner-warn';
+    box.setAttribute('role', 'alert');
+
+    const text = document.createElement('p');
+    text.textContent = message;
+    box.appendChild(text);
+
+    const actions = document.createElement('div');
+    actions.className = 'job-actions';
+    actions.appendChild(button);
+    box.appendChild(actions);
+
+    panel.replaceChildren(box);
 }
 
 /**

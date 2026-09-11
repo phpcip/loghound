@@ -280,7 +280,7 @@ final class LogFormat
      */
     private static function twinPattern(string $pattern): ?string
     {
-        if (!preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/s', $pattern, $m)) {
+        if (!preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/sD', $pattern, $m)) {
             return null;
         }
         return $m[1] . $m[2] . '(?#lh-nojit)' . $m[1] . $m[3];
@@ -360,7 +360,7 @@ final class LogFormat
         $raw = $fmt;
         $fmt = self::stripOuterQuotes($fmt);
 
-        if (preg_match('/^\s*\{/', $fmt) && preg_match('/\}\s*$/', $fmt)) {
+        if (preg_match('/^\s*\{/', $fmt) && preg_match('/\}\s*$/D', $fmt)) {
             $map = self::nginxJsonTemplateMap($fmt);
             if ($map !== []) {
                 return self::fromJson($name, $map, ['source' => $raw]);
@@ -696,7 +696,7 @@ final class LogFormat
      */
     public static function isDelimitedRegex(string $candidate): bool
     {
-        return (bool) preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/s', $candidate);
+        return (bool) preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/sD', $candidate);
     }
 
     /** KIND_REGEX or KIND_JSON. */
@@ -866,7 +866,7 @@ final class LogFormat
      */
     private static function apacheTimeDirective(string $arg): array
     {
-        if (preg_match('/^(begin|end):(.*)$/s', $arg, $m)) {
+        if (preg_match('/^(begin|end):(.*)$/sD', $arg, $m)) {
             $arg = $m[2];
         }
         $lower = strtolower($arg);

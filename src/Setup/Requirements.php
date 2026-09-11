@@ -62,7 +62,25 @@ final class Requirements
      *   label  short human name of the requirement
      *   state  'pass' | 'warn' | 'fail'
      *   detail one sentence saying what was actually observed
-     *   fix    string[] — literal shell commands or instructions, rendered verbatim
+     *   fix    string[] — see below. EVERY line must be pasteable.
+     *
+     * ---------------------------------------------------------------------------------------
+     * `fix` IS A SHELL TRANSCRIPT, NOT PROSE. EVERY LINE MUST BE PASTEABLE.
+     * ---------------------------------------------------------------------------------------
+     * These rows are rendered into a `<pre class="snippet mono">` by the installer and, by the
+     * panel's system-check card, into the same block WITH A COPY BUTTON ON IT. So a line of
+     * English in here is a line of English that lands in somebody's shell, and three of them
+     * did: "Install a newer PHP and point this vhost at it.", "Add read access for those
+     * directories…", "Or skip this screen and run the shell wizard instead: sudo -u …".
+     *
+     * The convention is a `#` prefix, which every other row here already follows. It is a
+     * comment in sh AND in a php-fpm pool file, which matters because the open_basedir row
+     * mixes an ini line with shell commands — either way, a pasted block is inert where it is
+     * not meant to run. Explanation that will not fit in a `#` line belongs in `detail`, which
+     * is rendered as prose and has no copy button.
+     *
+     * A command naming a path names the INSTALLATION's real path, never a relative one: the
+     * operator pasting it is not necessarily in the install directory, and usually is not.
      *
      * `warn` never blocks the installer. `fail` does: those are the conditions under
      * which continuing would produce a broken install.
@@ -190,8 +208,9 @@ final class Requirements
                 ? 'Running PHP ' . PHP_VERSION . '.'
                 : 'This server is running PHP ' . PHP_VERSION . ', which is too old.',
             'fix'    => $ok ? [] : [
-                'Install a newer PHP and point this vhost at it.',
-                'On Debian/Ubuntu: apt install php8.3-cli php8.3-fpm',
+                '# Install a newer PHP, then point this vhost and its FPM pool at it.',
+                'apt install php' . self::minPhpSeries() . '-cli php' . self::minPhpSeries()
+                    . '-fpm   # Debian/Ubuntu; any newer series works too',
             ],
         ];
     }
@@ -226,6 +245,27 @@ final class Requirements
     private static function phpSeries(): string
     {
         return PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
+    }
+
+    /**
+     * Major.minor of the OLDEST PHP this installation would accept.
+     *
+     * Deliberately not phpSeries(), and this is the one row where that distinction decides
+     * whether the command works at all. Every other fix line names a package for the PHP that
+     * is RUNNING, which is right when the task is "add an extension to it". This row fires
+     * precisely because the running PHP is too old, so naming its series would produce
+     * `apt install php8.0-cli` — an instruction to reinstall the version that just failed the
+     * check. It was a hardcoded `php8.3` before, which was at least new enough but goes stale
+     * silently the moment MIN_PHP moves or 8.3 leaves the distro.
+     *
+     * Derived from MIN_PHP, which is the only value in this file that is authoritative about
+     * what Loghound needs, so this command can never recommend something that would fail the
+     * check it is printed under. The comment beside it says a newer series is fine.
+     */
+    private static function minPhpSeries(): string
+    {
+        $parts = explode('.', self::MIN_PHP);
+        return ($parts[0] ?? '8') . '.' . ($parts[1] ?? '1');
     }
 
     /**
@@ -316,11 +356,12 @@ final class Requirements
                 . 'The ingest daemon is not affected — it runs from the command line, where the '
                 . 'restriction does not apply.',
             'fix'    => [
-                'Add read access for those directories to the PHP-FPM pool, then reload PHP:',
+                '# Add this line to the PHP-FPM pool for this site, then reload PHP:',
                 'php_admin_value[open_basedir] = ' . $setting . ':' . implode(':', $blocked),
                 'systemctl reload php' . self::phpSeries() . '-fpm',
-                'Or skip this screen and run the shell wizard instead: '
-                    . 'sudo -u ' . self::phpUser() . ' php ' . $this->root . '/bin/loghound-setup',
+                '# or skip this screen entirely and run the shell wizard, where the',
+                '# restriction does not apply:',
+                $this->cliCommand(),
             ],
         ];
     }
@@ -440,10 +481,15 @@ final class Requirements
             if ($pattern === '') {
                 continue;
             }
+            /* THE FALLBACK ASKS ABOUT THIS SOURCE, NOT ABOUT EVERY SOURCE SO FAR. $paths is the
+               accumulator across all of them, so once any earlier source matched anything the
+               literal-path fallback stopped firing — and a source configured as a plain path
+               that glob() does not expand silently vanished from the requirements check. */
+            $before = count($paths);
             foreach ((glob($pattern) ?: []) as $file) {
                 $paths[$file] = true;
             }
-            if ($paths === [] && @is_file($pattern)) {
+            if (count($paths) === $before && @is_file($pattern)) {
                 $paths[$pattern] = true;
             }
         }
@@ -531,26 +577,55 @@ final class Requirements
      * has never heard of config/loghound.php: each line says what is missing in product
      * terms, not in configuration-key terms.
      *
-     * @return array<int,array{step:string,text:string}>
+     * `actionable` says whether there is anything for a human to DO about the line, and the
+     * status page offers a link only when there is. The beacon signing key is the case it
+     * exists for: its own sentence says finishing setup generates it, and it carried a "Fix
+     * this" link anyway — an instruction contradicting the sentence printed next to it.
+     *
+     * `step` is still carried on a line that is not actionable, because the bounce message in
+     * Installer::clampStep() reads these texts to name the prerequisite a step is waiting on.
+     *
+     * @return array<int,array{step:string,text:string,actionable:bool}>
      */
     public function missing(): array
     {
         $out = [];
 
         if ((array) $this->cfg->get('sources', []) === []) {
-            $out[] = ['step' => Installer::STEP_SOURCES, 'text' => 'No access log has been chosen yet, so there is nothing to analyse.'];
+            $out[] = [
+                'step'       => Installer::STEP_SOURCES,
+                'text'       => 'No access log has been chosen yet, so there is nothing to analyse.',
+                'actionable' => true,
+            ];
         }
         if ((string) $this->cfg->get('solr.hits_core', '') === ''
             || (string) $this->cfg->get('solr.sessions_core', '') === '') {
-            $out[] = ['step' => Installer::STEP_STORAGE, 'text' => 'No search index has been created yet, so there is nowhere to keep the results.'];
+            $out[] = [
+                'step'       => Installer::STEP_STORAGE,
+                'text'       => 'No search index has been created yet, so there is nowhere to keep the results.',
+                'actionable' => true,
+            ];
         } elseif ((string) $this->cfg->get('solr.base_url', '') === '') {
-            $out[] = ['step' => Installer::STEP_STORAGE, 'text' => 'The index exists but Loghound has no address to reach it on.'];
+            $out[] = [
+                'step'       => Installer::STEP_STORAGE,
+                'text'       => 'The index exists but Loghound has no address to reach it on.',
+                'actionable' => true,
+            ];
         }
         if (strlen((string) $this->cfg->get('beacon.secret', '')) < 32) {
-            $out[] = ['step' => Installer::STEP_ADMIN, 'text' => 'The signing key that stops visitors forging timing data has not been generated yet. Finishing setup generates it.'];
+            $out[] = [
+                'step'       => Installer::STEP_ADMIN,
+                'text'       => 'The signing key that stops visitors forging timing data has not been '
+                    . 'generated yet. Finishing setup generates it; there is nothing to do here.',
+                'actionable' => false,
+            ];
         }
         if ((string) $this->cfg->get('auth.password_hash', '') === '') {
-            $out[] = ['step' => Installer::STEP_ADMIN, 'text' => 'There is no username and password for signing in to Loghound.'];
+            $out[] = [
+                'step'       => Installer::STEP_ADMIN,
+                'text'       => 'There is no username and password for signing in to Loghound.',
+                'actionable' => true,
+            ];
         }
 
         return $out;

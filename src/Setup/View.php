@@ -118,6 +118,7 @@ final class View
         $this->heading($step);
         $this->rail($step);
         $this->flash();
+        $this->bounce();
 
         switch ($step) {
             case Installer::STEP_SOURCES:
@@ -165,16 +166,13 @@ final class View
      *
      * Finished steps are links, because going back to change an answer is normal. Steps
      * ahead of the current one are not: they read values the earlier ones write, and the
-     * controller refuses them anyway.
+     * controller refuses them anyway — saying which prerequisite is missing when it does.
+     *
+     * The names come from Installer::LABELS rather than from a copy kept here, so the rail
+     * and any sentence that has to refer to a step cannot call it two different things.
      */
     private function rail(string $current): void
     {
-        static $labels = [
-            Installer::STEP_SOURCES => 'Access logs',
-            Installer::STEP_STORAGE => 'Storage',
-            Installer::STEP_ADMIN   => 'Sign-in',
-        ];
-
         $progress = (array) ($this->ctx['progress'] ?? []);
         $unlocked = !empty($this->ctx['unlocked']);
 
@@ -182,7 +180,8 @@ final class View
 
         $done = $current !== Installer::STEP_STATUS;
         echo '<li class="' . ($current === Installer::STEP_STATUS ? 'on' : ($done ? 'done' : '')) . '">'
-            . '<a href="?setup=' . Security::esc(Installer::STEP_STATUS) . '">System check</a></li>';
+            . '<a href="?setup=' . Security::esc(Installer::STEP_STATUS) . '">'
+            . Security::esc(Installer::stepLabel(Installer::STEP_STATUS)) . '</a></li>';
 
         foreach (Installer::ORDER as $i => $step) {
             $classes = [];
@@ -192,7 +191,7 @@ final class View
             if (!empty($progress[$step])) {
                 $classes[] = 'done';
             }
-            $label = ($i + 1) . '. ' . ($labels[$step] ?? $step);
+            $label = ($i + 1) . '. ' . Installer::stepLabel($step);
 
             echo '<li class="' . Security::esc(implode(' ', $classes)) . '">';
             if ($unlocked && (!empty($progress[$step]) || $step === $current)) {
@@ -223,6 +222,24 @@ final class View
         $class = ['ok' => 'banner-good', 'warn' => 'banner-warn'][$kind] ?? 'banner-bad';
         echo '<div class="banner ' . $class . '" role="' . ($kind === 'error' ? 'alert' : 'status') . '">'
             . Security::esc((string) $flash['text']) . "</div>\n";
+    }
+
+    /**
+     * Why this is not the screen that was asked for.
+     *
+     * Its own banner rather than the flash, because a bounce and a flash are different things
+     * and can happen at once: the flash is the outcome of something the operator just did,
+     * this is the reason the page in front of them is not the one they clicked towards.
+     * Rendered as a status rather than an alert — being sent to the right screen is not an
+     * error, it only used to LOOK like nothing happening, which is the defect this repairs.
+     */
+    private function bounce(): void
+    {
+        $why = (string) ($this->ctx['bounced'] ?? '');
+        if ($why === '') {
+            return;
+        }
+        echo '<div class="banner banner-warn" role="status">' . Security::esc($why) . "</div>\n";
     }
 
     /** The hidden CSRF field every form on every screen carries. */
@@ -262,8 +279,7 @@ final class View
         if ($missing !== []) {
             echo '<ul class="setup-missing">';
             foreach ($missing as $item) {
-                echo '<li>' . Security::esc($item['text'])
-                    . ' <a href="?setup=' . Security::esc($item['step']) . '">Fix this</a></li>';
+                echo '<li>' . Security::esc($item['text']) . $this->missingLink($item) . '</li>';
             }
             echo '</ul>';
         }
@@ -275,16 +291,46 @@ final class View
     }
 
     /**
+     * The link that ends one line of the missing-list, or nothing at all.
+     *
+     * THREE STATES, and two of them used to be rendered as the same dead "Fix this".
+     *
+     *  - **Not actionable.** The signing key line says, in its own sentence, that finishing
+     *    setup generates the key. There is nothing for the operator to go and do, so offering
+     *    a link to do it is an instruction that contradicts the sentence beside it.
+     *  - **Locked.** Every `?setup=<step>` is clamped to the status page until this browser
+     *    has unlocked setup, so a "Fix this" here returned a byte-identical page. Three of the
+     *    four links on the first screen anybody sees did nothing at all. They now go to the
+     *    unlock panel further down the same page and say what they are for.
+     *  - **Unlocked and actionable.** The link the label always promised.
+     *
+     * @param array{step:string,text:string,actionable:bool} $item
+     */
+    private function missingLink(array $item): string
+    {
+        if (empty($item['actionable'])) {
+            return '';
+        }
+        if (empty($this->ctx['unlocked'])) {
+            return ' <a href="#unlock">Unlock setup first</a>';
+        }
+        return ' <a href="?setup=' . Security::esc((string) $item['step']) . '">Fix this</a>';
+    }
+
+    /**
      * The token gate.
      *
      * Says which file to read and the exact command that prints it. Without this an
      * installer on a live URL would let whoever found it first point Loghound at a Solr
      * they control and set the password.
+     *
+     * Carries `id="unlock"`, because the missing-list above it links here while setup is
+     * locked and a link has to land somewhere.
      */
     private function unlockPanel(bool $blocked): void
     {
         if (!empty($this->ctx['unlocked'])) {
-            echo '<section class="card">';
+            echo '<section class="card" id="unlock">';
             echo '<h2>Ready to continue</h2>';
             echo '<p><span class="chip chip-good">Unlocked</span> This browser has proved it can read '
                 . 'a file on this server.</p>';
@@ -300,7 +346,7 @@ final class View
 
         $haveToken = $this->token->ensure();
 
-        echo '<section class="card">';
+        echo '<section class="card" id="unlock">';
         echo '<h2>Prove you have access to this server</h2>';
         echo '<p>Anyone can reach this page — it is on the internet, and Loghound is not '
             . 'configured yet. So before anything can be saved, paste the setup token. It is in a '

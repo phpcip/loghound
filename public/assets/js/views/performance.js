@@ -17,7 +17,8 @@
 'use strict';
 
 import {
-    api, byId, cardChart, dec, durUs, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody
+    api, byId, cardChart, dec, durUs, el, hideEmpty, loadCard, noDataYet, num, pct, setPop,
+    showEmpty, snippet, tbody
 } from '../core.js';
 import { lines, stackedBars, tokens } from '../charts.js';
 
@@ -85,16 +86,26 @@ function renderHeadline(data) {
         num(data.timed) + ' of them (' + dec(data.timed_pct, 1) + '%) carry a logged duration; the percentiles ' +
         'cover only those. Requests without a duration are excluded, not counted as zero.' +
         (data.who === 'human' && !data.who_supported
-            ? ' NOTE: hit documents in this index carry no verdict, so the "Humans only" filter cannot be applied ' +
-              'here and matched nothing. Switch back to "All clients".'
+            ? ' NOTE: requests in this index carry no verdict, so the "Humans only" choice could not be applied ' +
+              'to these figures — they cover every request in range, not only human ones. Switch back to ' +
+              '"All clients" to stop the choice implying otherwise.'
             : '') +
         ignoredFilterNote(data));
 
-    if (data.requests > 0 && data.timed === 0) {
+    /* THREE OUTCOMES, THREE STATES. Nothing matched at all; something matched but none of it
+       is timed, which is a log-format problem with a fix; or there are percentiles to read.
+       The zero-request case used to have no state whatsoever — four em-dashes under a caption
+       reading "0 HTML page requests in this range", which is the one card in the panel that
+       said nothing about why it was blank. */
+    if (data.requests === 0) {
+        noDataYet('pf-headline-empty', 'requests');
+        return false;
+    }
+    if (data.timed === 0) {
         showMissingDuration(data.requests);
         return false;
     }
-    hideEmpty('pf-nodur');
+    hideEmpty('pf-headline-empty');
     return true;
 }
 
@@ -121,30 +132,18 @@ function ignoredFilterNote(data) {
  * Explain that no duration is being logged, and which directive fixes it.
  */
 function showMissingDuration(requests) {
-    const node = byId('pf-nodur');
-    if (!node) {
-        return;
-    }
-    node.hidden = false;
-    node.classList.add('show');
-    node.replaceChildren(
-        el('h3', { text: 'No request durations are being logged' }),
-        el('p', {
-            text: 'Not one of the ' + num(requests) + ' matched requests carries a dur_us_l value, so there is ' +
-                'nothing to compute a percentile from. Your log format does not include the request duration — ' +
-                'the stock Apache "combined" format does not.'
-        }),
-        el('p', { text: 'Add %D to your Apache LogFormat, or $request_time to an nginx log_format:' }),
-        el('pre', {
-            class: 'snippet mono',
-            text: 'LogFormat "%h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined_d'
-        }),
+    showEmpty('pf-headline-empty', 'No request durations are being logged', [
+        'Not one of the ' + num(requests) + ' matched requests records how long it took, so there is ' +
+            'nothing to compute a percentile from. Your log format does not include the request duration — ' +
+            'the stock Apache "combined" format does not.',
+        'Add %D to your Apache LogFormat, or $request_time to an nginx log_format:',
+        snippet('LogFormat "%h %l %u %t \\"%r\\" %>s %O %D \\"%{Referer}i\\" \\"%{User-Agent}i\\"" combined_d'),
         el('p', {}, [
             'The full recommended format, which also enables several detection rules, is in ',
             el('code', { text: 'docs/INSTALL.md' }),
             '. Everything else in this view works without it.'
         ])
-    );
+    ]);
 }
 
 /**
@@ -179,11 +178,11 @@ function renderPaths(data) {
 
     tbody(byId('pf-paths-table'), data.paths.map((row) => ({
         cells: [
-            { text: row.path, mono: true, clip: true },
-            { text: num(row.requests), num: true },
-            { text: durUs(row.p50), num: true },
-            { text: durUs(row.p95), num: true },
-            { text: durUs(row.p99), num: true },
+            { text: row.path, mono: true, clip: true, sort: row.path },
+            { text: num(row.requests), num: true, sort: row.requests },
+            { text: durUs(row.p50), num: true, sort: row.p50 === null ? '' : row.p50 },
+            { text: durUs(row.p95), num: true, sort: row.p95 === null ? '' : row.p95 },
+            { text: durUs(row.p99), num: true, sort: row.p99 === null ? '' : row.p99 },
             {
                 node: el('span', {
                     class: 'bar bar-split',
@@ -235,7 +234,7 @@ function renderStatus(data) {
                 })
             },
             { text: STATUS_MEANING[row.status] || '—', class: 'muted' },
-            { text: num(row.count), num: true },
+            { text: num(row.count), num: true, sort: row.count },
             {
                 node: el('span', { class: 'bar', title: pct(row.count, total) }, [
                     el('span', { style: 'width:' + ((row.count / total) * 100).toFixed(2) + '%' })

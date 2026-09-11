@@ -24,7 +24,7 @@
 
 'use strict';
 
-import { api, byId, dec, el, fill, loadCard, num, setPop } from '../core.js';
+import { api, byId, dayOnly, dec, el, fill, loadCard, num, setPop } from '../core.js';
 
 /**
  * How often the strip re-reads the meter, in milliseconds.
@@ -42,6 +42,9 @@ import { api, byId, dec, el, fill, loadCard, num, setPop } from '../core.js';
  * The server sends its own `refresh_sec` and the strip takes whichever is longer, so raising
  * the cache interval automatically slows the polling to match.
  */
+/** Ceiling for the backoff after a failed read: slow enough not to hammer, soon enough to notice. */
+const STRIP_MAX_BACKOFF_MS = 300000;
+
 const STRIP_POLL_MS = 90000;
 
 /** Levels that make the strip loud. Below these it stays a quiet line of type. */
@@ -170,25 +173,42 @@ function paintStrip(data) {
 export function initBandwidthStrip() {
     let timer = null;
 
+    /* A FAILED READ RETRIES; IT DOES NOT STOP FOR EVER. The catch used to null the timer and
+       nothing ever set it again, so one failed poll retired the strip permanently — and this is
+       the one quota that cannot be reclaimed by deleting anything: past it the panel itself is
+       answered 403. A backed-off retry keeps it coming back without hammering a box that is
+       already in trouble. */
+    let backoff = STRIP_POLL_MS;
+
     const tick = async () => {
         try {
             const data = await api('usage', 'meter');
             paintStrip(data);
+            backoff = STRIP_POLL_MS;
             const wanted = Math.max(STRIP_POLL_MS, (Number(data.refresh_sec) || 0) * 1000);
             timer = window.setTimeout(tick, wanted);
         } catch (err) {
-            timer = null;
+            backoff = Math.min(backoff * 2, STRIP_MAX_BACKOFF_MS);
+            timer = window.setTimeout(tick, backoff);
         }
     };
 
     tick();
 
-    // A tab that has been hidden for an hour comes back to a stale meter, and the poll it
-    // was waiting on may have been throttled to nothing by the browser. Re-read on return.
+    /* A tab hidden for an hour comes back to a stale meter, and the poll it was waiting on may
+       have been throttled to nothing by the browser. The old guard was `timer === null`, which
+       after a SUCCESSFUL tick is never true — so the one case it was written for, a tab
+       returning to stale numbers, was the one case it did not cover. Cancel whatever is pending
+       and read now. */
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && timer === null) {
-            tick();
+        if (document.visibilityState !== 'visible') {
+            return;
         }
+        if (timer !== null) {
+            window.clearTimeout(timer);
+            timer = null;
+        }
+        tick();
     });
 }
 
@@ -283,7 +303,10 @@ function renderWindow(data) {
             ]),
             el('div', { class: 'stats stats-tight' }, [
                 stat('Held now', row.span.days === null ? '—' : days(row.span.days),
-                    row.span.oldest ? 'oldest document ' + row.span.oldest.slice(0, 10) : 'measured from the index'),
+                    /* mm/dd/yyyy, like every other date in the panel. This was the only one
+                       rendered as an ISO prefix, by slicing the first ten characters off the
+                       instant — which also threw the time away with no way to get it back. */
+                    row.span.oldest ? 'oldest document ' + dayOnly(row.span.oldest) : 'measured from the index'),
                 stat('Plan window', w.plan_days === null ? '—' : days(w.plan_days),
                     w.max_size_mb === null ? 'no plan limit read' : 'estimated for ' + mb(w.max_size_mb)),
                 stat('Ingest', w.ingest_mb_day === null ? '—' : mb(w.ingest_mb_day) + '/day',
@@ -297,12 +320,19 @@ function renderWindow(data) {
 
     fill(mount, rows);
 
+    /* "NEITHER — NOTHING IS BEING DELETED" WAS NOT A SAFE THING TO SAY. `limited_by` is 'none'
+       whenever the window cannot be PROJECTED, which on a fresh install is the state for the
+       first ten minutes even with the disk rule switched on. `window.enabled` is the disk
+       rule's actual setting and is what the two honest branches below read. */
     const first = data.cores.length ? data.cores[0].window : null;
     setPop('usage-window', first
         ? 'Two limits apply and the shorter one wins. Currently: ' +
           (first.limited_by === 'size' ? 'the plan window.'
-              : first.limited_by === 'time' ? 'your retention setting.'
-                  : 'neither — nothing is being deleted.')
+              : first.limited_by === 'time' ? 'your age limit.'
+                  : first.enabled
+                      ? 'not yet known — the disk rule is on, but the window it leaves cannot be '
+                        + 'projected until the ingest rate has been measured.'
+                      : 'neither — there is no age limit and deleting for size is switched off.')
         : 'No index usage is available.');
 }
 
@@ -327,18 +357,27 @@ function renderLimits(data) {
     const first = data.cores.length ? data.cores[0].window : null;
     const inEffect = first ? first.limited_by : 'none';
 
+    /* A ROW SAYS WHETHER ITS RULE IS ON, SEPARATELY FROM HOW LONG A WINDOW IT LEAVES. The
+       size row read "not known yet" whether the rule was switched off or merely unprojected,
+       which are opposite facts: one means nothing is trimming the index, the other means
+       something is and the figure is pending. */
+    const sizeOn = first ? first.enabled !== false : true;
     const rows = [
         {
             limit: 'Time-based',
             by: 'privacy.retention_days',
-            window: data.retention_days > 0 ? days(data.retention_days) : 'disabled',
-            active: inEffect === 'time'
+            window: data.retention_days > 0 ? days(data.retention_days) : 'no age limit',
+            active: inEffect === 'time',
+            off: !(data.retention_days > 0)
         },
         {
             limit: 'Size-based',
             by: 'your Opensolr plan',
-            window: first && first.plan_days !== null ? days(first.plan_days) : 'not known yet',
-            active: inEffect === 'size'
+            window: !sizeOn
+                ? 'switched off'
+                : (first && first.plan_days !== null ? days(first.plan_days) : 'not known yet'),
+            active: inEffect === 'size',
+            off: !sizeOn
         }
     ];
 
@@ -348,13 +387,17 @@ function renderLimits(data) {
         el('td', { class: 'num mono', text: row.window }),
         el('td', {}, [el('span', {
             class: 'chip' + (row.active ? ' chip-accent' : ''),
-            text: row.active ? 'in effect' : 'not the limit'
+            text: row.active ? 'in effect' : (row.off ? 'switched off' : 'not the limit')
         })])
     ])));
 
-    setPop('usage-limits', inEffect === 'none'
-        ? 'Neither limit is currently deleting anything.'
-        : 'Both run on their own schedule; the one that deletes sooner is the one you see.');
+    const onCount = rows.filter((row) => !row.off).length;
+    setPop('usage-limits', onCount === 0
+        ? 'Both limits are switched off, so nothing is deleted for age or for size. An index that '
+          + 'reaches its Opensolr disk quota is blocked by the platform, reads included.'
+        : onCount === 1
+            ? 'One of the two is switched on; it is the only thing deciding how much history is kept.'
+            : 'Both run on their own schedule; the one that deletes sooner is the one you see.');
 }
 
 /**

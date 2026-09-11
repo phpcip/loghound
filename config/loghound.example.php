@@ -351,8 +351,17 @@ return [
          * What the list is good for is keeping one honest site's measurements out of
          * another's when several of them report into the same pair of indexes.
          *
-         * Empty by default, which accepts every host, so an installation that never sets it
-         * behaves exactly as it did before this setting existed.
+         * Empty by default. An unlisted host's beacons still contribute every TIMING — wall,
+         * visible and engaged time, interactions, scroll, pageviews — and contribute NO signal
+         * code at all, so the execution plane reports no `headless_b` for them.
+         *
+         * THAT IS THE ANTI-FRAMING RULE AND IT IS WORTH UNDERSTANDING. A staged beacon is
+         * re-attached to a session by the visitor's address block and User-Agent hash, so any
+         * page loaded in that visitor's browser — an advert, an iframe, any site they open —
+         * can post a beacon that merges into their real session. If an unlisted beacon could
+         * assert `automation_webdriver`, any web page on the internet could have any of your
+         * visitors recorded as a headless bot. Listing your own hosts is what says "beacons
+         * claiming to be this site may speak about my visitors".
          *
          *     'allowed_hosts' => ['shop.example.com', 'www.example.com'],
          */
@@ -416,6 +425,10 @@ return [
          * actually survive is then decided by the other rule — the rolling size window under
          * `quota`, which deletes the oldest data when an index approaches the disk its
          * Opensolr plan gives it. The two are independent and whichever bites first wins.
+         *
+         * Also readable and writable as `maintenance.delete_hits_after_days`. It is the same
+         * one number under two names — Config mirrors a write to either onto the other, so an
+         * upgrade could not silently lose it — and there is no second setting to keep in step.
          */
         'retention_days' => 90,
 
@@ -424,6 +437,86 @@ return [
          * per-visitor field, so long-term trends survive the deletion of the detail.
          */
         'rollup_forever' => true,
+    ],
+
+    // =====================================================================
+    // Plan quota — the SECOND retention rule, and the one that deletes by size
+    // =====================================================================
+
+    /**
+     * Retention is two limits, not one, and whichever bites first wins.
+     *
+     * `privacy.retention_days` above is a decision about VISITORS: how long you are willing
+     * to keep a record of one. This section is a decision about CAPACITY: an Opensolr plan
+     * gives each index a disk allowance, and an index that reaches it is BLOCKED by the
+     * platform — reads included, so the panel goes dark too. So the oldest data is deleted
+     * before that happens, which is why this is on by default.
+     *
+     * Both the ingest daemon (before it writes) and `bin/loghound-retention` (daily) apply
+     * it. `bin/loghound-retention --dry-run` prints the cutoff and the document count of
+     * every step and deletes nothing, which is the honest way to decide these numbers.
+     */
+    'quota' => [
+        /**
+         * Switch the rolling size window off entirely.
+         *
+         * Supported, and it does NOT mean "unlimited": with it off an index grows until it
+         * reaches the plan allowance, at which point the platform blocks it. Turn it off
+         * when you would rather be blocked than lose the oldest data — and then watch the
+         * meter on the panel's Maintenance card.
+         */
+        'enabled' => true,
+
+        /**
+         * Fraction of the plan's disk at which a trim runs before the next write, and the
+         * fraction it comes back down to. The target is forced below the high-water mark:
+         * equal values would make every write trigger a trim that frees nothing, which is a
+         * delete-and-commit loop against a live index.
+         */
+        'disk_high_water' => 0.90,
+        'disk_target'     => 0.80,
+
+        /**
+         * Hours of the most recent data the trim will never delete, whatever the arithmetic
+         * says. It is the floor that stops a badly sized plan from deleting the traffic the
+         * dashboard is currently showing.
+         */
+        'min_keep_hours' => 24,
+
+        /**
+         * How often the plan usage is re-read from Opensolr: after this many seconds, or
+         * after this many documents indexed, whichever comes first.
+         *
+         * Not free. The platform derives the index size by asking the Solr node, so this is
+         * a control-plane round trip that is itself a round trip to the index — hence a
+         * five-minute clock rather than a per-write check.
+         */
+        'refresh_sec'  => 300,
+        'refresh_docs' => 50000,
+
+        /**
+         * Seconds a core is left alone after a trim, and the number of delete-by-query calls
+         * one trim may issue.
+         *
+         * Deleting in Lucene marks documents deleted; the bytes come back when a merge
+         * rewrites the segments, on the index's own schedule. So a trim that immediately
+         * re-measured would read the size from BEFORE the merge and delete again. The
+         * cooldown is what lets the merges catch up, and the step cap bounds what one pass
+         * can do — each step commits, so it is a real cost.
+         */
+        'trim_cooldown_sec' => 900,
+        'max_trim_steps'    => 3,
+
+        /**
+         * Fractions of the plan's monthly bandwidth at which the meter starts warning and
+         * becomes urgent. Bandwidth is NOT trimmable — nothing Loghound deletes reduces it —
+         * so these only ever warn, early enough to act on.
+         */
+        'bw_warn'     => 0.75,
+        'bw_critical' => 0.90,
+
+        /** Where the panel sends you when an allowance is the thing that needs changing. */
+        'upgrade_url' => 'https://opensolr.com/pricing',
     ],
 
     // =====================================================================

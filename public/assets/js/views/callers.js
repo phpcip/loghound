@@ -22,8 +22,8 @@
 import { api, byId, el, hideEmpty, loadCard, num, pct, setPop, tbody } from '../core.js';
 import { barsH, dispose, donut } from '../charts.js';
 import {
-    chartOrEmpty, fieldSetter, handleState, lfAdd, lfRemove, renderFilters, renderVolume,
-    resolveCore, shareBar, tokens
+    chartOrEmpty, fieldSetter, handleState, lfAdd, lfRemove, plotOrNote, renderFilters,
+    renderVolume, resolveCore, shareBar, tokens
 } from './opensolr.js';
 
 /** How each classification is labelled and chipped in the table. */
@@ -78,17 +78,20 @@ function renderWho(data) {
         })));
     }
 
-    barsH('cl-handlers-chart', handlers.slice(0, 12).map((path) => ({
-        label: path,
-        value: data.handlers[path],
-        extra: pct(data.handlers[path], handlerTotal) + ' of the requests listed'
-    })));
+    if (!plotOrNote('cl-handlers-chart', handlers.length,
+        'The platform recorded no handler for these requests, so there is no endpoint to plot.')) {
+        barsH('cl-handlers-chart', handlers.slice(0, 12).map((path) => ({
+            label: path,
+            value: data.handlers[path],
+            extra: pct(data.handlers[path], handlerTotal) + ' of the requests listed'
+        })));
+    }
 
     tbody(byId('cl-ips-table'), ips.map((ip) => ({
         attrs: { class: 'lf-pick' },
         cells: [
             pickCell('ip', ip, data.active, { mono: true, nowrap: true }),
-            { text: num(data.addresses[ip]), num: true },
+            { text: num(data.addresses[ip]), num: true, sort: data.addresses[ip] },
             { node: shareBar(data.addresses[ip], data.requests) }
         ]
     })));
@@ -97,7 +100,7 @@ function renderWho(data) {
         attrs: { class: 'lf-pick' },
         cells: [
             pickCell('path', path, data.active, { mono: true, clip: true }),
-            { text: num(data.handlers[path]), num: true },
+            { text: num(data.handlers[path]), num: true, sort: data.handlers[path] },
             { node: shareBar(data.handlers[path], handlerTotal) }
         ]
     })));
@@ -135,7 +138,7 @@ function renderCross(data) {
         attrs: { class: 'lf-pick' },
         cells: [
             pickCell('ip', row.ip, data.active, { mono: true, nowrap: true }),
-            { text: num(row.requests), num: true },
+            { text: num(row.requests), num: true, sort: row.requests },
             {
                 node: el('span', {
                     class: 'chip ' + (CLASSES[row.class] ? CLASSES[row.class].chip : ''),

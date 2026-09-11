@@ -145,19 +145,52 @@ export function stateMessage(data) {
 export function handleState(emptyId, data, what) {
     const message = stateMessage(data);
     if (message) {
-        showEmpty(emptyId, 'Nothing to show', [
+        /* "EVERYTHING ELSE ON THIS PAGE IS UNAFFECTED" WAS A LIE WHEN IT MATTERED MOST. Every
+           card on these four views calls this, so on an `unreachable` or `refused` state ALL of
+           them rendered it — four cards each telling the reader the other three were fine.
+           A platform-wide state is a page-wide fact and says so; an index-specific one keeps
+           the reassurance, because there it is true. */
+        const pageWide = data.state === 'unreachable' || data.state === 'refused'
+            || data.state === 'not_configured';
+        showEmpty(emptyId, 'No ' + what + ' to show', [
             message,
             data.state === 'no_index'
                 ? 'Pick an index above once the list has loaded.'
-                : 'Everything else on this page is unaffected.'
+                : pageWide
+                    ? 'Every card on this page reads the same source, so they are all in this state. '
+                      + 'Web-traffic views are unaffected.'
+                    : 'Everything else on this page is unaffected.'
         ]);
         return true;
     }
     if (!data.requests) {
+        /* FILTERED TO NOTHING IS NOT THE SAME AS NOTHING LOGGED. These views have their own
+           filter namespace, and its chips may be lit directly above this message — which said
+           flatly that Opensolr logged no requests, when what happened is that the reader
+           excluded all of them. */
+        /* `active` is the log-plane facet layer's flat(): a map of field to chosen values,
+           not a list. Counting it as an array answers zero on every filtered page. */
+        const active = data.active;
+        let filters = 0;
+        if (Array.isArray(active)) {
+            filters = active.length;
+        } else if (active && typeof active === 'object') {
+            for (const field of Object.keys(active)) {
+                filters += Array.isArray(active[field]) ? active[field].length : 1;
+            }
+        }
+        if (filters > 0) {
+            showEmpty(emptyId, 'No ' + what + ' match your filters', [
+                'Opensolr logged requests for this index in the selected range, but none of them match '
+                    + 'the ' + filters + ' filter value' + (filters === 1 ? '' : 's') + ' set above.',
+                'Remove a value from the chips above the card, or widen the time range.'
+            ]);
+            return true;
+        }
         showEmpty(emptyId, 'No ' + what + ' in this time range', [
             'Opensolr logged no requests for this index in the selected range. Try a wider range.',
-            'The request log covers queries that reached the search index. An index nothing queries ' +
-                'produces no rows here, which is not a fault.'
+            'The request log covers queries that reached the search index. An index nothing queries '
+                + 'produces no rows here, which is not a fault.'
         ]);
         return true;
     }
@@ -518,6 +551,38 @@ export function chartOrEmpty(chartId, emptyId, rows, heading, parts) {
     }
     dispose(chartId);
     showEmpty(emptyId, heading, parts);
+    return true;
+}
+
+/**
+ * Draw a chart, or put a sentence where it would have been.
+ *
+ * FOR HALF OF A SPLIT CARD, where chartOrEmpty() cannot be used because the card's one empty
+ * slot would blank the other half with it. An ECharts instance with no series renders as an
+ * empty axis box, which reads as broken rather than as empty — the reason this file already
+ * carries chartOrEmpty() — and four charts were reaching that state because the guard on their
+ * card tested `data.requests` and not the series they were actually about to draw.
+ *
+ * Returns true when the caller should NOT draw.
+ *
+ * @param {string} chartId Element id of the .chart container.
+ * @param {number} rows    How many series points there are.
+ * @param {string} sentence What to say instead, naming why it is empty.
+ */
+export function plotOrNote(chartId, rows, sentence) {
+    const node = byId(chartId);
+    if (rows > 0) {
+        if (node) {
+            node.classList.remove('chart-note');
+            node.replaceChildren();
+        }
+        return false;
+    }
+    dispose(chartId);
+    if (node) {
+        node.classList.add('chart-note');
+        node.replaceChildren(el('p', { class: 'muted', text: sentence }));
+    }
     return true;
 }
 

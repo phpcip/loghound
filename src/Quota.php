@@ -725,9 +725,20 @@ final class Quota
             $parts[] = 'Your age limit keeps ' . self::days($time) . ', which is what limits the window'
                 . ($plan !== null ? ' — the plan itself would hold roughly ' . self::days($plan) . '.' : '.');
         } elseif ($limitedBy === 'none') {
-            $parts[] = 'Nothing currently limits how far back the data goes: no age limit is set, and '
-                . 'no plan disk quota has been read for this index, so nothing is being deleted for '
-                . 'either reason.';
+            /* "NOTHING IS BEING DELETED" IS ONLY TRUE IF THE SIZE RULE IS ALSO OFF. `limitedBy`
+               falls to 'none' whenever the window cannot be PROJECTED — and it cannot be
+               projected until the ingest rate is known, which takes two usage readings ten
+               minutes apart. So a fresh install with the rolling trim on, which is the default,
+               was told nothing is being deleted for either reason, one sentence before being
+               told the rate is not known yet. Not knowing how far back the data goes is not the
+               same fact as nothing being deleted, and the two branches say so separately. */
+            $parts[] = $this->enabled()
+                ? 'How far back the data goes cannot be stated yet: no age limit is set, and the plan '
+                  . 'disk quota for this index has not been read. Data is still deleted when the index '
+                  . 'runs out of that disk, oldest first.'
+                : 'Nothing limits how far back the data goes: there is no age limit, and deleting for '
+                  . 'size is switched off. An index that reaches its Opensolr disk quota is blocked by '
+                  . 'the platform, reads included.';
         }
 
         if ($rate !== null) {

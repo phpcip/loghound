@@ -67,6 +67,30 @@ final class Installer
      */
     public const ORDER = [self::STEP_SOURCES, self::STEP_STORAGE, self::STEP_ADMIN];
 
+    /**
+     * What each step is called, in one place because three things name them.
+     *
+     * The progress rail, the reason a jump was bounced, and any sentence that has to refer to
+     * a step the operator has not reached yet. These used to be a `static $labels` local
+     * inside View::rail(), which meant a message written anywhere else either repeated the
+     * words or invented different ones — and two names for one screen is how an instruction
+     * stops being followable.
+     *
+     * @var array<string,string>
+     */
+    public const LABELS = [
+        self::STEP_STATUS  => 'System check',
+        self::STEP_SOURCES => 'Access logs',
+        self::STEP_STORAGE => 'Storage',
+        self::STEP_ADMIN   => 'Sign-in',
+    ];
+
+    /** The name of a step, or the raw value when it is not one. */
+    public static function stepLabel(string $step): string
+    {
+        return self::LABELS[$step] ?? $step;
+    }
+
     private Config $cfg;
 
     private string $root;
@@ -197,17 +221,34 @@ final class Installer
     {
         Security::startSession();
 
-        if (!empty($_SESSION['lh_setup_unlocked'])) {
+        $at = (int) ($_SESSION['lh_setup_unlocked'] ?? 0);
+
+        /* THE UNLOCK HAS ITS OWN CLOCK, AND IT DID NOT. It used to be the bare boolean `true`,
+           so a thirty-minute reinstall grant became an unlock that lived as long as the PHP
+           session — a window bounded by session.gc_maxlifetime rather than by anything this
+           file decided. Storing the instant instead makes the bound explicit and makes an old
+           session's unlock expire the way the grant that produced it was always meant to. A
+           legacy `true` reads as 0 and is therefore expired, which is the safe direction. */
+        if ($at > 0 && (time() - $at) <= self::UNLOCK_TTL) {
             return true;
         }
+        unset($_SESSION['lh_setup_unlocked']);
 
         if (Token::spendGrant()) {
-            $_SESSION['lh_setup_unlocked'] = true;
+            $_SESSION['lh_setup_unlocked'] = time();
             return true;
         }
 
         return false;
     }
+
+    /**
+     * How long an unlock stands before the token has to be presented again.
+     *
+     * An hour is far longer than an install takes and short enough that a browser left open on
+     * a half-finished installer does not stay a way in indefinitely.
+     */
+    private const UNLOCK_TTL = 3600;
 
     /**
      * Refuse the request unless the setup token has been presented.
@@ -301,7 +342,7 @@ final class Installer
 
         Security::startSession();
         session_regenerate_id(true);
-        $_SESSION['lh_setup_unlocked'] = true;
+        $_SESSION['lh_setup_unlocked'] = time();
 
         $this->flash('ok', 'Unlocked. Let\'s set Loghound up.');
         $this->redirect(Steps::firstIncomplete($this->cfg));
@@ -549,7 +590,7 @@ final class Installer
     {
         $installId = is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : '';
 
-        if (!preg_match('/^[a-f0-9]{4,32}$/', $installId)) {
+        if (!preg_match('/^[a-f0-9]{4,32}$/D', $installId)) {
             $this->flash('error', 'Choose which pair of indexes to use.');
             $this->redirect(self::STEP_STORAGE);
         }
@@ -582,7 +623,7 @@ final class Installer
     {
         $region = is_string($_POST['region'] ?? null) ? $_POST['region'] : '';
 
-        if (!preg_match('/^[A-Z0-9_]{2,32}$/', $region)) {
+        if (!preg_match('/^[A-Z0-9_]{2,32}$/D', $region)) {
             $this->flash('error', 'Choose a region for your indexes.');
             $this->redirect(self::STEP_STORAGE);
         }
@@ -734,8 +775,9 @@ final class Installer
     {
         $requirements = new Requirements($this->root, $this->cfg);
 
+        $bounced = '';
         if ($step !== self::STEP_STATUS) {
-            $step = $this->clampStep($step);
+            [$step, $bounced] = $this->clampStep($step, $requirements);
         }
 
         $view = new View($this->cfg, $this->root, $requirements, $this->token);
@@ -744,6 +786,7 @@ final class Installer
             [
                 'unlocked'  => $this->unlocked(),
                 'flash'     => $this->takeFlash(),
+                'bounced'   => $bounced,
                 'jobs'      => $this->jobIds(),
                 'regions'   => $this->regions(),
                 'account'   => $this->account(),
@@ -753,28 +796,74 @@ final class Installer
     }
 
     /**
-     * Keep the operator on the first step that is not finished.
+     * Keep the operator on the first step that is not finished, AND SAY SO.
      *
-     * Going BACK to a finished step is allowed — changing an earlier answer is a normal
-     * thing to want. Jumping FORWARD past an unfinished one is not, because the later
-     * steps read values the earlier ones write.
+     * Going BACK to a finished step is allowed — changing an earlier answer is a normal thing
+     * to want. Jumping FORWARD past an unfinished one is not, because the later steps read
+     * values the earlier ones write.
+     *
+     * THE SILENCE WAS THE BUG. This used to return a step and nothing else, so every bounce
+     * rendered a page that was byte-identical to the one the operator was already looking at:
+     * clicking a link did nothing, three times over, with no way to tell a refusal from a
+     * broken link. Whatever it returns now, it returns the reason with it, and the reason
+     * NAMES THE MISSING PREREQUISITE rather than restating the rule — "Storage needs an
+     * access log" is actionable, "that step is not available yet" is not.
+     *
+     * A name that is not a step at all is reported as that FIRST, before the lock, so a retired
+     * route like `?setup=privacy` is never described as "locked" — which would be a second
+     * false statement on top of the silence. Nothing is disclosed by saying so: ORDER is a
+     * public constant, and the reply is identical whether or not the caller is unlocked.
+     *
+     * @return array{0:string,1:string} The step to render, and why it is not the one asked
+     *                                  for. The second is an empty string when it is.
      */
-    private function clampStep(string $step): string
+    private function clampStep(string $step, Requirements $requirements): array
     {
-        if (!$this->unlocked()) {
-            return self::STEP_STATUS;
-        }
-
         $wantedAt = array_search($step, self::ORDER, true);
-        $firstOpen = array_search(Steps::firstIncomplete($this->cfg), self::ORDER, true);
 
         if ($wantedAt === false) {
-            return self::STEP_STATUS;
+            return [self::STEP_STATUS, 'There is no setup step called "' . $step . '".'];
         }
-        if ($firstOpen !== false && $wantedAt > $firstOpen) {
-            return self::ORDER[$firstOpen];
+
+        if (!$this->unlocked()) {
+            return [
+                self::STEP_STATUS,
+                'Setup is locked, so ' . self::stepLabel($step) . ' cannot be opened yet. Paste '
+                . 'the setup token below to unlock it — this page is on the internet and nothing '
+                . 'can be saved until this browser has proved it can read a file on the server.',
+            ];
         }
-        return $step;
+
+        $firstOpen = array_search(Steps::firstIncomplete($this->cfg), self::ORDER, true);
+        if ($firstOpen === false || $wantedAt <= $firstOpen) {
+            return [$step, ''];
+        }
+
+        $blocker = self::ORDER[$firstOpen];
+        $why = $this->prerequisite($requirements, $blocker);
+
+        return [
+            $blocker,
+            self::stepLabel($step) . ' reads answers that ' . self::stepLabel($blocker)
+            . ' has not given yet' . ($why === '' ? '' : ': ' . $why)
+            . ' This is that step; finishing it leads back to ' . self::stepLabel($step) . '.',
+        ];
+    }
+
+    /**
+     * The unfinished thing a step is waiting on, in the words the status page already uses.
+     *
+     * Read from Requirements::missing() rather than written again here, so the sentence an
+     * operator is bounced with and the sentence in the missing-list are the same sentence.
+     */
+    private function prerequisite(Requirements $requirements, string $step): string
+    {
+        foreach ($requirements->missing() as $item) {
+            if (($item['step'] ?? '') === $step) {
+                return (string) $item['text'];
+            }
+        }
+        return '';
     }
 
     /**
@@ -819,7 +908,7 @@ final class Installer
         Security::startSession();
         $_SESSION['lh_setup_regions'] = array_values(array_filter(
             $regions,
-            static fn($r): bool => is_string($r) && preg_match('/^[A-Z0-9_]{2,32}$/', $r) === 1
+            static fn($r): bool => is_string($r) && preg_match('/^[A-Z0-9_]{2,32}$/D', $r) === 1
         ));
     }
 
@@ -872,20 +961,45 @@ final class Installer
             return $cached;
         }
 
+        /* NO OUTBOUND CALL FOR A CALLER WHO HAS NOT PROVED FILESYSTEM ACCESS. render() asks for
+           this on EVERY installer render, and until setup finishes the installer answers the
+           whole internet — so a plain `GET ?setup=status` with no cookie went straight past the
+           empty session cache into two control-plane reads at a 25-second timeout each. Fifty
+           seconds of a PHP-FPM worker and a slice of the operator's API quota, per request, from
+           an unauthenticated stranger, repeatable by simply not sending a cookie. A handful of
+           concurrent requests is the whole pool.
+
+           The unlock is the gate that already exists for exactly this — proof of access to the
+           filesystem — and the panel this feeds is only rendered behind it anyway, so nothing an
+           unlocked operator sees changes. */
+        if (!$this->unlocked()) {
+            return self::emptyAccount();
+        }
+
         if ((string) $this->cfg->get('opensolr.email', '') === ''
             || (string) $this->cfg->get('opensolr.api_key', '') === '') {
-            return [
-                'ok'       => false,
-                'error'    => '',
-                'pairs'    => [],
-                'halves'   => [],
-                'total'    => 0,
-                'counted'  => 0,
-                'capacity' => Pairs::capacity(0),
-            ];
+            return self::emptyAccount();
         }
 
         return $this->rememberAccount();
+    }
+
+    /**
+     * The shape account() returns when there is nothing to report and nothing to ask.
+     *
+     * @return array<string,mixed>
+     */
+    private static function emptyAccount(): array
+    {
+        return [
+            'ok'       => false,
+            'error'    => '',
+            'pairs'    => [],
+            'halves'   => [],
+            'total'    => 0,
+            'counted'  => 0,
+            'capacity' => Pairs::capacity(0),
+        ];
     }
 
     /**

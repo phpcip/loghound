@@ -258,7 +258,7 @@ $sessionCore = (string) $cfg->get('solr.sessions_core');
  * cannot put an arbitrary string into a field that delete queries are built from.
  */
 $installId = (string) $cfg->get('solr.install_id', '');
-$installId = preg_match('/^[a-f0-9]{4,32}$/', $installId) === 1 ? $installId : '';
+$installId = preg_match('/^[a-f0-9]{4,32}$/D', $installId) === 1 ? $installId : '';
 
 try {
     $solr = new Solr((array) $cfg->get('solr', []));

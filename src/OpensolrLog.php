@@ -640,7 +640,7 @@ final class OpensolrLog
      */
     private static function assertBound(string $value): string
     {
-        if (!preg_match('#^[A-Za-z0-9_+\-./: *]{1,40}$#', $value)) {
+        if (!preg_match('#^[A-Za-z0-9_+\-./: *]{1,40}$#D', $value)) {
             throw new \InvalidArgumentException('OpensolrLog: unsafe range bound.');
         }
         return $value;

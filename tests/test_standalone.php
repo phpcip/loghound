@@ -1365,7 +1365,10 @@ return [
         => static function (): void {
             $src = lh_sa_scorer();
 
-            lh_contains($src, "\$installId = preg_match('/^[a-f0-9]{4,32}\$/', \$installId) === 1 ? \$installId : '';",
+            // The D modifier is part of the assertion, not decoration: without it PCRE's `$`
+            // matches before a trailing newline, so "abc123\n" passed a check whose whole job is
+            // to bound what reaches a field that delete queries are built from.
+            lh_contains($src, "\$installId = preg_match('/^[a-f0-9]{4,32}\$/D', \$installId) === 1 ? \$installId : '';",
                 'the value is validated to the shape Config::coreName demands, so a hand-edited '
                 . 'configuration cannot put an arbitrary string into a field delete queries are '
                 . 'built from');

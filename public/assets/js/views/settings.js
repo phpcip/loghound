@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { api, byId, el, post, reattachJob, runJob, when } from '../core.js';
+import { api, byId, dec, el, num, post, reattachJob, runJob, when } from '../core.js';
 
 /** Human titles for the job kinds this view can start. */
 const JOB_TITLES = {
@@ -130,9 +130,22 @@ async function loadBeaconStatus() {
     try {
         data = await api('settings', 'beacon');
     } catch (err) {
+        /* A RETRY, because page-reload was the only way back. This box is not inside a
+           loadCard(), so nothing else on the page offers one for it — and "status unknown" with
+           a Solr message under it is precisely the state an operator wants to try again from. */
         box.className = 'beacon-status beacon-none';
         label.textContent = 'Beacon: status unknown';
-        detail.textContent = 'Could not ask the sessions core: ' + (err && err.message ? err.message : err);
+        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        again.addEventListener('click', () => {
+            again.disabled = true;
+            label.textContent = 'Beacon: asking\u2026';
+            loadBeaconStatus();
+        });
+        detail.replaceChildren(
+            document.createTextNode('Could not ask the sessions core: '
+                + (err && err.message ? err.message : err) + ' '),
+            again
+        );
         return;
     }
 
@@ -141,7 +154,7 @@ async function loadBeaconStatus() {
     const everSeen = status.ever > 0;
 
     box.className = 'beacon-status ' + (live ? 'beacon-live' : (everSeen ? 'beacon-stale' : 'beacon-none'));
-    label.textContent = 'Beacon: ' + (live ? 'Receiving data' : (everSeen ? 'Not seen in the last hour' : 'Never seen'));
+    label.textContent = beaconLabel(live, everSeen);
 
     detail.replaceChildren(...(everSeen
         ? beaconDetail(status)
@@ -173,9 +186,7 @@ function paintFinishBeacon(status, live, everSeen) {
     }
 
     box.className = 'finish-state ' + (everSeen ? 'finish-ok' : 'finish-bad');
-    label.textContent = everSeen
-        ? (live ? 'Beacon: receiving data' : 'Beacon: seen, but not in the last hour')
-        : 'Beacon: never seen';
+    label.textContent = beaconLabel(live, everSeen);
 
     detail.replaceChildren(...(everSeen
         ? beaconDetail(status)
@@ -191,13 +202,37 @@ function paintFinishBeacon(status, live, everSeen) {
 }
 
 /**
+ * The one sentence that says what the beacon is doing, used by BOTH places that say it.
+ *
+ * There were two of these, on one page, off one fetch, disagreeing on capitalisation and on
+ * wording: "Beacon: Receiving data" against "Beacon: receiving data", and "Never seen" against
+ * "never seen". The window is named too — "Never seen" reads as "not since installation", when
+ * what was measured is the last thirty days, which is what the detail line underneath it had
+ * been saying all along.
+ */
+function beaconLabel(live, everSeen) {
+    if (live) {
+        return 'Beacon: receiving data';
+    }
+    return everSeen
+        ? 'Beacon: seen, but not in the last hour'
+        : 'Beacon: not seen in the last 30 days';
+}
+
+/**
  * Build the beacon detail line: recent counts, last arrival and coverage.
+ *
+ * Every figure goes through the shared formatters. `status.hour.toLocaleString('en-US')` was
+ * the only number in the panel not routed through num(), and it threw a TypeError on a null —
+ * inside a loader that is not a card, so the box would have been left reading "status unknown"
+ * for ever with the reason only in the console. `status.coverage` was printed raw, so a
+ * coverage of five sixths rendered as 83.33333333333333%.
  */
 function beaconDetail(status) {
     const parts = [
         document.createTextNode(
-            status.hour.toLocaleString('en-US') + ' sessions in the last hour · ' +
-            status.day.toLocaleString('en-US') + ' in the last 24 hours'
+            num(status.hour) + ' sessions in the last hour · ' +
+            num(status.day) + ' in the last 24 hours'
         )
     ];
     if (status.last) {
@@ -206,7 +241,7 @@ function beaconDetail(status) {
     }
     if (status.coverage !== null && status.coverage !== undefined) {
         parts.push(document.createTextNode(' · '));
-        parts.push(el('span', { class: 'mono', text: status.coverage + '%' }));
+        parts.push(el('span', { class: 'mono', text: dec(status.coverage, 1) + '%' }));
         parts.push(document.createTextNode(' of sessions that were served a page'));
     }
     return parts;

@@ -38,6 +38,22 @@ namespace Loghound;
 final class Opensolr
 {
     /** Default control-plane base. Overridable in config for staging. */
+    /**
+     * Most bytes a control-plane response may deliver before it is abandoned.
+     *
+     * Without one the transport falls back to Solr::MAX_RESPONSE_BYTES — sixty-four megabytes,
+     * chosen for a facet response from OUR OWN Solr and far too generous for an API that
+     * answers with a JSON object or a configset file. The platform caps an upload at roughly
+     * 3.5 MB, so eight is ample for anything legitimate and small enough that a hostile or
+     * compromised endpoint cannot drive json_decode(), a regex scan and an array_diff() over a
+     * body of its own choosing — work that ends up in var/schema-check.json and is re-read by
+     * the panel on every Settings render.
+     */
+    public const MAX_RESPONSE_BYTES = 8388608;
+
+    /** Longest control-plane message kept for display or logging. */
+    public const MAX_MESSAGE = 500;
+
     public const DEFAULT_API_BASE = 'https://opensolr.com/solr_manager/api';
 
     private string $apiBase;
@@ -312,14 +328,28 @@ final class Opensolr
      * Failure is a null rather than an exception. A configset the platform cannot hand back
      * — an older index, a node that did not answer, an account that lost the file — is a
      * normal state that the reuse flow has to describe to the operator, not a crash.
+     *
+     * `$why` carries the reason for that null back to a caller that wants to print it, already
+     * redacted. "Could not read the schema" and "could not read the schema because nothing is
+     * listening on the control plane" are the same verdict and completely different problems,
+     * and the operator is the one who has to tell them apart. Callers that do not care pass
+     * nothing and behave exactly as before.
+     *
+     * @param string|null $why Set to a printable reason whenever this returns null.
      */
-    public function fetchConfigFile(string $indexName, string $fileName, string $extension): ?string
-    {
+    public function fetchConfigFile(
+        string $indexName,
+        string $fileName,
+        string $extension,
+        ?string &$why = null
+    ): ?string {
+        $why = null;
+
         if (!Security::isSafeCoreName($indexName)) {
             throw new \InvalidArgumentException('Opensolr: invalid index name: ' . $indexName);
         }
-        if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/', $fileName)
-            || !preg_match('/^[A-Za-z0-9]{1,8}$/', $extension)) {
+        if (!preg_match('/^[A-Za-z0-9_-]{1,64}$/D', $fileName)
+            || !preg_match('/^[A-Za-z0-9]{1,8}$/D', $extension)) {
             throw new \InvalidArgumentException('Opensolr: invalid configset file name.');
         }
 
@@ -330,15 +360,23 @@ final class Opensolr
                 'file_extension' => $extension,
             ], 'GET');
         } catch (\Throwable $e) {
+            $why = $this->redact($e->getMessage());
             return null;
         }
 
         if (empty($res['status'])) {
+            $why = 'Opensolr refused the request: '
+                . $this->redact(self::stringifyMsg($res['msg'] ?? 'no reason given'));
             return null;
         }
 
         $body = $res['msg'] ?? '';
-        return is_string($body) && $body !== '' ? $body : null;
+        if (is_string($body) && $body !== '') {
+            return $body;
+        }
+
+        $why = 'Opensolr answered without any file contents.';
+        return null;
     }
 
     /**
@@ -361,7 +399,7 @@ final class Opensolr
         if (!Security::isSafeCoreName($indexName)) {
             throw new \InvalidArgumentException('Opensolr: invalid index name: ' . $indexName);
         }
-        if (!preg_match('/^[A-Z0-9_]{2,32}$/', $region)) {
+        if (!preg_match('/^[A-Z0-9_]{2,32}$/D', $region)) {
             throw new \InvalidArgumentException('Opensolr: invalid region: ' . $region);
         }
 
@@ -677,6 +715,14 @@ final class Opensolr
      * without a truthy status is a failure the operator must see rather than a warning to
      * hide.
      *
+     * A REJECTED FILE STOPS THE PUSH, and that is the other half of the ordering rule. Every
+     * upload reloads the core, so carrying on to solrconfig.xml after the schema was refused
+     * would reload the core against a solrconfig referring to field types the schema on the
+     * index does not define — precisely the broken state the schema-first order exists to
+     * prevent, arrived at from the other direction. Stopping means a rejected schema leaves the
+     * index exactly as it was, so a re-run is always safe, and the caller can say which of the
+     * two states the operator is in rather than guessing.
+     *
      * @param string $confDir Local directory, e.g. solr/hits/conf
      * @return array<int,array{file:string,ok:bool,msg:string}> One row per file, for the
      *                                                          setup wizard to display.
@@ -694,11 +740,22 @@ final class Opensolr
 
         $order = ['managed-schema.xml', 'solrconfig.xml'];
         $results = [];
+        $stoppedBy = '';
 
         foreach ($order as $name) {
+            if ($stoppedBy !== '') {
+                $results[] = [
+                    'file' => $name,
+                    'ok'   => false,
+                    'msg'  => 'not uploaded, because ' . $stoppedBy . ' was rejected first',
+                ];
+                continue;
+            }
+
             $path = $real . '/' . $name;
             if (!is_file($path)) {
                 $results[] = ['file' => $name, 'ok' => false, 'msg' => 'missing locally'];
+                $stoppedBy = $name;
                 continue;
             }
 
@@ -710,8 +767,12 @@ final class Opensolr
                     'ok'   => $ok,
                     'msg'  => $ok ? 'uploaded' : self::stringifyMsg($res['msg'] ?? 'rejected'),
                 ];
+                if (!$ok) {
+                    $stoppedBy = $name;
+                }
             } catch (\Throwable $e) {
-                $results[] = ['file' => $name, 'ok' => false, 'msg' => $e->getMessage()];
+                $results[] = ['file' => $name, 'ok' => false, 'msg' => $this->redact($e->getMessage())];
+                $stoppedBy = $name;
             }
         }
 
@@ -733,11 +794,29 @@ final class Opensolr
      */
     private function call(string $endpoint, array $params, string $method): array
     {
-        if (!preg_match('/^[a-z0-9_]{1,64}$/', $endpoint)) {
+        if (!preg_match('/^[a-z0-9_]{1,64}$/D', $endpoint)) {
             throw new \InvalidArgumentException('Opensolr: invalid endpoint: ' . $endpoint);
         }
         if ($this->email === '' || $this->apiKey === '') {
             throw new \RuntimeException('Opensolr: email and api_key are required in managed mode.');
+        }
+
+        /* THE BASE URL IS CHECKED BEFORE THE CREDENTIALS ARE ATTACHED TO IT, and it was not
+           checked at all. `opensolr.api_base` decides where this account's email and API key
+           are sent on every single call — it is the primary credential path in the product —
+           and it was taken from the configuration and concatenated, so `https://127.0.0.1/…`,
+           `https://169.254.169.254/…`, an internal name or a plain `http://` host were all
+           accepted. Security::safeOutboundUrl() is the same check enrich.geo_endpoint gets,
+           which is the secondary path; there was no reason for the primary one to have less.
+
+           Refused rather than defaulted: silently falling back to DEFAULT_API_BASE would send
+           an operator's credentials somewhere they did not configure, which is the same class
+           of surprise in the other direction. */
+        if (Security::safeOutboundUrl($this->apiBase) === null) {
+            throw new \RuntimeException(
+                'Opensolr: opensolr.api_base must be an https URL on a public host, with no '
+                . 'embedded credentials. Leave it unset to use ' . self::DEFAULT_API_BASE . '.'
+            );
         }
 
         $params['email']   = $this->email;
@@ -753,6 +832,7 @@ final class Opensolr
             'body'            => $method === 'GET' ? null : $qs,
             'timeout'         => $this->timeout,
             'connect_timeout' => 10,
+            'max_bytes'       => self::MAX_RESPONSE_BYTES,
             'user'            => '',
             'pass'            => '',
         ]);
@@ -785,7 +865,26 @@ final class Opensolr
             throw new \RuntimeException('Opensolr: configset file is too large: ' . basename($path));
         }
 
+        /* THE SAME BASE-URL CHECK request() MAKES. This method builds its own URL rather than
+           going through it, so without this the one endpoint that uploads a configset AND carries
+           the credentials would be the one that never validated where it was sending them. */
+        if (Security::safeOutboundUrl($this->apiBase) === null) {
+            throw new \RuntimeException(
+                'Opensolr: opensolr.api_base must be an https URL on a public host, with no '
+                . 'embedded credentials. Leave it unset to use ' . self::DEFAULT_API_BASE . '.'
+            );
+        }
+
+        /* EVERY PART OF THIS BODY IS A HEADER UNTIL THE BLANK LINE, and the body is built by
+           concatenation. A filename carrying a quote or a CRLF closes the Content-Disposition
+           and opens whatever the rest of it says; a credential carrying a CRLF forges a whole
+           extra part. basename() strips directories and nothing else — it leaves quotes, CR and
+           LF exactly where they were. These values are all ours today, which is precisely why
+           the check is cheap and why "ours today" is not a property worth relying on. */
         $filename = basename($path);
+        if (!preg_match('/^[A-Za-z0-9._-]{1,128}$/D', $filename)) {
+            throw new \RuntimeException('Opensolr: unsafe configset filename: ' . $filename);
+        }
 
         $boundary = '----loghound' . bin2hex(random_bytes(16));
         $eol = "\r\n";
@@ -795,6 +894,12 @@ final class Opensolr
             'email'     => $this->email,
             'api_key'   => $this->apiKey,
         ];
+
+        foreach ($fields as $name => $value) {
+            if (preg_match('/[\x00\r\n"]/', (string) $value)) {
+                throw new \RuntimeException('Opensolr: unsafe value in the ' . $name . ' upload field.');
+            }
+        }
 
         $body = '';
         foreach ($fields as $name => $value) {
@@ -818,6 +923,7 @@ final class Opensolr
             'body'            => $body,
             'timeout'         => $this->timeout,
             'connect_timeout' => 10,
+            'max_bytes'       => self::MAX_RESPONSE_BYTES,
             'user'            => '',
             'pass'            => '',
         ]);
@@ -881,13 +987,49 @@ final class Opensolr
      *
      * The key is also matched inside an echoed query string, in case the platform returned a
      * normalised or partially encoded form of it.
+     *
+     * FOUR SHAPES, NOT ONE, and the widening is not decoration. These strings do not stay in a
+     * log: Setup\Schema puts them in `var/schema-check.json` and the panel's Settings page
+     * renders them, so whatever the control plane echoed back is published to a browser. The
+     * literal key and `api_key=` were covered; the account email that travels beside it in every
+     * request was not, nor a URL that arrived carrying userinfo, nor the other credential-shaped
+     * parameter names a future endpoint may use. Panel\Jobs::redact() already redacts that set
+     * for the panel's own errors and there is no reason this one should be narrower.
+     *
+     * preg_replace returns NULL on a PCRE failure, and casting that to a string silently
+     * replaces the whole message with an empty one — so each step falls back to its input
+     * rather than to nothing.
      */
     private function redact(string $text): string
     {
+        /* TRUNCATED AS WELL AS SCRUBBED. These strings are stored in var/schema-check.json and
+           rendered into the Settings page on every load, so an `msg` of arbitrary length is a
+           file and a page of arbitrary length. install/opensolr-teardown.php already cuts its
+           platform messages at 300; there is no reason this one should not. */
+        if (strlen($text) > self::MAX_MESSAGE) {
+            $text = substr($text, 0, self::MAX_MESSAGE) . '…';
+        }
+
+        /* THE NAMED PARAMETERS GO FIRST, then the bare literals. The other order replaces
+           `api_key=SECRET` with `api_key=[api_key redacted]` and the pattern then matches the
+           placeholder, leaving a mangled tail. Nothing leaks either way; this simply reads. */
+        $patterns = [
+            '/(api[_-]?key|apikey|email|token|secret|password|passwd|pwd|salt)=([^&"\s]*)/i'
+                => '$1=[redacted]',
+            '#(https?://)[^/@\s:]+:[^/@\s]+@#i' => '$1[redacted]@',
+        ];
+        foreach ($patterns as $pattern => $replacement) {
+            $text = preg_replace($pattern, $replacement, $text) ?? $text;
+        }
+
         if ($this->apiKey !== '') {
             $text = str_replace($this->apiKey, '[api_key redacted]', $text);
         }
-        return (string) preg_replace('/(api_key=)[^&"\s]+/i', '$1[redacted]', $text);
+        if ($this->email !== '') {
+            $text = str_replace($this->email, '[email redacted]', $text);
+        }
+
+        return $text;
     }
 
     /**

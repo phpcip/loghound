@@ -437,6 +437,37 @@ First public release.
   cache settings that differ per core because the two workloads are mirror images —
   autowarm 0 throughout the write-heavy `hits` core, warming on the read-heavy `sessions`
   core.
+- `bin/loghound-schema` — **the supported way to bring a live index's schema up to date after
+  an upgrade, and the thing to run after every one of them.** Setup uploads the configsets when
+  the indexes are created and nothing re-uploads them afterwards, so a release that adds a field
+  ships code writing a field the live schema does not declare. The one dynamic field either
+  schema has is `*` mapped to `ignored`: Solr **accepts** that document, discards the value, and
+  raises no error anywhere — the first symptom is a facet that is permanently empty, months
+  later. Running with no flags (or `--check`) reads the schema each index is actually running
+  and reports, per index, what this release expects, what the index has, and what is missing;
+  `--apply` pushes the configsets through the same `Opensolr::pushConfigSet()` call the
+  installer uses, schema first, additively, without touching a document already in the index.
+  A field the index has and this release does not write is **not** an error and is never
+  "fixed". A schema that cannot be read is **never** reported as matching, and `--apply`
+  refuses to push over one — a push replaces the whole configset, and pushing blind over a
+  schema that might be newer would delete the fields that newer release writes. Exit codes are
+  for deployment scripts: `0` up to date, `3` out of date, `2` failed, `1` unusable
+  configuration. Refuses to run under a web SAPI. See
+  [docs/INSTALL.md § Upgrading](docs/INSTALL.md#upgrading).
+- **The panel notices on its own.** The Settings page's Solr card reports when the live schema
+  is behind what the release expects, prints the command with the installation's real path, and
+  carries the marker that force-opens a folded card. It never fetches a live schema while a page
+  renders: it shows the saved verdict from `var/schema-check.json`, states how old that verdict
+  is, and offers the same check as a background job. A verdict taken **before** an upgrade is
+  reported as saying nothing about the release running now rather than as a clean bill of
+  health — it is stamped with the field-shape fingerprint of the release that produced it. An
+  installation with no saved verdict at all is reported as unverified, never as current.
+- A configset push now **stops at the first rejected file**. Every upload reloads the core, so
+  carrying on to `solrconfig.xml` after the schema was refused reloaded the core against a
+  solrconfig referring to field types the index's schema does not define — the exact broken
+  state the schema-first order exists to prevent, reached from the other direction. A rejected
+  schema now leaves the index untouched, so a re-run is always safe, and the two half-applied
+  states are reported as the different states they are.
 - `bin/loghound-retention` — daily systemd timer issuing a real `delete-by-query` against
   both cores, plus the SQLite caches. `privacy.rollup_forever` keeps the aggregate daily
   documents, which carry no per-visitor field, so long-range charts survive the deletion of

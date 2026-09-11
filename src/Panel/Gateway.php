@@ -153,7 +153,7 @@ final class Gateway
             }
             return $ok;
         } catch (\Throwable $e) {
-            $this->error = 'Solr ping failed: ' . $e->getMessage();
+            $this->error = 'Solr ping failed: ' . Jobs::redact($e->getMessage());
             return false;
         }
     }
@@ -421,7 +421,13 @@ final class Gateway
             return 'Solr returned 404 while running "' . $tag . '" — the core name is probably wrong, '
                 . 'or the index has not been created yet.';
         }
-        return 'Solr query "' . $tag . '" failed: ' . $msg;
+        /* REDACTED, LIKE EVERY OTHER ERROR CHANNEL IN THIS PROJECT. This string reaches the
+           browser: Controller::envelope() puts gw->error() in the `error` key of every API
+           response. The message underneath it is either Solr's own error text — which routinely
+           echoes the offending filter back — or a raw curl_error(), and both carry internal
+           hostnames, ports and core names. Panel\Jobs::redact() is what the POST path, the API
+           path and the job store already use; this was the one place that skipped it. */
+        return 'Solr query "' . $tag . '" failed: ' . Jobs::redact($msg);
     }
 
     /**

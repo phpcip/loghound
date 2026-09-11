@@ -95,6 +95,32 @@ function ensureDialog() {
 }
 
 /**
+ * Make everything except the dialog unreachable while it is open, and give it back on close.
+ *
+ * `inert` removes a subtree from the tab order, from hit testing and from the accessibility
+ * tree in one attribute — which is the whole of what "modal" means and what `aria-modal` only
+ * PROMISES. Without it the page behind the scrim stayed fully tabbable and fully announced, so
+ * a keyboard user who left the trap (see onPanelKey) landed on live controls they could not
+ * see, and a screen-reader user could read the entire page underneath.
+ *
+ * Applied to the dialog's siblings rather than to <main>, so the sidebar and anything else a
+ * view appends to <body> are covered too.
+ */
+function setBackgroundInert(on) {
+    const root = byId('lh-dialog');
+    for (const node of document.body.children) {
+        if (node === root) {
+            continue;
+        }
+        if (on) {
+            node.setAttribute('inert', '');
+        } else {
+            node.removeAttribute('inert');
+        }
+    }
+}
+
+/**
  * Keep Tab inside the panel, and let Escape out.
  *
  * The focusable set is recomputed on every Tab rather than cached, because the body's
@@ -102,30 +128,60 @@ function ensureDialog() {
  * has been replaced.
  */
 function onPanelKey(event) {
-    if (event.key === 'Escape') {
-        event.preventDefault();
-        closeDialog();
-        return;
-    }
     if (event.key !== 'Tab') {
         return;
     }
     const panel = event.currentTarget;
+
+    /* TABBABLE, NOT MERELY FOCUSABLE. The selector used to end in a bare `[tabindex]`, which
+       matched the dialog body — created with `tabindex="-1"` so it can take focus on open but
+       never be tabbed to. That put a non-tabbable node at the END of the list, so `last` was
+       something Tab would never land on: the "wrap back to the top" branch never fired, the
+       browser's own Tab skipped the body, and focus left the modal for the page behind it. On
+       a freshly opened dialog, whose body is the word "Loading…" and nothing else, that was
+       every single time. */
     const focusable = Array.prototype.filter.call(
-        panel.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]'),
-        (node) => node.offsetParent !== null || node === panel
+        panel.querySelectorAll(
+            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]),'
+            + ' textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ),
+        (node) => node.offsetParent !== null
     );
+
+    /* NOTHING TABBABLE STILL MEANS TRAPPED. A body with no controls in it is the loading state
+       and the failure state; letting Tab out of either is the same leak by another route. */
     if (!focusable.length) {
+        event.preventDefault();
+        byId('lh-dialog-body').focus();
         return;
     }
+
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    if (event.shiftKey && (document.activeElement === first || !panel.contains(document.activeElement))) {
         event.preventDefault();
         last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && (document.activeElement === last || !panel.contains(document.activeElement))) {
         event.preventDefault();
         first.focus();
+    }
+}
+
+/**
+ * Escape, from anywhere on the page.
+ *
+ * Bound to the DOCUMENT rather than to the panel. A panel-scoped Escape only works while focus
+ * is inside the panel, which makes it useless in exactly the situation an operator needs it:
+ * focus somewhere unexpected and a modal in the way. The nav drawer already does it this way.
+ */
+function onDocumentKey(event) {
+    if (event.key !== 'Escape') {
+        return;
+    }
+    const root = byId('lh-dialog');
+    if (root && !root.hidden) {
+        event.preventDefault();
+        closeDialog();
     }
 }
 
@@ -152,8 +208,19 @@ export function openDialog(title, subtitle) {
     const body = byId('lh-dialog-body');
     fill(body, [el('p', { class: 'muted', text: 'Loading…' })]);
 
+    /* WHOEVER OPENED IT GETS FOCUS BACK, however it was opened. `opener` used to be set only
+       by the delegated row handler, so every dialog opened straight from code — the value
+       browser, reached by pressing "Show all" in a facet list — restored focus to nothing. The
+       operator was returned to the top of the document and lost their place in the sidebar.
+       Set here only when the row handler has not already named the opener, so a row click
+       still restores the row and not whatever the click left focused. */
+    if (!opener && document.activeElement && document.activeElement !== document.body) {
+        opener = document.activeElement;
+    }
+
     root.hidden = false;
     document.documentElement.classList.add('lh-dialog-open');
+    setBackgroundInert(true);
     body.focus();
 
     return { body: body, generation: generation };
@@ -173,7 +240,8 @@ export function closeDialog() {
     generation += 1;
     root.hidden = true;
     document.documentElement.classList.remove('lh-dialog-open');
-    if (opener && typeof opener.focus === 'function') {
+    setBackgroundInert(false);
+    if (opener && typeof opener.focus === 'function' && document.contains(opener)) {
         opener.focus();
     }
     opener = null;
@@ -185,11 +253,29 @@ export function closeDialog() {
  * The message is the server's own sentence, set with textContent: a Solr error can quote a
  * User-Agent back at us and it must land as text.
  */
-export function dialogFail(body, err) {
-    fill(body, [
+export function dialogFail(body, err, retry) {
+    const parts = [
         el('h3', { text: 'This could not be loaded' }),
         el('p', { text: String(err && err.message ? err.message : err) })
-    ]);
+    ];
+
+    /* A FAILURE WITH A WAY FORWARD. Every failed CARD in the panel offers a retry; a failed
+       dialog offered nothing but Close, so the only way to try again was to shut it, find the
+       row again and press it again — and on a dialog opened from a facet list that row is no
+       longer on screen. The caller passes what it would have run; the button re-runs it in
+       place. Callers that genuinely have nothing to re-run pass nothing and get the message
+       alone, which is what this always did. */
+    if (typeof retry === 'function') {
+        const button = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        button.addEventListener('click', () => {
+            button.disabled = true;
+            fill(body, [el('p', { class: 'muted', text: 'Loading\u2026' })]);
+            retry();
+        });
+        parts.push(el('div', { class: 'card-error-actions' }, [button]));
+    }
+
+    fill(body, parts);
 }
 
 /**
@@ -247,18 +333,20 @@ function onActivate(event) {
        which is the case that used to be swallowed entirely, because there was no body to
        render into — a dialog is opened for the purpose. The error still reaches the console,
        because an operator reporting "clicking does nothing" needs something to paste. */
-    Promise.resolve(fn(datasetOf(node))).catch((err) => {
+    const run = () => Promise.resolve(fn(datasetOf(node))).catch((err) => {
         let body = byId('lh-dialog-body');
         if (!body) {
             openDialog('That could not be opened', '');
             body = byId('lh-dialog-body');
         }
         if (body) {
-            dialogFail(body, err instanceof Error ? err : new Error('The detail view failed to render.'));
+            dialogFail(body, err instanceof Error ? err : new Error('The detail view failed to render.'), run);
         }
         console.error('loghound: opening a ' + node.dataset.lhOpen + ' failed', err);
     });
+    run();
 }
 
 document.addEventListener('click', onActivate);
 document.addEventListener('keydown', onActivate);
+document.addEventListener('keydown', onDocumentKey);

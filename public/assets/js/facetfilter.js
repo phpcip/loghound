@@ -658,14 +658,28 @@ function searchSentence(found, typed, complete, truncated) {
  */
 function rebuild(list, group, needle, ns) {
     const buckets = group.buckets || [];
-    const matches = (needle === '' ? buckets : buckets.filter((bucket) => {
+    const found = needle === '' ? buckets : buckets.filter((bucket) => {
         const value = String(bucket.value || '').toLowerCase();
         const label = String(bucket.label || '').toLowerCase();
         return value.indexOf(needle) >= 0 || label.indexOf(needle) >= 0;
-    })).slice(0, INLINE_MAX);
+    });
+    const matches = found.slice(0, INLINE_MAX);
 
     fill(list, matches.map((bucket) => valueRow(group, bucket, ns)));
-    note(list.closest('.facet'), matches.length ? '' : 'No ' + String(group.label || group.field).toLowerCase() + ' value matches “' + needle + '”.');
+
+    /* A CAP THAT IS NOT SAID IS A VALUE THAT READS AS ABSENT. The note fired only when there
+       were ZERO matches, so a search returning sixty showed fifty and said nothing — and an
+       operator who typed a value, did not see it, and concluded it was not in the data was
+       reading a truncation as a finding. The only case that needs no note is the whole list. */
+    const dimension = String(group.label || group.field).toLowerCase();
+    let message = '';
+    if (!matches.length) {
+        message = 'No ' + dimension + ' value matches \u201c' + needle + '\u201d.';
+    } else if (found.length > matches.length) {
+        message = 'Showing the first ' + matches.length + ' of ' + found.length + ' matching values. '
+            + 'Narrow the text, or open the full list to see them all.';
+    }
+    note(list.closest('.facet'), message);
 }
 
 /**
@@ -761,7 +775,7 @@ export function openValueBrowser(field, label, ns) {
         renderBrowser(body, Object.assign({}, group, { label: label || group.label, ns: ns || NS }), generation);
     }).catch((err) => {
         if (isCurrent(generation)) {
-            dialogFail(body, err);
+            dialogFail(body, err, () => openValueBrowser(field, label, ns));
         }
     });
 }
@@ -969,7 +983,10 @@ function drawValues(holder, buckets, group) {
         if (b === '#') {
             return -1;
         }
-        return a.localeCompare(b);
+        /* An explicit locale, like every other comparison and formatter in the panel. With
+           none, the A–Z index the value browser is built around orders itself differently on
+           every machine, so two operators looking at the same dimension see different lists. */
+        return a.localeCompare(b, 'en-US', { sensitivity: 'base' });
     });
 
     const nodes = [];

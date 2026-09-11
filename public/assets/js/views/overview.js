@@ -9,7 +9,10 @@
 
 'use strict';
 
-import { api, byId, cardChart, dur, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody } from '../core.js';
+import {
+    api, byId, cardChart, dur, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, pct, setPop,
+    showEmpty, tbody
+} from '../core.js';
 import { barsH, stackedTraffic, tokens } from '../charts.js';
 import { dimRow } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
@@ -188,14 +191,31 @@ function loadSearches() {
     return loadCard('ov-searches', 'Faceting search terms', async () => {
         const data = await api('overview', 'searches');
 
+        /* THE FEATURE IS NOT CONFIGURED, which is a different fact from "no search terms in
+           this range" and needs its own sentence rather than a whole explanation crammed into
+           noDataYet()'s NOUN slot. It rendered, verbatim: "No search terms — name the query
+           parameters your search box uses in beacon.query_params (Settings → Beacon) and they
+           start appearing here in this time range" — and leaked a config key into a heading.
+           The setting is named where it can be marked as one, and the link goes to the page
+           that changes it rather than telling the reader where to look for it. */
         if (!data.configured.length) {
             setPop('ov-searches', 'Not collecting any search terms.');
             tbody(byId('ov-searches-table'), []);
-            noDataYet(
-                'ov-searches-empty',
-                'search terms — name the query parameters your search box uses in ' +
-                'beacon.query_params (Settings → Beacon) and they start appearing here'
-            );
+            showEmpty('ov-searches-empty', 'Search terms are not being collected', [
+                'Loghound reads a search term out of the URL, and only from the query parameters you '
+                    + 'have named. None are named on this installation, so nothing is collected and '
+                    + 'nothing can appear here.',
+                el('p', {}, [
+                    'Name the parameter your search box uses — ',
+                    el('code', { text: 'q' }),
+                    ', ',
+                    el('code', { text: 's' }),
+                    ' or whatever your site puts in the address — under ',
+                    el('a', { href: '?v=settings#set-beacon-card', text: 'Settings, in the beacon section' }),
+                    '. Terms start appearing here from the next visit onwards; nothing is recovered '
+                    + 'retrospectively.'
+                ])
+            ]);
             return;
         }
 
@@ -265,7 +285,7 @@ export default function init() {
         loadCard('ov-pivot', 'Cross-tabulating the filtered population', async () => {
             const data = await totals;
             if (!renderPivot('ov-pivot', data.pivot)) {
-                noDataYet('ov-pivot', 'Nothing in this range has both dimensions set.');
+                noPivotYet('ov-pivot-empty', 'both of its dimensions set');
             }
         });
     }

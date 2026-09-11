@@ -572,11 +572,40 @@ today's behaviour precisely: a fresh provisional session id, a staged row,
 merge-only, **no session created**, and no hostname and no search term recorded
 anywhere.
 
-Being on the list buys three things and nothing else:
+Being on the list buys four things and nothing else:
 
 1. its beacons may **create** a session when no log source covers the host;
 2. its reported hostname is recorded as `host_s`;
-3. the parameters from section 3.2 are kept as `search_terms_ss`.
+3. the parameters from section 3.2 are kept as `search_terms_ss`;
+4. its beacons may contribute **signal codes** — the execution-plane evidence that
+   sets `headless_b` and `client_score_f`.
+
+### Why the fourth one is on the list, and what it costs an empty list
+
+A beacon from an unlisted host contributes its **timings** exactly as before —
+wall, visible and engaged time, interactions, scroll, pageviews, `beacon_b`,
+`js_b` — and **no signal code at all**, in either direction.
+
+That is not tidiness. The staged row is re-attached to a session by `client_key`
+as well as by session id, and `client_key` is the address block plus the
+User-Agent hash, both read off the connection. So a hostile page loaded in a
+visitor's browser — an advert, an iframe, any site they happen to open — shares
+that key with them exactly. It does one CORS-simple POST, is handed a perfectly
+valid provisional session and a token bound to **its own** origin, posts
+`automation_webdriver`, and the merge folds that into the visitor's real
+log-backed session. In a bot-detection product that is the whole game: a stranger
+marking a person as automation, on somebody else's dashboard. Binding the token
+to an `Origin` never touched it, because the attacker never needed the victim's
+session.
+
+Refusing only the *client-reported* codes would not close it either, because the
+server derives `headless_zero_outer` and `screen_outer_impossible` from screen
+numbers that are also in the payload. The blunt rule is the only one that is
+provably complete.
+
+**So if you want headless detection from the beacon, list your hosts.** One line,
+and it is the same line that already gates the hostname, the search terms and the
+stored identity.
 
 ### How a listed host is told apart from the open internet
 
@@ -637,10 +666,14 @@ fetching was never observable from here.
 
 **In the ruleset.** Five rules are silenced (`Rules::TRANSPORT_CODES`):
 `no_js_on_html`, `no_assets`, `no_304_on_repeat`, `single_page_10s`,
-`periodic_timing`. Without that, `assets == 0` would be read back as evidence and
-`no_assets` alone — 55 points — would fire on **every single visitor** of a
-standalone site. `no_interaction` is deliberately *not* silenced: it reads the
-beacon's own interaction count, which a beacon-only session has.
+`periodic_timing`. Without that, `assets == 0` would be read back as evidence
+against **every single visitor** of a standalone site — `no_assets` is 25 points,
+`no_304_on_repeat` 30 and `single_page_10s` 15, all three reading counters that
+were never collected here. Each of those rules also has a guard of its own that
+declines on a beacon-only session today; the list is what makes that a guarantee
+rather than a coincidence of predicates written for another purpose.
+`no_interaction` is deliberately *not* silenced: it reads the beacon's own
+interaction count, which a beacon-only session has.
 
 The session carries:
 
@@ -758,8 +791,13 @@ Two consequences worth stating:
   addresses per fingerprint across every site in the index, deliberately: a
   rotating proxy fleet working through your sites in turn is exactly the pattern
   that is invisible from inside any one of them. It does mean
-  `fp_cluster_proxy_fleet` fires more readily on a shared pair, which is why it is
-  worth 45 points and designed to be corroborated rather than decisive alone.
+  `fp_cluster_proxy_fleet` fires more readily on a shared pair — and it is worth
+  **80 points**, which reaches the `bot` threshold on its own, so that is a
+  consequence to size before you share a pair rather than after. What bounds it is
+  not the weight but the rule's three guards: a five-IP floor, the `as_type_s =
+  mobile` exclusion, and the exemption for a self-declared crawler whose
+  forward-confirmed rDNS passed. On a shared pair, raise the floor with
+  `scoring.fp_fleet_min_ips`.
 - **The daily rollup converges rather than forking.** Every installation
   recomputes a whole day from every session document in the index and writes it at
   the same deterministic id, so they all compute the same numbers and the last

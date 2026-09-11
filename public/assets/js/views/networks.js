@@ -12,7 +12,8 @@
 'use strict';
 
 import {
-    api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody
+    api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, pct, populationLabel,
+    setPop, tbody
 } from '../core.js';
 import { donut, geoScatter, loadWorld, tokens, treemap } from '../charts.js';
 import { countryName, locate } from '../geo.js';
@@ -39,21 +40,26 @@ function typeColour(t, type) {
 }
 
 /**
- * A four-segment bar showing the human / declared / evasive / other mix of a row.
+ * A four-segment bar showing the mix of a row.
+ *
+ * The tooltip names the population in WORDS and gives both the count and the share, which is
+ * what the identical bar on Virtual hosts and in the visitor dialog say. It used to derive its
+ * label by stripping `bar-` off the CSS class, so it read "evasive: 214" — a palette class name
+ * and a bare count, against a percentage everywhere else.
  */
 function mixBar(row) {
     const total = Math.max(1, row.sessions);
-    const segment = (value, cls) => el('span', {
-        class: cls,
+    const segment = (value, key) => el('span', {
+        class: 'bar-' + key,
         style: 'width:' + ((value / total) * 100).toFixed(2) + '%',
-        title: cls.replace('bar-', '') + ': ' + num(value)
+        title: populationLabel(key) + ': ' + num(value) + ' (' + pct(value, total) + ')'
     });
     const other = Math.max(0, row.sessions - row.human - row.declared - row.evasive);
     return el('span', { class: 'bar bar-split' }, [
-        segment(row.human, 'bar-human'),
-        segment(row.declared, 'bar-declared'),
-        segment(row.evasive, 'bar-evasive'),
-        segment(other, 'bar-unknown')
+        segment(row.human, 'human'),
+        segment(row.declared, 'declared'),
+        segment(row.evasive, 'evasive'),
+        segment(other, 'unknown')
     ]);
 }
 
@@ -94,16 +100,20 @@ function networkCell(row, lead, extra) {
  * reader looks once the bar has told them which row to look at.
  */
 function mixCell(row) {
+    /* LABEL THEN COUNT, not "N <label>". The population labels are plural nouns and one of
+       them ("Unknown") is not a noun at all, so "1 declared crawlers" and "1 unknown" both
+       come out wrong however the count is pluralised. Naming the population and then its
+       figure is grammatical at every count and reads the same as the bar's own tooltip. */
     const other = Math.max(0, row.sessions - row.human - row.declared - row.evasive);
-    const parts = [num(row.human) + ' human'];
+    const parts = [populationLabel('human') + ' ' + num(row.human)];
     if (row.declared) {
-        parts.push(num(row.declared) + ' declared');
+        parts.push(populationLabel('declared') + ' ' + num(row.declared));
     }
     if (row.evasive) {
-        parts.push(num(row.evasive) + ' evasive');
+        parts.push(populationLabel('evasive') + ' ' + num(row.evasive));
     }
     if (other) {
-        parts.push(num(other) + ' unknown');
+        parts.push(populationLabel('unknown') + ' ' + num(other));
     }
     return el('div', {}, [
         mixBar(row),
@@ -178,10 +188,18 @@ function renderTypeLegend(t) {
     if (!holder) {
         return;
     }
+    /* THE KEY READS IN WORDS. It printed the stored `as_type_s` slugs — isp, vpn, edu — three
+       lines above a donut of the same values rendered as "Consumer ISP", "VPN / anonymiser"
+       and "Education", so one chart's key disagreed with the next chart's labels. The swatch
+       is decorative and says so; the word beside it is the whole content of the entry. */
     holder.replaceChildren(...['isp', 'mobile', 'hosting', 'vpn', 'edu', 'gov', 'unknown'].map((type) =>
         el('span', { class: 'controls', style: 'gap:6px' }, [
-            el('span', { style: 'display:inline-block;width:10px;height:10px;background:' + typeColour(t, type) }),
-            el('span', { class: 'muted', text: type })
+            el('span', {
+                class: 'swatch',
+                'aria-hidden': 'true',
+                style: 'background:' + typeColour(t, type)
+            }),
+            el('span', { class: 'muted', text: valueText('as_type_s', type) })
         ])
     ));
 }
@@ -337,7 +355,7 @@ export default function init() {
         loadCard('net-pivot', 'Cross-tabulating the filtered population', async () => {
             const data = await totals;
             if (!renderPivot('net-pivot', data.pivot)) {
-                noDataYet('net-pivot', 'No session in this range has both a network type and a verdict.');
+                noPivotYet('net-pivot-empty', 'both a network type and a verdict');
             }
         });
     }

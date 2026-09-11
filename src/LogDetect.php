@@ -101,9 +101,11 @@ final class LogDetect
         array $vhostDirs = [],
         array $opts = []
     ): array {
+        $roots = self::configRoots($configFiles, $vhostDirs, $opts);
+
         $state = [
-            'roots'      => self::configRoots($configFiles, $vhostDirs, $opts),
-            'defines'    => self::apacheSeedDefines($configFiles),
+            'roots'      => $roots,
+            'defines'    => self::apacheSeedDefines($configFiles, $roots),
             'formats'    => self::apacheBuiltinFormats(),
             'results'    => [],
             'seen'       => [],
@@ -511,7 +513,7 @@ final class LogDetect
                 $score += 1.0;
             } elseif ($v === '-' || $v === '') {
                 $score += 0.2;
-            } elseif (preg_match('/^[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/', $v)) {
+            } elseif (preg_match('/^[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/D', $v)) {
                 $score += 0.6;
             }
         }
@@ -523,8 +525,8 @@ final class LogDetect
             }
         } elseif (isset($rec['date'], $rec['time_hms'])) {
             $count++;
-            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $rec['date'])
-                && preg_match('/^\d{2}:\d{2}:\d{2}$/', $rec['time_hms'])) {
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/D', $rec['date'])
+                && preg_match('/^\d{2}:\d{2}:\d{2}$/D', $rec['time_hms'])) {
                 $score += 1.0;
             }
         }
@@ -554,7 +556,7 @@ final class LogDetect
             }
             if (isset($rec['proto'])) {
                 $count++;
-                $score += preg_match('~^HTTP/[0-9.]+$~i', $rec['proto']) ? 1.0 : 0.0;
+                $score += preg_match('~^HTTP/[0-9.]+$~iD', $rec['proto']) ? 1.0 : 0.0;
             }
             if (isset($rec['uri']) || isset($rec['uri_full'])) {
                 $count++;
@@ -601,10 +603,10 @@ final class LogDetect
         if ($request === '-' || $request === '') {
             return 0.5;
         }
-        if (preg_match('~^([A-Za-z\-_]{3,20})\s+(\S+)\s+(HTTP/[0-9.]+)$~', $request, $m)) {
+        if (preg_match('~^([A-Za-z\-_]{3,20})\s+(\S+)\s+(HTTP/[0-9.]+)$~D', $request, $m)) {
             return self::isHttpMethod($m[1]) ? 1.0 : 0.7;
         }
-        if (preg_match('~^([A-Za-z\-_]{3,20})\s+(\S+)$~', $request, $m)) {
+        if (preg_match('~^([A-Za-z\-_]{3,20})\s+(\S+)$~D', $request, $m)) {
             return self::isHttpMethod($m[1]) ? 0.7 : 0.3;
         }
         return 0.1;
@@ -633,13 +635,13 @@ final class LogDetect
         if ($v === '') {
             return false;
         }
-        if (preg_match('~^\d{1,2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2}(\.\d+)?(\s[+-]\d{4})?$~', $v)) {
+        if (preg_match('~^\d{1,2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2}(\.\d+)?(\s[+-]\d{4})?$~D', $v)) {
             return true;
         }
         if (preg_match('~^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}~', $v)) {
             return true;
         }
-        if (preg_match('~^\d{9,19}(\.\d+)?$~', $v)) {
+        if (preg_match('~^\d{9,19}(\.\d+)?$~D', $v)) {
             return true;
         }
         return false;
@@ -866,7 +868,7 @@ final class LogDetect
                 $haveRequest = true;
                 continue;
             }
-            if ($haveRequest && !$haveStatus && $kind === 'bare' && preg_match('/^\d{3}$/', $value)) {
+            if ($haveRequest && !$haveStatus && $kind === 'bare' && preg_match('/^\d{3}$/D', $value)) {
                 $names[$i] = 'status';
                 $haveStatus = true;
                 continue;
@@ -909,6 +911,14 @@ final class LogDetect
      * @param string[] $allowedRoots
      * @return string[] Oldest-first.
      */
+    /**
+     * Most bytes tailLines() will walk backwards through, whatever it finds.
+     *
+     * Four megabytes is thousands of log lines — far more than any sample needs — and it is
+     * the difference between "read the end of the file" and "read the file".
+     */
+    public const MAX_TAIL_BYTES = 4194304;
+
     public static function tailLines(string $path, int $n, array $allowedRoots): array
     {
         $real = Security::safePath($path, $allowedRoots);
@@ -921,15 +931,24 @@ final class LogDetect
             return [];
         }
 
+        /* THE WALK IS BOUNDED BY BYTES AS WELL AS BY LINES. The only exits used to be "found
+           n+1 newlines" and "reached offset 0", so a file with fewer newlines than asked for —
+           a corrupted region, a binary blob written into the log directory, a `cat` of
+           something that is not a log — was read into memory in its entirety. Worse, the
+           buffer was re-explode()d on every 64 KB step, which is quadratic: a 100 MB tail
+           region costs tens of gigabytes of string copying. safePath() constrains WHICH file
+           is opened and says nothing about how much of it is read. */
         $chunk = 65536;
+        $budget = self::MAX_TAIL_BYTES;
         $size  = (int) filesize($real);
         $pos   = $size;
         $buf   = '';
         $lines = [];
 
-        while ($pos > 0 && count($lines) <= $n) {
-            $read = (int) min($chunk, $pos);
+        while ($pos > 0 && count($lines) <= $n && $budget > 0) {
+            $read = (int) min($chunk, $pos, $budget);
             $pos -= $read;
+            $budget -= $read;
             fseek($fh, $pos);
             $buf = (string) fread($fh, $read) . $buf;
             $lines = explode("\n", $buf);
@@ -1012,7 +1031,9 @@ final class LogDetect
 
                 case 'servername':
                     if (isset($args[1]) && $st['vhost'] !== []) {
-                        $name = preg_replace('/:\d+$/', '', $args[1]['v']);
+                        /* preg_replace returns NULL on a PCRE failure and this was assigned
+                           straight in, so a vhost name could become null and propagate as one. */
+                        $name = (string) (preg_replace('/:\d+$/', '', $args[1]['v']) ?? $args[1]['v']);
                         $st['vhost'][count($st['vhost']) - 1] = $name;
                     }
                     break;
@@ -1159,7 +1180,7 @@ final class LogDetect
      * @param string[] $configFiles
      * @return array<string,string>
      */
-    private static function apacheSeedDefines(array $configFiles): array
+    private static function apacheSeedDefines(array $configFiles, array $roots): array
     {
         $defines = [
             'APACHE_LOG_DIR'  => is_dir('/var/log/httpd') ? '/var/log/httpd' : '/var/log/apache2',
@@ -1173,15 +1194,25 @@ final class LogDetect
             $candidates[] = dirname($f) . '/envvars';
         }
 
+        /* THE ONLY READ IN THIS CLASS THAT USED TO SKIP THE ALLOWLIST. Every other one goes
+           through Security::safePath() against the configured roots, and the class docblock
+           states that as an invariant. This one took `dirname()` of an operator-supplied config
+           path, appended `envvars`, and opened whatever was there — following a symlink, since
+           is_file() and file_get_contents() both do — and then turned every `NAME=value` line it
+           found into a `${VAR}` substitution rendered onto the setup screen. The roots are the
+           same ones the caller already resolved, and are passed in rather than recomputed. */
         foreach (array_unique($candidates) as $envvars) {
-            if (!is_file($envvars) || !is_readable($envvars)) {
+            if (!is_file($envvars) || !is_readable($envvars) || is_link($envvars)) {
+                continue;
+            }
+            if (Security::safePath($envvars, $roots) === null) {
                 continue;
             }
             $text = self::readCapped($envvars);
             if ($text === null) {
                 continue;
             }
-            if (preg_match_all('/^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)=(.*)$/mi', $text, $m, PREG_SET_ORDER)) {
+            if (preg_match_all('/^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)=(.*)$/miD', $text, $m, PREG_SET_ORDER)) {
                 foreach ($m as $set) {
                     $val = trim($set[2]);
                     $val = trim($val, "\"'");
@@ -1200,7 +1231,7 @@ final class LogDetect
         }
 
         foreach ($defines as $k => $v) {
-            $defines[$k] = preg_replace('/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/', '', $v);
+            $defines[$k] = (string) (preg_replace('/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/', '', $v) ?? '');
         }
 
         return $defines;
@@ -1561,6 +1592,10 @@ final class LogDetect
      */
     private static function globConfigs(string $spec, array $roots): array
     {
+        if (!self::globSpecIsSane($spec, $roots)) {
+            return [];
+        }
+
         $hits = @glob($spec, GLOB_BRACE);
         if ($hits === false) {
             return [];
@@ -1576,6 +1611,65 @@ final class LogDetect
             }
         }
         return $out;
+    }
+
+    /** Longest `Include` / `include` specification this class will hand to glob(). */
+    private const MAX_GLOB_SPEC = 512;
+
+    /** Most brace groups allowed in one specification: 6 pairs is at most 64 expansions. */
+    private const MAX_GLOB_BRACES = 6;
+
+    /**
+     * Decide whether a glob specification is worth running at all.
+     *
+     * THIS IS A DENIAL-OF-SERVICE GUARD, NOT TIDINESS. `GLOB_BRACE` expands combinatorially,
+     * and `Include` takes its argument straight from a webserver config this class was
+     * pointed at — which the class docblock already names as hostile input. Measured:
+     * `Include /etc/{a,b}{a,b}…*` with twenty pairs is 2²⁰ expansions and took 23.5 seconds
+     * of stat() in ONE directive, and a config may hold hundreds. `Security::safePath()` is
+     * applied to the RESULTS, which is far too late — the cost has already been paid, and a
+     * spec matching nothing at all costs the most.
+     *
+     * Three bounds, and the order matters because each is cheaper than the last:
+     *
+     *   1. A length cap. No real include line is anywhere near it.
+     *   2. A brace-group cap. Six pairs is sixty-four expansions, which covers every
+     *      legitimate `{sites-enabled,conf.d}` shape and refuses the bomb.
+     *   3. The literal prefix — everything before the first wildcard — must already sit
+     *      inside an allowed root. Without it a spec of `/*` walks the whole filesystem
+     *      before safePath() gets a chance to reject every result.
+     *
+     * @param string[] $roots
+     */
+    private static function globSpecIsSane(string $spec, array $roots): bool
+    {
+        if ($spec === '' || strlen($spec) > self::MAX_GLOB_SPEC) {
+            return false;
+        }
+        if (substr_count($spec, '{') > self::MAX_GLOB_BRACES) {
+            return false;
+        }
+
+        $stem = substr($spec, 0, strcspn($spec, '*?[{'));
+        $dir = $stem === '' ? '' : rtrim(dirname($stem . 'x'), '/');
+        if ($dir === '') {
+            return false;
+        }
+
+        $real = realpath($dir);
+        $candidates = array_unique(array_filter([$dir, $real === false ? '' : rtrim($real, '/')]));
+
+        foreach ($roots as $root) {
+            $realRoot = realpath((string) $root);
+            foreach (array_unique(array_filter([rtrim((string) $root, '/'), $realRoot === false ? '' : rtrim($realRoot, '/')])) as $prefix) {
+                foreach ($candidates as $candidate) {
+                    if ($candidate === $prefix || str_starts_with($candidate . '/', $prefix . '/')) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     /**

@@ -80,13 +80,12 @@ final class Store
         if (!is_file($this->path)) {
             return [];
         }
-        $lock = @fopen($this->lockPath(), 'c');
-        if ($lock !== false) {
-            @chmod($this->lockPath(), 0600);
+        $lock = $this->openLock();
+        if ($lock !== null) {
             @flock($lock, LOCK_SH);
         }
         $raw = @file_get_contents($this->path);
-        if ($lock !== false) {
+        if ($lock !== null) {
             @flock($lock, LOCK_UN);
             fclose($lock);
         }
@@ -115,11 +114,10 @@ final class Store
             return null;
         }
 
-        $lock = @fopen($this->lockPath(), 'c');
-        if ($lock === false) {
+        $lock = $this->openLock();
+        if ($lock === null) {
             return null;
         }
-        @chmod($this->lockPath(), 0600);
         if (!flock($lock, LOCK_EX)) {
             fclose($lock);
             return null;
@@ -132,6 +130,17 @@ final class Store
         $result = $fn($data);
 
         $json = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+
+        /* A CALLBACK THAT CHANGED NOTHING WRITES NOTHING. The rewrite used to be
+           unconditional, so every wrong TOTP code — a pre-authentication path anyone can drive
+           — cost a temp-file create, an fsync and a rename on var/auth-state.json. The result
+           is still returned, so a caller cannot tell the difference except in disk churn. */
+        if ($json !== false && is_string($raw) && $json === $raw) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            return $result;
+        }
+
         if ($json === false) {
             flock($lock, LOCK_UN);
             fclose($lock);
@@ -168,5 +177,42 @@ final class Store
     private function lockPath(): string
     {
         return $this->path . '.lock';
+    }
+
+    /**
+     * Open the lock file, refusing to follow a symlink into it.
+     *
+     * THE DEFECT THIS FIXES. The lock was opened with `fopen(…, 'c')` and then `chmod`'d, and
+     * both of those follow an existing symlink. Any local account able to win the race to
+     * create `var/persistent-logins.json.lock` or `var/auth-state.json.lock` therefore got an
+     * arbitrary-file chmod-to-0600 as the panel user — and, separately, a denial-of-service
+     * primitive, because making the lock path unopenable makes mutate() return null, which is
+     * a refusal on every authentication path that uses this store.
+     *
+     * Two changes. A path that IS a symlink is refused outright rather than opened. And the
+     * file is created with `x` — O_CREAT|O_EXCL, which the kernel refuses to satisfy through a
+     * symlink — so the mode is only ever set on a file this process made. An existing regular
+     * file is opened and left alone; it was ours and its mode is already right.
+     *
+     * @return resource|null
+     */
+    private function openLock()
+    {
+        $path = $this->lockPath();
+
+        if (is_link($path)) {
+            return null;
+        }
+
+        if (!is_file($path)) {
+            $fresh = @fopen($path, 'xb');
+            if ($fresh !== false) {
+                @chmod($path, 0600);
+                fclose($fresh);
+            }
+        }
+
+        $fh = @fopen($path, 'c');
+        return $fh === false ? null : $fh;
     }
 }

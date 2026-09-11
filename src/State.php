@@ -211,8 +211,17 @@ final class State
      */
     private function addColumn(string $table, string $column, string $type): void
     {
-        if (!preg_match('/^[a-z_][a-z0-9_]*$/', $table) || !preg_match('/^[a-z_][a-z0-9_]*$/', $column)) {
+        if (!preg_match('/^[a-z_][a-z0-9_]*$/D', $table) || !preg_match('/^[a-z_][a-z0-9_]*$/D', $column)) {
             throw new \InvalidArgumentException('State: unsafe identifier in addColumn().');
+        }
+
+        /* THE TYPE IS CONCATENATED TOO, and it was the one argument with no check on it at all
+           while the docblock above discussed only the two names. Everything after ADD COLUMN is
+           SQL, so a type carrying a comma or a semicolon is a second clause. Every caller passes
+           a literal from this file, which is exactly why the guard costs nothing and exactly why
+           it has to be here rather than assumed. */
+        if (!preg_match('/^[A-Z]+(?: NOT NULL)?(?: DEFAULT (?:-?\d+(?:\.\d+)?|\'\'|\'[A-Za-z0-9_ -]{0,32}\'))?$/D', $type)) {
+            throw new \InvalidArgumentException('State: unsafe column type in addColumn(): ' . $type);
         }
 
         $res = $this->db->query('PRAGMA table_info(' . $table . ')');

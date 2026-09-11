@@ -691,7 +691,7 @@ final class Sessions extends Controller
     private function detail(): array
     {
         $id = self::text('id', 128);
-        if (!preg_match('/^[A-Za-z0-9_-]{8,128}$/', $id)) {
+        if (!preg_match('/^[A-Za-z0-9_-]{8,128}$/D', $id)) {
             return $this->envelope(['error' => 'Not a session id.']);
         }
 

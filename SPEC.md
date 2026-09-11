@@ -43,7 +43,7 @@ plane alone is defeatable and every existing tool uses exactly one.
 |---|---|---|
 | HTML 200 served | no beacon ever arrived | `bot` — non-JS client, certain |
 | HTML 200 served | beacon arrived, headless signals positive | `bot` — headless automation, certain |
-| HTML 200 served | beacon arrived, zero interaction, left < 15s | `likely_bot` |
+| HTML 200 served | beacon arrived, zero interaction, single page, left ≤ 10s | `unknown` — `no_interaction` 40 + `single_page_10s` 15 = 55, which is deliberately short of a verdict |
 | HTML 200 served | beacon + interaction + plausible timing distribution | `human` |
 
 GoAccess/AWStats only ever see plane 1. Clicky/GA/Plausible/Matomo-JS only ever see plane 3,

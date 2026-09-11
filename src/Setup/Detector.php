@@ -598,6 +598,22 @@ final class Detector
     }
 
     /**
+     * The shell wizard, named with the path of the installation this config belongs to.
+     *
+     * A refusal that tells somebody to "run bin/loghound-setup" is only followable from one
+     * directory, and the person reading it is in a shell somewhere else — every other
+     * pasteable command in this product names the real path, and this one was the exception.
+     *
+     * Derived from the CONFIG rather than from this file, exactly as writeReport() derives
+     * var/: a run pointed at another installation's configuration must name that
+     * installation's binary, not the one whose code happens to be executing.
+     */
+    private static function setupCommand(Config $cfg): string
+    {
+        return dirname($cfg->path(), 2) . '/bin/loghound-setup';
+    }
+
+    /**
      * Persist the report where the Settings view reads it.
      *
      * Best effort: a read-only var/ must not turn a successful detection into a failure,
@@ -609,15 +625,10 @@ final class Detector
     public static function writeReport(Config $cfg, array $report): ?string
     {
         $path = dirname($cfg->path(), 2) . '/var/detect.json';
-        $dir = dirname($path);
-        if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
-            return null;
-        }
         $json = json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-        if ($json === false || @file_put_contents($path, $json) === false) {
+        if ($json === false || !Security::writePrivateFile($path, $json)) {
             return null;
         }
-        @chmod($path, 0640);
         return $path;
     }
 
@@ -669,20 +680,25 @@ final class Detector
         if ($path === '') {
             return $fail('Enter the full path of an access log file.');
         }
-        if (!@is_file($path)) {
-            return $fail('There is no file at ' . $path . ' that this server can see.');
-        }
-
+        /* THE ALLOWLIST IS CONSULTED BEFORE THE FILESYSTEM IS. The other order answered "there
+           is no file at /etc/shadow" differently from "there is no file at /etc/nonexistent",
+           which is a file-existence oracle for every path on the machine, offered before the
+           caller has been told they may not read there at all. The caller is privileged either
+           way, so this is small — and the two checks were trivially swappable. */
         $roots = (array) $cfg->get('allowed_log_roots', []);
         if (Security::safePath($path, $roots) === null) {
             return $fail(
                 $path . ' is outside the directories Loghound is allowed to read ('
                 . implode(', ', $roots) . '). That list is a safety control and it is never '
                 . 'widened from a web form. Either put the file somewhere already on the list, '
-                . 'or run bin/loghound-setup in a shell — it offers this same path and asks '
-                . 'whether ' . dirname($path) . ' may be read — or add that directory to '
+                . 'or run ' . self::setupCommand($cfg) . ' in a shell — it offers this same path '
+                . 'and asks whether ' . dirname($path) . ' may be read — or add that directory to '
                 . 'allowed_log_roots in config/loghound.php yourself.'
             );
+        }
+
+        if (!@is_file($path)) {
+            return $fail('There is no file at ' . $path . ' that this server can see.');
         }
 
         if ($format === 'custom') {

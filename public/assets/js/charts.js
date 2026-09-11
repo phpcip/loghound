@@ -17,7 +17,20 @@
 
 'use strict';
 
-import { clockOnly, dur, durUs, esc, num } from './core.js';
+import { clockOnly, dur, durUs, markup, num, tip } from './core.js';
+
+/**
+ * Strip the characters that mean something to ECharts' rich-text grammar.
+ *
+ * A rich-text label is `{style|text}` and is parsed, not escaped: a brace, a pipe or a
+ * newline inside the text half re-opens the grammar and the label stops being the label.
+ * It is drawn on a canvas so nothing here is an injection into a document, but a value
+ * that silently prints as something other than itself is the same class of defect as a
+ * number that is quietly wrong, and the values are read off API responses.
+ */
+function richText(value) {
+    return String(value === null || value === undefined ? '' : value).replace(/[{}|\n\r]/g, ' ');
+}
 
 /**
  * Read the current theme's colours out of the stylesheet.
@@ -35,7 +48,16 @@ export function tokens() {
         faint:  get('--faint', '#6b6560'),
         card:   get('--page', '#ffffff'),
         sunken: get('--chip', '#f4f1ec'),
+        /* `--band` is the page's own "one step away from the background" tone, and `--field-border`
+           is the edge of something you can interact with. Both were missing here, so the hover
+           band and the tooltip had nothing to reach for but `--chip` and `--hairline` — 1.04:1
+           and 1.4:1 against the page respectively. */
+        band:   get('--band', '#fbfaf8'),
+        field:  get('--field-border', '#b9b3a9'),
         border: get('--hairline', '#d9d4cc'),
+        /* The tone-corrected accent, for anything that has to sit near text. `--accent` fails a
+           contrast audit at 4.1:1 and the stylesheet says so where it declares the pair. */
+        accentInk: get('--accent-ink', '#9e340f'),
         grid:   get('--c-grid', '#e8e4dd'),
         axis:   get('--c-axis', '#6b6560'),
         accent: get('--accent', '#c05520'),
@@ -161,9 +183,15 @@ function withDefaults(option, t) {
         animationDuration: 260,
         textStyle: { fontFamily: t.ui, fontSize: 14, color: t.muted },
         grid: { left: 8, right: 14, top: 28, bottom: 6, containLabel: true },
+        /* THE TOOLTIP NEEDS AN EDGE. Its fill was the PAGE colour with shadows explicitly off
+           and a 1px hairline border — #2e2b28 on #111111 in the dark theme, 1.4:1 — so the one
+           panel that floats over the chart had no visible boundary, and it is the fallback
+           route to every label the axis truncated. The band colour separates it from the page
+           in both themes and the border steps up to the field border, which is the token that
+           exists for "the edge of a thing you can interact with". */
         tooltip: {
-            backgroundColor: t.card,
-            borderColor: t.border,
+            backgroundColor: t.band,
+            borderColor: t.field,
             borderWidth: 1,
             padding: [8, 10],
             confine: true,
@@ -397,16 +425,16 @@ export function stackedTraffic(id, data, order) {
                     total += Number(p.value) || 0;
                 }
                 const lines = [
-                    '<div style="color:' + t.muted + '">' + clockOnly(params[0].axisValue) + '</div>'
+                    tip`<div style="color:${t.muted}">${clockOnly(params[0].axisValue)}</div>`
                 ];
                 for (const p of params.slice().reverse()) {
                     lines.push(
-                        p.marker + ' ' + esc(p.seriesName) +
-                        '<span style="float:right;padding-left:18px;font-weight:600">' + num(p.value) + '</span>'
+                        tip`${markup(p.marker)} ${p.seriesName}` +
+                        tip`<span style="float:right;padding-left:18px;font-weight:600">${num(p.value)}</span>`
                     );
                 }
-                lines.push('<div style="border-top:1px solid ' + t.border + ';margin-top:5px;padding-top:5px">' +
-                    'Total<span style="float:right;padding-left:18px;font-weight:600">' + num(total) + '</span></div>');
+                lines.push(tip`<div style="border-top:1px solid ${t.border};margin-top:5px;padding-top:5px">` +
+                    tip`Total<span style="float:right;padding-left:18px;font-weight:600">${num(total)}</span></div>`);
                 return lines.join('<br>');
             }
         },
@@ -449,12 +477,12 @@ export function barsH(id, rows, opts) {
         grid: barGrid(room, 74, 6),
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'shadow', shadowStyle: { color: t.sunken } },
+            axisPointer: { type: 'shadow', shadowStyle: { color: t.band } },
             formatter: (params) => {
                 const p = params[0];
                 const row = rows[rows.length - 1 - p.dataIndex];
-                return '<strong>' + esc(p.name) + '</strong><br>' + fmt(p.value) +
-                    (row && row.extra ? '<br><span style="color:' + t.muted + '">' + row.extra + '</span>' : '');
+                return tip`<strong>${p.name}</strong><br>${fmt(p.value)}` +
+                    (row && row.extra ? tip`<br><span style="color:${t.muted}">${row.extra}</span>` : '');
             }
         },
         xAxis: Object.assign(valueAxis(t, fmt), {
@@ -497,7 +525,7 @@ export function barsHStacked(id, rows) {
         grid: barGrid(room, 60, 30),
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'shadow', shadowStyle: { color: t.sunken } },
+            axisPointer: { type: 'shadow', shadowStyle: { color: t.band } },
             /* The axis label may have been truncated to fit its column; the tooltip carries
                the value in full, which is where the reader goes when the row is cut. */
             formatter: (params) => {
@@ -505,14 +533,14 @@ export function barsHStacked(id, rows) {
                     return '';
                 }
                 let total = 0;
-                const lines = ['<strong>' + esc(params[0].name) + '</strong>'];
+                const lines = [tip`<strong>${params[0].name}</strong>`];
                 for (const p of params) {
                     total += Number(p.value) || 0;
-                    lines.push(p.marker + ' ' + esc(p.seriesName) +
-                        '<span style="float:right;padding-left:18px;font-weight:600">' + num(p.value) + '</span>');
+                    lines.push(tip`${markup(p.marker)} ${p.seriesName}` +
+                        tip`<span style="float:right;padding-left:18px;font-weight:600">${num(p.value)}</span>`);
                 }
-                lines.push('<div style="border-top:1px solid ' + t.border + ';margin-top:5px;padding-top:5px">' +
-                    'Total<span style="float:right;padding-left:18px;font-weight:600">' + num(total) + '</span></div>');
+                lines.push(tip`<div style="border-top:1px solid ${t.border};margin-top:5px;padding-top:5px">` +
+                    tip`Total<span style="float:right;padding-left:18px;font-weight:600">${num(total)}</span></div>`);
                 return lines.join('<br>');
             }
         },
@@ -610,7 +638,7 @@ export function donut(id, rows, centreLabel, centreValue) {
             },
         tooltip: {
             trigger: 'item',
-            formatter: (p) => '<strong>' + esc(p.name) + '</strong><br>' + num(p.value) + ' (' + p.percent + '%)'
+            formatter: (p) => tip`<strong>${p.name}</strong><br>${num(p.value)} (${p.percent}%)`
         },
         grid: null,
         series: [{
@@ -622,7 +650,7 @@ export function donut(id, rows, centreLabel, centreValue) {
             label: {
                 show: true,
                 position: 'center',
-                formatter: () => '{v|' + centreValue + '}\n{l|' + centreLabel + '}',
+                formatter: () => '{v|' + richText(centreValue) + '}\n{l|' + richText(centreLabel) + '}',
                 rich: {
                     v: { fontSize: 22, fontWeight: 600, color: t.text, fontFamily: t.mono, lineHeight: 28 },
                     l: { fontSize: 14, color: t.muted, fontFamily: t.mono }
@@ -654,10 +682,10 @@ export function histogram(id, rows, colorFor, opts) {
         grid: { top: 12, bottom: 4 },
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'shadow', shadowStyle: { color: t.sunken } },
+            axisPointer: { type: 'shadow', shadowStyle: { color: t.band } },
             formatter: (params) => {
                 const p = params[0];
-                return prefix + esc(p.name) + '<br><strong>' + num(p.value) + '</strong> ' + esc(noun);
+                return tip`${prefix}${p.name}<br><strong>${num(p.value)}</strong> ${noun}`;
             }
         },
         xAxis: {
@@ -703,7 +731,43 @@ function readableOn(fill, t) {
         return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
     };
     const luminance = 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
-    return luminance > 0.42 ? t.text : t.card;
+
+    /* THE THRESHOLD WAS TUNED FOR THE LIGHT PALETTE AND REPRODUCED THE DEFECT IN THE OTHER
+       THEME. A fixed 0.42 answers `t.card` — the PAGE colour — for anything darker, and in the
+       dark theme every network-type fill is dark, so every tile took the page colour: #111111
+       on #3a3631 is 1.4:1, which is no label, which is exactly what this function was written
+       to stop. Contrast is measured against BOTH candidates and the better one wins, which is
+       theme-independent by construction and needs no threshold to keep in step with a retone. */
+    const ratio = (a, b) => {
+        const hi = Math.max(a, b) + 0.05;
+        const lo = Math.min(a, b) + 0.05;
+        return hi / lo;
+    };
+    const inkL = relativeLuminance(t.text);
+    const pageL = relativeLuminance(t.card);
+    if (inkL === null || pageL === null) {
+        return luminance > 0.42 ? t.text : t.card;
+    }
+    return ratio(luminance, inkL) >= ratio(luminance, pageL) ? t.text : t.card;
+}
+
+/**
+ * WCAG relative luminance for a hex colour, or null when it is not one.
+ *
+ * Split out of readableOn() so the two candidate text colours can be measured with the same
+ * arithmetic as the fill they will be drawn on.
+ */
+function relativeLuminance(colour) {
+    const hex = String(colour || '').trim().replace('#', '');
+    const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+    if (!/^[0-9a-fA-F]{6}$/.test(full)) {
+        return null;
+    }
+    const channel = (i) => {
+        const v = parseInt(full.slice(i, i + 2), 16) / 255;
+        return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
 }
 
 /**
@@ -718,12 +782,12 @@ export function treemap(id, nodes, colorForType, legend) {
         tooltip: {
             formatter: (p) => {
                 const d = p.data;
-                return '<strong>' + esc(d.name) + '</strong><br>' +
-                    (d.org ? esc(d.org) + '<br>' : '') +
-                    '<span style="color:' + t.muted + '">' + (d.astype || 'unknown') + '</span><br>' +
-                    num(d.value) + ' sessions · ' + num(d.uniqIps) + ' IPs<br>' +
-                    '<span style="color:' + t.muted + '">' + num(d.human) + ' human · ' +
-                    num(d.evasive) + ' evasive</span>';
+                return tip`<strong>${d.name}</strong><br>` +
+                    (d.org ? tip`${d.org}<br>` : '') +
+                    tip`<span style="color:${t.muted}">${d.astype || 'unknown'}</span><br>` +
+                    tip`${num(d.value)} sessions · ${num(d.uniqIps)} IPs<br>` +
+                    tip`<span style="color:${t.muted}">${num(d.human)} human · ` +
+                    tip`${num(d.evasive)} evasive</span>`;
             }
         },
         grid: null,
@@ -775,11 +839,11 @@ export function lines(id, times, series, formatter) {
             trigger: 'axis',
             axisPointer: { type: 'line', lineStyle: { color: t.border } },
             formatter: (params) => {
-                const lines = ['<div style="color:' + t.muted + '">' + clockOnly(params[0].axisValue) + '</div>'];
+                const lines = [tip`<div style="color:${t.muted}">${clockOnly(params[0].axisValue)}</div>`];
                 for (const p of params) {
-                    lines.push(p.marker + ' ' + esc(p.seriesName) +
-                        '<span style="float:right;padding-left:18px;font-weight:600">' +
-                        (p.value === null || p.value === undefined ? '—' : (formatter ? formatter(p.value) : num(p.value))) +
+                    lines.push(tip`${markup(p.marker)} ${p.seriesName}` +
+                        tip`<span style="float:right;padding-left:18px;font-weight:600">` +
+                        tip`${p.value === null || p.value === undefined ? '—' : (formatter ? formatter(p.value) : num(p.value))}` +
                         '</span>');
                 }
                 return lines.join('<br>');
@@ -787,15 +851,25 @@ export function lines(id, times, series, formatter) {
         },
         xAxis: timeAxis(t, times),
         yAxis: valueAxis(t, formatter),
-        series: series.map((s) => ({
-            name: s.name,
-            type: 'line',
-            symbol: 'none',
-            connectNulls: false,
-            lineStyle: { width: 1.6, color: s.color },
-            itemStyle: { color: s.color },
-            data: s.data
-        }))
+        /* A SINGLE POINT HAS TO BE DRAWN AS A POINT. With `symbol: 'none'` a one-datum series
+           is a zero-length line segment, which paints nothing at all — and the card above it
+           was simultaneously reporting "1 data point", so the reader was told there was data
+           and shown an empty axis box. A one-bucket range is an entirely ordinary outcome of a
+           short time window. The marker is turned on only when there is exactly one real value
+           to mark, so a full series keeps the clean unmarked line it was designed with. */
+        series: series.map((s) => {
+            const real = (s.data || []).filter((v) => v !== null && v !== undefined).length;
+            return {
+                name: s.name,
+                type: 'line',
+                symbol: real === 1 ? 'circle' : 'none',
+                symbolSize: 6,
+                connectNulls: false,
+                lineStyle: { width: 1.6, color: s.color },
+                itemStyle: { color: s.color },
+                data: s.data
+            };
+        })
     }));
 }
 
@@ -804,7 +878,7 @@ export function stackedBars(id, times, series) {
     draw(id, (t) => ({
         legend: { data: series.map((s) => s.name) },
         grid: { top: 34 },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: t.sunken } } },
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: t.band } } },
         xAxis: Object.assign(timeAxis(t, times), { boundaryGap: true }),
         yAxis: valueAxis(t),
         series: series.map((s) => ({
@@ -834,10 +908,10 @@ export function geoScatter(id, points) {
         grid: mapped ? null : { left: 6, right: 6, top: 10, bottom: 6, containLabel: false },
         tooltip: {
             trigger: 'item',
-            formatter: (p) => '<strong>' + esc(p.data.name) + '</strong><br>' +
-                num(p.data.sessions) + ' sessions · ' + num(p.data.ips) + ' IPs<br>' +
-                '<span style="color:' + t.muted + '">' + num(p.data.human) + ' human · ' +
-                num(p.data.evasive) + ' evasive</span>'
+            formatter: (p) => tip`<strong>${p.data.name}</strong><br>` +
+                tip`${num(p.data.sessions)} sessions · ${num(p.data.ips)} IPs<br>` +
+                tip`<span style="color:${t.muted}">${num(p.data.human)} human · ` +
+                tip`${num(p.data.evasive)} evasive</span>`
         },
         geo: mapped ? {
             map: WORLD,

@@ -55,7 +55,7 @@ function lh_set_view(): array
 /** Run one settings action and return where it redirects to. */
 function lh_set_post(Settings $view, array $post): string
 {
-    $_POST = $post;
+    $_POST = $post + ['csrf' => lh_csrf()];
     return $view->post();
 }
 

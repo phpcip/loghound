@@ -70,12 +70,30 @@ $patterns = [
 ];
 
 /**
- * Things that legitimately look like secrets and are not.
+ * VALUES that legitimately look like secrets and are not.
  *
- * Kept narrow on purpose. Every entry here is a hole in the scanner, so each one
- * names why it is safe.
+ * ============================================================================
+ * THESE ARE TESTED AGAINST THE MATCH, NOT AGAINST THE LINE. THAT IS THE FIX.
+ * ============================================================================
+ * There used to be one list, and a match anywhere on the line skipped the WHOLE line with
+ * `continue 2`. Every word in it is common English, so the gate was defeated by writing a
+ * secret next to one of them — and not deliberately, either, because these are words that
+ * turn up in ordinary comments. Measured against the scanner as it stood:
+ *
+ *     $a = 'https://admin:hunter2@solr.example.com/solr';               MISSED  ("example")
+ *     $c = 'f3a91c04be775d2298ee10ab44cc5177'; // sha256 of the row     MISSED  ("sha256")
+ *     $d = 'AKIAIOSFODNN7EXAMPLE1';                                     MISSED  ("EXAMPLE")
+ *     $e = 'ghp_0123…ab'; // fp                                        MISSED  ("fp")
+ *
+ * Four real credentials, four clean bills of health, from a gate the repository relies on.
+ *
+ * Scoping the test to the matched text is what makes a hole a hole in the VALUE rather than
+ * in the line: `'YOUR_API_KEY'` is still allowed because the placeholder is the match, while
+ * a real key on a line that merely mentions an example is not.
+ *
+ * @var array<int,string>
  */
-$allow = [
+$allowValue = [
     // Placeholder values in the shipped example config and in documentation.
     '/YOUR_[A-Z_]+/',
     '/(?:example|placeholder|changeme|replace[_-]?me|dummy|sample|redacted|xxx+)/i',
@@ -99,6 +117,35 @@ $allow = [
     // A real credential is neither, so this does not blind the scanner to one.
     '/SENTINEL/',
     '/(?:a1b2c3d4|abcdef0123456789|0123456789abcdef|deadbeef|cafebabe)/i',
+    // The internet's canonical joke password. It appears only in the tests that PROVE a URL
+    // carrying userinfo is refused, which need a URL carrying userinfo to refuse. A real
+    // credential is not this string, so excusing it blinds the scanner to nothing.
+    '/hunter2/i',
+];
+
+/**
+ * Things that need the LINE for context, because the value alone cannot be told apart.
+ *
+ * One rule qualifies and only one: a 32-plus hex run is the same shape as a fingerprint, a
+ * content hash, a git object id and the vendored bundle's integrity value, and this product
+ * publishes fingerprints in its own UI. Nothing else is form-ambiguous, so nothing else is
+ * here — and each entry is keyed to the rule it excuses rather than excusing every rule at
+ * once, which is what the old single list did.
+ *
+ * @var array<string,array<int,string>>
+ */
+$allowLine = [
+    // A marker with NOTHING after it is a marker, not a key: the fixture that names a `.key`
+    // file for the uninstaller to delete writes exactly the header line and no base64. Real
+    // key material follows the header, so this cannot excuse one.
+    'private key block' => [
+        '/BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----(?:\\\\n)?[\'"]/',
+    ],
+    'hex secret 32+' => [
+        '/\b(?:sha1|sha256|sha512|md5|integrity|checksum|commit)\b/i',
+        '/fp_hash|fingerprint|ua_hash|_hash_s|\bfp\b|Fp\s*=/i',
+        '/password_hash|auth\.password_hash|hash_hmac|random_bytes|bin2hex/',
+    ],
 ];
 
 /** @return string[] */
@@ -119,32 +166,55 @@ $findings = [];
 
 /**
  * Scan one blob of text and record anything that matches without being allowed.
+ *
+ * @param array<int,array{0:string,1:string}> $patterns
+ * @param array<int,string>                   $allowValue Tested against the MATCH.
+ * @param array<string,array<int,string>>     $allowLine  Tested against the line, per rule.
+ * @param array<int,array<string,mixed>>      $findings
  */
-function scanText(string $label, string $text, array $patterns, array $allow, array &$findings): void
-{
+function scanText(
+    string $label,
+    string $text,
+    array $patterns,
+    array $allowValue,
+    array $allowLine,
+    array &$findings
+): void {
+    // A minified bundle is one enormous line of noise, and only a vendored bundle is. The
+    // skip used to apply to any long line anywhere, which made "put it at the end of a long
+    // line" a way past the gate; now it is scoped to the paths that are actually minified.
+    $minified = (bool) preg_match('#(?:^|/)(?:vendor/|dist/)|\.min\.(?:js|css)$#i', $label);
+
     $lines = explode("\n", $text);
     foreach ($lines as $n => $line) {
-        if (strlen($line) > 4000) {
-            // A minified vendor bundle on one line produces noise, not signal.
+        if ($minified && strlen($line) > 4000) {
             continue;
         }
-        foreach ($allow as $ok) {
-            if (preg_match($ok, $line)) {
-                continue 2;
-            }
-        }
         foreach ($patterns as [$what, $re]) {
-            if (preg_match($re, $line, $m)) {
-                $hit = (string) ($m[0] ?? '');
-                $findings[] = [
-                    'file' => $label,
-                    'line' => $n + 1,
-                    'what' => $what,
-                    // Redacted: enough to locate it, not enough to leak it further.
-                    'hint' => substr($hit, 0, 6) . str_repeat('.', 6) . substr($hit, -4),
-                ];
-                break;
+            if (!preg_match($re, $line, $m)) {
+                continue;
             }
+            $hit = (string) ($m[0] ?? '');
+
+            foreach ($allowValue as $ok) {
+                if (preg_match($ok, $hit)) {
+                    continue 2;
+                }
+            }
+            foreach ($allowLine[$what] ?? [] as $ok) {
+                if (preg_match($ok, $line)) {
+                    continue 2;
+                }
+            }
+
+            $findings[] = [
+                'file' => $label,
+                'line' => $n + 1,
+                'what' => $what,
+                // Redacted: enough to locate it, not enough to leak it further.
+                'hint' => substr($hit, 0, 6) . str_repeat('.', 6) . substr($hit, -4),
+            ];
+            break;
         }
     }
 }
@@ -168,7 +238,7 @@ if ($mode === 'history') {
             continue;
         }
         $seen++;
-        scanText($path . ' @ ' . substr($sha, 0, 8), $blob, $patterns, $allow, $findings);
+        scanText($path . ' @ ' . substr($sha, 0, 8), $blob, $patterns, $allowValue, $allowLine, $findings);
     }
     echo "scanned {$seen} blob(s) across all commits\n";
 } else {
@@ -178,7 +248,7 @@ if ($mode === 'history') {
         if ($text === false || strlen($text) > 2_000_000) {
             continue;
         }
-        scanText($file, $text, $patterns, $allow, $findings);
+        scanText($file, $text, $patterns, $allowValue, $allowLine, $findings);
     }
     echo 'scanned ' . count($files) . " file(s) (" . $mode . ")\n";
 }
@@ -193,5 +263,6 @@ foreach ($findings as $f) {
     printf("  %-52s line %-5d %s  [%s]\n", $f['file'], $f['line'], $f['what'], $f['hint']);
 }
 echo "\n" . count($findings) . " finding(s).\n";
-echo "If one is a false positive, add a narrow rule to \$allow in this file and say why.\n";
+echo "If one is a false positive, add a narrow rule to \$allowValue (preferred) or\n";
+echo "\$allowLine in this file, and say why it is safe.\n";
 exit(1);

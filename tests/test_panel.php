@@ -781,11 +781,11 @@ return [
 
         $saved = $_POST;
         try {
-            $_POST = ['action' => 'privacy', 'ip_mode' => 'telepathy', 'retention_days' => '30'];
+            $_POST = ['action' => 'privacy', 'ip_mode' => 'telepathy', 'retention_days' => '30', 'csrf' => lh_csrf()];
             lh_same('?v=settings&err=bad_ip_mode', $view->post(), 'an invented mode is refused');
             lh_same('full', $cfg->get('privacy.ip_mode'), 'and nothing is written');
 
-            $_POST = ['action' => 'privacy', 'ip_mode' => 'hash', 'retention_days' => '30'];
+            $_POST = ['action' => 'privacy', 'ip_mode' => 'hash', 'retention_days' => '30', 'csrf' => lh_csrf()];
             lh_same('?v=settings&ok=privacy_saved', $view->post(), 'a real mode is accepted');
             lh_same('hash', $cfg->get('privacy.ip_mode'), 'and stored');
             lh_same(30, $cfg->get('privacy.retention_days'), 'with the retention window');
@@ -834,11 +834,11 @@ return [
 
         $saved = $_POST;
         try {
-            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'telepathy'];
+            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'telepathy', 'csrf' => lh_csrf()];
             lh_same('?v=settings&err=bad_auth_mode', $view->post(), 'an invented mode is refused');
             lh_same('basic', $cfg->get('auth.mode'), 'and nothing is written');
 
-            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'session'];
+            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'session', 'csrf' => lh_csrf()];
             lh_same('?v=settings&ok=auth_saved', $view->post(), 'a real mode is accepted');
             lh_same('session', $cfg->get('auth.mode'), 'and stored');
         } finally {
@@ -859,7 +859,7 @@ return [
 
         $saved = $_POST;
         try {
-            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'session'];
+            $_POST = ['action' => 'auth_mode', 'auth_mode' => 'session', 'csrf' => lh_csrf()];
             lh_same('?v=settings&err=bad_auth_mode', $view->post(), 'no credentials means no mode to pick');
             lh_same('none', $cfg->get('auth.mode'), 'and the mode is untouched');
         } finally {

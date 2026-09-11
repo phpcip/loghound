@@ -54,6 +54,16 @@ namespace Loghound;
 final class Solr
 {
     /**
+     * Most DECOMPRESSED bytes any single response may deliver before it is abandoned.
+     *
+     * Sixty-four megabytes is far beyond any facet page or document page this client asks
+     * for, and small enough that a compressed bomb from a hostile or compromised endpoint
+     * cannot exhaust a daemon. A caller with a tighter requirement passes `max_bytes` in the
+     * request array.
+     */
+    public const MAX_RESPONSE_BYTES = 67108864;
+
+    /**
      * Parameters that must never reach Solr, whoever asks and for whatever reason.
      *
      * Presence of any of these is treated as an attack, not a mistake: the request is
@@ -120,6 +130,39 @@ final class Solr
      * @var string[]
      */
     private const DENIED_PREFIXES = ['stream.', 'shards.', 'jdbc.', 'zk', 'core.'];
+
+    /**
+     * The ONLY parameter names this client will send. Everything else is refused.
+     *
+     * WHY THIS EXISTS ALONGSIDE THE DENYLIST ABOVE, RATHER THAN INSTEAD OF IT. A denylist of
+     * dangerous Solr parameters is a list that has to keep up with Solr, and it did not. Every
+     * one of these reached a node unexamined: `facet.query`, which takes a whole query string
+     * and therefore `{!frange}`; `bf`, `bq` and `boost`, which are function queries evaluated
+     * server-side; `hl.q`; and the entire `f.<field>.<anything>` family, which re-specifies any
+     * per-field option there is. None is reachable today, because every parameter map in this
+     * codebase is built from literal keys in source — but "not reachable today" is the property
+     * that a denylist quietly stops having, and it is the reason the list was written as one.
+     *
+     * An allowlist inverts that: a parameter nobody has thought about is refused by default,
+     * and adding one is a deliberate line in this file. The set was derived by instrumenting
+     * every call in the suite, not by reading the callers, so it is what the application
+     * actually sends and not what it looks like it sends.
+     *
+     * `json.facet` is NOT here and must never be: jsonFacet() validates a PHP array field by
+     * field and attaches the serialised result AFTER this method has run. A pre-built JSON
+     * blob cannot be validated, so it is refused outright below.
+     *
+     * The denylist stays because it gives a different and better answer for a parameter that
+     * is not merely unknown but hostile — a caller that tried to set `shards` has a bug or an
+     * injection, and the message says so instead of "unknown parameter".
+     *
+     * @var string[]
+     */
+    private const ALLOWED_PARAMS = [
+        'q', 'uq', 'qf', 'mm', 'fq', 'fl', 'sort', 'rows', 'start',
+        'facet', 'facet.field', 'facet.limit', 'facet.mincount', 'facet.sort',
+        'facet.contains', 'facet.contains.ignorecase',
+    ];
 
     /**
      * Aggregate functions permitted inside a JSON Facet.
@@ -482,7 +525,7 @@ final class Solr
         $tags = [];
         foreach ($excludeTags as $tag) {
             $tag = (string) $tag;
-            if (!preg_match('/^[A-Za-z0-9_]{1,64}$/', $tag)) {
+            if (!preg_match('/^[A-Za-z0-9_]{1,64}$/D', $tag)) {
                 throw new \InvalidArgumentException('Solr: unsafe excludeTag: ' . $tag);
             }
             $tags[] = $tag;
@@ -547,7 +590,7 @@ final class Solr
         if (mb_strlen($contains) > 64) {
             throw new \InvalidArgumentException('Solr: facet substring is too long.');
         }
-        if (preg_match('/[\x00-\x1F\x7F]/u', $contains)) {
+        if (preg_match('/[\x00-\x1F\x7F]/', $contains) === 1) {
             throw new \InvalidArgumentException('Solr: control character in facet substring.');
         }
         return $contains;
@@ -573,7 +616,7 @@ final class Solr
         if ($query === '') {
             throw new \InvalidArgumentException('Solr: refusing an empty delete query.');
         }
-        if (!$allowDeleteAll && preg_match('/^\*\s*:\s*\*$/', $query)) {
+        if (!$allowDeleteAll && preg_match('/^\*\s*:\s*\*$/D', $query)) {
             throw new \InvalidArgumentException(
                 'Solr: refusing to delete every document without allowDeleteAll.'
             );
@@ -653,7 +696,7 @@ final class Solr
      */
     public static function escapeTerm(string $value): string
     {
-        $value = preg_replace('/[\x00-\x1F\x7F]/u', '', $value) ?? '';
+        $value = preg_replace('/[\x00-\x1F\x7F]/', '', $value) ?? '';
         return '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], $value) . '"';
     }
 
@@ -727,13 +770,13 @@ final class Solr
         if ($bound === '' || $bound === '*') {
             return '*';
         }
-        if (preg_match('/^-?\d+(\.\d+)?$/', $bound)) {
+        if (preg_match('/^-?\d+(\.\d+)?$/D', $bound)) {
             return $bound;
         }
-        if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/', $bound)) {
+        if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/D', $bound)) {
             return $bound;
         }
-        if (preg_match('#^(NOW|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z)([-+/]\d*[A-Z]+)*$#', $bound)) {
+        if (preg_match('#^(NOW|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z)([-+/]\d*[A-Z]+)*$#D', $bound)) {
             return $bound;
         }
         throw new \InvalidArgumentException('Solr: invalid range bound: ' . $bound);
@@ -776,7 +819,7 @@ final class Solr
         foreach ($params as $key => $value) {
             $key = (string) $key;
 
-            if (!preg_match('/^[A-Za-z0-9_.\[\]-]{1,64}$/', $key)) {
+            if (!preg_match('/^[A-Za-z0-9_.\[\]-]{1,64}$/D', $key)) {
                 throw new \InvalidArgumentException('Solr: illegal parameter name: ' . $key);
             }
 
@@ -793,6 +836,13 @@ final class Solr
                         'Solr: parameter "' . $key . '" is refused (denied prefix "' . $prefix . '").'
                     );
                 }
+            }
+
+            if (!in_array($lower, self::ALLOWED_PARAMS, true)) {
+                throw new \InvalidArgumentException(
+                    'Solr: parameter "' . $key . '" is refused; it is not on ALLOWED_PARAMS. '
+                    . 'Add it there deliberately if this client should be able to send it.'
+                );
             }
 
             $out[$key] = $value;
@@ -942,7 +992,7 @@ final class Solr
             if ($clause === '') {
                 continue;
             }
-            if (!preg_match('/^([A-Za-z0-9_]{1,64})\s+(asc|desc)$/i', $clause, $m)) {
+            if (!preg_match('/^([A-Za-z0-9_]{1,64})\s+(asc|desc)$/iD', $clause, $m)) {
                 throw new \InvalidArgumentException('Solr: unsafe sort clause: ' . $clause);
             }
             if ($m[1] !== 'score' && !Security::isSafeFieldName($m[1])) {
@@ -995,7 +1045,7 @@ final class Solr
     {
         $out = [];
         foreach ($qf as $entry) {
-            if (!preg_match('/^([A-Za-z0-9_]{1,64})(\^\d+(\.\d+)?)?$/', trim((string) $entry), $m)) {
+            if (!preg_match('/^([A-Za-z0-9_]{1,64})(\^\d+(\.\d+)?)?$/D', trim((string) $entry), $m)) {
                 throw new \InvalidArgumentException('Solr: unsafe qf entry: ' . $entry);
             }
             $out[] = trim((string) $entry);
@@ -1040,7 +1090,7 @@ final class Solr
 
         $out = [];
         foreach ($facet as $name => $spec) {
-            if (!preg_match('/^[A-Za-z0-9_]{1,64}$/', (string) $name)) {
+            if (!preg_match('/^[A-Za-z0-9_]{1,64}$/D', (string) $name)) {
                 throw new \InvalidArgumentException('Solr: unsafe facet bucket name: ' . $name);
             }
 
@@ -1085,7 +1135,7 @@ final class Solr
                 $clean['numBuckets'] = (bool) $spec['numBuckets'];
             }
             if (isset($spec['sort'])) {
-                if (!preg_match('/^[A-Za-z0-9_]{1,64}\s+(asc|desc)$/i', (string) $spec['sort'])) {
+                if (!preg_match('/^[A-Za-z0-9_]{1,64}\s+(asc|desc)$/iD', (string) $spec['sort'])) {
                     throw new \InvalidArgumentException('Solr: unsafe facet sort: ' . $spec['sort']);
                 }
                 $clean['sort'] = (string) $spec['sort'];
@@ -1097,7 +1147,7 @@ final class Solr
                 }
             }
             if (isset($spec['gap'])) {
-                if (!preg_match('/^[-+]?\d*[A-Za-z]*$/', (string) $spec['gap'])) {
+                if (!preg_match('/^[-+]?\d*[A-Za-z]*$/D', (string) $spec['gap'])) {
                     throw new \InvalidArgumentException('Solr: unsafe facet gap: ' . $spec['gap']);
                 }
                 $clean['gap'] = (string) $spec['gap'];
@@ -1108,7 +1158,7 @@ final class Solr
                 if ($tags !== null) {
                     $tags = is_array($tags) ? $tags : [$tags];
                     foreach ($tags as $tag) {
-                        if (!preg_match('/^[A-Za-z0-9_]{1,64}$/', (string) $tag)) {
+                        if (!preg_match('/^[A-Za-z0-9_]{1,64}$/D', (string) $tag)) {
                             throw new \InvalidArgumentException('Solr: unsafe excludeTag: ' . $tag);
                         }
                     }
@@ -1138,7 +1188,7 @@ final class Solr
         if ($agg === 'count') {
             return 'count';
         }
-        if (!preg_match('/^([a-z]+)\(([A-Za-z0-9_]{1,64})(,\s*\d+(\.\d+)?)*\)$/', $agg, $m)) {
+        if (!preg_match('/^([a-z]+)\(([A-Za-z0-9_]{1,64})(,\s*\d+(\.\d+)?)*\)$/D', $agg, $m)) {
             throw new \InvalidArgumentException('Solr: unsafe facet aggregate: ' . $agg);
         }
         if (!in_array($m[1], self::FACET_AGGS, true)) {
@@ -1165,7 +1215,7 @@ final class Solr
      */
     private function normaliseUserText(string $text): string
     {
-        $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', ' ', $text) ?? '';
+        $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', ' ', $text) ?? '';
         $text = trim($text);
         while (preg_match('/^\{![^}]*\}/', $text)) {
             $text = trim((string) preg_replace('/^\{![^}]*\}/', '', $text));
@@ -1300,6 +1350,23 @@ final class Solr
     {
         $ch = curl_init();
 
+        /* A RESPONSE IS BOUNDED WHILE IT ARRIVES, NOT AFTER IT HAS. gzip is accepted because
+           facet responses compress well, and curl decompresses transparently — so a caller
+           that checks strlen($body) afterwards is checking a string that is already resident.
+           A hostile or compromised endpoint answering a one-megabyte gzip that expands to
+           gigabytes would exhaust the daemon before any cap ran. CURLOPT_MAXFILESIZE does not
+           help (it reads Content-Length, which is the COMPRESSED size and may be absent), so
+           the write callback counts decompressed bytes and aborts the transfer the moment the
+           ceiling is crossed. The abort surfaces as an ordinary transport failure.
+
+           CURLOPT_PROTOCOLS pins the scheme as well. base_url is operator configuration and is
+           validated where it is stored, but curl will happily speak file://, scp:// and gopher://
+           if a URL ever reaches it unvalidated, and there is no reason for this client to be
+           able to. */
+        $cap = (int) ($req['max_bytes'] ?? self::MAX_RESPONSE_BYTES);
+        $buffer = '';
+        $overflowed = false;
+
         curl_setopt_array($ch, [
             CURLOPT_URL            => $req['url'],
             CURLOPT_RETURNTRANSFER => true,
@@ -1311,6 +1378,16 @@ final class Solr
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_ENCODING       => '',
+            CURLOPT_PROTOCOLS      => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_WRITEFUNCTION  => static function ($handle, string $chunk) use (&$buffer, &$overflowed, $cap): int {
+                $len = strlen($chunk);
+                if (strlen($buffer) + $len > $cap) {
+                    $overflowed = true;
+                    return 0;
+                }
+                $buffer .= $chunk;
+                return $len;
+            },
         ]);
 
         if ($req['body'] !== null) {
@@ -1321,15 +1398,23 @@ final class Solr
             curl_setopt($ch, CURLOPT_USERPWD, $req['user'] . ':' . $req['pass']);
         }
 
-        $body   = curl_exec($ch);
+        curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
         $error  = curl_error($ch);
 
         unset($ch);
 
+        if ($overflowed) {
+            return [
+                'status' => 0,
+                'body'   => '',
+                'error'  => 'response exceeded ' . $cap . ' bytes and was abandoned',
+            ];
+        }
+
         return [
             'status' => $status,
-            'body'   => is_string($body) ? $body : '',
+            'body'   => $buffer,
             'error'  => $error,
         ];
     }

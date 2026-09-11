@@ -164,13 +164,16 @@ final class Token
 
         $token = bin2hex(random_bytes(16));
 
-        $fh = @fopen($this->path(), 'wb');
-        if ($fh === false) {
+        /* A FRESH NAME, CHMOD'D BEFORE THE FIRST BYTE, THEN RENAMED OVER THE TARGET. The old
+           shape opened the real path with 'wb' and chmod'd it afterwards — and chmod does not
+           narrow a descriptor somebody already holds, so a local account spinning on open()
+           during the window between fopen and chmod keeps a readable fd and reads the token the
+           moment it is written. Security::writePrivateFile() does it the way Config::save()
+           does: O_CREAT|O_EXCL on a name nobody can have guessed, mode set while the file is
+           still empty, atomic rename. */
+        if (!Security::writePrivateFile($this->path(), $token . "\n", 0600)) {
             return false;
         }
-        @chmod($this->path(), 0600);
-        fwrite($fh, $token . "\n");
-        fclose($fh);
 
         return true;
     }
@@ -216,7 +219,47 @@ final class Token
         if (!Security::equals($stored, $given)) {
             return 'That is not the setup token. Read it again with: sudo cat ' . $this->path();
         }
+
+        /* A CORRECT TOKEN GIVES THE BUDGET BACK. allow() counts unconditionally so that the
+           refusal costs the same whether the token was right or wrong — which is the timing
+           property it was written for and which is preserved, because the clearing happens
+           only once the comparison has already succeeded. Without it, eight CORRECT unlocks in
+           an hour locked the operator out of their own installer, which is a lockout earned by
+           doing nothing wrong. */
+        $this->forgive($clientIp);
+
         return '';
+    }
+
+    /**
+     * Forget this address's attempts after it proves it holds the token.
+     *
+     * The same rule Security::loginSuccess() follows for the panel: a counter that only ever
+     * goes up turns a successful credential into a lockout.
+     */
+    private function forgive(string $clientIp): void
+    {
+        $file = $this->varDir . '/' . self::ATTEMPTS;
+        $fh = @fopen($file, 'c+');
+        if ($fh === false) {
+            return;
+        }
+        if (!flock($fh, LOCK_EX)) {
+            fclose($fh);
+            return;
+        }
+
+        $data = json_decode((string) stream_get_contents($fh), true);
+        if (is_array($data) && is_array($data['ips'] ?? null)) {
+            unset($data['ips'][$clientIp === '' ? 'unknown' : hash('sha256', $clientIp)]);
+            ftruncate($fh, 0);
+            rewind($fh);
+            fwrite($fh, (string) json_encode($data));
+            fflush($fh);
+        }
+
+        flock($fh, LOCK_UN);
+        fclose($fh);
     }
 
     /**

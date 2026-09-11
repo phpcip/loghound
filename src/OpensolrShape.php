@@ -166,10 +166,10 @@ final class OpensolrShape
         if ($value === '') {
             return '';
         }
-        if (preg_match('/^-?[0-9]+(?:\.[0-9]+)?$/', $value)) {
+        if (preg_match('/^-?[0-9]+(?:\.[0-9]+)?$/D', $value)) {
             return '#';
         }
-        if (preg_match('/^[A-Za-z0-9_.\-]{1,40}$/', $value)) {
+        if (preg_match('/^[A-Za-z0-9_.\-]{1,40}$/D', $value)) {
             return $value;
         }
         return self::skeleton($value);
@@ -249,16 +249,16 @@ final class OpensolrShape
             return $token;
         }
         if ($token[0] === '[' || $token[0] === '{') {
-            return preg_match('/^[\[{][#*]TO[#*][\]}]$/', $token) === 1 ? $token : '[?]';
+            return preg_match('/^[\[{][#*]TO[#*][\]}]$/D', $token) === 1 ? $token : '[?]';
         }
-        if (preg_match('/^-?[0-9]+(?:\.[0-9]+)?$/', $token)) {
+        if (preg_match('/^-?[0-9]+(?:\.[0-9]+)?$/D', $token)) {
             return '#';
         }
 
         $colon = strpos($token, ':');
         if ($colon !== false && $colon > 0) {
             $field = substr($token, 0, $colon);
-            if (preg_match('/^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$/', $field)) {
+            if (preg_match('/^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$/D', $field)) {
                 return $field . ':' . self::term(substr($token, $colon + 1));
             }
             return '?';
@@ -288,21 +288,21 @@ final class OpensolrShape
                 foreach ($parts as $part) {
                     $at = strpos($part, '=');
                     if ($at === false) {
-                        if ($parser === '' && preg_match('/^[A-Za-z0-9_.\-]{1,40}$/', $part)) {
+                        if ($parser === '' && preg_match('/^[A-Za-z0-9_.\-]{1,40}$/D', $part)) {
                             $parser = $part;
                         }
                         continue;
                     }
                     $key = substr($part, 0, $at);
                     $val = substr($part, $at + 1);
-                    if (!preg_match('/^[A-Za-z0-9_.\-]{1,40}$/', $key)) {
+                    if (!preg_match('/^[A-Za-z0-9_.\-]{1,40}$/D', $key)) {
                         continue;
                     }
                     if (str_starts_with($val, '$')) {
                         $pairs[] = $key . '=' . $val;
-                    } elseif (preg_match('/^-?[0-9]+(?:\.[0-9]+)?$/', $val)) {
+                    } elseif (preg_match('/^-?[0-9]+(?:\.[0-9]+)?$/D', $val)) {
                         $pairs[] = $key . '=#';
-                    } elseif (preg_match('/^[A-Za-z0-9_.\-^]{1,60}$/', $val)) {
+                    } elseif (preg_match('/^[A-Za-z0-9_.\-^]{1,60}$/D', $val)) {
                         $pairs[] = $key . '=' . $val;
                     } else {
                         $pairs[] = $key . '=?';
@@ -361,7 +361,7 @@ final class OpensolrShape
             $key = $eq === false ? $chunk : substr($chunk, 0, $eq);
             $value = $eq === false ? '' : substr($chunk, $eq + 1);
             $key = urldecode($key);
-            if ($key === '' || !preg_match('/^[A-Za-z0-9_.\[\]\-]{1,64}$/', $key)) {
+            if ($key === '' || !preg_match('/^[A-Za-z0-9_.\[\]\-]{1,64}$/D', $key)) {
                 continue;
             }
             $pairs[] = [$key, urldecode($value)];
@@ -388,7 +388,7 @@ final class OpensolrShape
             $candidate = $segments === [] ? '' : (string) end($segments);
         }
 
-        return preg_match('/^[A-Za-z0-9_.\-]{1,40}$/', $candidate) === 1 ? $candidate : 'other';
+        return preg_match('/^[A-Za-z0-9_.\-]{1,40}$/D', $candidate) === 1 ? $candidate : 'other';
     }
 
     /**

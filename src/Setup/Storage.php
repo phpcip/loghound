@@ -348,7 +348,7 @@ final class Storage
         if ($apiKey === '' && $stored === '') {
             $errors[] = 'Enter your Opensolr API key. You will find it under Account in your '
                 . 'Opensolr control panel.';
-        } elseif ($apiKey !== '' && !preg_match('/^[A-Za-z0-9_\-]{8,128}$/', $apiKey)) {
+        } elseif ($apiKey !== '' && !preg_match('/^[A-Za-z0-9_\-]{8,128}$/D', $apiKey)) {
             $errors[] = 'That API key does not look right — it should be a single line of '
                 . 'letters, digits, hyphens or underscores with no spaces.';
         }
@@ -463,7 +463,13 @@ final class Storage
                 'key'   => 'schema_hits',
                 'label' => 'Uploading the hits schema',
                 'run'   => static function (Job $j, Config $c) use ($root): string {
-                    return self::pushConfigset($j, $c, (string) $c->get('solr.hits_core'), $root . '/solr/hits/conf');
+                    return self::pushConfigset(
+                        $j,
+                        $c,
+                        (string) $c->get('solr.hits_core'),
+                        $root . '/solr/hits/conf',
+                        'hits'
+                    );
                 },
             ],
 
@@ -471,7 +477,13 @@ final class Storage
                 'key'   => 'schema_sessions',
                 'label' => 'Uploading the sessions schema',
                 'run'   => static function (Job $j, Config $c) use ($root): string {
-                    return self::pushConfigset($j, $c, (string) $c->get('solr.sessions_core'), $root . '/solr/sessions/conf');
+                    return self::pushConfigset(
+                        $j,
+                        $c,
+                        (string) $c->get('solr.sessions_core'),
+                        $root . '/solr/sessions/conf',
+                        'sessions'
+                    );
                 },
             ],
 
@@ -646,6 +658,12 @@ final class Storage
      * is not treated as "probably fine": the entire point of the check is the case where
      * assuming fine is expensive.
      *
+     * Either outcome that ends with the index in the right shape — nothing missing, or the
+     * configset pushed — records `solr.schema_release` for that role, because both of them
+     * established the same fact. See Schema::notice() for what the panel does with it, and
+     * bin/loghound-schema for the same comparison made outside a setup job, which is what an
+     * operator upgrading an existing installation runs.
+     *
      * @param string $role     'hits' or 'sessions'
      * @param bool   $upgrade  Whether the operator agreed to push this version's configset.
      * @throws \RuntimeException On a mismatch the operator has not agreed to fix.
@@ -678,6 +696,7 @@ final class Storage
         $missing = self::schemaShortfall($localXml, $liveXml);
 
         if ($missing === []) {
+            Schema::recordRelease($cfg, $role, rtrim($root, '/'));
             return $core . ' already has every field this version writes.';
         }
 
@@ -695,7 +714,7 @@ final class Storage
         }
 
         $job->note('Adding the missing fields to ' . $core . ' …');
-        $pushed = self::pushConfigset($job, $cfg, $core, rtrim($root, '/') . '/solr/' . $role . '/conf');
+        $pushed = self::pushConfigset($job, $cfg, $core, rtrim($root, '/') . '/solr/' . $role . '/conf', $role);
 
         return 'Added ' . count($missing) . ' missing field'
             . (count($missing) === 1 ? '' : 's') . ' to ' . $core . '. ' . $pushed;
@@ -751,8 +770,27 @@ final class Storage
         ) < 1) {
             return [];
         }
-        return array_values(array_unique($m[1]));
+
+        /* THE LIST IS BOUNDED, because the XML it came from is a control-plane response and a
+           schema is not a stream. Every name that comes back is compared against the local set
+           in a nested loop, diffed, written into var/schema-check.json and re-read by the panel
+           on every Settings render, so an answer with a million field declarations in it is a
+           million-element array doing all four of those things. Two thousand is an order of
+           magnitude more than either of this product's schemas declares; past it the comparison
+           is meaningless anyway and the honest answer is the one the caller already handles. */
+        $names = array_values(array_unique($m[1]));
+        return count($names) > self::MAX_SCHEMA_FIELDS ? [] : $names;
     }
+
+    /**
+     * Most field names a live schema may declare before it is treated as unreadable.
+     *
+     * Returning the empty list rather than a truncated one is deliberate and is the same
+     * choice the surrounding docblock makes for a schema that could not be parsed: a partial
+     * field list makes every absent name look missing, and the caller reports "could not be
+     * read", which is the only safe reading.
+     */
+    public const MAX_SCHEMA_FIELDS = 2000;
 
     /**
      * Prove the stored credentials work, and that the chosen region exists on this account.
@@ -885,6 +923,27 @@ final class Storage
         $job->note('Asking where ' . $hits . ' lives …');
 
         $conn = self::client($cfg)->connectionDetails($hits);
+
+        /* THE PLATFORM'S ANSWER IS VALIDATED BEFORE IT BECOMES THE PLACE WE SEND A PASSWORD.
+           `base_url` here is a raw read of `msg.info.connection_url` out of a control-plane
+           response, and the next two lines store the Solr HTTP credentials beside it. Every
+           later probe builds a Solr client from that config and sends those credentials as
+           Basic auth to whatever host the string named — so a compromised control plane, a
+           MITM, or an `opensolr.api_base` pointed at somebody else's host returns
+           `http://attacker/solr/x` and the next connection test hands over the Solr password.
+           It is a standing SSRF primitive out of the panel process as well.
+
+           src/Solr.php asserts that "base_url is operator configuration and is validated where
+           it is stored". On this path it was neither operator configuration nor validated.
+           Security::safeOutboundUrl() is the same check opensolr.api_base and the geolocation
+           endpoint now get: https, a public host, no embedded credentials. */
+        if (Security::safeOutboundUrl((string) $conn['base_url']) === null) {
+            throw new \RuntimeException(
+                'Opensolr gave a connection URL for ' . $hits . ' that this installation will not '
+                . 'use: it has to be an https URL on a public host with no credentials in it. '
+                . 'Nothing has been saved.'
+            );
+        }
 
         $cfg->set('solr.base_url', $conn['base_url']);
         $cfg->set('solr.http_user', $conn['http_user']);
@@ -1091,9 +1150,24 @@ final class Storage
      * Order matters and is enforced inside Opensolr::pushConfigSet(): schema first, then
      * solrconfig. Reversed, the core reloads against a solrconfig referring to field types
      * the old schema does not define, and the reload fails.
+     *
+     * A SUCCESSFUL PUSH IS REMEMBERED, in `solr.schema_release`. That marker is what lets the
+     * panel say something true about an index without a control-plane call on every page load:
+     * it records which set of fields the configset on that index was uploaded for, so an
+     * upgrade that changes the schema is visible for free, before anybody runs a check. It is
+     * written only here and in Schema::apply(), only after the platform accepted every file,
+     * and it is evidence rather than proof — see Schema::notice(), which never reports it as a
+     * verification.
+     *
+     * @param string $role 'hits' or 'sessions', the index this configset belongs to.
      */
-    private static function pushConfigset(Job $job, Config $cfg, string $core, string $confDir): string
-    {
+    private static function pushConfigset(
+        Job $job,
+        Config $cfg,
+        string $core,
+        string $confDir,
+        string $role = ''
+    ): string {
         if ($core === '') {
             throw new \RuntimeException('The index name is missing — the previous step did not finish.');
         }
@@ -1117,6 +1191,10 @@ final class Storage
                 . '. The index is in your Opensolr control panel; you can upload the files from '
                 . 'solr/ by hand there, or press Try again.'
             );
+        }
+
+        if ($role !== '') {
+            Schema::recordRelease($cfg, $role, dirname($confDir, 3));
         }
 
         return 'Schema and solrconfig uploaded, index reloaded.';

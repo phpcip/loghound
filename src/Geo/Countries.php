@@ -355,7 +355,7 @@ final class Countries
     private static function normalise(string $code): string
     {
         $cc = strtoupper(trim($code));
-        return preg_match('/^[A-Z]{2}$/', $cc) === 1 ? $cc : '';
+        return preg_match('/^[A-Z]{2}$/D', $cc) === 1 ? $cc : '';
     }
 
     /** One codepoint as UTF-8, without needing the intl extension. */

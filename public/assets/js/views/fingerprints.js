@@ -20,7 +20,7 @@ import {
     api, byId, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, shortHash, when
 } from '../core.js';
 import { sparkline, tokens } from '../charts.js';
-import { clientNode, countryNode, dimValue } from '../identity.js';
+import { clientNode, countryNode, dimValue, verdictChip } from '../identity.js';
 import { markSortable } from '../sorttable.js';
 
 /** Rows currently expanded, so a re-sort can leave them open. */
@@ -32,14 +32,6 @@ function hashNode(hash) {
         el('span', { class: 'fp-head', text: shortHash(hash, 12) }),
         el('span', { class: 'fp-tail', text: String(hash).slice(12, 20) })
     ]);
-}
-
-/** Verdict chip with the shared verdict colouring. */
-function verdictChip(verdict) {
-    return el('span', {
-        class: 'chip v-' + String(verdict || 'unknown'),
-        text: verdict || 'unknown'
-    });
 }
 
 /**
@@ -79,7 +71,6 @@ function clusterRow(row, sparkBuckets) {
     const tr = el('tr', {
         class: 'row-link' + (row.fleet ? ' fleet' : ''),
         tabindex: '0',
-        role: 'button',
         title: 'Open everything known about this fingerprint',
         dataset: { fp: row.fp, lhOpen: 'dim', field: 'fp_hash_s', value: row.fp }
     });
@@ -130,7 +121,13 @@ function clusterRow(row, sparkBuckets) {
     tr.appendChild(el('td', { class: 'clip', 'data-sort': row.avg_score === null ? '' : String(row.avg_score) }, [
         el('div', { class: 'clip-line' }, [
             verdictChip(row.verdict),
-            row.declared ? el('span', { class: 'chip chip-good', text: 'declared' }) : null
+            row.declared
+                ? el('span', {
+                    class: 'chip chip-good',
+                    title: 'Every address in this cluster identified itself in the User-Agent, and the claim checked out.',
+                    text: 'Declared'
+                })
+                : null
         ]),
         el('div', {
             class: 'sub mono',
@@ -142,7 +139,15 @@ function clusterRow(row, sparkBuckets) {
     return tr;
 }
 
-/** Expand or collapse a cluster's member list. */
+/**
+ * Expand or collapse a cluster's member list.
+ *
+ * `expanded` is cleared whenever the rows are re-fetched, because loadClusters() replaces the
+ * whole tbody and never rebuilds the `<tr class="members">` beneath a row. Without that, a
+ * fingerprint that was open before a failed load came back marked `aria-expanded="true"` with a
+ * "−" on it, over content that no longer existed. The two sort controls cleared it; the card's
+ * own Retry did not, because that path goes through core.js and knows nothing about this Set.
+ */
 async function toggle(tr, row) {
     const next = tr.nextElementSibling;
     const button = tr.querySelector('.expander');
@@ -160,7 +165,7 @@ async function toggle(tr, row) {
     button.setAttribute('aria-expanded', 'true');
 
     const holder = el('tr', { class: 'members' }, [
-        el('td', { colspan: '10' }, [
+        el('td', { colspan: '7' }, [
             el('div', { class: 'members-inner' }, [el('p', { class: 'muted', text: 'Loading addresses…' })])
         ])
     ]);
@@ -171,7 +176,24 @@ async function toggle(tr, row) {
         const data = await api('fingerprints', 'members', { fp: row.fp });
         renderMembers(inner, data);
     } catch (err) {
-        inner.replaceChildren(el('p', { class: 'muted', text: 'Could not load addresses: ' + err.message }));
+        /* A RETRY IN PLACE. The expander is left reading "−", so pressing it again COLLAPSES
+           the row rather than retrying it — the reader has to collapse and re-expand, and the
+           control gives them no reason to think that would help. */
+        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        again.addEventListener('click', () => {
+            again.disabled = true;
+            inner.replaceChildren(el('p', { class: 'muted', text: 'Loading addresses\u2026' }));
+            api('fingerprints', 'members', { fp: row.fp })
+                .then((data) => renderMembers(inner, data))
+                .catch((e) => inner.replaceChildren(
+                    el('p', { class: 'muted', text: 'Could not load addresses: ' + e.message }),
+                    el('div', { class: 'card-error-actions' }, [again])
+                ));
+        });
+        inner.replaceChildren(
+            el('p', { class: 'muted', text: 'Could not load addresses: ' + err.message }),
+            el('div', { class: 'card-error-actions' }, [again])
+        );
     }
 }
 
@@ -192,12 +214,15 @@ function renderMembers(inner, data) {
     ]);
 
     const table = el('table', { class: 'tight table-fixed' }, [
+        /* ONE UNIT, AND THEY SUM TO 100 — see the same fix in detail.js. This one was 110ch
+           of fixed columns with a width-less <col> for Organisation inside a 680px table, and
+           every column in it measured 0px wide. */
         el('colgroup', {}, [
-            el('col', { style: 'width:16ch' }), el('col', { style: 'width:15ch' }),
-            el('col', { style: 'width:9ch' }), el('col'), el('col', { style: 'width:18ch' }),
-            el('col', { style: 'width:10ch' }), el('col', { style: 'width:16ch' }),
-            el('col', { style: 'width:7ch' }), el('col', { style: 'width:6ch' }),
-            el('col', { style: 'width:13ch' })
+            el('col', { style: 'width:14%' }), el('col', { style: 'width:13%' }),
+            el('col', { style: 'width:7%' }), el('col', { style: 'width:16%' }),
+            el('col', { style: 'width:13%' }), el('col', { style: 'width:8%' }),
+            el('col', { style: 'width:10%' }), el('col', { style: 'width:6%' }),
+            el('col', { style: 'width:5%' }), el('col', { style: 'width:8%' })
         ]),
         el('thead', {}, [
             el('tr', {}, [
@@ -220,8 +245,7 @@ function renderMembers(inner, data) {
         body.appendChild(el('tr', {
             class: 'row-link',
             tabindex: '0',
-            role: 'button',
-            title: 'Open everything known about this address',
+                title: 'Open everything known about this address',
             dataset: { lhOpen: 'dim', field: 'ip_s', value: m.ip }
         }, [
             el('td', { class: 'mono nowrap', 'data-sort': m.ip || '' }, [dimValue('ip_s', m.ip, { mono: true })]),
@@ -273,6 +297,11 @@ function renderMembers(inner, data) {
  * request and shows its own progress while it does.
  */
 function loadClusters() {
+    /* THE OPEN SET IS CLEARED HERE, not at each caller. This replaces the whole tbody and never
+       rebuilds the member rows under it, so any fingerprint still marked open would come back
+       with "−" and `aria-expanded="true"` over content that does not exist. The two sort
+       handlers cleared it by hand; the card's own Retry, which goes through core.js, could not. */
+    expanded.clear();
     return loadCard('fp-table', 'Building fingerprint clusters', async () => {
         const table = byId('fp-table-el');
         const sort = byId('fp-sort');
@@ -318,10 +347,10 @@ export default function init() {
     const sort = byId('fp-sort');
     const min = byId('fp-min');
     if (sort) {
-        sort.addEventListener('change', () => { expanded.clear(); loadClusters(); });
+        sort.addEventListener('change', () => loadClusters());
     }
     if (min) {
-        min.addEventListener('change', () => { expanded.clear(); loadClusters(); });
+        min.addEventListener('change', () => loadClusters());
     }
     document.addEventListener('lh:theme', () => {
         const t = tokens();

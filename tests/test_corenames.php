@@ -209,7 +209,15 @@ return [
     'config rejects an unset or duplicated core name' => static function (): bool {
         $cfg = Config::load('/nonexistent/loghound.php');
         $errors = implode(' | ', $cfg->validate());
-        if (strpos($errors, 'run bin/loghound-setup') === false) {
+        /*
+         * The wizard is named by its ABSOLUTE path, and this assertion says so on purpose.
+         * These messages are read over SSH and in a journal, where a relative
+         * `bin/loghound-setup` is a command that works from exactly one directory — and on a
+         * machine with two checkouts it configures the wrong installation without saying so.
+         */
+        if (strpos($errors, $cfg->setupCommand()) === false
+            || !str_starts_with($cfg->setupCommand(), '/')
+            || str_contains($cfg->setupCommand(), '//')) {
             throw new \RuntimeException('Empty core names should point at the setup wizard: ' . $errors);
         }
 

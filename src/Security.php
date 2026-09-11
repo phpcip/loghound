@@ -438,7 +438,7 @@ final class Security
      */
     public static function isSafeFieldName(string $field): bool
     {
-        return (bool) preg_match('/^[A-Za-z0-9_]{1,64}$/', $field);
+        return (bool) preg_match('/^[A-Za-z0-9_]{1,64}$/D', $field);
     }
 
     /**
@@ -446,7 +446,7 @@ final class Security
      */
     public static function isSafeCoreName(string $core): bool
     {
-        return (bool) preg_match('/^[A-Za-z0-9_]{1,64}$/', $core);
+        return (bool) preg_match('/^[A-Za-z0-9_]{1,64}$/D', $core);
     }
 
     /**
@@ -483,7 +483,7 @@ final class Security
         if (strlen($pattern) > 4096) {
             return 'Pattern is too long (max 4096 bytes).';
         }
-        if (!preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/s', $pattern)) {
+        if (!preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/sD', $pattern)) {
             return 'Pattern must be a delimited regex, e.g. /^(?<ip>\S+) .../';
         }
 
@@ -650,6 +650,12 @@ final class Security
         session_regenerate_id(true);
 
         self::clearPending();
+
+        /* An enrollment or an uncollected set of recovery codes that has outlived its TTL goes
+           here too. sweepEphemeral() used to run only on the already-signed-in branch of
+           authenticateSession(), so a session re-established from a persistent-login token
+           carried whatever the previous one had been holding into the new one unswept. */
+        TwoFactor::sweepEphemeral();
 
         $now = time();
         $_SESSION[self::S_USER]     = $user;
@@ -1012,7 +1018,8 @@ final class Security
             header('Content-Type: text/plain; charset=utf-8');
             exit(
                 "Loghound has not finished being set up, so it has no way to sign you in.\n" .
-                "Open this site in a browser to finish setup, or run bin/loghound-setup on the server.\n"
+                "Open this site in a browser to finish setup, or run this on the server:\n" .
+                '  ' . dirname(__DIR__) . "/bin/loghound-setup\n"
             );
         }
 
@@ -1021,20 +1028,31 @@ final class Security
             http_response_code(429);
             header('Retry-After: ' . max(1, $result['retry']));
             header('Content-Type: text/plain; charset=utf-8');
+            /* THE ABSOLUTE PATH IS LOGGED, NOT PRINTED. This response is reachable with no
+               credentials at all — eight wrong passwords — and it used to hand an anonymous
+               prober the deployment root, the directory layout and whether the install is a
+               symlinked deploy. That is reconnaissance that turns a later file-handling bug
+               into an exploit. The operator, who can read the error log, still gets the path. */
+            error_log('Loghound: sign-in lockout in force; clear it by deleting ' . self::ledgerPath($varDir));
             exit(
                 "Too many failed sign-in attempts from your address.\n" .
                 'Try again in ' . $minutes . " minute(s).\n" .
-                'To clear it now, delete ' . self::ledgerPath($varDir) . " on the server.\n"
+                'To clear it now, delete var/' . self::LOGIN_LEDGER . " inside your Loghound\n" .
+                "installation; the server error log names its full path.\n"
             );
         }
 
         if ($state === 'store') {
             http_response_code(503);
             header('Content-Type: text/plain; charset=utf-8');
+            error_log(
+                'Loghound: cannot write the sign-in attempt ledger in '
+                . dirname(self::ledgerPath($varDir)) . '; refusing every sign-in until it is writable.'
+            );
             exit(
-                "Loghound cannot record failed sign-in attempts, because it cannot write to\n" .
-                dirname(self::ledgerPath($varDir)) . ". It refuses to sign anyone in rather than\n" .
-                "skip the check. Give that directory to the user this panel runs as.\n"
+                "Loghound cannot record failed sign-in attempts, because it cannot write to its\n" .
+                "var/ directory. It refuses to sign anyone in rather than skip the check. Give that\n" .
+                "directory to the user this panel runs as; the server error log names it.\n"
             );
         }
 
@@ -1256,6 +1274,207 @@ final class Security
         header('X-Frame-Options: DENY');
         header('Cross-Origin-Opener-Policy: same-origin');
         header('Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()');
+    }
+
+    /**
+     * Write a file that is never readable by anyone but its owner's group, at any instant.
+     *
+     * THE ORDERING IS THE WHOLE POINT. `file_put_contents()` creates with `0666 & ~umask` —
+     * 0644 on a default umask, 0666 on an FPM pool that sets none — and the ENTIRE payload is
+     * on disk before a following chmod() narrows it. Both call sites that used that shape write
+     * operator data: `var/detect.json` holds up to five raw sample log lines per source, which
+     * is full request paths, query strings, User-Agents and client addresses, and
+     * `var/schema-check.json` holds control-plane messages. On a shared host the race is won by
+     * spinning on open().
+     *
+     * So: a fresh temp name opened with `x` (O_CREAT|O_EXCL, which no symlink can satisfy),
+     * chmod BEFORE the first byte, then an atomic rename over the target. Config::save() and
+     * Setup\Token::ensure() already write this way; these two did not.
+     *
+     * @return bool Whether the file is now on disk with the intended contents.
+     */
+    public static function writePrivateFile(string $path, string $contents, int $mode = 0640): bool
+    {
+        $dir = dirname($path);
+        if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
+            return false;
+        }
+
+        $tmp = $dir . '/.' . basename($path) . '.' . bin2hex(random_bytes(6)) . '.tmp';
+        $fh = @fopen($tmp, 'xb');
+        if ($fh === false) {
+            return false;
+        }
+        @chmod($tmp, $mode);
+
+        $written = fwrite($fh, $contents);
+        fflush($fh);
+        fclose($fh);
+
+        if ($written === false || $written !== strlen($contents) || !@rename($tmp, $path)) {
+            @unlink($tmp);
+            return false;
+        }
+        @chmod($path, $mode);
+        return true;
+    }
+
+    /**
+     * Does this hostname resolve to somewhere on the public internet, and only there?
+     *
+     * THE CHECK THAT DECIDES WHERE A CREDENTIAL IS SENT. Two configuration values name an
+     * outbound host that receives the Opensolr account email and API key on every call —
+     * `opensolr.api_base` and `enrich.geo_endpoint` — and neither was checked at all.
+     * `https://127.0.0.1/…`, `https://[::1]/…`, `https://169.254.169.254/…` or any internal
+     * name was accepted, which is a credential-exfiltration and cloud-metadata primitive out
+     * of one config line.
+     *
+     * THREE REFUSALS, CHEAPEST FIRST, AND ONE HONEST LIMIT.
+     *
+     *   1. A literal address must be public. This is the attack shape that matters and it
+     *      needs no resolver: loopback, link-local, and every reserved range are refused.
+     *   2. A name that cannot BE public is refused on its spelling: `localhost`, any
+     *      single-label name, and the reserved local suffixes.
+     *   3. When a resolver answers, EVERY address it returns must be public — not merely the
+     *      first, because a name with one public and one loopback record would otherwise
+     *      connect to whichever the resolver handed curl. The verdict is memoised, so this
+     *      costs one lookup per host for the life of the process.
+     *
+     * THE LIMIT, STATED RATHER THAN GLOSSED: when no resolver answers — an air-gapped box, the
+     * test suite, a name that does not exist — step 3 cannot run and the name is allowed through
+     * on the strength of steps 1 and 2. Refusing instead would make an offline installation fail
+     * closed on a value that is read from a file only the operator writes.
+     *
+     * Redirects cannot reintroduce any of this: Solr::curlTransport sets CURLOPT_FOLLOWLOCATION
+     * to false and pins CURLOPT_PROTOCOLS, so there is no per-hop revalidation to do.
+     */
+    public static function hostIsPublic(string $host): bool
+    {
+        static $memo = [];
+
+        $host = strtolower(trim($host, " \t[]"));
+        if ($host === '' || strlen($host) > 253) {
+            return false;
+        }
+        if (isset($memo[$host])) {
+            return $memo[$host];
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return $memo[$host] = (filter_var(
+                $host,
+                FILTER_VALIDATE_IP,
+                FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+            ) !== false);
+        }
+
+        if (!preg_match('/^[a-z0-9]([a-z0-9\-._]{0,251}[a-z0-9])?$/D', $host)) {
+            return $memo[$host] = false;
+        }
+        if (!str_contains($host, '.')) {
+            return $memo[$host] = false;
+        }
+        foreach (['.localhost', '.local', '.internal', '.intranet', '.home.arpa'] as $suffix) {
+            if (str_ends_with($host, $suffix)) {
+                return $memo[$host] = false;
+            }
+        }
+
+        foreach ([DNS_A, DNS_AAAA] as $type) {
+            $records = @dns_get_record($host, $type);
+            foreach (is_array($records) ? $records : [] as $record) {
+                $value = (string) ($record['ip'] ?? ($record['ipv6'] ?? ''));
+                if ($value !== '' && filter_var(
+                    $value,
+                    FILTER_VALIDATE_IP,
+                    FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+                ) === false) {
+                    return $memo[$host] = false;
+                }
+            }
+        }
+
+        return $memo[$host] = true;
+    }
+
+    /**
+     * Is this an https URL pointing at a public host, with no credentials of its own?
+     *
+     * The shape every outbound base URL in this project has to have. Returns the trimmed URL
+     * or null, so a caller can fail closed in one line.
+     */
+    public static function safeOutboundUrl(string $url): ?string
+    {
+        $url = trim($url);
+        if ($url === '' || strlen($url) > 2048) {
+            return null;
+        }
+        if (preg_match('/[\x00-\x20\x7F"\'<>]/', $url)) {
+            return null;
+        }
+
+        $parts = parse_url($url);
+        if (!is_array($parts)) {
+            return null;
+        }
+        if (strtolower((string) ($parts['scheme'] ?? '')) !== 'https') {
+            return null;
+        }
+        $host = (string) ($parts['host'] ?? '');
+        if ($host === '' || isset($parts['user']) || isset($parts['pass'])) {
+            return null;
+        }
+        return self::hostIsPublic($host) ? $url : null;
+    }
+
+    /**
+     * Did this request really arrive over TLS?
+     *
+     * TWO WAYS THE OLD EXPRESSION — `($_SERVER['HTTPS'] ?? '') !== ''` — WAS WRONG, and both
+     * of them decide whether a bearer credential is marked `Secure`.
+     *
+     *   It said NO on a request that was HTTPS. This project supports reverse-proxied
+     *   deployments and honours `X-Forwarded-For` from `trusted_proxies`, but nothing read
+     *   `X-Forwarded-Proto`. With TLS terminating at a load balancer or Cloudflare and the
+     *   origin listening on plain HTTP, `$_SERVER['HTTPS']` is unset — so the ten-year
+     *   "stay signed in" token, which grants a full panel session with no timeout, was issued
+     *   WITHOUT `Secure` and would travel in cleartext on any `http://` request to the same
+     *   host that an attacker could induce.
+     *
+     *   It said YES on a request that was not. Under IIS and some SAPIs `$_SERVER['HTTPS']`
+     *   is the literal string `'off'` over plain HTTP, and `'off' !== ''`. The cookie then
+     *   carries `Secure` on a plain-HTTP install, the browser never sends it back, and the
+     *   feature silently does not work.
+     *
+     * The forwarded header is believed ONLY when the immediate peer is a proxy the operator
+     * configured, on exactly the reasoning clientIp() uses: otherwise any visitor could assert
+     * `X-Forwarded-Proto: https` and change how a cookie is marked.
+     *
+     * @param string[] $trustedProxies CIDRs whose forwarded headers may be believed.
+     */
+    public static function isHttps(array $trustedProxies = []): bool
+    {
+        $https = strtolower((string) ($_SERVER['HTTPS'] ?? ''));
+        if ($https !== '' && $https !== 'off' && $https !== '0') {
+            return true;
+        }
+        if ((int) ($_SERVER['SERVER_PORT'] ?? 0) === 443) {
+            return true;
+        }
+
+        $remote = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+        if ($remote === '' || !self::ipInAny($remote, $trustedProxies)) {
+            return false;
+        }
+
+        $proto = strtolower(trim((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')));
+        if ($proto !== '') {
+            $first = trim((string) (explode(',', $proto)[0] ?? ''));
+            return $first === 'https';
+        }
+
+        $ssl = strtolower((string) ($_SERVER['HTTP_X_FORWARDED_SSL'] ?? ''));
+        return $ssl === 'on';
     }
 
     /**

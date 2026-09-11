@@ -252,13 +252,21 @@ final class Hosts extends Controller
         self::skeleton('hosts-table', 'rows', 0, 'Grouping sessions by virtual host');
 
         echo '<div class="table-wrap"><table id="hosts-table-table" class="table-fixed"><colgroup>'
-            . '<col style="width:22%"><col style="width:11%"><col style="width:11%">'
-            . '<col style="width:11%"><col style="width:11%"><col style="width:11%">'
-            . '<col style="width:11%"><col style="width:12%">'
+            /* THE UNKNOWN COLUMN IS HERE BECAUSE THE CAPTION CLAIMS THE ROW ADDS UP. Four of
+               the five populations were on screen and the caption said "the five populations
+               are mutually exclusive, so they add up to the session count on each row" — a sum
+               the reader could try and would find did not hold, because the fifth was missing.
+               `unknown` is a finding in this product and not an absence: a session that was
+               scored and did not reach a verdict either way. Printing it is what makes the
+               arithmetic on the row checkable. */
+            . '<col style="width:20%"><col style="width:10%"><col style="width:10%">'
+            . '<col style="width:10%"><col style="width:10%"><col style="width:10%">'
+            . '<col style="width:10%"><col style="width:10%"><col style="width:10%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Host</th>'
             . '<th scope="col" class="num">Sessions</th>'
             . '<th scope="col" class="num">Humans</th>'
+            . '<th scope="col" class="num">Unknown</th>'
             . '<th scope="col" class="num">Evasive</th>'
             . '<th scope="col" class="num">AI crawlers</th>'
             . '<th scope="col" class="num">Declared</th>'

@@ -27,23 +27,8 @@
 import {
     api, byId, dayOnly, dec, el, fill, hideEmpty, loadCard, noDataYet, num, pct, timeOnly, when
 } from '../core.js';
-import { clientNode, countryNode, dimValue, drillRow, openButton } from '../identity.js';
+import { clientNode, countryNode, dimValue, drillRow, openButton, verdictChip } from '../identity.js';
 import { activeFilters, renderFacetPanel } from '../facets.js';
-
-/**
- * Verdict chip, the same colouring the whole panel uses.
- *
- * The chip is set in the body face, because a verdict is a word — "human", "likely_bot" — not
- * something whose characters have to line up or be copied exactly. The score sits beside it in
- * monospace with tabular figures, because that IS a number read down the column. One judgement,
- * one cell: the two were separate columns and neither was legible in the width it got.
- */
-function verdictChip(verdict) {
-    return el('span', {
-        class: 'chip v-' + String(verdict || 'unknown'),
-        text: verdict || 'unknown'
-    });
-}
 
 /**
  * The facet sidebar, rendered by the SHARED control.
@@ -99,11 +84,16 @@ function renderRows(data) {
     const body = table.tBodies[0];
     body.replaceChildren();
 
+    /* THE SLOT IS `se-results-empty`, which is what Controller::cardClose('se-results') emits.
+       It said `se-table-empty` — the id of the TABLE with `-empty` on it — so showEmpty() looked
+       for an element that does not exist, returned silently, and the busiest view in the panel
+       answered a filter that matched nothing with an empty table and no sentence at all.
+       MEASURED: `numFound: 0`, zero rows, both empty slots still hidden. */
     if (!data.docs.length) {
-        noDataYet('se-table-empty', 'sessions');
+        noDataYet('se-results-empty', 'sessions');
         return;
     }
-    hideEmpty('se-table-empty');
+    hideEmpty('se-results-empty');
 
     for (const doc of data.docs) {
         const tr = el('tr', drillRow('session', { id: doc.id }));
@@ -268,9 +258,15 @@ function loadFacets() {
 
         const count = byId('se-count');
         if (count) {
+            /* THE UNFILTERED BRANCH NAMES ITS POPULATION TOO. The filtered one was written for
+               exactly the reason the docblock above gives — a bare count reads as a total — and
+               the other branch was left as the word "matching" with nothing after it: "1,204
+               matching · 312 with beacon data". Matching what? Now: the range. */
             const filters = activeFilters().length;
             count.textContent = num(data.matched) +
-                (filters ? ' matching the ' + filters + ' active filter' + (filters === 1 ? '' : 's') : ' matching') +
+                (filters
+                    ? ' matching the ' + filters + ' active filter' + (filters === 1 ? '' : 's')
+                    : ' sessions in this range') +
                 ' · ' + num(data.beacon_count) + ' with beacon data (' + pct(data.beacon_count, data.matched) + ')';
         }
     });

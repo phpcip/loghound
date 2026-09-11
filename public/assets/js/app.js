@@ -11,7 +11,7 @@
 
 'use strict';
 
-import { boot, initCopyButtons, initTheme } from './core.js';
+import { boot, byId, initCopyButtons, initTheme } from './core.js';
 import { initCharts } from './charts.js';
 import { initDetail } from './detail.js';
 import { initFilterBar } from './facets.js';
@@ -86,8 +86,44 @@ function start() {
     if (typeof view === 'function') {
         Promise.resolve(view()).catch((err) => {
             window.console.error('[loghound] view "' + slug + '" failed to initialise:', err);
+            pageFailed(slug, err);
         });
     }
+}
+
+/**
+ * Say so, on the page, when a view could not start at all.
+ *
+ * WHAT THIS REPLACES. The rejection was written to the console and nothing else, so a throw
+ * anywhere in a view's init() — before any card had asked for its data — left every card on
+ * that page pulsing its loading skeleton forever, with the only evidence of what happened in a
+ * devtools panel the operator has no reason to open. "It has been loading for ten minutes" is
+ * not a failure mode a dashboard is allowed to have.
+ *
+ * Each card is taken out of its loading state so nothing is left pretending to be in flight,
+ * and the page-level slot carries the one sentence that explains all of them at once. Reload
+ * is the way forward: an init that threw has no partial state worth retrying around.
+ */
+function pageFailed(slug, err) {
+    for (const status of document.querySelectorAll('.card-status')) {
+        status.hidden = true;
+    }
+    for (const skel of document.querySelectorAll('.skel-rows')) {
+        skel.remove();
+    }
+
+    const banner = byId('lh-conn');
+    const detail = byId('lh-conn-detail');
+    if (!banner || !detail) {
+        return;
+    }
+    const heading = banner.querySelector('strong');
+    if (heading) {
+        heading.textContent = 'This page could not start.';
+    }
+    detail.textContent = 'Nothing on it loaded, because the ' + slug + ' view failed before it asked for any data: '
+        + String(err && err.message ? err.message : err) + ' Reloading the page is the only way to retry.';
+    banner.hidden = false;
 }
 
 if (document.readyState === 'loading') {

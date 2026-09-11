@@ -275,6 +275,30 @@ export function dimValue(field, value, opts) {
 }
 
 /**
+ * The verdict chip, in words, coloured the same way wherever it appears.
+ *
+ * THERE WERE THREE OF THESE, and all three printed the stored slug. The session table, the
+ * fingerprint table and the visitor dialog each carried a byte-identical local copy whose text
+ * was `verdict || 'unknown'` — so `likely_human` was rendered as chip text on two views, which
+ * is the one thing valueText() exists to stop and what this file's own header calls the rule
+ * that is never bent. There is one of them now and it goes through the vocabulary.
+ *
+ * The CLASS still carries the slug, because that is what the palette keys off
+ * (`.chip.v-likely_human`), and a class name is not user-visible text. The `why` sentence from
+ * the vocabulary becomes the title, so the chip explains itself on hover as every other
+ * vocabulary value in the panel does.
+ */
+export function verdictChip(verdict) {
+    const raw = verdict === null || verdict === undefined || verdict === '' ? 'unknown' : String(verdict);
+    const spoken = valueWords('bot_verdict_s', raw);
+    return el('span', {
+        class: 'chip v-' + raw,
+        title: spoken && spoken.why ? spoken.why : null,
+        text: valueText('bot_verdict_s', raw)
+    });
+}
+
+/**
  * A country: the flag, then the country's full name, as a filter control.
  *
  * ALWAYS THE NAME, NEVER THE BARE CODE. A sidebar reading `US BR RU IN RO KE PT SC TR VE ZA AE`
@@ -379,9 +403,19 @@ export function networkNode(doc) {
 /**
  * The attributes that make a table row open a detail dialog.
  *
- * Spread into el('tr', …). `tabindex` and the button role are what make it reachable and
- * announced; dialog.js's delegated listener does the rest, so a table replaced by a fetch
- * needs no re-wiring.
+ * Spread into el('tr', …). `tabindex` is what makes it reachable; dialog.js's delegated
+ * listener does the rest, so a table replaced by a fetch needs no re-wiring.
+ *
+ * NO `role="button"` ON A `<tr>`, and that is not a style preference. It did two things at once,
+ * both bad. A row that is not a `row` leaves its `<tbody>` holding a child that is not one, so
+ * the table's structure is invalid and `<th scope="col">` stops associating with the cells
+ * beneath it. Worse, `button` takes PRESENTATIONAL CHILDREN: every descendant is stripped from
+ * the accessibility tree — so the filter links in each cell, the explicit row opener at the end
+ * and the expander inside the fingerprint rows all disappeared for a screen-reader user, which
+ * is precisely the set of controls this file exists to make consistent. The row keeps its
+ * tabindex and gains a real accessible name instead; Enter and Space still activate it through
+ * the same delegated handler, because that handler matches on the data attribute and not on a
+ * role.
  *
  * @param {string} kind  Subject kind a view registered an opener for.
  * @param {Object} data  Extra data- attributes the opener needs, without the lh prefix.
@@ -396,9 +430,9 @@ export function drillRow(kind, data) {
     return {
         class: 'row-link',
         tabindex: '0',
-        role: 'button',
         dataset: dataset,
-        title: 'Open the full record'
+        title: 'Open the full record',
+        'aria-label': 'Open the full record'
     };
 }
 

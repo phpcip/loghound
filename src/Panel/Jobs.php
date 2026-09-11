@@ -90,7 +90,7 @@ final class Jobs
     public function __construct(Config $cfg, Gateway $gw, array $extraPlans = [])
     {
         foreach (array_keys($extraPlans) as $kind) {
-            if (!is_string($kind) || !preg_match('/^[a-z][a-z0-9_]{2,31}$/', $kind)) {
+            if (!is_string($kind) || !preg_match('/^[a-z][a-z0-9_]{2,31}$/D', $kind)) {
                 throw new \RuntimeException('Job kind is not a valid identifier.');
             }
             if (in_array($kind, self::KINDS, true)) {
@@ -310,7 +310,7 @@ final class Jobs
         }
         $clean = [];
         foreach ($params as $key => $value) {
-            if (!is_string($key) || !preg_match('/^[a-z][a-z0-9_]{0,31}$/', $key)) {
+            if (!is_string($key) || !preg_match('/^[a-z][a-z0-9_]{0,31}$/D', $key)) {
                 return null;
             }
             if ($value !== null && !is_scalar($value)) {
@@ -928,11 +928,24 @@ final class Jobs
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $days = (int) $cfg->get('privacy.retention_days', 0);
                     if ($days <= 0) {
+                        /* THE OTHER RULE IS STILL ON, AND ON A DEFAULT INSTALL IT IS. This step
+                           used to answer "Retention is 0, so nothing is ever deleted", which is
+                           false whenever the rolling disk trim is enabled — the default. It is
+                           the same sentence Settings::keepHeadline() was corrected for, and the
+                           correction never reached this copy of it. What is true is narrower:
+                           there is no AGE limit, so this preview, which previews the age limit,
+                           has nothing to count. */
+                        $rolling = $cfg->get('quota.enabled', true) !== false;
                         return [
                             'ok'     => true,
                             'stop'   => true,
-                            'note'   => 'disabled',
-                            'detail' => 'Retention is 0, so nothing is ever deleted and there is nothing to preview.',
+                            'note'   => 'no age limit',
+                            'detail' => 'No age limit is set, so there is nothing for this preview to count. '
+                                . ($rolling
+                                    ? 'Data is still deleted when an index runs out of its plan\'s disk, oldest '
+                                      . 'first — that rule is separate and it is on.'
+                                    : 'The rolling disk trim is off as well, so nothing is deleted for either '
+                                      . 'reason and an index can reach its plan quota and be blocked.'),
                         ];
                     }
                     return [
@@ -963,13 +976,27 @@ final class Jobs
                         'ok'     => true,
                         'note'   => number_format($total) . ' docs',
                         'detail' => $total === 0
-                            ? 'Nothing is past retention. The index is already within policy.'
-                            : number_format($total) . ' documents would be removed. The panel does not delete: run '
-                              . 'bin/loghound-retention, or enable loghound-retention.timer, to apply it.',
+                            ? 'Nothing is past the age limit. Both indexes are already within it.'
+                            : number_format($total) . ' documents are past the age limit. The panel does not '
+                              . 'delete: run ' . self::binPath('loghound-retention') . ', or enable '
+                              . 'loghound-retention.timer, to apply it.',
                     ];
                 },
             ],
         ];
+    }
+
+    /**
+     * The absolute path to one of the shipped commands.
+     *
+     * ALWAYS ABSOLUTE. An operator reading "run bin/loghound-retention" is on a shell somewhere
+     * else on the machine, so a relative path is a command that either fails or — worse, on a
+     * box with two checkouts — runs the wrong one. The rule is already stated in Settings and
+     * honoured by every command block there; this is the one place that had not caught up.
+     */
+    private static function binPath(string $command): string
+    {
+        return dirname(__DIR__, 2) . '/bin/' . $command;
     }
 
     /**
@@ -1067,6 +1094,6 @@ final class Jobs
      */
     public static function isJobId(string $id): bool
     {
-        return (bool) preg_match('/^[a-f0-9]{24}$/', $id);
+        return (bool) preg_match('/^[a-f0-9]{24}$/D', $id);
     }
 }

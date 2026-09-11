@@ -97,14 +97,26 @@ function stateOf(job) {
  * bound because the distribution is bucketed, and it is rendered with a "≤" to say so.
  */
 function shapeP95(row, edges) {
-    if (!row.timed || !edges.length) {
-        return '—';
-    }
-    const value = histPercentile(row.hist, edges, 0.95);
+    const value = shapeP95Value(row, edges);
     if (value === null) {
         return '—';
     }
     return value === Infinity ? '> ' + dur(edges[edges.length - 1]) : '≤ ' + dur(value);
+}
+
+/**
+ * The same figure as a number, for the column's sort key.
+ *
+ * "≤ 1.2 s" and "> 5.0 s" cannot be compared as strings and cannot be parsed back without
+ * guessing at the format, which is the case core.js's `sort` descriptor exists for. Infinity
+ * is kept rather than clamped: the over-the-top bucket genuinely IS the largest value, and it
+ * sorts as such through Number().
+ */
+function shapeP95Value(row, edges) {
+    if (!row.timed || !edges.length) {
+        return null;
+    }
+    return histPercentile(row.hist, edges, 0.95);
 }
 
 /**
@@ -364,13 +376,17 @@ function renderShapes(state, order, running) {
         attrs: { dataset: { row: String(index) } },
         cells: [
             expanderCell(),
-            { node: shapeNode(row.label), clip: true, title: row.label },
-            { text: num(row.count), num: true },
-            { text: row.zero ? num(row.zero) : '—', num: true },
-            { node: shareBar(row.zero, row.count) },
-            { text: row.mean === null ? '—' : dur(row.mean), num: true },
-            { text: shapeP95(row, state.edges), num: true },
-            { text: row.qmax === null ? '—' : dur(row.qmax), num: true }
+            { node: shapeNode(row.label), clip: true, title: row.label, sort: row.label },
+            { text: num(row.count), num: true, sort: row.count },
+            { text: row.zero ? num(row.zero) : '—', num: true, sort: row.zero || 0 },
+            { node: shareBar(row.zero, row.count), sort: row.count ? (row.zero || 0) / row.count : 0 },
+            { text: row.mean === null ? '—' : dur(row.mean), num: true, sort: row.mean === null ? '' : row.mean },
+            {
+                text: shapeP95(row, state.edges),
+                num: true,
+                sort: shapeP95Value(row, state.edges) === null ? '' : shapeP95Value(row, state.edges)
+            },
+            { text: row.qmax === null ? '—' : dur(row.qmax), num: true, sort: row.qmax === null ? '' : row.qmax }
         ]
     })));
 
@@ -392,12 +408,30 @@ function renderZero(state, running) {
         handleState('qy-zero-empty', { state: 'unreachable', note: state.note }, 'empty responses');
         return;
     }
+    /* SCANNED NOTHING IS NOT A CLEAN BILL OF HEALTH. This branch fires when the scan read ZERO
+       requests, and it announced "every request this index answered matched at least one
+       document" — a finding derived from having looked at nothing. The card beside it reports
+       the same condition honestly as "No requests in this time range", so the two sat next to
+       each other saying opposite things. Zero scanned and zero empty among some scanned are
+       different states and now read differently. */
     if (!state.scanned) {
         tbody(table, []);
         if (!running) {
+            showEmpty('qy-zero-empty', 'Nothing was scanned', [
+                'No request was read for this index in the selected range, so nothing has been checked '
+                    + 'for empty responses. This card can say nothing about them either way.',
+                'Widen the time range, or pick an index that is being queried.'
+            ]);
+        }
+        return;
+    }
+
+    if (!rankShapes(state.shapes, 'count').length) {
+        tbody(table, []);
+        if (!running) {
             showEmpty('qy-zero-empty', 'Nothing came back empty', [
-                'Every request this index answered in the selected range matched at least one document. ' +
-                    'That is the state you want this card to be in.'
+                'All ' + num(state.scanned) + ' requests read for this index in the selected range matched '
+                    + 'at least one document. That is the state you want this card to be in.'
             ]);
         }
         return;
@@ -411,10 +445,10 @@ function renderZero(state, running) {
         attrs: { dataset: { row: String(index) } },
         cells: [
             expanderCell(),
-            { node: shapeNode(row.label), clip: true, title: row.label },
-            { text: num(row.count), num: true },
-            { node: shareBar(row.count, state.scanned) },
-            { text: row.mean === null ? '—' : dur(row.mean), num: true }
+            { node: shapeNode(row.label), clip: true, title: row.label, sort: row.label },
+            { text: num(row.count), num: true, sort: row.count },
+            { node: shareBar(row.count, state.scanned), sort: state.scanned ? row.count / state.scanned : 0 },
+            { text: row.mean === null ? '—' : dur(row.mean), num: true, sort: row.mean === null ? '' : row.mean }
         ]
     })));
 

@@ -121,7 +121,7 @@ try {
 }
 
 $installId = (string) $cfg->get('solr.install_id', '');
-$installId = preg_match('/^[a-f0-9]{4,32}$/', $installId) === 1 ? $installId : '';
+$installId = preg_match('/^[a-f0-9]{4,32}$/D', $installId) === 1 ? $installId : '';
 
 $failed = false;
 

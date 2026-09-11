@@ -113,7 +113,7 @@ function lh_cred_transport(array &$calls, string $goodKey, array $held = []): ca
  */
 function lh_cred_post(Config $cfg, string $root, array $fields): string
 {
-    $_POST = ['action' => 'opensolr_credentials'] + $fields;
+    $_POST = ['action' => 'opensolr_credentials', 'csrf' => lh_csrf()] + $fields;
     $_SERVER['REQUEST_METHOD'] = 'POST';
 
     $settings = new Settings($cfg, new Gateway($cfg, null, false));

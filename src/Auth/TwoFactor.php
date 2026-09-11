@@ -227,7 +227,7 @@ final class TwoFactor
      */
     public static function looksLikeRecoveryCode(string $code): bool
     {
-        return (bool) preg_match('/^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$/', $code)
+        return (bool) preg_match('/^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$/D', $code)
             && strlen(self::normalise($code)) === self::RECOVERY_LENGTH;
     }
 
@@ -292,6 +292,7 @@ final class TwoFactor
             'recovery' => self::hashAll($codes),
         ]);
 
+        self::clearSpent($varDir);
         Persistence::revokeAll($varDir);
 
         return ['errors' => [], 'codes' => $codes];
@@ -314,6 +315,8 @@ final class TwoFactor
         }
 
         $cfg->set('auth.totp', ['enabled' => false, 'secret' => '', 'recovery' => []]);
+
+        self::clearSpent($varDir);
         Persistence::revokeAll($varDir);
 
         return [];
@@ -324,13 +327,15 @@ final class TwoFactor
      *
      * @return string[] The plaintext codes, to be shown once.
      */
-    public static function regenerate(Config $cfg): array
+    public static function regenerate(Config $cfg, ?string $varDir = null): array
     {
         $codes = self::mintRecoveryCodes();
 
         $totp = (array) $cfg->get('auth.totp', []);
         $totp['recovery'] = self::hashAll($codes);
         $cfg->set('auth.totp', $totp);
+
+        self::clearSpent($varDir ?? $cfg->varDir());
 
         return $codes;
     }
@@ -356,14 +361,14 @@ final class TwoFactor
 
         $trimmed = trim($code);
 
-        if (preg_match('/^[0-9\s]{6,8}$/', $trimmed)) {
+        if (preg_match('/^[0-9\s]{6,8}$/D', $trimmed)) {
             if (self::acceptStep(self::secret($auth), $trimmed, $varDir) !== null) {
                 return 'totp';
             }
             return 'no';
         }
 
-        return self::consumeRecoveryCode($cfg, $trimmed) ? 'recovery' : 'no';
+        return self::consumeRecoveryCode($cfg, $trimmed, $varDir) ? 'recovery' : 'no';
     }
 
     /**
@@ -378,7 +383,7 @@ final class TwoFactor
      */
     private static function acceptStep(string $secret, string $code, ?string $varDir): ?int
     {
-        if (!preg_match('/^[0-9\s]{6,8}$/', trim($code))) {
+        if (!preg_match('/^[0-9\s]{6,8}$/D', trim($code))) {
             return null;
         }
 
@@ -403,7 +408,7 @@ final class TwoFactor
      * Every stored hash is compared even after one matches, so the time taken does not reveal
      * which code was presented or how many are left.
      */
-    private static function consumeRecoveryCode(Config $cfg, string $code): bool
+    private static function consumeRecoveryCode(Config $cfg, string $code, ?string $varDir): bool
     {
         $normalised = self::normalise($code);
         if (strlen($normalised) !== self::RECOVERY_LENGTH) {
@@ -425,11 +430,97 @@ final class TwoFactor
             return false;
         }
 
+        if (!self::claimRecoveryHash($given, $varDir)) {
+            return false;
+        }
+
         unset($stored[$matched]);
         $totp['recovery'] = array_values($stored);
         $cfg->set('auth.totp', $totp);
 
         return true;
+    }
+
+    /**
+     * Claim one recovery hash as spent, durably and atomically, or refuse it.
+     *
+     * ============================================================================
+     * THE SPEND HAPPENS HERE AND NOT IN THE CONFIG, FOR THREE REASONS.
+     * ============================================================================
+     * Deleting the hash from `auth.totp.recovery` in memory was the whole of "a used recovery
+     * code is deleted, not marked", and it left the actual deletion to whoever happened to
+     * call Config::save() afterwards. Three ways that failed:
+     *
+     *   IT WAS OFTEN NEVER SAVED AT ALL. Panel\Settings::requireSecondFactor() validates the
+     *   factor FIRST and its callers then return on their own validation errors without ever
+     *   persisting — type the wrong confirmation word into the reinstall form, or submit a
+     *   password the policy refuses, and the recovery code you just spent is still live.
+     *   Reusable indefinitely, with the panel reporting one fewer than there really is.
+     *
+     *   IT WAS NOT ATOMIC. Config::save() is a lock-free whole-file write, so N parallel
+     *   requests each read the same snapshot, each matched the same code, and each signed in.
+     *   One "works once" code, N sessions, N persistent tokens.
+     *
+     *   IT COULD BE UNDONE. Two concurrent saves are last-writer-wins over the whole file, so
+     *   a save that started before the spend puts the consumed hash back on disk.
+     *
+     * Auth\Store is the mechanism the TOTP replay floor already uses for exactly this shape of
+     * problem — read, decide and write inside one LOCK_EX — and the spend belongs in it for
+     * exactly the same reason. The config list remains the ISSUED set, so recoveryRemaining()
+     * and the panel keep working unchanged; this store is the authority on what has been SPENT,
+     * and it is written before the caller is told the code was good.
+     *
+     * FAILS CLOSED. A store that cannot be written means the spend cannot be recorded, and a
+     * code that cannot be recorded as spent is not accepted — the same rule acceptStep() lives
+     * by one method above.
+     */
+    private static function claimRecoveryHash(string $hash, ?string $varDir): bool
+    {
+        $claimed = Store::at($varDir, self::STORE)->mutate(
+            static function (array &$data) use ($hash): bool {
+                $used = is_array($data['recovery_used'] ?? null) ? $data['recovery_used'] : [];
+
+                foreach ($used as $spent) {
+                    if (is_string($spent) && Security::equals($spent, $hash)) {
+                        return false;
+                    }
+                }
+
+                $used[] = $hash;
+                $data['recovery_used'] = array_slice(array_values($used), -self::MAX_SPENT);
+                return true;
+            }
+        );
+
+        return $claimed === true;
+    }
+
+    /**
+     * Spent-hash entries kept before the oldest are dropped.
+     *
+     * Only ever RECOVERY_CODES are live at a time and every regeneration clears the list, so
+     * the cap is a backstop against a store that was never cleared rather than a working
+     * limit. Evicting an entry can only forgive a code that is no longer issued anyway,
+     * because the issued list in the config is checked first.
+     */
+    private const MAX_SPENT = 100;
+
+    /**
+     * Forget every spent recovery hash.
+     *
+     * Called wherever a fresh set is issued or the factor is turned off, so the store does not
+     * carry the history of a set that no longer exists.
+     */
+    private static function clearSpent(?string $varDir): void
+    {
+        $store = Store::at($varDir, self::STORE);
+        if (!$store->exists()) {
+            return;
+        }
+        $store->mutate(static function (array &$data): bool {
+            unset($data['recovery_used']);
+            return true;
+        });
     }
 
     /**

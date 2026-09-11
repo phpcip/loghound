@@ -462,10 +462,16 @@ function setUpFacets() {
     button.appendChild(el('span', { class: 'lh-facetbtn-state' }));
     head.insertAdjacentElement('afterend', button);
 
-    const content = card.querySelector('.card-content');
-    if (content && content.id) {
-        button.setAttribute('aria-controls', content.id);
+    /* THE CONTROLLED ELEMENT IS THE ONE THAT ACTUALLY OPENS AND CLOSES. This pointed at
+       `.card-content`, a DESCENDANT of the region the handler toggles — the class goes on the
+       rail two levels up and the stylesheet hangs the visibility rules off that — and it was
+       set only `if (content && content.id)`, so a lookup that missed left no attribute at all
+       rather than falling back. The rail is given an id if it has none, so the reference is
+       always to something that exists. */
+    if (!rail.id) {
+        rail.id = 'lh-facet-rail';
     }
+    button.setAttribute('aria-controls', rail.id);
 
     button.addEventListener('click', () => {
         const open = rail.classList.toggle('is-open');
@@ -538,11 +544,18 @@ function setUpRail() {
         mirrorThemeTitle(toggle, label);
     }
 
+    /* A PRESSED TOGGLE, NOT A DISCLOSURE. The rail never HIDES the view list — it collapses the
+       labels so only the icons remain, and every link stays present and operable. Announcing
+       `aria-expanded="false"` therefore told a screen-reader user the navigation was closed
+       when it was fully available, which is the opposite of what they would find. `aria-pressed`
+       is what a two-state control that changes an appearance says.
+       `aria-controls` is gone with it: it was `(side.querySelector('ul') || {}).id ||
+       'lh-view-list'` — a literal fallback that, if setUpNav() had taken either of its early
+       returns, pointed at an element id that does not exist. */
     const button = el('button', {
         type: 'button',
         class: 'lh-railbtn',
-        'aria-expanded': 'false',
-        'aria-controls': (side.querySelector('ul') || {}).id || 'lh-view-list'
+        'aria-pressed': 'false'
     });
     button.appendChild(el('span', { class: 'lh-railbtn-mark', 'aria-hidden': 'true' }));
     button.appendChild(el('span', { class: 'lh-railbtn-label' }, 'Collapse'));
@@ -616,7 +629,7 @@ function applyRail(collapsed) {
     const button = document.querySelector('.lh-railbtn');
     document.documentElement.classList.toggle('lh-rail-collapsed', collapsed);
     if (button) {
-        button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        button.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
         button.setAttribute('title', collapsed ? 'Show the view names' : 'Collapse to icons');
         const label = button.querySelector('.lh-railbtn-label');
         if (label) {
@@ -774,6 +787,19 @@ function setUpSections() {
     openFromHash();
 
     window.addEventListener('hashchange', openFromHash);
+
+    /* A CARD THAT FAILS OPENS ITSELF. Cards fetch their data after this runs, so the trouble
+       check above only ever saw a page that had not loaded anything yet. A card that failed
+       while collapsed kept its error, its message and its retry button inside a region with
+       `display: none`: the operator saw a shut heading and no reason to open it. core.js
+       announces the failure; this is what acts on it. Not remembered — the card opening
+       because something broke is not the operator expressing a preference about it. */
+    document.addEventListener('lh:card-trouble', (event) => {
+        const id = event.detail && event.detail.id;
+        if (id) {
+            setCard(document.getElementById(id + '-card'), true);
+        }
+    });
 
     /* The section nav must OPEN what it jumps to. A nav that scrolls to a collapsed heading
        has moved the reader somewhere and shown them nothing. The listener is on the document

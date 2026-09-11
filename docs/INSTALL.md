@@ -794,9 +794,82 @@ counted in `MISSED ROTATIONS` rather than hidden.
 
 ```bash
 sudo ./install/install.sh --upgrade
+php ./bin/loghound-schema                # then this, every time
 ```
 
 Refreshes the code. `config/loghound.php` and `var/` are never touched.
+
+### The second line is not optional
+
+Your two indexes keep running the configset that was uploaded when they were created.
+A release that adds a field therefore ships code that writes a field the live schema does
+not declare — and the only dynamic field in either schema is `*` mapped to the `ignored`
+type, so **Solr accepts the document, discards that value, and answers 200**. Nothing
+raises an error: not the tailer, not the platform, not the panel. The first symptom is a
+facet that is permanently empty, months later, and the values that were dropped are gone.
+
+`bin/loghound-schema` is the supported fix. It reads the schema each index is actually
+running, compares it field by field against the configsets in this checkout, and tells you
+exactly what is missing:
+
+```
+$ php bin/loghound-schema
+Loghound schema check
+  installation : /opt/loghound
+  release      : 187edea2d4fb8de4
+
+  hits      loghound_9f3c17ab_hits           BEHIND        3 missing: planes_s, search_terms_ss, install_s
+  sessions  loghound_9f3c17ab_sessions       CURRENT       106 fields, all present
+
+Out of date. […]
+Fix it with:
+  php /opt/loghound/bin/loghound-schema --apply
+```
+
+`--apply` uploads this release's configsets — schema first, then `solrconfig.xml`, then a
+core reload, the same call and the same order the installer uses. It is **additive**: it
+adds the missing fields and does not touch a document already in the index.
+
+| Flag | What it does |
+|---|---|
+| *(none)* or `--check` | Compare and report. Changes nothing, anywhere. |
+| `--apply` | Push this release's configsets to any index that is missing fields, then re-read the live schemas and report what is there now. |
+| `--quiet` | Print only what is wrong, and the verdict. |
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Up to date — both live schemas declare every field this release writes. |
+| `1` | Unusable configuration, unknown flag, or no indexes provisioned yet. |
+| `2` | Failed — a schema could not be read, or an upload was rejected. |
+| `3` | Out of date — an index is missing a field (`--check` only). |
+
+```bash
+php bin/loghound-schema || php bin/loghound-schema --apply
+```
+
+**A field your index has and this release does not write is not an error** and is never
+"fixed": that is a newer schema, or a field a later release dropped, and it costs nothing.
+
+**A schema that cannot be read is never reported as matching.** If the control plane does
+not hand one back, the command says so and exits 2 — and `--apply` refuses to push to that
+index, because a push replaces the whole configset and pushing blind over a schema that
+might be newer would delete the fields that newer release writes. Run it again when the
+platform answers.
+
+A push that only half lands says which file was rejected and what state that leaves the
+index in: a rejected `managed-schema.xml` stops the push before `solrconfig.xml` is sent,
+so the index is untouched and re-running is safe; a rejected `solrconfig.xml` after an
+accepted schema means the new fields are live and the index is still on its previous
+solrconfig.
+
+The verdict is written to `var/schema-check.json`, which is what the **Solr** card on the
+panel's Settings page reads — so running this over SSH updates what the browser shows. The
+panel never fetches a live schema while a page renders; it shows the saved verdict, states
+how old it is, and offers a button that runs the same check as a background job. A verdict
+taken before an upgrade is reported as saying nothing about the release running now, rather
+than being shown as a clean bill of health.
+
+It refuses to run under a web SAPI, wherever the file is copied to.
 
 **If the prefix is a git working copy** — which is a supported and, on some boxes, the
 preferred layout — the upgrade is a fast-forward pull in place:

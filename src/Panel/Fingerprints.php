@@ -192,7 +192,7 @@ final class Fingerprints extends Controller
     private function members(): array
     {
         $fp = self::text('fp', 64);
-        if (!preg_match('/^[a-f0-9]{8,64}$/i', $fp)) {
+        if (!preg_match('/^[a-f0-9]{8,64}$/iD', $fp)) {
             return $this->envelope(['rows' => [], 'error' => 'Not a fingerprint hash.']);
         }
 

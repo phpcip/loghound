@@ -77,7 +77,11 @@ final class OpensolrTeardown
      * as a second lock on the same door: if coreName() ever changes shape, this refuses
      * rather than deletes.
      */
-    public const NAME_RE = '/^loghound_[a-f0-9]{8}_(hits|sessions)$/';
+    /* The D modifier is gate four of five on the most destructive operation in this product,
+       and it was the one validator in the file without it: `$` matches before a trailing
+       newline, so `loghound_deadbeef_hits\n` passed a check whose whole job is to catch a name
+       that arrived from somewhere unexpected. Its neighbour three lines away already had it. */
+    public const NAME_RE = '/^loghound_[a-f0-9]{8}_(hits|sessions)$/D';
 
     /** Ownership is proven and the two names are safe to act on. */
     public const OK = 'ok';
@@ -114,7 +118,7 @@ final class OpensolrTeardown
         }
 
         $installId = (string) $cfg->get('solr.install_id', '');
-        if (!preg_match('/^[a-f0-9]{8}$/', $installId)) {
+        if (!preg_match('/^[a-f0-9]{8}$/D', $installId)) {
             return self::verdict(
                 self::REFUSE,
                 'solr.install_id is missing or is not an 8-character lowercase hex id'

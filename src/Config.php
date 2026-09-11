@@ -409,7 +409,7 @@ final class Config
      */
     public static function coreName(string $installId, string $role): string
     {
-        if (!preg_match('/^[a-f0-9]{4,32}$/', $installId)) {
+        if (!preg_match('/^[a-f0-9]{4,32}$/D', $installId)) {
             throw new \InvalidArgumentException('Install id must be lowercase hex.');
         }
         if (!in_array($role, ['hits', 'sessions'], true)) {
@@ -546,6 +546,34 @@ final class Config
     public function path(): string
     {
         return $this->path;
+    }
+
+    /**
+     * The shell wizard for THIS installation, named with its real path.
+     *
+     * validate()'s messages are read in a browser, in a systemd journal and over SSH, and the
+     * one instruction two of them carry is "run bin/loghound-setup". Relative, that is a
+     * command which fails from every directory but one — and on a machine with two checkouts
+     * it silently configures the wrong installation. The rule is already written down in
+     * Panel\Login::alert(); this is the same rule applied where it had been missed.
+     *
+     * Derived from the configuration file's own location, so a daemon started with
+     * LOGHOUND_CONFIG pointing at another installation names that installation's binary.
+     *
+     * FALLS BACK TO THE RUNNING CODE when that derivation cannot produce an installation
+     * directory — a relative path, or a config two levels below the filesystem root, which
+     * yields `/` and would print `//bin/loghound-setup`. A command with a doubled slash is not
+     * wrong in a shell, but it is the kind of thing that makes a reader distrust the whole
+     * message, and the value it was derived from was not an installation anyway. `__DIR__` is:
+     * this file is `src/Config.php`, so its parent is the installation printing the message.
+     */
+    public function setupCommand(): string
+    {
+        $root = rtrim(dirname($this->path, 2), '/');
+        if ($root === '' || $root === '.' || !str_starts_with($root, '/')) {
+            $root = dirname(__DIR__);
+        }
+        return $root . '/bin/loghound-setup';
     }
 
     /**
@@ -712,7 +740,8 @@ final class Config
                         . 'run yourself is no longer supported: Loghound provisions and manages its own '
                         . 'two indexes on Opensolr — creating them, uploading their configsets and '
                         . 'reloading them — and it cannot do that on a Solr it does not administer. '
-                        . "Set solr.mode to 'opensolr' and re-run bin/loghound-setup to provision the "
+                        . "Set solr.mode to 'opensolr' and re-run " . $this->setupCommand()
+                        . ' to provision the '
                         . 'two indexes on your Opensolr account. Your existing data is not moved by '
                         . 'doing so.'
                     : ', which is the only storage backend there is.');
@@ -728,7 +757,8 @@ final class Config
         foreach (['hits_core', 'sessions_core'] as $k) {
             $name = (string) $this->get('solr.' . $k);
             if ($name === '') {
-                $errors[] = "solr.$k is not set — run bin/loghound-setup to create the indexes.";
+                $errors[] = "solr.$k is not set — run " . $this->setupCommand()
+                    . ' to create the indexes.';
             } elseif (!Security::isSafeCoreName($name)) {
                 $errors[] = "solr.$k must match [A-Za-z0-9_]{1,64}.";
             } elseif (strlen($name) > 50) {

@@ -80,6 +80,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/../src/autoload.php';
 
+use Loghound\Auth\Persistence;
 use Loghound\Config;
 use Loghound\Geo\Countries;
 use Loghound\Panel\Bots;
@@ -112,11 +113,19 @@ header('Cache-Control: no-store, private');
 $configPath = __DIR__ . '/../config/loghound.php';
 $cfg = Config::load($configPath);
 
+/* The trusted-proxy list is read once and handed to the two places that need it before any
+   session or cookie exists. Security::isHttps() is what decides whether a cookie is marked
+   Secure, and behind a TLS-terminating proxy that question can only be answered from a
+   forwarded header — which may be believed only when the immediate peer is a proxy this
+   operator configured. */
+$proxies = (array) $cfg->get('trusted_proxies', []);
+Persistence::trustProxies($proxies);
+
 if (session_status() !== PHP_SESSION_ACTIVE) {
     session_set_cookie_params([
         'httponly' => true,
         'samesite' => 'Strict',
-        'secure'   => (($_SERVER['HTTPS'] ?? '') !== ''),
+        'secure'   => Security::isHttps($proxies),
         'path'     => '/',
     ]);
 }
@@ -132,7 +141,7 @@ if (Login::handles($cfg)) {
 Security::requireAuth(
     (array) $cfg->get('auth', []),
     dirname(__DIR__) . '/var',
-    (array) $cfg->get('trusted_proxies', [])
+    $proxies
 );
 
 Security::requireCsrf();
@@ -188,7 +197,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 
 $action = $_GET['api'] ?? null;
 if (is_string($action) && $action !== '') {
-    if (!preg_match('/^[a-z_]{1,32}$/', $action)) {
+    if (!preg_match('/^[a-z_]{1,32}$/D', $action)) {
         json_out(['error' => 'Unknown action'], 400);
     }
 

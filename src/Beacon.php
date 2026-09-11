@@ -360,7 +360,7 @@ final class Beacon
                 continue;
             }
             $name = strtolower($name);
-            if (preg_match('/^[a-z0-9_\-.\[\]]+$/', $name)) {
+            if (preg_match('/^[a-z0-9_\-.\[\]]+$/D', $name)) {
                 $out[$name] = true;
             }
         }
@@ -394,7 +394,7 @@ final class Beacon
         if ($v === '' || strlen($v) > self::MAX_HOST) {
             return '';
         }
-        if (!preg_match('/^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)*$/', $v)) {
+        if (!preg_match('/^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)*$/D', $v)) {
             return '';
         }
         return $v;
@@ -456,8 +456,8 @@ final class Beacon
         if (!mb_check_encoding($v, 'UTF-8')) {
             $v = mb_convert_encoding($v, 'UTF-8', 'UTF-8');
         }
-        $v = (string) preg_replace('/[\x09-\x0D]/u', ' ', $v);
-        $v = (string) preg_replace('/[\x00-\x1F\x7F]/u', '', $v);
+        $v = (string) preg_replace('/[\x09-\x0D]/', ' ', $v);
+        $v = (string) preg_replace('/[\x00-\x1F\x7F]/', '', $v);
         $v = trim((string) preg_replace('/\s+/u', ' ', $v));
         if ($v === '' || mb_strlen($v) > self::MAX_TERM) {
             return '';
@@ -828,6 +828,79 @@ final class Beacon
      * @return string[] Extra signal codes.
      */
     public function derive(array $p, string $connUa): array
+    {
+        return $this->deriveInner($p, $connUa);
+    }
+
+    /**
+     * The signal codes a beacon is allowed to contribute, given which site it speaks for.
+     *
+     * ============================================================================
+     * THIS IS THE FIX FOR A CROSS-ORIGIN FRAMING ATTACK ON REAL VISITORS.
+     * ============================================================================
+     * The claim this file used to make — see isServerDerivedCode() — was that the decisive
+     * codes are "defended by binding the token to an Origin, so a third-party page cannot
+     * obtain credentials for a visitor's session in the first place". That is true and it is
+     * not the attack. THE ATTACKER DOES NOT NEED THE VICTIM'S SESSION.
+     *
+     * The merge key is not the session id. bin/loghound-score re-attaches a staged row by
+     * `client_key` as well (State::beaconsFor: `WHERE merged = 0 AND (session_id = :sid OR
+     * client_key = :ck)`), and the client key is `Security::ipNetwork($ip) . '|' . sha1($ua)`
+     * — the /24 and the User-Agent, both read off the connection. A hostile page loaded in the
+     * victim's browser — an ad, an iframe, any site they visit — therefore shares the victim's
+     * client key exactly. It does one CORS-simple POST, is handed a perfectly valid provisional
+     * session and a token bound to ITS OWN origin, posts `automation_webdriver`, and the scorer
+     * folds that row into the victim's real log-backed session: `headless_b` true,
+     * `client_score_f` 100. In a bot-detection product that is the whole game — a stranger
+     * marking a person as automation, on someone else's dashboard.
+     *
+     * Filtering the CLIENT-REPORTED codes alone would not close it, because derive() computes
+     * `headless_zero_outer` and `screen_outer_impossible` from screen numbers that are ALSO in
+     * the payload. So the rule is the blunt one, and it is the only one that is provably
+     * complete: a beacon that cannot be attributed to a site the operator listed contributes
+     * NO signal code, in either direction. It still contributes everything the merge exists
+     * for — wall, visible and engaged time, interactions, scroll, pageviews, `beacon_b` and
+     * `js_b` — so the headline metric is untouched.
+     *
+     * WHAT IT COSTS, PLAINLY: on an installation that has not filled in
+     * `beacon.allowed_hosts`, the execution plane stops contributing headless detection. That
+     * is a real loss and it is one configuration line away from being undone, whereas the
+     * alternative is a product that lets any web page accuse any visitor. The allowlist was
+     * already the gate for the hostname, the search terms, the identity and the stored
+     * User-Agent; this makes it the gate for the verdict-bearing codes too, which is where it
+     * always belonged.
+     *
+     * An attributed beacon can still be forged by something that is not a browser, because an
+     * allowlist is a permission and not an authentication — docs/BEACON.md says so — but that
+     * forger must also already share the victim's address block and User-Agent, which a
+     * third-party page gets for free and a stranger does not.
+     *
+     * @param array<string,mixed> $payload A normalised payload.
+     * @param string $connUa The User-Agent read from the connection.
+     * @param string $site   The hostname lh_site() attributed this beacon to, or ''.
+     * @param string[] $timingFlags Flags checkTimings() produced for this payload.
+     * @return string[] The signal codes that may be staged.
+     */
+    public function signalsFor(array $payload, string $connUa, string $site, array $timingFlags = []): array
+    {
+        if ($site === '') {
+            return [];
+        }
+
+        return array_values(array_unique(array_merge(
+            (array) ($payload['signals'] ?? []),
+            $timingFlags,
+            $this->deriveInner($payload, $connUa)
+        )));
+    }
+
+    /**
+     * derive()'s body, so signalsFor() can reach it without going through the public name.
+     *
+     * @param array<string,mixed> $p
+     * @return string[]
+     */
+    private function deriveInner(array $p, string $connUa): array
     {
         $out = [];
 
@@ -1265,7 +1338,7 @@ final class Beacon
             return '';
         }
         $v = substr($v, 0, $max);
-        return preg_match('/^[A-Za-z0-9._\-]*$/', $v) ? $v : '';
+        return preg_match('/^[A-Za-z0-9._\-]*$/D', $v) ? $v : '';
     }
 
     /**
@@ -1284,7 +1357,7 @@ final class Beacon
             return '';
         }
         $v = substr($v, 0, $max);
-        $v = preg_replace('/[\x00-\x1F\x7F]/u', '', $v) ?? '';
+        $v = preg_replace('/[\x00-\x1F\x7F]/', '', $v) ?? '';
         if (!mb_check_encoding($v, 'UTF-8')) {
             $v = mb_convert_encoding($v, 'UTF-8', 'UTF-8');
         }
@@ -1354,7 +1427,7 @@ final class Beacon
             if (!is_string($c) || $c === '' || strlen($c) > self::MAX_CODE_LEN) {
                 continue;
             }
-            if (!preg_match('/^[a-z0-9_]+$/', $c)) {
+            if (!preg_match('/^[a-z0-9_]+$/D', $c)) {
                 continue;
             }
             if (self::isServerDerivedCode($c)) {

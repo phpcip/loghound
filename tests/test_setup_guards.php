@@ -391,7 +391,7 @@ return [
                 'sources'      => [$manual['source']],
             ]));
 
-            $_POST = ['action' => 'confirm_source', 'path' => $log];
+            $_POST = ['action' => 'confirm_source', 'path' => $log, 'csrf' => lh_csrf()];
             $redirect = lh_guard_settings($panelCfg)->post();
         } finally {
             $_POST = $savedPost;
@@ -478,7 +478,7 @@ return [
                 'sources'      => [$unusable],
             ]));
 
-            $_POST = ['action' => 'confirm_source', 'path' => $log];
+            $_POST = ['action' => 'confirm_source', 'path' => $log, 'csrf' => lh_csrf()];
             $redirect = lh_guard_settings($panelCfg)->post();
         } finally {
             $_POST = $savedPost;

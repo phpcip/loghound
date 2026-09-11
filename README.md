@@ -124,7 +124,7 @@ there is no subsequent request to measure against.
 |---|---|---|
 | HTML 200 served | no beacon ever arrived | `bot` — non-JS client |
 | HTML 200 served | beacon arrived, headless signals positive | `bot` — headless automation |
-| HTML 200 served | beacon arrived, zero interaction, left in under 15s | `likely_bot` |
+| HTML 200 served | beacon arrived, zero interaction, single page, left in under 10s | `unknown` — 55 points, deliberately short of a verdict |
 | HTML 200 served | beacon + interaction + plausible timing distribution | `human` |
 
 GoAccess and AWStats only ever see plane 1. Clicky, GA4, Plausible and Matomo-JS only
@@ -170,6 +170,14 @@ Installs to `/opt/loghound` by default; `--prefix=/srv/loghound` (or anywhere el
 and every generated artefact follows it — the vhost docroot, the FPM pool, the systemd
 units, the deny rules. If the prefix is a git working copy, `--upgrade` is a fast-forward
 pull in place.
+
+**After every upgrade, run `bin/loghound-schema`.** New code can write a field your
+indexes do not declare yet, and the only dynamic field in either schema maps everything
+unknown to `ignored` — so Solr accepts the document, throws that value away, and reports
+no error at all. The command compares what this release writes against the schemas your
+indexes are actually running, `--apply` pushes the configsets to fix it, and its exit
+codes (0 up to date, 3 out of date, 2 could not tell) are meant for a deployment script.
+The panel's Settings page shows the same verdict and says how old it is.
 
 The installer:
 

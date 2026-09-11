@@ -880,10 +880,14 @@ fix_permissions() {
         run find "$PREFIX/$d" -type d -exec chmod 0750 {} +
         run find "$PREFIX/$d" -type f -exec chmod 0640 {} +
     done
-    local cmd
-    for cmd in loghound-tail loghound-setup loghound-score loghound-retention; do
-        [[ -e "$PREFIX/bin/$cmd" ]] && run chmod 0750 "$PREFIX/bin/$cmd"
-    done
+    # Every file directly in bin/ is a command and has to keep its execute bit, which the
+    # 0640 sweep above has just taken off all of them. This used to be a hardcoded list of
+    # four names, and the fifth command shipped non-executable because nobody thought to
+    # add it here — a list that has to be edited in step with a directory is a list that
+    # will be forgotten. Derived from what is actually installed instead.
+    if [[ -d "$PREFIX/bin" ]]; then
+        run find "$PREFIX/bin" -maxdepth 1 -type f -exec chmod 0750 {} +
+    fi
 
     if [[ -d "$PREFIX/public" ]]; then
         run find "$PREFIX/public" -type d -exec chmod 0755 {} +
@@ -906,13 +910,19 @@ fix_permissions() {
     ok "$PREFIX/var 0750, and src/ bin/ solr/ 0750 (root-owned code, group-readable)"
 
     # ---- convenience symlinks ----
-    for cmd in loghound-tail loghound-setup loghound-score loghound-retention; do
-        [[ -e "$PREFIX/bin/$cmd" ]] || continue
+    #
+    # Derived from what is actually installed, for the same reason as the execute bits above:
+    # the hardcoded list of four names left the fifth command with no link, so it could be run
+    # only by its full path while its siblings could be typed from anywhere.
+    local target cmd
+    for target in "$PREFIX"/bin/*; do
+        [[ -f "$target" ]] || continue
+        cmd="$(basename "$target")"
         if [[ -e "/usr/local/bin/$cmd" ]] && [[ ! -L "/usr/local/bin/$cmd" ]]; then
             warn "/usr/local/bin/$cmd exists and is not a symlink — leaving it alone"
             continue
         fi
-        run ln -sfn "$PREFIX/bin/$cmd" "/usr/local/bin/$cmd"
+        run ln -sfn "$target" "/usr/local/bin/$cmd"
     done
 }
 
@@ -2660,15 +2670,28 @@ uninstall_fpm_pool() {
 uninstall_fragments() {
     step "Command links and scheduler fragments"
 
-    local cmd removed=0
-    for cmd in loghound-tail loghound-setup loghound-score loghound-retention; do
-        if [[ -L "/usr/local/bin/$cmd" ]]; then
-            run rm -f "/usr/local/bin/$cmd"
-            ok "removed /usr/local/bin/$cmd"
-            removed=1
-        elif [[ -e "/usr/local/bin/$cmd" ]]; then
-            warn "/usr/local/bin/$cmd is a real file, not our symlink — leaving it alone"
-            leave_behind "/usr/local/bin/$cmd — a real file Loghound did not create"
+    # Matched by WHERE THE LINK POINTS, not by a list of names. A hardcoded list removes a
+    # link a later release added only if somebody remembered to add it here too — and the
+    # symptom of forgetting is a dangling symlink in /usr/local/bin after an uninstall that
+    # reported success. A link into this prefix is ours whatever it is called; a link
+    # somewhere else is not ours whatever it is called. readlink does not resolve the target,
+    # so a link left dangling by an earlier partial uninstall is still matched and removed.
+    local cmd link target removed=0
+    for link in /usr/local/bin/*; do
+        [[ -L "$link" ]] || continue
+        target="$(readlink "$link" 2>/dev/null || true)"
+        [[ "$target" == "$PREFIX/bin/"* ]] || continue
+        run rm -f "$link"
+        ok "removed $link"
+        removed=1
+    done
+
+    for cmd in "$PREFIX"/bin/*; do
+        [[ -f "$cmd" ]] || continue
+        cmd="/usr/local/bin/$(basename "$cmd")"
+        if [[ -e "$cmd" ]] && [[ ! -L "$cmd" ]]; then
+            warn "$cmd is a real file, not our symlink — leaving it alone"
+            leave_behind "$cmd — a real file Loghound did not create"
         fi
     done
     (( removed )) || skip "no Loghound command links found"
@@ -3000,6 +3023,22 @@ if [[ "$MODE" == "upgrade" ]]; then
     fi
     ROLLBACK_ARMED=0
     step "Upgrade complete"
+
+    # The code is new; the schema on the live indexes is whatever was uploaded when they
+    # were created. A release that adds a field therefore writes a field the live schema
+    # does not declare, and the `*`-to-`ignored` dynamic field means Solr ACCEPTS that
+    # document and discards the value with no error anywhere. This is the one manual step
+    # an upgrade has, so it is printed as a step and not as a footnote.
+    step "One more thing — check the index schema"
+    say "New code can write a field your indexes do not declare yet. Solr accepts the"
+    say "document and throws that value away, silently. Check it, and fix it if needed:"
+    say ""
+    say "    php $PREFIX/bin/loghound-schema"
+    say "    php $PREFIX/bin/loghound-schema --apply"
+    say ""
+    say "Exit codes: 0 up to date, 3 out of date, 2 could not tell. The panel's Settings"
+    say "page shows the same verdict, and says how old it is."
+    say ""
     say "loghound-tail --status --human"
     exit 0
 fi

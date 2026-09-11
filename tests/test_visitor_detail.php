@@ -666,10 +666,75 @@ return [
             $js = lh_vd_file('public/assets/js/dialog.js');
             lh_contains($js, "close.addEventListener('click', closeDialog)", 'the close button must close it');
             lh_contains($js, "scrim.addEventListener('click', closeDialog)", 'the overlay must close it');
-            lh_contains($js, "event.key === 'Escape'", 'Escape must close it');
+            lh_contains($js, "event.key !== 'Escape'", 'Escape must close it');
             lh_contains($js, "event.key !== 'Tab'", 'Tab must be trapped while it is open');
             lh_contains($js, 'opener.focus()', 'focus must go back to whatever opened it');
             lh_contains($js, "'aria-modal': 'true'", 'a modal must announce itself as one');
+
+            // Escape is bound to the DOCUMENT, not to the panel. A panel-scoped Escape only
+            // works while focus is already inside the panel, which makes it useless in the one
+            // situation it exists for — and the Tab trap used to leak focus out of the dialog,
+            // so that situation was reachable. Measured in a real browser: with focus on
+            // <body>, Escape now closes the dialog and returns focus to the opener.
+            lh_contains(
+                $js,
+                "document.addEventListener('keydown', onDocumentKey)",
+                'Escape must work from anywhere on the page, not only from inside the panel'
+            );
+        },
+
+    'the focus trap keeps Tab inside the dialog even when its body holds no control' =>
+        function (): void {
+            $js = lh_vd_file('public/assets/js/dialog.js');
+
+            // THE MEASURED DEFECT. The focusable selector ended in a bare `[tabindex]`, which
+            // matched the dialog body — created with tabindex="-1" so it can take focus on open
+            // but never be tabbed to. A non-tabbable node therefore sat at the END of the list,
+            // so the wrap-around branch never fired and Tab walked straight out of the modal
+            // into the page behind it. Every freshly opened dialog was in that state, because
+            // its body is the word "Loading…" until the fetch lands.
+            lh_contains(
+                $js,
+                '[tabindex]:not([tabindex="-1"])',
+                'a node that cannot be tabbed to must not be counted as the last tab stop'
+            );
+            lh_contains(
+                $js,
+                'input:not([disabled])',
+                'a disabled field is not a tab stop either',
+            );
+            lh_contains(
+                $js,
+                "byId('lh-dialog-body').focus();",
+                'a body with nothing tabbable in it still keeps Tab inside the dialog'
+            );
+
+            // aria-modal is a promise; inert is the mechanism. Without it the page behind the
+            // scrim stayed tabbable and fully announced to a screen reader.
+            lh_contains($js, "node.setAttribute('inert', '')", 'the page behind a modal must be inert');
+            lh_contains($js, "node.removeAttribute('inert')", 'and must get its controls back on close');
+        },
+
+    'a dialog that fails offers a way to try again' =>
+        function (): void {
+            $js = lh_vd_file('public/assets/js/dialog.js');
+
+            // Every failed CARD in the panel offers a retry. A failed dialog offered nothing but
+            // Close, so the only way to try again was to shut it, find the row again and press
+            // it again — and a dialog opened from a facet list has no row to go back to.
+            lh_contains($js, 'export function dialogFail(body, err, retry)', 'a failure can carry its own retry');
+            lh_contains($js, "typeof retry === 'function'", 'and only draws the control when there is one');
+
+            foreach ([
+                'public/assets/js/detail.js'       => ['openSession(id)', 'openDimension(field, value)'],
+                'public/assets/js/facetfilter.js'  => ['openValueBrowser(field, label, ns)'],
+            ] as $file => $expected) {
+                $src = lh_vd_file($file);
+                foreach ($expected as $needle) {
+                    lh_contains($src, 'dialogFail', $file . ' renders its failure into the dialog');
+                    lh_contains($src, $needle, $file . ' passes ' . $needle . ' as the retry');
+                }
+            }
         },
 
     'a link inside a clickable row navigates instead of opening the dialog' =>
@@ -1031,7 +1096,27 @@ return [
             lh_contains($js, "setAttribute('aria-sort'", 'the current sort must be announced');
             lh_contains($js, "'sorted-desc' : 'sorted-asc'", 'the direction must be visible');
             lh_contains($js, "table.dataset.sortDir === 'asc' ? 'desc' : 'asc'", 'a second press must reverse it');
-            lh_contains($js, "event.key !== 'Enter' && event.key !== ' '", 'a header must be operable by keyboard');
+            // KEYBOARD OPERATION COMES FROM A REAL BUTTON NOW, not from a keydown listener on
+            // the <th>. The header used to carry tabindex="0" and a handler with no role at
+            // all, so a screen reader announced "column header, Requests" and said nothing
+            // about it being pressable — a control that reads as text. Putting role="button" on
+            // the <th> would have been worse: it stops being a columnheader and its
+            // presentational children take the header's own text out of the accessibility tree.
+            //
+            // The keydown listener had to GO at the same time, not merely be joined by a
+            // button: a button fires a click for Enter and for Space itself, so keeping both
+            // sorted twice per press and flipped the direction straight back. Measured in a
+            // real browser: one Enter sorts ascending, the second descending.
+            lh_contains($js, "button.className = 'sort-btn'", 'the sort control must be a real button');
+            lh_contains($js, "th.removeAttribute('tabindex')", 'the header itself must stop being the control');
+            lh_false(
+                str_contains($js, "document.addEventListener('keydown', onActivate)"),
+                'a native button already turns Enter and Space into a click; a second listener sorts twice'
+            );
+            lh_false(
+                str_contains($js, "th.setAttribute('role'"),
+                'a <th> with role=button is no longer a column header and hides its own text from AT'
+            );
             lh_contains($js, "classList.contains('w-expand')", 'a control column has nothing to sort by');
             lh_false((bool) preg_match('/\bonclick\s*=/i', $js), 'the CSP forbids an inline handler');
         },

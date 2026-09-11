@@ -30,6 +30,16 @@ run yourself: it owns these two indexes, it has to be able to create them and ke
 right, and it cannot do that on a Solr it does not administer. The configsets below are exactly
 what gets pushed, so everything this document describes is what is running.
 
+**After an upgrade, they are what gets pushed AGAIN — run `bin/loghound-schema`.** Setup
+uploads these files once, when the indexes are created. Nothing re-uploads them afterwards, so
+a release that adds a field to this document ships code writing a field your live schema does
+not declare. Read rule 4 below and what it costs: the one dynamic field either schema has is
+`*` mapped to `ignored`, which means Solr **accepts** that document, discards the value, and
+returns no error to anyone. `bin/loghound-schema` compares this checkout against the live
+schemas and names what is missing; `bin/loghound-schema --apply` pushes the configsets, schema
+first, additively, without touching a document already in the index. The panel's Settings page
+carries the same verdict. See [INSTALL.md § Upgrading](INSTALL.md#upgrading).
+
 **Field names are a contract** (SPEC §4). The parser writes them, the scorer reads them, the
 dashboard queries them. Renaming one is a breaking change to three components at once.
 

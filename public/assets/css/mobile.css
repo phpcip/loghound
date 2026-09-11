@@ -235,7 +235,64 @@ textarea {
         padding-bottom: 8px;
     }
 
-    #lh-dialog-close { min-width: var(--lh-tap); }
+    /* WIDTH AS WELL AS HEIGHT, for the icon-shaped controls. The generic rule above sets only
+       a min-height, so a square control came out 28x44 — measured on the row opener, which is
+       the one surface in a table row that unambiguously opens the record. */
+    #lh-dialog-close,
+    .rowopen,
+    .expander,
+    .lh-navbtn,
+    .lh-railbtn { min-width: var(--lh-tap); }
+
+    .rowopen,
+    .expander { min-height: var(--lh-tap); }
+
+    /* A TICK BOX IS A TARGET TOO. Measured at 20x20 on every checkbox and radio in the panel.
+       Most of them are wrapped in a `label.radio`/`label.check`, which has its own rule further
+       down; this covers the ones that are not, so a checkbox added outside a label cannot land
+       back at the UA's 13px default. */
+    input[type="checkbox"],
+    input[type="radio"] {
+        width: 24px;
+        height: 24px;
+    }
+
+    /* A segmented population toggle: "Humans only / All / Bots & crawlers". The middle one is
+       two letters wide and was a 28px target between two that were not. */
+    .toggle button,
+    button[data-pop] { min-width: var(--lh-tap); }
+
+    /* The two "undo the filter" links. Both were plain text with no padding at all — 18.2px
+       and 21.7px — and the second is the only control that clears every filter at once. */
+    .facet-clear,
+    .filterbar-clear {
+        display: inline-flex;
+        align-items: center;
+        min-height: var(--lh-tap);
+        padding: 0 6px;
+    }
+
+    /* The value browser's primary action. It is an <a> by design, so none of the button rules
+       above reach it, and it measured exactly 40px — the one control on a full-screen phone
+       sheet that applies the operator's selection. */
+    .fb-apply { min-height: var(--lh-tap); }
+
+    /* The jump bar. Its own 44px rule lives in the max-width:900px section, so a coarse-pointer
+       tablet above that width got 28.8px links. Every other touch rule in this file is on the
+       pointer query; this one was not. */
+    .set-nav a { min-height: var(--lh-tap); }
+
+    /* The last of the controls the touch floor never reached, all measured on a coarse pointer
+       at 1280: the theme cycle at 40x34, the virtual-host selector at 29px, the expand-all and
+       filter-panel buttons at 29 and 31, and the card heading that folds its own section at 35.
+       Every one of them is a real control an operator presses, and none was on a rule that saw
+       a stylus or a touchscreen above the phone breakpoint. */
+    .theme-toggle,
+    .hostpick select,
+    #lh-host,
+    .lh-expandall,
+    #lh-facets-toggle,
+    .card-toggle { min-height: var(--lh-tap); }
 
     /* The time range picker: the most-used control in the panel and, at 29x20, the
        smallest. It keeps its shape — type on a rule, not a button — and gains height. */
@@ -295,10 +352,16 @@ textarea {
         align-items: center;
         padding: 4px 0;
     }
+    /* 24px, not 20. This rule sits in the touch block and was the one thing SHRINKING the
+       control it was written to enlarge: `label.radio input` outranks a bare
+       `input[type="checkbox"]`, so every tick box and radio on a phone measured 20x20 — a
+       quarter of the area of every other control on the same form — while the label around it
+       was correctly given a 44px row. The row stays 44px; the box within it is now a target as
+       well, not just a marker at the end of one. */
     label.radio input,
     label.check input {
-        width: 20px;
-        height: 20px;
+        width: 24px;
+        height: 24px;
         margin-top: 0;
     }
 
@@ -314,10 +377,10 @@ textarea {
        whether the table is stacked or still a table. */
 
     th.sortable {
-        min-height: var(--lh-tap);
-        padding-top: 8px;
+        padding-top: 0;
         padding-bottom: 8px;
     }
+    th.sortable > .sort-btn { min-height: var(--lh-tap); }
 
     /* Pager links, the installer's step rail, and the two links inside the bandwidth
        strip — all measured between 18px and 20px tall. */
@@ -338,7 +401,8 @@ textarea {
     a.dim,
     .banner a,
     .caveat a,
-    .note a {
+    .note a,
+    .setup-missing a {
         padding-top: 13px;
         padding-bottom: 13px;
         margin-top: -13px;

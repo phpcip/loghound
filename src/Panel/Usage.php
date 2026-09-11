@@ -398,11 +398,23 @@ final class Usage extends Controller
         echo '<div id="usage-window-rows"></div>';
 
         echo '<div class="note">';
-        echo '<p><strong>Disk looks after itself.</strong> Before each batch is written, Loghound checks how '
-            . 'full the index is against your plan. Above the high-water mark it deletes the oldest data '
-            . 'first, by date, in bounded steps &mdash; so the index does not reach the quota and the window '
-            . 'simply rolls forward. There is nothing to act on here; it is a statement of how much history '
-            . 'the plan holds.</p>';
+        /* THE CLAIM IS CONDITIONAL, because the behaviour is. `quota.enabled = false` is a
+           supported setting, and with it off none of the sentence below is true — the index CAN
+           reach its quota, and the platform then blocks it for reads as well as writes. Settings
+           says exactly that on the same installation; this card asserted the opposite. */
+        if ($this->quota()->enabled()) {
+            echo '<p><strong>Disk looks after itself.</strong> Before each batch is written, Loghound checks how '
+                . 'full the index is against your plan. Above the high-water mark it deletes the oldest data '
+                . 'first, by date, in bounded steps &mdash; so the index does not reach the quota and the window '
+                . 'simply rolls forward. There is nothing to act on here; it is a statement of how much history '
+                . 'the plan holds.</p>';
+        } else {
+            echo '<p><strong>Disk does not look after itself on this installation.</strong> Deleting for size '
+                . 'is switched off, so nothing trims the index as it fills and it can reach its plan quota. '
+                . 'An index at its quota is blocked by Opensolr &mdash; every request is answered 403, reads '
+                . 'included. Turn it back on under <a href="?v=settings#set-privacy-card">Settings</a>, or keep '
+                . 'the index inside the plan some other way.</p>';
+        }
         echo '<p class="faint">The projected window is an estimate from observed growth and is described as '
             . 'one. The span actually held is not an estimate: it is the newest timestamp in the index minus '
             . 'the oldest.</p>';
@@ -433,9 +445,13 @@ final class Usage extends Controller
         echo '<p><strong>Time-based</strong> retention is <code>privacy.retention_days</code> in '
             . '<code>config/loghound.php</code>, applied by <code>bin/loghound-retention</code> on its timer. '
             . 'It is a privacy decision: how long you are willing to keep a record of a visitor.</p>';
+        /* "BOTH RUN" IS ONLY TRUE WHEN BOTH ARE ON. Either can be switched off — an age limit of
+           0, or `quota.enabled = false` — and the card said they both ran regardless. The row
+           table above already reports which is in effect; this paragraph now agrees with it. */
         echo '<p><strong>Size-based</strong> retention is this plan window, applied by the ingest daemon '
-            . 'before it writes. It is a capacity decision: how much history the index can hold. Both run; '
-            . 'the one that deletes sooner is the one you see.</p>';
+            . 'before it writes. It is a capacity decision: how much history the index can hold. '
+            . 'Whichever of the two is switched on and deletes sooner is the one you see in the table '
+            . 'above; a limit that is off does nothing and says so there.</p>';
         echo '<p class="faint">Daily rollup documents are never deleted by either while '
             . '<code>privacy.rollup_forever</code> is set. They carry counts rather than visitors, they cost '
             . 'almost nothing, and they are the difference between a 90-day tool and one that can show you '

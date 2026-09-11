@@ -271,7 +271,18 @@ $state = lh_state();
 
 $perMin = $beacon->ratePerMin();
 
-$ipKey = 'ip:' . substr(hash_hmac('sha256', $ip, (string) $config->get('beacon.secret', '')), 0, 24);
+/* THE BUCKET IS PER NETWORK, NOT PER ADDRESS. Keyed on the full address it was no limit at
+   all in one very ordinary case: the default allocation on essentially every VPS is an IPv6
+   /64, which is 2^64 distinct buckets each with its own full budget, and every request that
+   is even REFUSED writes a row into the ratelimit table (State::rateLimit upserts before it
+   decides). Security::ipNetwork with a /32 for v4 and a /64 for v6 gives an attacker exactly
+   one bucket per allocation they actually had to obtain, and leaves a v4 visitor's bucket
+   precisely where it was. */
+$ipKey = 'ip:' . substr(
+    hash_hmac('sha256', Security::ipNetwork($ip, 32, 64), (string) $config->get('beacon.secret', '')),
+    0,
+    24
+);
 if ($state !== null && !lh_allow($state, $ipKey, $perMin)) {
     lh_end();
 }
@@ -306,17 +317,19 @@ if ($isHello) {
     }
 }
 
-if ($state !== null && !lh_allow($state, 'sess:' . $sessionId, $perMin)) {
+/* NOT ON THE HELLO BRANCH. The id there was minted three lines ago from random_bytes, so its
+   bucket is always brand new and always full: the check could never refuse, and its only
+   effect was to write one ratelimit row per hello keyed by a value nothing will ever present
+   again — an unbounded table fed by the most cheaply-repeatable request this endpoint takes,
+   purged only by the daily retention pass. Hellos are bounded by the address bucket above,
+   which is where a request with no session to speak of belongs. */
+if (!$isHello && $state !== null && !lh_allow($state, 'sess:' . $sessionId, $perMin)) {
     lh_end($respond);
 }
 
 [$payload, $timingFlags] = $beacon->checkTimings($payload, $issuedAt);
 
-$signals = array_values(array_unique(array_merge(
-    (array) $payload['signals'],
-    $timingFlags,
-    $beacon->derive($payload, $ua)
-)));
+$signals = $beacon->signalsFor($payload, $ua, $site, $timingFlags);
 
 if ($state !== null) {
     lh_stage($state, $sessionId, $clientKey, [

@@ -244,8 +244,8 @@ final class Persistence
 
         $parts = explode('.', $raw, 2);
         if (count($parts) !== 2
-            || !preg_match('/^[a-f0-9]{32}$/', $parts[0])
-            || !preg_match('/^[a-f0-9]{64}$/', $parts[1])
+            || !preg_match('/^[a-f0-9]{32}$/D', $parts[0])
+            || !preg_match('/^[a-f0-9]{64}$/D', $parts[1])
         ) {
             self::clearCookie();
             return ['state' => 'stale', 'user' => ''];
@@ -332,7 +332,16 @@ final class Persistence
             }
         );
 
+        /* THE COOKIE IS CLEARED HERE TOO, AND IT WAS NOT. Every other refusal path clears it;
+           this one returned first, which turned an unwritable var/ into an unbreakable loop
+           the operator could not get out of without deleting the cookie by hand:
+           Security::resumeRemembered maps 'store' onto the 'login' state, requireAuth
+           redirects to ?login=1, and Panel\Login sees Persistence::present() — which tests
+           only that the cookie string is non-empty — and redirects straight back. Round and
+           round, with the sign-in form never rendered, on the one failure whose remedy is
+           written on that form. */
         if (!is_array($result)) {
+            self::clearCookie();
             return ['state' => 'store', 'user' => ''];
         }
 
@@ -486,7 +495,7 @@ final class Persistence
         $now = time();
         $out = [];
         foreach ($tokens as $key => $record) {
-            if (!is_string($key) || !preg_match('/^[a-f0-9]{32}$/', $key) || !is_array($record)) {
+            if (!is_string($key) || !preg_match('/^[a-f0-9]{32}$/D', $key) || !is_array($record)) {
                 continue;
             }
             if ((int) ($record['expires'] ?? 0) <= $now) {
@@ -496,7 +505,15 @@ final class Persistence
         }
 
         if (count($out) > self::MAX_TOKENS) {
-            uasort($out, static fn(array $a, array $b): int => ((int) $b['used']) <=> ((int) $a['used']));
+            /* `used` is read with a default, like every other field in this class. A store
+               written by an older build, hand-edited, or truncated by a full disk would
+               otherwise raise an undefined-key warning INSIDE the authentication path, which
+               under a warning-to-exception handler is a 500 on every request carrying the
+               cookie. A record with no `used` sorts oldest, which is the safe direction. */
+            uasort(
+                $out,
+                static fn(array $a, array $b): int => ((int) ($b['used'] ?? 0)) <=> ((int) ($a['used'] ?? 0))
+            );
             $out = array_slice($out, 0, self::MAX_TOKENS, true);
         }
 
@@ -533,17 +550,45 @@ final class Persistence
      * the browser drop it and the feature silently stop working. SameSite=Lax, for the reason
      * set out in the class docblock.
      *
+     * The TLS question goes through Security::isHttps() rather than reading $_SERVER['HTTPS']
+     * here. This is a ten-year bearer credential, and the expression that used to be inline
+     * answered NO behind every TLS-terminating proxy — which is how this token came to be
+     * issued in the clear on exactly the deployments the project documents support for.
+     *
+     * @param string[] $trustedProxies
      * @return array<string,mixed>
      */
-    private static function cookieOptions(int $expires): array
+    private static function cookieOptions(int $expires, array $trustedProxies = []): array
     {
         return [
             'expires'  => $expires,
             'path'     => '/',
             'domain'   => '',
-            'secure'   => (($_SERVER['HTTPS'] ?? '') !== ''),
+            'secure'   => Security::isHttps($trustedProxies !== [] ? $trustedProxies : self::$proxies),
             'httponly' => true,
             'samesite' => 'Lax',
         ];
+    }
+
+    /**
+     * The trusted-proxy list, handed down once per request so the cookie helpers can ask
+     * Security::isHttps() without every call site having to carry it.
+     *
+     * Request-scoped and set by the front controller before anything reads a cookie. Empty
+     * means "believe no forwarded header", which is the safe default: an installation that
+     * has not declared its proxies gets the direct-connection answer and nothing else.
+     *
+     * @var string[]
+     */
+    private static array $proxies = [];
+
+    /**
+     * Declare which proxies this installation sits behind, for the cookie flags.
+     *
+     * @param string[] $cidrs
+     */
+    public static function trustProxies(array $cidrs): void
+    {
+        self::$proxies = array_values(array_filter($cidrs, 'is_string'));
     }
 }

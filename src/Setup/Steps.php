@@ -128,6 +128,18 @@ final class Steps
                 $widening[] = 'Cannot allow ' . $dir . ': there is no such directory.';
                 continue;
             }
+            /* THE / GUARD ITS SIBLING HAS HAD ALL ALONG. allowLogRoot() refuses it in so many
+               words and this path did not, which made the difference reachable: a discovered
+               source at a top-level path — an Apache `CustomLog /access.log`, or a fallback glob
+               resolving to `/*` — yields dirname() === '/', the confirm screen offers it as a
+               checkbox, and ticking it puts `/` in allowed_log_roots. From that moment
+               Security::safePath() accepts every path on the machine and "add a log source"
+               becomes an arbitrary-file read whose contents are rendered as sample lines. */
+            if ($real === '/') {
+                $widening[] = 'Refusing to allow / — that would let any file on this server be '
+                    . 'read as a log.';
+                continue;
+            }
             if (!in_array($real, $roots, true)) {
                 $roots[] = $real;
             }
@@ -343,7 +355,7 @@ final class Steps
         $user = trim($user);
         if ($user === '') {
             $errors[] = 'Choose a username.';
-        } elseif (!preg_match('/^[A-Za-z0-9._@-]{1,64}$/', $user)) {
+        } elseif (!preg_match('/^[A-Za-z0-9._@-]{1,64}$/D', $user)) {
             $errors[] = 'The username may contain letters, digits, and . _ - @ only.';
         }
 
@@ -674,7 +686,9 @@ final class Steps
             return $saved;
         }
 
-        return $mayUseRequestHost ? self::requestBaseUrl() : '';
+        return $mayUseRequestHost
+            ? self::requestBaseUrl((array) $cfg->get('trusted_proxies', []))
+            : '';
     }
 
     /**
@@ -684,18 +698,25 @@ final class Steps
      * it is echoed into a page: a hostname or an IPv4 literal with an optional port, and
      * nothing else. A header carrying a path, a scheme, a credential or markup yields
      * nothing rather than a URL built around it.
+     *
+     * @param string[] $trustedProxies CIDRs whose X-Forwarded-Proto may be believed.
      */
-    public static function requestBaseUrl(): string
+    public static function requestBaseUrl(array $trustedProxies = []): string
     {
         $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
         if ($host === '' || strlen($host) > 255) {
             return '';
         }
-        if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?$/', $host)) {
+        if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?$/D', $host)) {
             return '';
         }
 
-        $scheme = (($_SERVER['HTTPS'] ?? '') !== '') ? 'https' : 'http';
+        /* Through Security::isHttps(), which is the one place this question is answered. The
+           inline expression it replaces said "http" behind every TLS-terminating proxy — so the
+           beacon snippet the installer prints pointed at http:// on an https-only site and was
+           silently blocked as mixed content — and said "https" on IIS, where the value is the
+           literal string 'off' over plain HTTP. */
+        $scheme = Security::isHttps($trustedProxies) ? 'https' : 'http';
 
         return $scheme . '://' . $host;
     }
@@ -719,25 +740,44 @@ final class Steps
      * "Unusable" is judged by the same two checks applyBaseUrl() refuses a value with, so a
      * config file edited by hand is held to the standard the form enforces.
      *
+     * EVERY REFUSAL NAMES THE FIX THAT IS IN FRONT OF THE READER, which is not the same fix on
+     * both screens. `$mayUseRequestHost` is passed by exactly one caller — the installer's
+     * sign-in screen, which is the only screen allowed to guess an address from the request —
+     * and that screen renders the **Public URL** field about fifty lines above this message.
+     * Telling that operator to go and hand-edit `base_url` in a file, while the input for it is
+     * on the screen they are looking at, is an instruction that is worse than no instruction:
+     * they will do it, and the form will overwrite it when they press the button. After setup
+     * the flag is off, there is no such field on the page, and the file is the honest answer.
+     *
      * @return array{0:string,1:string} [snippet, problem] — exactly one is ever non-empty.
      */
     public static function beaconSnippet(Config $cfg, bool $mayUseRequestHost = false): array
     {
         $base = self::effectiveBaseUrl($cfg, $mayUseRequestHost);
 
+        $setIt = $mayUseRequestHost
+            ? 'Fill in the "Public URL" field on this screen — it is just above this card — and '
+                . 'press the button; the snippet is then on the Settings page.'
+            : 'Set base_url in config/loghound.php to the URL your visitors would reach this '
+                . 'installation at, then come back.';
+
+        $correctIt = $mayUseRequestHost
+            ? 'Correct the "Public URL" field on this screen, just above this card, and press the '
+                . 'button.'
+            : 'Correct base_url in config/loghound.php.';
+
         if ($base === '') {
             return ['', 'The public address of this panel is not set, so there is no snippet to copy. '
-                . 'Set base_url in config/loghound.php to the URL your visitors would reach this '
-                . 'installation at, then come back.'];
+                . $setIt];
         }
         if (Security::urlHasUserinfo($base)) {
             return ['', 'The configured address of this panel contains a username or password, which would '
-                . 'be published in the HTML of every page you measure. Set base_url to https://host/path '
-                . 'only.'];
+                . 'be published in the HTML of every page you measure. It must be https://host/path only. '
+                . $correctIt];
         }
         if (Security::safeUrl($base) === '#') {
             return ['', 'The configured address of this panel is not a plain http:// or https:// URL, so no '
-                . 'snippet can be built from it. Correct base_url in config/loghound.php.'];
+                . 'snippet can be built from it. ' . $correctIt];
         }
 
         return ['<script src="' . $base . '/b.js?v=1" defer></script>', ''];

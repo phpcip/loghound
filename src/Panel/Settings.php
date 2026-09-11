@@ -49,6 +49,7 @@ use Loghound\Setup\Job;
 use Loghound\Setup\Pairs;
 use Loghound\Setup\Requirements;
 use Loghound\Setup\Reset;
+use Loghound\Setup\Schema;
 use Loghound\Setup\Steps;
 use Loghound\Setup\Storage;
 use Loghound\Setup\Token;
@@ -77,6 +78,16 @@ final class Settings extends Controller implements JobHost, Sections
      * leaves the operator with a dead tab and no idea whether it ran.
      */
     private const KIND_RESCAN = 'source_rescan';
+
+    /**
+     * The job kind that compares this release's schemas against the live ones.
+     *
+     * A job for the same reason the rescan is one, and a job rather than something the card
+     * does while it renders for a second reason: it is two control-plane round trips, and a
+     * Settings page that waits on opensolr.com is a Settings page that stops rendering the day
+     * opensolr.com is slow. The card shows the saved verdict and this is what refreshes it.
+     */
+    private const KIND_SCHEMA = 'schema_check';
 
     public function slug(): string
     {
@@ -137,7 +148,10 @@ final class Settings extends Controller implements JobHost, Sections
         if ($this->gw->isDemo()) {
             return [];
         }
-        return [self::KIND_RESCAN => static fn (array $ctx): array => self::rescanPlan()];
+        return [
+            self::KIND_RESCAN => static fn (array $ctx): array => self::rescanPlan(),
+            self::KIND_SCHEMA => static fn (array $ctx): array => Schema::checkPlan(self::root()),
+        ];
     }
 
     /** The job store for this view, with this view's own planners registered. */
@@ -322,6 +336,13 @@ final class Settings extends Controller implements JobHost, Sections
      */
     public function post(): string
     {
+        /* ASKED FOR A SECOND TIME, DELIBERATELY. The front controller enforces it before any
+           view is constructed, and Panel\OpensolrView re-asserts it here for the reason its
+           own docblock gives: a control that is only applied by the caller is one refactor
+           away from being gone. This is the view with every destructive action on it, and it
+           was the one that did not repeat the check. */
+        Security::requireCsrf();
+
         $action = is_string($_POST['action'] ?? null) ? $_POST['action'] : '';
 
         switch ($action) {
@@ -919,8 +940,18 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $anchor = '#set-solr';
 
+        /* A SECOND FACTOR, ON EXACTLY THE REASONING saveOpensolrCredentials() GIVES. That method
+           demands one because "being able to REPLACE it from a stolen session means pointing this
+           installation at an account the attacker controls — every future visitor record then
+           lands in their indexes, quietly, while the panel keeps looking healthy". Repointing the
+           core pair achieves the same redirection of the write path, and it did not ask. */
+        $refused = $this->requireSecondFactor();
+        if ($refused !== '') {
+            return '?v=settings&err=' . $refused . $anchor;
+        }
+
         $installId = is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : '';
-        if (!preg_match('/^[a-f0-9]{4,32}$/', $installId)) {
+        if (!preg_match('/^[a-f0-9]{4,32}$/D', $installId)) {
             return '?v=settings&err=pair_unknown' . $anchor;
         }
 
@@ -935,12 +966,12 @@ final class Settings extends Controller implements JobHost, Sections
                 'upgrade_schema' => ($_POST['upgrade_schema'] ?? '') === '1',
             ]);
         } catch (\Throwable $e) {
-            self::stashSolrNote('bad', 'The job store could not be opened: ' . $e->getMessage());
+            self::stashSolrNote('bad', 'The job store could not be opened: ' . Jobs::redact($e->getMessage()));
             return '?v=settings&err=pair_failed' . $anchor;
         }
 
         if (!$job->runAll($this->cfg, self::root())) {
-            self::stashSolrNote('bad', $job->error());
+            self::stashSolrNote('bad', Jobs::redact($job->error()));
             return '?v=settings&err=pair_failed' . $anchor;
         }
 
@@ -1362,7 +1393,7 @@ final class Settings extends Controller implements JobHost, Sections
     private function removeSource(): string
     {
         $id = is_string($_POST['source'] ?? null) ? $_POST['source'] : '';
-        if (!preg_match('/^[0-9a-f]{16}$/', $id)) {
+        if (!preg_match('/^[0-9a-f]{16}$/D', $id)) {
             return '?v=settings&err=no_such_source';
         }
 
@@ -1470,6 +1501,16 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function savePrivacy(): string
     {
+        /* A SECOND FACTOR, BECAUSE THIS DECIDES WHAT IS STORED ABOUT EVERY FUTURE VISITOR.
+           Moving ip_mode back to `full` from a stolen session de-anonymises an installation
+           that had chosen not to keep addresses, silently, and the operator's only evidence
+           would be the data itself. A privacy posture that one stolen cookie can reverse is
+           not a posture. */
+        $refused = $this->requireSecondFactor();
+        if ($refused !== '') {
+            return '?v=settings&err=' . $refused . '#set-privacy';
+        }
+
         $mode = is_string($_POST['ip_mode'] ?? null) ? $_POST['ip_mode'] : '';
         if (!in_array($mode, Steps::ipModes(), true)) {
             return '?v=settings&err=bad_ip_mode';
@@ -1540,6 +1581,15 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function saveAuthMode(): string
     {
+        /* A SECOND FACTOR, BECAUSE THIS IS A WAY TO TURN THE SECOND FACTOR OFF. The two-factor
+           section only operates in session mode (twoFactorSection() refuses outside it), so
+           moving the panel to Basic from a stolen session sidesteps the factor without ever
+           presenting one — which is precisely what totpDisable() exists to prevent. */
+        $refused = $this->requireSecondFactor();
+        if ($refused !== '') {
+            return '?v=settings&err=' . $refused . '#set-auth';
+        }
+
         $mode = is_string($_POST['auth_mode'] ?? null) ? $_POST['auth_mode'] : '';
 
         if (Steps::applyAuthMode($this->cfg, $mode) !== []) {
@@ -2198,7 +2248,11 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'than ingesting on a guess.',
             'save_failed'     => 'The configuration file could not be written. Check ownership and mode 0640 on config/loghound.php.',
             'bad_ip_mode'     => 'Unknown IP privacy mode.',
-            'bad_thresholds'  => 'Thresholds must descend: bot > likely_bot > unknown > likely_human.',
+            'bad_thresholds'  => 'Thresholds must descend: '
+                . Vocabulary::label('bot_verdict_s', 'bot') . ' above '
+                . Vocabulary::label('bot_verdict_s', 'likely_bot') . ' above '
+                . Vocabulary::label('bot_verdict_s', 'unknown') . ' above '
+                . Vocabulary::label('bot_verdict_s', 'likely_human') . '.',
             'bad_timezone'    => 'Unknown timezone.',
             'bad_auth_mode'   => 'That sign-in method was refused. Choose one of the two offered, and note that '
                 . 'neither can be selected before a username and password have been set.',
@@ -3274,7 +3328,13 @@ final class Settings extends Controller implements JobHost, Sections
                     echo '<tr>';
                     echo '<td class="mono">' . Security::esc((string) ($m['token'] ?? '')) . '</td>';
                     echo '<td class="mono">' . Security::esc((string) ($m['field'] ?? '')) . '</td>';
-                    echo '<td class="mono clip">' . Security::esc((string) ($m['example'] ?? '')) . '</td>';
+                    /* THE TITLE IS THE ONLY WAY BACK TO THE WHOLE VALUE. `td.clip` truncates at
+                       46ch, and 22ch on a phone; core.js's tbody() adds a title for every clip
+                       cell it builds, and these server-rendered ones had none — so a referrer
+                       or a User-Agent longer than the column was simply gone. */
+                    $example = (string) ($m['example'] ?? '');
+                    echo '<td class="mono clip" title="' . Security::esc($example) . '">'
+                        . Security::esc($example) . '</td>';
                     echo '</tr>';
                 }
                 echo '</tbody></table></div>';
@@ -3309,7 +3369,8 @@ final class Settings extends Controller implements JobHost, Sections
                     echo '<div class="table-wrap"><table class="tight sample-parsed"><tbody>';
                     foreach ((array) ($s['parsed'] ?? []) as $field => $value) {
                         echo '<tr><th scope="row" class="mono">' . Security::esc((string) $field) . '</th>';
-                        echo '<td class="mono clip">' . Security::esc((string) $value) . '</td></tr>';
+                        echo '<td class="mono clip" title="' . Security::esc((string) $value) . '">'
+                            . Security::esc((string) $value) . '</td></tr>';
                     }
                     echo '</tbody></table></div>';
                     echo '</div>';
@@ -3474,6 +3535,7 @@ final class Settings extends Controller implements JobHost, Sections
             . Security::esc((string) Gateway::queryTimeout($this->cfg)) . 's</dd>';
         echo '</dl>';
 
+        $this->schemaPart();
         $this->opensolrAccountForm();
         $this->pairSwitchPart();
 
@@ -3498,6 +3560,134 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<p class="muted">Each check runs as a sequence of steps with its own progress, so it cannot time '
             . 'out however slow the backend is. You can close this page and come back to it.</p>';
         self::cardEnd();
+    }
+
+    /**
+     * Does the schema on the live indexes still match the fields this release writes?
+     *
+     * THE DEFECT THIS CARD EXISTS FOR. A release adds a field, the operator upgrades the code,
+     * and the indexes keep running the configset that was uploaded when they installed. The
+     * only dynamic field either schema declares is `*` mapped to `ignored`, so Solr accepts
+     * every document carrying the new field and throws the value away — no error from the
+     * tailer, none from the platform, none here. The first symptom is a facet that is
+     * permanently empty, months later. It is not allowed to be a silent condition, so this card
+     * says so, and it carries the `chip-warn` marker that force-opens a folded section.
+     *
+     * NOTHING HERE TOUCHES THE NETWORK. The verdict comes from Schema::notice(), which reads
+     * one small file in var/ and the configuration already in memory; the check that produces
+     * that file is the button below, or `bin/loghound-schema` on the shell. That is deliberate
+     * and it is why the age of the verdict is printed next to it every time: a cached answer
+     * presented without its date is a claim about now made from evidence about then.
+     *
+     * A cache written before an upgrade is not shown as a clean bill of health. It carries the
+     * fingerprint of the field set it was taken against, and a mismatch is reported as saying
+     * nothing about the release running now — which is exactly the moment this matters most.
+     */
+    private function schemaPart(): void
+    {
+        try {
+            $notice = Schema::notice($this->cfg, self::root());
+        } catch (\Throwable $e) {
+            return;
+        }
+
+        echo '<h4>Index schema</h4>';
+
+        /* THE BADGE SAYS WHAT IT IS THE STATUS OF. On screen the heading above it supplies that;
+           to a screen reader running the page as a list of controls and states it was a bare
+           "Not verified" with nothing attached to it. The `.check-row .chip-warn` shape is load
+           bearing — assets/js/responsive.js treats it as trouble and force-opens the card around
+           it, so it cannot be folded away — and is kept exactly. */
+        if ($notice['severity'] !== 'good') {
+            echo '<div class="check-row"><span class="chip chip-warn">'
+                . '<span class="sr-only">Index schema: </span>'
+                . ($notice['severity'] === 'bad' ? 'Needs attention' : 'Not verified')
+                . '</span></div>';
+        }
+
+        echo '<p' . ($notice['severity'] === 'bad' ? ' class="pop"' : '') . '><strong>'
+            . Security::esc((string) $notice['headline']) . '</strong></p>';
+        echo '<p class="muted">' . Security::esc((string) $notice['detail']) . '</p>';
+
+        echo '<p class="muted">' . ($notice['checked_at'] === null
+            ? 'No check has been saved on this installation yet.'
+            : 'Last checked <span class="mono">'
+                . Security::esc(gmdate('m/d/Y H:i:s', (int) $notice['checked_at'])) . ' UTC</span>'
+                . ', against the schemas your indexes were running at that moment.') . '</p>';
+
+        $this->schemaRows((array) $notice['indexes']);
+
+        $lines = [Schema::command(self::root())];
+        if ((string) $notice['state'] === Schema::BEHIND) {
+            $lines[] = Schema::command(self::root()) . ' --apply';
+        }
+        self::commandBlock('set-solr-schema', [
+            'key'     => 'schema',
+            'title'   => (string) $notice['state'] === Schema::BEHIND
+                ? 'Check it, then push this release\'s configsets'
+                : 'Check it from a shell',
+            'lines'   => $lines,
+            'problem' => '',
+        ]);
+        echo '<p class="muted">The check changes nothing and exits 0 when both indexes are up to date, '
+            . '3 when one is behind and 2 when a schema could not be read, so a deployment script can '
+            . 'gate on it. <code class="mono">--apply</code> is additive: it uploads the configsets and '
+            . 'reloads the cores, and it does not touch a document already in the index. Run it after '
+            . 'every upgrade.</p>';
+
+        if ($this->gw->isDemo()) {
+            echo '<p class="muted">Checking is switched off while the panel is showing demo data.</p>';
+            return;
+        }
+
+        echo '<div class="job-actions">';
+        echo '<button type="button" data-job="' . Security::esc(self::KIND_SCHEMA) . '" '
+            . 'data-mount="job-schema">Check the live schemas now</button>';
+        echo '</div>';
+        echo '<div id="job-schema"></div>';
+        echo '<p class="muted">One read per index against your Opensolr account. It writes nothing to '
+            . 'either index; it only saves the answer, so this card stops asking.</p>';
+    }
+
+    /**
+     * One row per index from a saved check: what it has, and what it is missing.
+     *
+     * Only rendered when a check actually describes the release running now — the states that
+     * have no rows to show are the ones where showing a table would imply a verification that
+     * has not happened.
+     *
+     * Field names come from the shipped schema and from the live one, both filtered through
+     * Storage::schemaFieldNames() to the platform's own field-name alphabet before they reach
+     * here, and every one of them is escaped again on the way out.
+     *
+     * @param array<int,array<string,mixed>> $indexes
+     */
+    private function schemaRows(array $indexes): void
+    {
+        if ($indexes === []) {
+            return;
+        }
+
+        echo '<dl class="kv">';
+        foreach ($indexes as $row) {
+            $missing = array_map('strval', (array) ($row['missing'] ?? []));
+            $state = (string) ($row['state'] ?? '');
+
+            echo '<dt>' . Security::esc((string) ($row['role'] ?? '')) . '</dt><dd>';
+            echo '<span class="mono">' . Security::esc((string) ($row['core'] ?? '')) . '</span> — ';
+
+            if ($state === Schema::CURRENT) {
+                echo 'all ' . (int) ($row['expected'] ?? 0) . ' fields this release writes are declared';
+            } elseif ($missing !== []) {
+                echo '<strong>missing ' . count($missing) . '</strong>: <span class="mono wrap">'
+                    . Security::esc(Schema::namedList($missing, 12)) . '</span>';
+            } else {
+                echo Security::esc((string) ($row['message'] ?? 'could not be read'));
+            }
+
+            echo '</dd>';
+        }
+        echo '</dl>';
     }
 
     /**
@@ -3698,7 +3888,8 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'deleted until it is back down to %d%%. The ingest daemon does this BEFORE it '
                 . 'writes, so the index never actually reaches the quota, and bin/loghound-retention '
                 . 'runs the same pass daily. This is what decides how much history you have on a '
-                . 'busy site — more disk on the plan buys more history, and nothing is ever cut off.',
+                . 'busy site: more disk on the plan buys more history. The index is never blocked '
+                . 'for being full; the oldest data is what gives way.',
                 (int) round($quota->highWater() * 100),
                 (int) round($quota->target() * 100)
             ))
@@ -3867,7 +4058,11 @@ final class Settings extends Controller implements JobHost, Sections
             return [$base, true];
         }
         $host = (string) ($_SERVER['HTTP_HOST'] ?? 'loghound.example.com');
-        $scheme = (($_SERVER['HTTPS'] ?? '') !== '') ? 'https' : 'http';
+        /* Through Security::isHttps(), like everything else that has to answer this. The inline
+           expression this replaces said "http" behind every TLS-terminating proxy, so the beacon
+           snippet an operator copied off this page pointed at http:// on an https-only site and
+           was silently blocked as mixed content. */
+        $scheme = Security::isHttps((array) $this->cfg->get('trusted_proxies', [])) ? 'https' : 'http';
         return [$scheme . '://' . $host, false];
     }
 
@@ -4237,7 +4432,8 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<fieldset><legend>Retention</legend>';
         echo '<label for="retention">Delete hits and sessions older than</label> ';
         echo '<input type="number" id="retention" name="retention_days" min="0" max="3650" value="'
-            . Security::esc((string) $days) . '" inputmode="numeric"> <span class="muted">days (0 keeps everything)</span>';
+            . Security::esc((string) $days) . '" inputmode="numeric"> <span class="muted">days'
+            . ' (0 means no age limit — it does not switch retention off; the disk rule above is separate)</span>';
         echo '<label class="check"><input type="checkbox" name="rollup_forever"'
             . ($this->cfg->get('privacy.rollup_forever') ? ' checked' : '') . '> '
             . 'Keep the daily rollup documents indefinitely <span class="muted">(they are tiny and hold no addresses)</span></label>';
@@ -4270,8 +4466,13 @@ final class Settings extends Controller implements JobHost, Sections
             'set-scoring',
             self::sectionNum('set-scoring'),
             'Scoring weights',
-            'Points added to bot_score_f when a rule fires. Saving bumps rule_version_i, so sessions scored under '
-            . 'the old weights stay identifiable. Existing documents are not rescored.'
+            /* A CARD CAPTION IS PROSE, so the two Solr field names came out as bare words in the
+               middle of a sentence — and cardOpen() escapes its population text, so they cannot
+               be marked up as code here even if they belonged. They are not what the reader
+               needs: the fact is that the score goes up and that old scores stay identifiable. */
+            'Points added to a session\'s bot score when a rule fires. Saving records a new scoring '
+            . 'version, so sessions scored under the old weights stay identifiable. Existing documents '
+            . 'are not rescored.'
         );
 
         echo '<form method="post" action="?v=settings">';
@@ -4287,20 +4488,34 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<td><code class="mono">' . Security::esc($code) . '</code><br><span class="muted">'
                 . Security::esc($meta['label']) . '</span></td>';
             echo '<td class="muted">' . Security::esc($meta['why']) . '</td>';
-            echo '<td class="num"><input type="number" min="0" max="100" name="weight['
-                . Security::esc($code) . ']" value="' . Security::esc((string) $value) . '" inputmode="numeric"></td>';
+            /* EVERY FIELD HAS A NAME. These were the only unlabelled controls in the panel:
+               no id, no wrapping <label>, no aria-label, so a screen reader announced N
+               identical "edit, blank" boxes with nothing to say which rule each one weighted.
+               The column header associates with the CELL, not with the input inside it. The
+               rule's own label is already on screen in the first cell, so aria-labelledby
+               points at it rather than repeating it — and adds the word "weight", because the
+               field is a weight and the row is a rule. */
+            $weightId = 'weight-' . preg_replace('/[^a-z0-9_-]/i', '', $code);
+            echo '<td class="num"><input type="number" min="0" max="100" id="' . Security::esc($weightId) . '"'
+                . ' name="weight[' . Security::esc($code) . ']"'
+                . ' value="' . Security::esc((string) $value) . '" inputmode="numeric"'
+                . ' aria-label="' . Security::esc('Weight for ' . $meta['label']) . '"></td>';
             echo '</tr>';
         }
         echo '</tbody></table></div>';
 
         echo '<fieldset><legend>Verdict thresholds</legend>';
         echo '<p class="muted">A score at or above each threshold gets that verdict. They must descend.</p>';
+        /* THE VERDICTS READ IN WORDS. The labels were the stored slugs — the operator was shown
+           `likely_bot ≥ [60]` — while Panel\Vocabulary held "Likely bot" two files away and
+           every other surface in the panel used it. */
         echo '<div class="thresholds">';
-        foreach ([
-            'bot' => 'bot', 'likely_bot' => 'likely_bot', 'unknown' => 'unknown', 'likely_human' => 'likely_human',
-        ] as $key => $label) {
-            $v = (int) ($thresholds[$key] ?? ['bot' => 80, 'likely_bot' => 60, 'unknown' => 40, 'likely_human' => 20][$key]);
-            echo '<label>' . Security::esc($label) . ' ≥ <input type="number" min="0" max="100" name="threshold['
+        foreach (['bot' => 80, 'likely_bot' => 60, 'unknown' => 40, 'likely_human' => 20] as $key => $fallback) {
+            $v = (int) ($thresholds[$key] ?? $fallback);
+            $spoken = Vocabulary::value('bot_verdict_s', $key);
+            echo '<label title="' . Security::esc($spoken['why']) . '">'
+                . Security::esc($spoken['label'])
+                . ' ≥ <input type="number" min="0" max="100" name="threshold['
                 . Security::esc($key) . ']" value="' . Security::esc((string) $v) . '" inputmode="numeric"></label>';
         }
         echo '</div></fieldset>';

@@ -91,6 +91,28 @@ final class Sessionizer
     private const MAX_TRACKED_URIS = 5000;
 
     /**
+     * Byte budget for the KEYS of one tracked set, on top of the entry count above.
+     *
+     * THE ENTRY CAPS ALONE ARE NOT A BOUND, and that is a denial of service rather than an
+     * untidiness. Every key is a string an attacker chose: `path_s` is capped at MAX_TEXT
+     * (2048 characters) and a URI is a path plus its query string, so ten thousand paths and
+     * five thousand URIs are bounded at roughly 39 MB of live keys — and the whole aggregate
+     * is json_decode'd, mutated and json_encode'd into SQLite ON EVERY HIT of that session.
+     * Measured on a saturated blob: 38.8 MB, 0.074 s to decode, 131 MB peak, and on PHP's
+     * stock 128 MB memory_limit the decode is fatal. One client owns one session (the key is
+     * the /24 plus the User-Agent hash), so fifteen thousand requests with long distinct
+     * paths is the whole attack, after which every further line from that client costs tens
+     * of megabytes of work or kills the daemon.
+     *
+     * A quarter of a megabyte per set is far more than any real session reaches and is small
+     * enough that the per-hit round trip stays in microseconds. Hitting it saturates the set
+     * exactly as the entry cap does: counting stops, `paths_saturated` is raised, and
+     * uniq_paths_i becomes "at least this many" — which docs/SCHEMA.md already documents and
+     * which no scoring rule reads as an exact figure.
+     */
+    private const MAX_TRACKED_KEY_BYTES = 262144;
+
+    /**
      * Cap on the inter-request gap list retained per session.
      *
      * The gap statistics (median, stddev) only need a representative sample; keeping every
@@ -417,8 +439,10 @@ final class Sessionizer
                 'entry_path' => null,
                 'exit_path'  => null,
                 'paths'      => [],
+                'paths_bytes' => 0,
                 'paths_saturated' => false,
                 'uris'          => [],
+                'uris_bytes'    => 0,
                 'repeat_assets' => 0,
                 'gaps'       => [],
                 'terms'      => [],
@@ -519,8 +543,11 @@ final class Sessionizer
         if ($path !== '') {
             if (isset($agg['paths'][$path])) {
                 $agg['paths'][$path]++;
-            } elseif (count($agg['paths']) < self::MAX_TRACKED_PATHS) {
+            } elseif (count($agg['paths']) < self::MAX_TRACKED_PATHS
+                && (int) ($agg['paths_bytes'] ?? 0) + strlen($path) <= self::MAX_TRACKED_KEY_BYTES
+            ) {
                 $agg['paths'][$path] = 1;
+                $agg['paths_bytes'] = (int) ($agg['paths_bytes'] ?? 0) + strlen($path);
             } else {
                 $agg['paths_saturated'] = true;
             }
@@ -543,8 +570,11 @@ final class Sessionizer
                     $agg['repeat_assets']++;
                 }
                 $agg['uris'][$uri]++;
-            } elseif (count($agg['uris']) < self::MAX_TRACKED_URIS) {
+            } elseif (count($agg['uris']) < self::MAX_TRACKED_URIS
+                && (int) ($agg['uris_bytes'] ?? 0) + strlen($uri) <= self::MAX_TRACKED_KEY_BYTES
+            ) {
                 $agg['uris'][$uri] = 1;
+                $agg['uris_bytes'] = (int) ($agg['uris_bytes'] ?? 0) + strlen($uri);
             }
         }
 

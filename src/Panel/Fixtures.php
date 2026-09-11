@@ -959,7 +959,7 @@ final class Fixtures
     /** Convert a `+<n><UNIT>` gap string to seconds. */
     private static function gapSeconds(string $gap): int
     {
-        if (preg_match('/^\+?(\d+)(SECOND|MINUTE|HOUR|DAY)$/i', trim($gap), $m)) {
+        if (preg_match('/^\+?(\d+)(SECOND|MINUTE|HOUR|DAY)$/iD', trim($gap), $m)) {
             $mult = ['SECOND' => 1, 'MINUTE' => 60, 'HOUR' => 3600, 'DAY' => 86400];
             return ((int) $m[1]) * $mult[strtoupper($m[2])];
         }
@@ -1157,7 +1157,7 @@ final class Fixtures
      */
     private static function aggregate(array $docs, string $expr)
     {
-        if (!preg_match('/^(\w+)\(([^)]*)\)$/', trim($expr), $m)) {
+        if (!preg_match('/^(\w+)\(([^)]*)\)$/D', trim($expr), $m)) {
             return null;
         }
         $fn = strtolower($m[1]);

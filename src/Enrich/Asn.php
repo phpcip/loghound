@@ -197,6 +197,22 @@ final class Asn
      */
     private $whois;
 
+    /**
+     * Most entries either in-process memo will hold.
+     *
+     * THE CAP IS THE WHOLE POINT, because the key is an address an attacker chooses and the
+     * tail daemon is a long-lived process. Uncapped, `memoRdns` grows by one entry per
+     * distinct source address for the lifetime of the daemon, which an IPv6 scanner rotating
+     * /64s or any botnet drives without limit — a slow memory exhaustion that looks like a
+     * leak rather than an attack. `Enrich\Ua` and `Parser::loggedFields` already bound their
+     * caches for exactly this reason; these two did not.
+     *
+     * Eviction is "drop the oldest half when full". A memo is a speed-up over a store that is
+     * still there (the SQLite cache), so forgetting an entry costs one read and can never
+     * change an answer.
+     */
+    private const MEMO_MAX = 4096;
+
     /** @var array<string,array> In-process memo keyed by netblock / address. */
     private array $memoAsn = [];
     private array $memoRdns = [];
@@ -254,7 +270,7 @@ final class Asn
     public function country(string $ip): ?string
     {
         $cc = $this->cached($ip)[self::CARRIED_CC] ?? null;
-        if (!is_string($cc) || !preg_match('/^[A-Z]{2}$/', $cc)) {
+        if (!is_string($cc) || !preg_match('/^[A-Z]{2}$/D', $cc)) {
             return null;
         }
         return $cc;
@@ -290,7 +306,7 @@ final class Asn
             $hit = false;
             $cached = $this->state->cacheGet('asn', $key, $hit);
             if ($hit) {
-                return $this->memoAsn[$key] = ($cached ?? []);
+                return $this->remember($this->memoAsn, $key, $cached ?? []);
             }
         }
 
@@ -304,7 +320,23 @@ final class Asn
                 ((int) ($this->cfg['asn_ttl_days'] ?? 30)) * 86400
             );
         }
-        return $this->memoAsn[$key] = $fields;
+        return $this->remember($this->memoAsn, $key, $fields);
+    }
+
+    /**
+     * Write one entry into a bounded memo and return it.
+     *
+     * @param array<string,array> $memo
+     * @param array<string,mixed> $fields
+     * @return array<string,mixed>
+     */
+    private function remember(array &$memo, string $key, array $fields): array
+    {
+        if (count($memo) >= self::MEMO_MAX) {
+            $memo = array_slice($memo, intdiv(self::MEMO_MAX, 2), null, true);
+        }
+        $memo[$key] = $fields;
+        return $fields;
     }
 
     /**
@@ -355,7 +387,7 @@ final class Asn
         if ($cymru['asn'] > 0) {
             $out['asn_i'] = $cymru['asn'];
         }
-        if (preg_match('/^[A-Za-z]{2}$/', $cymru['cc'])) {
+        if (preg_match('/^[A-Za-z]{2}$/D', $cymru['cc'])) {
             $out[self::CARRIED_CC] = strtoupper($cymru['cc']);
         }
         if ($cymru['as_name'] !== '') {
@@ -637,7 +669,7 @@ final class Asn
             $hit = false;
             $cached = $this->state->cacheGet('rdns', $ip, $hit);
             if ($hit) {
-                return $this->memoRdns[$ip] = ($cached ?? []);
+                return $this->remember($this->memoRdns, $ip, $cached ?? []);
             }
         }
 
@@ -656,7 +688,7 @@ final class Asn
                 ((int) ($this->cfg['rdns_ttl_days'] ?? 7)) * 86400
             );
         }
-        return $this->memoRdns[$ip] = $fields;
+        return $this->remember($this->memoRdns, $ip, $fields);
     }
 
     /**
@@ -677,7 +709,7 @@ final class Asn
             return null;
         }
         $name = rtrim((string) $answers[0], '.');
-        if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9\-._]{0,252}[A-Za-z0-9])?$/', $name)) {
+        if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9\-._]{0,252}[A-Za-z0-9])?$/D', $name)) {
             return null;
         }
         return strtolower($name);

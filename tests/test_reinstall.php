@@ -212,7 +212,7 @@ return [
 
             lh_contains($src, 'Token::spendGrant()', 'the installer consults the grant');
             lh_true(
-                strpos($src, "!empty(\$_SESSION['lh_setup_unlocked'])") < strpos($src, 'Token::spendGrant()'),
+                strpos($src, "\$_SESSION['lh_setup_unlocked'] ?? 0") < strpos($src, 'Token::spendGrant()'),
                 'after the ordinary unlock, as an additional way in rather than a replacement'
             );
 
