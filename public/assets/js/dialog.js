@@ -1,0 +1,236 @@
+/*
+ * Loghound — the shared detail dialog, and the one delegated listener that opens it.
+ *
+ * WHY THIS IS ITS OWN FILE. Every table in the panel wants the same thing: a row names
+ * something, and clicking it should open the whole record. Writing that seven times would
+ * produce seven dialogs with seven focus bugs, so there is one here and every view adopts
+ * it. It is deliberately free of any knowledge of sessions, paths or networks: a view
+ * registers an opener for a kind of subject and the dialog knows nothing else.
+ *
+ * THE CSP. The panel's script-src is 'self' with no 'unsafe-inline', so there is no inline
+ * handler, no onclick attribute and no javascript: href anywhere in here. Rows advertise
+ * themselves with data attributes and ONE listener on the document dispatches them, which
+ * also means a table re-rendered by fetch() needs no re-wiring.
+ *
+ * EVERYTHING A VIEW PUTS IN THE BODY CAME OFF THE WIRE. The dialog itself sets textContent
+ * and never innerHTML, and the openers are held to the same rule by core.js's el().
+ *
+ * ACCESSIBILITY, because a modal that traps a keyboard user is worse than no modal:
+ * aria-modal with a labelled heading, focus moved into the panel on open, Tab cycling kept
+ * inside it while it is open, Escape and the scrim both close it, and focus returned to the
+ * element that opened it.
+ */
+
+'use strict';
+
+import { byId, el, fill } from './core.js';
+
+/** Subject kind → opener. A view registers what it knows how to open. */
+const openers = new Map();
+
+/** The element that opened the dialog, so focus can go back where it came from. */
+let opener = null;
+
+/** Incremented on every open, so a slow fetch for a dismissed dialog renders nothing. */
+let generation = 0;
+
+/**
+ * Register an opener for a kind of subject.
+ *
+ * The opener receives the row's own dataset (a plain object of the data- attributes) and is
+ * responsible for calling openDialog() and filling the body. It is async: the dialog is
+ * expected to appear immediately and fill in when the request lands.
+ *
+ * @param {string} kind
+ * @param {function(Object): (void|Promise<void>)} fn
+ */
+export function registerOpener(kind, fn) {
+    openers.set(String(kind), fn);
+}
+
+/**
+ * Build the dialog element once and keep it.
+ *
+ * Created lazily rather than emitted by every view's body(), because it is a control and
+ * not content: a view that never opens one should not carry its markup.
+ */
+function ensureDialog() {
+    let root = byId('lh-dialog');
+    if (root) {
+        return root;
+    }
+
+    const title = el('h2', { id: 'lh-dialog-title' });
+    const sub = el('p', { class: 'muted', id: 'lh-dialog-sub' });
+    const close = el('button', { type: 'button', class: 'ghost small', id: 'lh-dialog-close', text: 'Close' });
+    const body = el('div', { class: 'lh-dialog-body', id: 'lh-dialog-body', tabindex: '-1' });
+
+    const panel = el('div', {
+        class: 'lh-dialog-panel',
+        role: 'dialog',
+        'aria-modal': 'true',
+        'aria-labelledby': 'lh-dialog-title'
+    }, [
+        el('div', { class: 'lh-dialog-head' }, [el('div', {}, [title, sub]), close]),
+        body
+    ]);
+
+    const scrim = el('div', { class: 'lh-dialog-scrim' });
+    root = el('div', { class: 'lh-dialog', id: 'lh-dialog', hidden: true }, [scrim, panel]);
+
+    close.addEventListener('click', closeDialog);
+    scrim.addEventListener('click', closeDialog);
+    panel.addEventListener('keydown', onPanelKey);
+
+    document.body.appendChild(root);
+    return root;
+}
+
+/**
+ * Keep Tab inside the panel, and let Escape out.
+ *
+ * The focusable set is recomputed on every Tab rather than cached, because the body's
+ * contents arrive after the dialog opens and a cached list would send Tab to a node that
+ * has been replaced.
+ */
+function onPanelKey(event) {
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDialog();
+        return;
+    }
+    if (event.key !== 'Tab') {
+        return;
+    }
+    const panel = event.currentTarget;
+    const focusable = Array.prototype.filter.call(
+        panel.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, [tabindex]'),
+        (node) => node.offsetParent !== null || node === panel
+    );
+    if (!focusable.length) {
+        return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+    }
+}
+
+/**
+ * Open the dialog with a heading and a caption, and return its body element.
+ *
+ * The caller renders into the returned node. A second open replaces the first rather than
+ * stacking: two modals over each other is never the right answer, and the generation
+ * counter means the abandoned one's fetch cannot paint over the new one.
+ *
+ * @param {string} title
+ * @param {string} subtitle
+ * @returns {{body: HTMLElement, generation: number}}
+ */
+export function openDialog(title, subtitle) {
+    const root = ensureDialog();
+    generation += 1;
+
+    byId('lh-dialog-title').textContent = String(title || 'Detail');
+    const sub = byId('lh-dialog-sub');
+    sub.textContent = String(subtitle || '');
+    sub.hidden = !subtitle;
+
+    const body = byId('lh-dialog-body');
+    fill(body, [el('p', { class: 'muted', text: 'Loading…' })]);
+
+    root.hidden = false;
+    document.documentElement.classList.add('lh-dialog-open');
+    body.focus();
+
+    return { body: body, generation: generation };
+}
+
+/** Has the dialog moved on since this open? A stale render must be dropped. */
+export function isCurrent(token) {
+    return token === generation;
+}
+
+/** Close the dialog and give focus back to whatever opened it. */
+export function closeDialog() {
+    const root = byId('lh-dialog');
+    if (!root || root.hidden) {
+        return;
+    }
+    generation += 1;
+    root.hidden = true;
+    document.documentElement.classList.remove('lh-dialog-open');
+    if (opener && typeof opener.focus === 'function') {
+        opener.focus();
+    }
+    opener = null;
+}
+
+/**
+ * Replace a dialog body with a failure, in the same shape a card error uses.
+ *
+ * The message is the server's own sentence, set with textContent: a Solr error can quote a
+ * User-Agent back at us and it must land as text.
+ */
+export function dialogFail(body, err) {
+    fill(body, [
+        el('h3', { text: 'This could not be loaded' }),
+        el('p', { text: String(err && err.message ? err.message : err) })
+    ]);
+}
+
+/**
+ * Convert a DOMStringMap into a plain object, so an opener gets something ordinary.
+ */
+function datasetOf(node) {
+    const out = {};
+    for (const key of Object.keys(node.dataset)) {
+        out[key] = node.dataset[key];
+    }
+    return out;
+}
+
+/**
+ * Dispatch a click or an Enter/Space on the nearest [data-lh-open] to its opener.
+ *
+ * A LINK ALWAYS WINS. The filter affordance in a table cell is a real <a href>, so it must
+ * navigate rather than open a dialog even though it sits inside a clickable row — which is
+ * the whole reason the two are different elements. closest() then picks the INNERMOST
+ * data-lh-open, so a drillable cell beats the row it is in.
+ */
+function onActivate(event) {
+    if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') {
+        return;
+    }
+    const target = event.target;
+    if (!target || typeof target.closest !== 'function') {
+        return;
+    }
+    if (target.closest('a[href], button, input, select, textarea')) {
+        return;
+    }
+    const node = target.closest('[data-lh-open]');
+    if (!node) {
+        return;
+    }
+    const fn = openers.get(node.dataset.lhOpen);
+    if (typeof fn !== 'function') {
+        return;
+    }
+    event.preventDefault();
+    opener = node;
+    Promise.resolve(fn(datasetOf(node))).catch(() => {
+        const body = byId('lh-dialog-body');
+        if (body) {
+            dialogFail(body, new Error('The detail view failed to render.'));
+        }
+    });
+}
+
+document.addEventListener('click', onActivate);
+document.addEventListener('keydown', onActivate);

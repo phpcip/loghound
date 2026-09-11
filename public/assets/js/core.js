@@ -141,8 +141,14 @@ export function byId(id) {
 /**
  * Build a table body from rows.
  *
- * Each cell descriptor is `{text, mono, num, clip, title, node, class}`. Everything goes
- * through textContent unless a pre-built `node` is supplied.
+ * Each cell descriptor is `{text, mono, num, clip, nowrap, title, node, class, sort}`.
+ * Everything goes through textContent unless a pre-built `node` is supplied.
+ *
+ * `sort` is the value the column sorts BY, when that is not the text on screen. "2.3 s",
+ * "1.2 MiB" and "09/11/2026 02:44" all sort wrongly as strings and none of them can be
+ * recovered from the rendered text without guessing at its format, so the raw number goes on
+ * the cell as a data attribute and assets/js/sorttable.js uses it. A cell with no `sort`
+ * sorts by its text, which is right for a name and for anything already in a sortable shape.
  */
 export function tbody(table, rows) {
     const body = table.tBodies[0] || table.appendChild(document.createElement('tbody'));
@@ -158,7 +164,8 @@ export function tbody(table, rows) {
             if (cell.class) { classes.push(cell.class); }
             const td = el('td', {
                 class: classes.join(' ') || null,
-                title: cell.title || (cell.clip && cell.text ? String(cell.text) : null)
+                title: cell.title || (cell.clip && cell.text ? String(cell.text) : null),
+                'data-sort': cell.sort === null || cell.sort === undefined ? null : String(cell.sort)
             });
             if (cell.node) {
                 td.appendChild(cell.node);

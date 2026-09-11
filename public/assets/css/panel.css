@@ -1358,59 +1358,512 @@ td .shape { white-space: nowrap; }
 .check-row .muted { overflow-wrap: anywhere; }
 
 /*
- * The Settings jump bar.
+ * The section nav — the pinned bar of jump links every view builds from its own cards.
  *
- * Eleven cards in one scroll is not navigable, so this sticks under the page header and
- * stays reachable wherever the reader is. Horizontal and wrapping rather than a sidebar:
- * the panel already has one on the left and a second would compete with it.
+ * WHERE IT IS. First child of <main>, a SIBLING of `.view`. It cannot be inside `.view`:
+ * that is `display: flex; flex-direction: column`, and a sticky element inside a flex
+ * container is sticky within its own flex item box — a box exactly as tall as the bar — so
+ * it has no travel and scrolls away as soon as the reader passes a few cards. Rendered as a
+ * sibling, its containing block is <main>, which is the whole document, and it holds to the
+ * last card. It sits above the H1, the one place the "nothing above the H1" rule is set
+ * aside on purpose: this is chrome of the same kind as the left sidebar.
  *
- * scroll-margin-top on the cards keeps a jumped-to heading clear of the bar instead of
- * landing underneath it.
+ * ONE ROW, ALWAYS. `flex-wrap: nowrap` plus `overflow-x: auto`. Eleven entries at full
+ * heading length do not fit on a line at any realistic width, and a bar that costs two rows
+ * of every screen is worse than the scrolling it was added to fix — so the labels are short
+ * by contract (the second element of each view's SECTIONS entry) and the row scrolls
+ * sideways when it has to. The scrollbar is suppressed so the bar's HEIGHT is the same on
+ * every platform: scroll-margin-top is derived from that height, and a scrollbar that
+ * appears on one machine and not another would move every jump target.
+ * assets/js/sectionnav.js keeps the active entry scrolled into view, which is what makes a
+ * scrolling row usable at eleven entries on a narrow window.
+ *
+ * THE JUMP OFFSET. `--set-nav-h` is measured from the rendered bar by that module and
+ * written onto the root element, because the height depends on the font the browser actually
+ * resolved. The value below is the fallback for the first paint and for scripting off.
+ *
+ * The horizontal negative margins mirror <main>'s own padding at each breakpoint so the bar
+ * is full-bleed and nothing scrolls past it in the gutters; --nav-pull does the same for
+ * main's padding-top, so the bar starts flush with the top of the page rather than 40px down.
  */
+
+:root { --set-nav-h: 50px; }
+
 .set-nav {
+    --nav-gutter: 32px;
+    --nav-pull: 40px;
+
     position: sticky;
     top: 0;
-    z-index: 20;
-    margin: 0 0 24px;
-    padding: 10px 0;
+    z-index: 30;
+    margin: calc(var(--nav-pull) * -1) calc(var(--nav-gutter) * -1) 28px;
+    padding: 10px var(--nav-gutter);
     background: var(--page);
     border-bottom: 1px solid var(--hairline);
-    box-shadow: 0 6px 12px -12px rgba(17, 17, 17, 0.55);
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
 }
+.set-nav::-webkit-scrollbar { display: none; }
+
 .set-nav ul {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px 8px;
+    flex-wrap: nowrap;
+    gap: 0 6px;
     margin: 0;
     padding: 0;
     list-style: none;
 }
+.set-nav li { flex: 0 0 auto; }
+
 .set-nav a {
     display: inline-flex;
     align-items: baseline;
-    gap: 6px;
+    gap: 7px;
     padding: 5px 10px;
-    border: 1px solid var(--hairline);
-    border-radius: 2px;
-    background: var(--band);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
     font-size: 14px;
     line-height: 1.2;
-    color: var(--ink);
+    color: var(--muted);
     text-decoration: none;
     white-space: nowrap;
 }
 .set-nav a:hover,
-.set-nav a:focus-visible { border-color: var(--accent); color: var(--accent-ink); background: var(--chip); }
-.set-nav-num {
-    font-family: var(--mono, monospace);
-    font-size: 14px;
-    color: var(--faint);
+.set-nav a:focus-visible { border-color: var(--hairline); color: var(--ink); background: var(--band); }
+
+/* Active is the one accent and a rule under the entry, never a filled pill. */
+.set-nav a.on {
+    color: var(--accent-ink);
+    border-color: transparent;
+    border-bottom-color: var(--accent);
+    background: none;
 }
+.set-nav-num { font-family: var(--font-mono); font-size: 14px; color: var(--faint); }
 .set-nav a:hover .set-nav-num,
-.set-nav a:focus-visible .set-nav-num { color: var(--accent-ink); }
+.set-nav a:focus-visible .set-nav-num,
+.set-nav a.on .set-nav-num { color: var(--accent-ink); }
 
-.card[id^="set-"] { scroll-margin-top: 96px; }
+/* Every card is a jump target, so every card clears the bar.
 
-@media (max-width: 640px) {
-    .set-nav { position: static; }
+   Deliberately NOT scoped as `.view .card`. A view whose markup leaves one <div> unbalanced
+   makes the parser close `.view` early, and every card after that point becomes a SIBLING of
+   it — measured on the Settings page, where the descendant form of this rule matched nothing
+   and every jump landed its heading underneath the bar. The offset is a property of being a
+   card, not of where the parser thinks the card ended up. */
+
+.card { scroll-margin-top: calc(var(--set-nav-h) + 20px); }
+
+/* These two mirror <main>'s own padding at the same two breakpoints (1000px, 620px). */
+
+@media (max-width: 1000px) {
+    .set-nav { --nav-gutter: 20px; --nav-pull: 32px; }
 }
+
+@media (max-width: 620px) {
+    .set-nav { --nav-gutter: 16px; --nav-pull: 28px; margin-bottom: 22px; }
+}
+
+@media print {
+    .set-nav { display: none; }
+}
+
+/* The Opensolr filter rail (OpensolrView::filterCard).
+
+   Four facet columns, the outcome slice above them and the active filters above that. A card
+   rather than a second vertical sidebar: the panel already has one on the left and the
+   session explorer has a facet rail of its own, so a third column on a page whose main chart
+   wants the width would compete with both.
+
+   Everything here is a link, because a filtered page has to be a URL somebody can send. */
+
+.lf-active:empty,
+.lf-outcomes:empty,
+.lf-rail:empty { display: none; }
+
+.lf-active { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.lf-active a {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 3px 9px; font: 600 14px var(--font-mono);
+    border: 1px solid var(--accent); color: var(--accent-ink); border-radius: var(--radius);
+    max-width: 100%;
+}
+.lf-active a span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lf-active a:hover { background: var(--accent); color: var(--on-accent); text-decoration: none; }
+.lf-active .lf-clear { border-style: dashed; }
+
+.lf-outcomes { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.lf-outcomes a {
+    display: inline-flex; align-items: baseline; gap: 8px;
+    padding: 4px 11px; font-size: 14px; line-height: 1.3;
+    border: 1px solid var(--hairline); border-radius: var(--radius);
+    color: var(--muted); text-decoration: none;
+}
+.lf-outcomes a:hover { border-color: var(--accent); color: var(--accent-ink); background: var(--band); }
+.lf-outcomes a.on { border-color: var(--accent); color: var(--accent-ink); background: var(--chip); }
+.lf-outcomes .lf-count { font-family: var(--font-mono); color: var(--faint); }
+.lf-outcomes a.on .lf-count,
+.lf-outcomes a:hover .lf-count { color: var(--accent-ink); }
+
+.lf-rail {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 24px 32px;
+    margin-bottom: 14px;
+}
+.lf-rail h3 {
+    font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--faint); margin-bottom: 6px;
+    padding-bottom: 6px; border-bottom: 1px solid var(--hairline);
+}
+.lf-rail ul { list-style: none; margin: 0; padding: 0; }
+.lf-rail li a {
+    display: flex; justify-content: space-between; gap: 10px;
+    padding: 3px 0; font-size: 14px; color: var(--muted); font-weight: 400;
+    text-decoration: none;
+}
+.lf-rail li a:hover { color: var(--accent-ink); }
+.lf-rail li a.on { color: var(--accent-ink); font-weight: 600; }
+.lf-rail .fv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.lf-rail .fc { font-family: var(--font-mono); color: var(--faint); flex: none; }
+
+/* A clickable table row that filters the page to its own value. Underlined on hover only, so
+   a table of them does not read as a wall of links. */
+
+tr.lf-pick td:first-child { cursor: pointer; }
+tr.lf-pick a { color: inherit; text-decoration: none; }
+tr.lf-pick a:hover { color: var(--accent-ink); text-decoration: underline; }
+
+/* =====================================================================================
+   VISITOR DETAIL — flags, the value-as-filter control, the filter bar and the dialog.
+
+   Appended as one block rather than woven into the rules above, because two other agents
+   are in this file at the same time. Everything here is prefixed (.dim, .flag, .filterbar,
+   .fchip, .fgroup, .fpanel, .lh-dialog, .ident-strip, .table-fixed) and overrides nothing
+   that was already written.
+
+   Editorial system throughout: flat, 2px corners, one accent, no gradients, no shadows,
+   nothing under 14px. Both themes come from the tokens at the top of the file, so there is
+   no colour literal anywhere below.
+   ================================================================================== */
+
+/* --- Tables that hold their shape -----------------------------------------------------
+
+   Nine columns of content-driven width push the last one past the right edge of the
+   viewport, which is how a Verdict column ends up reading "VERD" with its badges sliced in
+   half. Fixed layout makes the declared widths authoritative, every cell clips with an
+   ellipsis instead of pushing its neighbours, and min-width turns the wrapper's overflow-x
+   into the backstop — content scrolls rather than disappearing. */
+
+table.table-fixed { table-layout: fixed; min-width: 900px; }
+table.table-fixed td,
+table.table-fixed th { overflow: hidden; text-overflow: ellipsis; }
+table.table-fixed td.clip { max-width: none; }
+table.table-fixed td.wrap { white-space: normal; overflow: visible; text-overflow: clip; }
+table.table-fixed th.num, table.table-fixed td.num { white-space: nowrap; }
+
+/* A line inside a multi-line cell that must truncate on its own. */
+.clip-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Two stacked facts in one cell: the name, then what qualifies it. */
+.client { display: block; min-width: 0; line-height: 1.35; }
+.client > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client .chip { margin-left: 6px; }
+
+/* --- The value is the control --------------------------------------------------------
+
+   Underlined on hover only. A table where every identity value is a permanently underlined
+   link reads as a wall of blue, and the point is that the value looks like the value. */
+
+a.dim { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--field-border); }
+a.dim:hover,
+a.dim:focus-visible { color: var(--accent-ink); border-bottom-color: var(--accent); }
+.dim-count { margin-left: 8px; color: var(--faint); font-family: var(--font-mono); font-size: 14px; }
+
+/* --- Flags ---------------------------------------------------------------------------
+
+   Composed from the regional-indicator codepoints, so there is no image request and no
+   third-party asset — which is what lets the panel keep a CSP with no outside origin and
+   still work air-gapped. The code or the country name always sits beside it as real text. */
+
+.flag { margin-right: 6px; font-size: 16px; line-height: 1; }
+.geo { display: inline-flex; align-items: baseline; gap: 0; min-width: 0; }
+
+/* --- The filter bar ------------------------------------------------------------------
+
+   First child of .view on every page. The active row is drawn from the URL with no request
+   at all, so it is on screen before any card has a number in it: a filtered number that
+   does not say it is filtered is a wrong number. */
+
+.filterbar { display: flex; flex-direction: column; gap: 12px; }
+.filterbar-active {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 12px 14px;
+    background: var(--band);
+    border-left: 2px solid var(--accent);
+}
+.filterbar-label {
+    font: 600 14px/1.4 var(--font-ui);
+    text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint);
+}
+.filterbar-note { flex-basis: 100%; font-size: 14px; color: var(--faint); line-height: 1.45; }
+.filterbar-clear { font-size: 14px; font-weight: 600; }
+.filterbar-tools { display: flex; gap: 10px; }
+
+.fchip {
+    display: inline-flex; align-items: baseline; gap: 6px;
+    padding: 3px 9px;
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius);
+    background: var(--page);
+    font-size: 14px; color: var(--ink); text-decoration: none;
+}
+.fchip:hover, .fchip:focus-visible { border-color: var(--accent); color: var(--accent-ink); }
+.fchip-dim { color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-size: 14px; }
+.fchip-val { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; max-width: 30ch; }
+.fchip-x { color: var(--faint); font-weight: 700; }
+
+/* Dimension lists: the distribution, and every value in it a filter. */
+.fpanel {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px;
+    padding: 18px 0 4px;
+    border-top: 1px solid var(--hairline);
+}
+.fgroup h3, .fgroup h4 {
+    margin: 0 0 8px;
+    font: 600 14px/1.4 var(--font-ui);
+    text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint);
+    padding-bottom: 6px; border-bottom: 1px solid var(--hairline);
+}
+.fgroup ul { list-style: none; margin: 0; padding: 0; }
+.fgroup li {
+    display: flex; justify-content: space-between; gap: 10px;
+    padding: 4px 0; font-size: 14px; min-width: 0;
+}
+.fgroup li > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fgroup p { margin: 8px 0 0; font-size: 14px; }
+
+/* --- The detail dialog ---------------------------------------------------------------
+
+   One instance, created on first use, shared by every view. Fixed to the viewport rather
+   than positioned in the flow, so opening a session no longer scrolls the operator away
+   from the list they were working through. */
+
+html.lh-dialog-open { overflow: hidden; }
+
+.lh-dialog { position: fixed; inset: 0; z-index: 60; display: flex; }
+.lh-dialog-scrim { position: absolute; inset: 0; background: var(--ink); opacity: 0.4; }
+.lh-dialog-panel {
+    position: relative;
+    margin: auto;
+    width: min(1100px, calc(100% - 32px));
+    max-height: calc(100% - 48px);
+    display: flex; flex-direction: column;
+    background: var(--page);
+    border: 1px solid var(--hairline);
+    border-top: 2px solid var(--accent);
+    border-radius: var(--radius);
+}
+.lh-dialog-head {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--hairline);
+}
+.lh-dialog-head h2 {
+    margin: 0;
+    font: 700 24px/1.2 var(--font-ui); letter-spacing: -0.02em;
+    overflow-wrap: anywhere;
+}
+.lh-dialog-head p { margin: 6px 0 0; font-size: 14px; }
+.lh-dialog-body { padding: 20px 24px 28px; overflow-y: auto; }
+.lh-dialog-body h3 {
+    margin: 28px 0 12px;
+    font: 600 15px/1.3 var(--font-ui);
+    text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint);
+    padding-bottom: 6px; border-bottom: 1px solid var(--hairline);
+}
+.lh-dialog-body h4 { margin: 20px 0 8px; font: 600 15px/1.3 var(--font-ui); }
+.lh-dialog-body > :first-child { margin-top: 0; }
+.lh-dialog-body .stats { margin-bottom: 18px; }
+.lh-dialog-body .stat-value { font-size: 26px; }
+.lh-dialog-body .fpanel { border-top: 0; padding-top: 0; }
+
+/* The trail carries a sixth column — how long the server took — so it needs its own grid
+   rather than the five-column one the old inline panel used. */
+.lh-dialog .timeline li { grid-template-columns: 78px 50px minmax(0, 1fr) 44px 74px 66px; gap: 12px; }
+
+/* What the measured site declared about who this was. Flagged with the accent because it is
+   the one fact in the dialog that Loghound did not derive for itself. */
+.ident-strip {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px;
+    padding: 12px 14px; margin-bottom: 18px;
+    background: var(--band);
+    border-left: 2px solid var(--accent);
+}
+.ident-label {
+    font: 600 14px/1.4 var(--font-ui);
+    text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint);
+}
+.ident-value { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+.ident-strip .faint { flex-basis: 100%; font-size: 14px; line-height: 1.45; }
+
+@media (max-width: 900px) {
+    .lh-dialog-panel { width: 100%; max-height: 100%; margin: 0; border: 0; border-top: 2px solid var(--accent); }
+    .lh-dialog-body { padding: 16px; }
+    .lh-dialog .timeline li { grid-template-columns: 66px minmax(0, 1fr) 44px; }
+    .lh-dialog .timeline .t-method,
+    .lh-dialog .timeline .t-bytes,
+    .lh-dialog .timeline .t-dur { display: none; }
+    .filterbar-active { padding: 10px 12px; }
+}
+
+/* =====================================================================================
+   VISITOR DETAIL, PART TWO — sortable headers, the facet control, and alignment.
+
+   Second half of the same appended block, kept separate from the rules two other agents
+   are writing above. Prefixes: .sortable/.sort-mark, .facet-*, .chip-word, .sub, .score.
+   ================================================================================== */
+
+/* --- Sortable column headers ---------------------------------------------------------
+
+   The affordance is added by assets/js/sorttable.js, so a table gains it by existing. The
+   header row has to read as ONE thing rather than as a row of separate words, which is what
+   the rule under it and the shared background are for. */
+
+thead tr { background: var(--band); }
+thead th { position: relative; }
+th.sortable { cursor: pointer; user-select: none; padding-right: 18px; }
+th.sortable:hover,
+th.sortable:focus-visible { color: var(--accent-ink); }
+th.sortable:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+th.num.sortable { padding-right: 18px; }
+
+.sort-mark { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); font-size: 14px; }
+th.sortable .sort-mark::after { content: "\2195"; color: var(--field-border); }
+th.sorted-asc  .sort-mark::after { content: "\25B2"; color: var(--accent-ink); }
+th.sorted-desc .sort-mark::after { content: "\25BC"; color: var(--accent-ink); }
+th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
+
+/* --- Typeface per value, not per table ----------------------------------------------
+
+   Monospace is for values whose characters line up or must be copied exactly: an address, a
+   path, a fingerprint, a session id, a raw User-Agent, a number compared down a column. An
+   organisation name, a country, a timezone, a verdict and a device class are prose. The chip
+   class had been setting monospace on all of them. */
+
+.chip-word { font-family: var(--font-ui); font-weight: 600; }
+
+/* The second line of a two-line cell: the qualifier under the name. Set apart by colour and
+   size rather than by a separator, so an absent value leaves no stray punctuation. */
+.sub { display: block; font-size: 14px; color: var(--faint); }
+.sub .chip { margin: 2px 0 0; }
+
+/* A bot score sitting next to a verdict chip: a number, so tabular and aligned. */
+.score { margin-left: 8px; font-variant-numeric: tabular-nums; }
+
+/* --- The facet control --------------------------------------------------------------
+
+   A facet list has to look like a control before it is pressed. The whole row is the target,
+   the count has its own right-aligned column so the quantities line up down the list, and a
+   proportional bar behind the row makes the distribution readable without reading a number —
+   which is most of why anybody opens a facet list. */
+
+.facet-how {
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    background: var(--band);
+    border-left: 2px solid var(--hairline);
+    font-size: 14px; color: var(--muted); line-height: 1.5;
+}
+.facet-groups { display: flex; flex-direction: column; gap: 0; }
+.fpanel .facet-groups {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 0 32px;
+}
+
+.facet { padding: 16px 0; border-top: 1px solid var(--hairline); }
+.facet:first-child { border-top: 0; padding-top: 0; }
+
+.facet-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    margin: 0 0 8px;
+    font: 600 14px/1.4 var(--font-ui);
+    text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint);
+}
+.facet-chosen { text-transform: none; letter-spacing: 0; color: var(--accent-ink); font-size: 14px; }
+
+.facet-search { margin-bottom: 8px; }
+.facet-q {
+    width: 100%;
+    padding: 5px 8px;
+    font: 400 14px/1.4 var(--font-ui);
+    color: var(--ink);
+    background: var(--page);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius);
+}
+.facet-q:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.facet-list { list-style: none; margin: 0; padding: 0; }
+.facet-li { margin: 0; }
+
+.facet-opt {
+    position: relative;
+    display: grid; grid-template-columns: 14px minmax(0, 1fr) max-content;
+    align-items: baseline; gap: 6px;
+    padding: 5px 8px;
+    font-size: 14px; line-height: 1.4;
+    color: var(--ink); text-decoration: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+}
+.facet-opt:hover,
+.facet-opt:focus-visible { border-color: var(--field-border); background: var(--band); }
+.facet-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.facet-opt.is-static { color: var(--muted); }
+
+.facet-fill {
+    position: absolute; left: 0; top: 2px; bottom: 2px;
+    background: var(--chip);
+    z-index: 0;
+}
+.facet-opt > :not(.facet-fill) { position: relative; z-index: 1; }
+
+.facet-mark { color: var(--accent-ink); font-weight: 700; text-align: center; }
+.facet-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.facet-n {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    color: var(--faint); text-align: right;
+}
+
+.facet-opt.is-on { border-color: var(--accent); background: var(--band); font-weight: 600; }
+.facet-opt.is-on .facet-fill { background: var(--c-human); }
+.facet-opt.is-on .facet-n { color: var(--ink); }
+
+.facet-more {
+    margin-top: 6px;
+    padding: 4px 9px;
+    font: 600 14px/1.4 var(--font-ui);
+    color: var(--muted);
+    background: none;
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.facet-more:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-ink); }
+.facet-more:disabled { cursor: default; opacity: 0.6; }
+.facet-note { margin: 8px 0 0; font-size: 14px; color: var(--faint); line-height: 1.45; }
+
+/* A real boundary between the sidebar and the results, so the page reads as two regions
+   rather than as one column of stray text. */
+.explorer .facets { border-right: 1px solid var(--hairline); padding-right: 24px; }
+
+@media (max-width: 900px) {
+    .explorer .facets { border-right: 0; padding-right: 0; border-bottom: 1px solid var(--hairline); }
+    .fpanel .facet-groups { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* The explorer sidebar holds a real control now rather than five lists of body text, so it
+   needs the width for a value and its count side by side. */
+.explorer { grid-template-columns: 292px minmax(0, 1fr); gap: 32px; }

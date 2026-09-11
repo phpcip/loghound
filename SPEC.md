@@ -306,6 +306,19 @@ session closes; there is never a second document for the same session.
 | Verdict | Reached with the five absence-based rules **not evaluated** (§7), and **floored at `unknown`**: a provisional verdict may never be `human` or `likely_human`. |
 | Rollups | Excluded. Daily rollups count settled sessions only (§4.2 rollup block). |
 
+**`ident_s`, `signed_in_b` — what the measured site said about the visitor.**
+
+Neither is ever inferred. Loghound reads no cookie, scrapes no form and hunts no meta tag:
+the site declares these through the beacon or they are absent. They are the only fields on a
+session that do not come from the log line or from Loghound's own measurement.
+
+| | |
+|---|---|
+| `ident_s` | Whatever the site calls the person — an email, a customer number, an account id. Stored, because the session dialog shows it back. Capped at 128 characters, control characters stripped, valid UTF-8 enforced; markup is kept as data and escaped at the sink. |
+| `signed_in_b` | **Three states, and the third is the absence of the field.** `true` signed in, `false` explicitly not, **absent = not reported**. A site that never answers must not be counted as anonymous, so the field carries no default and is written only when a payload actually said one or the other — the same discipline as `provisional_b`, for the same reason. |
+| Resolution | Over a session: the last non-empty identity wins, and signed-in beats anonymous. |
+| Switches | `beacon.store_identity` is **off by default** — it is a name, which is personal data. `beacon.store_signed_in` is on: a boolean identifies nobody. Both gate before the value reaches SQLite, so "off" means it is never stored anywhere. |
+
 ---
 
 ## 5. Ingestion pipeline

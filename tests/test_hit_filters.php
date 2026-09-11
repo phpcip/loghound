@@ -225,11 +225,22 @@ return [
         => static function (): void {
             $missing = array_diff_key(Query::filterFields(), Query::hitFilterFields());
 
-            if (array_keys($missing) !== ['bot_verdict_s', 'bot_class_s', 'bot_reasons_ss']) {
+            $expected = [
+                'bot_verdict_s',
+                'bot_class_s',
+                'bot_reasons_ss',
+                'paths_ss',
+                'signed_in_b',
+            ];
+
+            if (array_keys($missing) !== $expected) {
                 throw new \RuntimeException(
                     'The hits/sessions filter split changed to: ' . implode(', ', array_keys($missing))
                     . '. If a field was added to filterFields() it must be present on BOTH schemas or '
-                    . 'excluded here on purpose.'
+                    . 'excluded here on purpose. The three verdict fields are the scorer\'s conclusions '
+                    . 'about a whole session; paths_ss is the set of paths a session touched, and a hit '
+                    . 'has one path, not a set; signed_in_b is what the site told the beacon, which '
+                    . 'arrives once per session and never per log line.'
                 );
             }
         },

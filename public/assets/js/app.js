@@ -13,6 +13,9 @@
 
 import { boot, initCopyButtons, initTheme } from './core.js';
 import { initCharts } from './charts.js';
+import { initDetail } from './detail.js';
+import { initFilterBar } from './facets.js';
+import { initSortableTables } from './sorttable.js';
 
 import overview from './views/overview.js';
 import bots from './views/bots.js';
@@ -58,6 +61,13 @@ const VIEWS = {
  * than inside one card. Both insert themselves into the header only when they have something
  * to say — no Opensolr account, or a single virtual host, means no furniture — and both fail
  * silently, because neither is a report.
+ *
+ * Two more join them for the same reason. The filter bar says which filters are in force and
+ * offers every dimension to filter by, and a filtered number that does not say it is filtered
+ * is a wrong number on EVERY page, not on the one that happens to own the control. The detail
+ * dialogs are registered here rather than per view because a row that names a network means the
+ * same thing on Networks, on Bots and in the session explorer, and three views each opening
+ * their own dialog is three focus bugs.
  */
 function start() {
     initTheme();
@@ -65,6 +75,9 @@ function start() {
     initCharts();
     initBandwidthStrip();
     initHostPicker();
+    initFilterBar();
+    initDetail();
+    initSortableTables();
 
     const slug = document.body.dataset.view || boot.view || 'overview';
     const view = VIEWS[slug];

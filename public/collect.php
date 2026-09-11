@@ -119,6 +119,14 @@
  *    access log is the authority on what was actually served (SPEC.md §6.4 —
  *    "the log wins on facts, the beacon wins on time"). The address is stored
  *    under the configured privacy mode, exactly like a log hit.
+ *    Two fields on the row come from the measured SITE rather than from the
+ *    browser: the identity string it chose to attach, and whether the visitor
+ *    was signed in. Both are caller-supplied and therefore hostile — they are
+ *    bounded, stripped of control characters and validated by
+ *    Beacon::normalise() before they reach here, and either can be switched off
+ *    in configuration, in which case normalise() empties the field and nothing
+ *    is staged at all. The signed-in state is three-state: `null` means the site
+ *    said nothing, and it must never be stored as "anonymous".
  *
  * ----------------------------------------------------------------------------
  * STATE ACCESS
@@ -289,6 +297,8 @@ if ($state !== null) {
         'tz'          => $payload['tz'],
         'webgl'       => $payload['webgl'],
         'path'        => $payload['path'],
+        'ident'       => $payload['ident'],
+        'signed_in'   => $payload['signed_in'],
         'ip'          => Security::applyIpPrivacy(
             $ip,
             (string) $config->get('privacy.ip_mode', 'full'),

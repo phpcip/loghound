@@ -36,7 +36,6 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
-use Loghound\OpensolrLog;
 use Loghound\OpensolrShape;
 use Loghound\Security;
 
@@ -83,6 +82,21 @@ final class Queries extends OpensolrView
     /** Job kinds this view hosts: the whole log, and the requests that matched nothing. */
     private const KIND_ALL = 'shape_scan';
     private const KIND_ZERO = 'empty_scan';
+
+    /**
+     * The cards, in render order. Drives the jump bar and every card's number.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    protected const SECTIONS = [
+        ['qy-filters', 'Slice'],
+        ['qy-volume', 'Volume'],
+        ['qy-shapes', 'Shapes'],
+        ['qy-latency', 'Latency'],
+        ['qy-zero', 'Finds nothing'],
+        ['qy-slow', 'Slowest'],
+        ['qy-explain', 'Reading these'],
+    ];
 
     /**
      * QTime histogram edges, in milliseconds.
@@ -186,7 +200,48 @@ final class Queries extends OpensolrView
             return null;
         }
 
-        return ['core' => $core, 'range' => $range];
+        return [
+            'core'    => $core,
+            'range'   => $range,
+            'lf'      => self::postedFilters(),
+            'outcome' => self::postedOutcome(),
+        ];
+    }
+
+    /**
+     * The packed filter set this scan is to run under, from the POST body.
+     *
+     * A poll — and a start — is a POST to the bare view URL and carries no query string, so
+     * the filters cannot be read from `$_GET` the way every GET-driven card reads them. The
+     * front end therefore posts back the opaque string the server itself put in the payload
+     * it is looking at (`lf_packed`), and it is decoded and re-encoded HERE rather than
+     * trusted: decodeLogFilters() drops any field that is not in the allowlist and caps every
+     * value, so a hand-forged value can do no more than a hand-forged query string could.
+     *
+     * Re-encoding also canonicalises it, which matters because the params are a job's
+     * identity: two spellings of the same filter set must not become two scans.
+     */
+    private static function postedFilters(): string
+    {
+        $raw = $_POST['lf'] ?? '';
+        if (!is_string($raw) || $raw === '' || strlen($raw) > 256) {
+            return '';
+        }
+
+        $parts = [];
+        foreach (self::decodeLogFilters($raw) as $field => $values) {
+            $parts[] = $field . '=' . implode(',', array_map('rawurlencode', $values));
+        }
+        $packed = implode(';', $parts);
+
+        return strlen($packed) > 256 ? '' : $packed;
+    }
+
+    /** The outcome slice this scan is to run under, from the POST body. */
+    private static function postedOutcome(): string
+    {
+        $raw = $_POST['outcome'] ?? '';
+        return is_string($raw) && isset(self::OUTCOMES[$raw]) ? $raw : '';
     }
 
     /**
@@ -241,10 +296,17 @@ final class Queries extends OpensolrView
             ];
         }
 
-        $fqs = [OpensolrLog::dateFq((string) $ranges[$rangeKey]['start'])];
-        if ($emptyOnly) {
-            $fqs[] = OpensolrLog::numericFq('hits', '0', '0');
+        $packed = (string) ($ctx['lf'] ?? '');
+        $outcome = (string) ($ctx['outcome'] ?? '');
+        if (!isset(self::OUTCOMES[$outcome])) {
+            $outcome = '';
         }
+
+        $fqs = self::logFqsFor(
+            (string) $ranges[$rangeKey]['start'],
+            self::decodeLogFilters($packed),
+            $emptyOnly ? 'zero' : $outcome
+        );
 
         $from = $page * self::SCAN_ROWS;
         $res = $this->log()->log($core, [
@@ -476,7 +538,10 @@ final class Queries extends OpensolrView
             return;
         }
 
+        $this->filterCard('qy-filters', self::indexPicker('qy-core'));
+        $this->volumeCard('qy-volume');
         $this->shapesCard();
+        $this->latencyCard();
         $this->zeroCard();
         $this->slowCard();
         $this->explainCard();
@@ -485,8 +550,7 @@ final class Queries extends OpensolrView
     /** The shape table, with the scope control and the scan progress. */
     private function shapesCard(): void
     {
-        $tools = self::indexPicker('qy-core');
-        $tools .= '<div class="controls"><label for="qy-sort">Order by</label><select id="qy-sort">';
+        $tools = '<div class="controls"><label for="qy-sort">Order by</label><select id="qy-sort">';
         foreach ([
             'count' => 'Most requests',
             'zero'  => 'Most zero-result',
@@ -497,10 +561,11 @@ final class Queries extends OpensolrView
         }
         $tools .= '</select></div>';
 
-        self::cardOpen('qy-shapes', '01', 'Query shapes', '', $tools);
+        self::cardOpen('qy-shapes', $this->cardNumber('qy-shapes'), 'Query shapes', '', $tools);
         self::skeleton('qy-shapes', 'rows', 0, 'Scanning the request log');
 
         echo '<div class="job-mount" id="qy-shapes-job"></div>';
+        echo '<div class="chart" id="qy-shapes-chart" style="height:300px"></div>';
         echo '<div class="table-wrap"><table id="qy-shapes-table"><thead><tr>'
             . '<th scope="col" class="w-expand"><span class="sr-only">Expand</span></th>'
             . '<th scope="col">Shape</th>'
@@ -515,12 +580,46 @@ final class Queries extends OpensolrView
         self::cardClose('qy-shapes');
     }
 
+    /**
+     * The latency distribution across everything the scan read.
+     *
+     * Costs no extra call. Every shape in the scan carries its own log-scaled histogram —
+     * that is how the per-shape percentiles survive being merged across twenty pages — and
+     * summing those histograms bucket by bucket gives the distribution for the whole scanned
+     * population. It was being computed and then never drawn.
+     *
+     * Log-scaled, because query latency is: the interesting structure is between 1 ms and
+     * 100 ms, and a linear axis wide enough to hold a thirty-second outlier puts every real
+     * query in its first bar.
+     */
+    private function latencyCard(): void
+    {
+        self::cardOpen(
+            'qy-latency',
+            $this->cardNumber('qy-latency'),
+            'How long the scanned requests took',
+            'Every timed request the scan above read, bucketed on a log scale. Costs no extra reading — '
+            . 'the buckets are the same ones the per-shape percentiles are computed from.'
+        );
+        self::skeleton('qy-latency', 'chart', 300, 'Summing the scanned histograms');
+
+        self::statRow([
+            ['p50',   'p50',    'Half of the scanned requests were answered within this'],
+            ['p95',   'p95',    'One scanned request in twenty took longer'],
+            ['p99',   'p99',    'The worst one percent of the scanned requests'],
+            ['timed', 'Timed',  'Scanned requests that carried a QTime at all'],
+        ]);
+        echo '<div class="chart" id="qy-latency-chart" style="height:280px"></div>';
+
+        self::cardClose('qy-latency');
+    }
+
     /** Shapes that matched nothing, scanned over zero-result requests only. */
     private function zeroCard(): void
     {
         self::cardOpen(
             'qy-zero',
-            '02',
+            $this->cardNumber('qy-zero'),
             'Shapes that find nothing',
             ''
         );
@@ -549,9 +648,9 @@ final class Queries extends OpensolrView
     {
         self::cardOpen(
             'qy-slow',
-            '03',
+            $this->cardNumber('qy-slow'),
             'Slowest individual requests',
-            'The requests with the highest QTime in the selected range, exactly — not a sample.'
+            'The requests with the highest QTime under the current filters, exactly — not a sample.'
         );
         self::skeleton('qy-slow', 'rows', 0, 'Asking the platform for the slowest requests');
 
@@ -569,7 +668,7 @@ final class Queries extends OpensolrView
     /** What QTime is, what it is not, and how a shape is derived. */
     private function explainCard(): void
     {
-        self::cardOpen('qy-explain', '04', 'Reading these numbers');
+        self::cardOpen('qy-explain', $this->cardNumber('qy-explain'), 'Reading these numbers');
         echo '<div class="explain">';
         echo '<p><strong>QTime is not response time.</strong> It is Solr\'s own measure of the time it spent '
             . 'answering the query, measured inside the search handler. It excludes the time the request '
@@ -591,6 +690,10 @@ final class Queries extends OpensolrView
             . 'already in progress rather than starting a second one. Each table says exactly how many '
             . 'requests it read and out of how many. The slowest-requests table above is different: that '
             . 'one is exact, because sorting is something the platform can do itself.</p>';
+        echo '<p><strong>A scan runs under the filters that were set when it started.</strong> The filters '
+            . 'are part of the operation\'s identity, so changing one starts a different scan rather than '
+            . 'relabelling the running one, and the zero-result table below always reads zero-result '
+            . 'requests whatever outcome slice is selected above — that is what it is for.</p>';
         echo '<p><strong>The latency figures survive the paging.</strong> A percentile cannot be averaged '
             . 'across pages, so none is: every shape carries a histogram of its own response times, pages '
             . 'add histograms together bucket by bucket, and the percentiles are read off the merged '

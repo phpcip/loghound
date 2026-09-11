@@ -30,6 +30,13 @@
  *     what this section is for and where the credentials go. Loghound is completely useful
  *     without Opensolr and must never imply otherwise.
  *
+ * WHAT THE READER CAN SLICE BY, AND WHY IT IS NOT MORE. Every card on every one of these
+ * views answers under a filter set read from the query string — see logFilterFields() for
+ * the four dimensions the platform's request log can honestly be faceted on, and for the
+ * ones it cannot. The sidebar filters the rest of the panel uses (`f[…]`, verdict, country,
+ * fingerprint) name fields that exist only on Loghound's own cores, so they are reported as
+ * ignored rather than silently applied to a schema that has never heard of them.
+ *
  * THE API KEY never reaches this layer's output. It is held by \Loghound\OpensolrLog,
  * used server-side only, and every message that can escape has been through that class's
  * redact(). Nothing here puts it in HTML, in a URL the browser sees, or in a JSON payload.
@@ -46,10 +53,69 @@ use Loghound\Opensolr;
 use Loghound\OpensolrLog;
 use Loghound\Security;
 
-abstract class OpensolrView extends Controller implements JobHost
+abstract class OpensolrView extends Controller implements JobHost, Sections
 {
     /** Terms asked for when faceting client addresses. Bounded; the tail is a long one. */
     protected const IP_FACET_LIMIT = 60;
+
+    /** Terms per field in the filter rail. Short on purpose: it is a rail, not a report. */
+    protected const FILTER_FACET_LIMIT = 15;
+
+    /** Cards this view renders, in order. Overridden by every concrete view. */
+    protected const SECTIONS = [];
+
+    /**
+     * The fields of the platform's request log this section may filter on, with labels.
+     *
+     * THIS LIST IS WHAT THE DATA SUPPORTS, AND NOTHING MORE. The request log's fields are
+     * `core_name, date, timestamp_unix, ip, path, q, hits, qtime, http_status, size,
+     * param_hostname, full_request` (\Loghound\OpensolrLog::FIELDS), and only four of them
+     * are worth faceting:
+     *
+     *  - `path` — the handler. This is the one the operator asked for: a caller hitting
+     *    something like `/receive_Access` is neither a visitor nor a crawler, and the handler
+     *    is the field that separates a search box from an integration.
+     *  - `http_status` — refusals and failures, which is where a broken client shows up.
+     *  - `param_hostname` — which cluster node answered.
+     *  - `ip` — the caller. High cardinality, so the rail shows the busiest and says so.
+     *
+     * WHAT CANNOT BE FACETED, AND IS THEREFORE NOT OFFERED. `q` and `full_request` are
+     * effectively unique per request — that is the entire reason Query analysis groups by
+     * SHAPE instead — so a terms facet on them lists one-hit wonders. `hits` and `qtime` are
+     * numeric and are offered as the outcome slice below rather than as terms. And there is
+     * no bot/human dimension on this plane at all: the platform records who called, never
+     * what they are. That verdict exists only in Loghound's own sessions index, which is why
+     * it is reached by correlation on the "Who is querying" view and is not a filter here.
+     *
+     * @return array<string,string>
+     */
+    public static function logFilterFields(): array
+    {
+        return [
+            'path'           => 'Handler',
+            'http_status'    => 'Status',
+            'param_hostname' => 'Node',
+            'ip'             => 'Caller',
+        ];
+    }
+
+    /**
+     * The outcome slices, as an allowlist of keys to labels.
+     *
+     * Separate from the terms filters because `hits` and `qtime` are numbers: a terms facet
+     * on them would list every distinct result count the index ever returned. These are
+     * range filters with names, built by outcomeFq() from constants.
+     *
+     * @var array<string,string>
+     */
+    public const OUTCOMES = [
+        'zero'  => 'Matched nothing',
+        'found' => 'Matched something',
+        'slow'  => 'Slow answers',
+    ];
+
+    /** QTime at or above which a request counts as slow, in milliseconds. */
+    private const SLOW_MS = 100;
 
     /** @var OpensolrLog|null Lazily built, or injected by a test. */
     private ?OpensolrLog $client = null;
@@ -216,17 +282,247 @@ abstract class OpensolrView extends Controller implements JobHost
         ];
     }
 
+    /* ---------------------------------------------------------------------------------
+     * Filters
+     * ------------------------------------------------------------------------------ */
+
     /**
-     * The date filter every request-log query on this page carries.
+     * The active request-log filters, read out of the query string.
      *
-     * Solr date math evaluated by the platform against its own clock, so there is no
-     * timezone skew between this host and the analytics shards to get wrong.
+     * Shape: `?lf[path][]=select&lf[ip][]=203.0.113.9`. A SEPARATE namespace from the `f[…]`
+     * sidebar filters, and deliberately so: those name fields on Loghound's own sessions and
+     * hits cores (`bot_verdict_s`, `country_s`, …), none of which exists on the platform's
+     * analytics shards. Sharing one namespace would mean every chip the reader set on the
+     * session explorer arrived here as a field the request log has never heard of — and an
+     * `fq` naming an absent field matches nothing, so every figure would read zero under a
+     * chip that looked like it was working.
+     *
+     * A field not in logFilterFields() is dropped without comment: the UI never produces one.
+     * So is a value isFilterableValue() refuses, and for a reason worth reading there. Values
+     * are length-capped and count-capped here; they are turned into a literal by
+     * OpensolrLog::termsFq(), which quotes and escapes them, and the whole filter is then
+     * judged again by OpensolrLog::assertSafeFq().
+     *
+     * @return array<string,array<int,string>>
+     */
+    protected function logFilters(): array
+    {
+        $raw = $_GET['lf'] ?? null;
+        if (!is_array($raw)) {
+            return [];
+        }
+        $allowed = self::logFilterFields();
+
+        $out = [];
+        foreach ($raw as $field => $values) {
+            if (!is_string($field) || !isset($allowed[$field]) || !Security::isSafeFieldName($field)) {
+                continue;
+            }
+            foreach ((array) $values as $value) {
+                if (!is_string($value) || !self::isFilterableValue($value)) {
+                    continue;
+                }
+                $out[$field][] = mb_substr($value, 0, 256);
+            }
+            if (isset($out[$field])) {
+                $out[$field] = array_values(array_unique(array_slice($out[$field], 0, 20)));
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Is this a value the filter machinery will carry at all?
+     *
+     * THE FAILURE THIS PREVENTS is not an injection — OpensolrLog::termsFq() quotes and escapes
+     * every value, so `{!frange}` inside one is inert text. It is a 500. `assertSafeFq()` is
+     * deliberately blunt: it refuses a filter containing `{!`, `_query_`, `_val_` or a control
+     * character ANYWHERE in the string, quoted or not, and it does that by throwing. A crafted
+     * query string would therefore take the whole JSON endpoint down with "the panel could not
+     * complete that request" instead of quietly ignoring a filter the UI never produced.
+     *
+     * So the value is dropped HERE, at the boundary, on exactly the grounds assertSafeFq uses.
+     * That keeps the blunt check in place — it is not routed around, and it is still the last
+     * word — while making a hostile URL behave like a filter nobody set.
+     *
+     * A control character is dropped rather than stripped out, because stripping joins the two
+     * halves of the value into a third thing that was never asked for.
+     */
+    private static function isFilterableValue(string $value): bool
+    {
+        if ($value === '' || strlen($value) > 512) {
+            return false;
+        }
+        if (preg_match('/[\x00-\x1F\x7F]/', $value)) {
+            return false;
+        }
+        if (str_contains($value, '{!')) {
+            return false;
+        }
+        return stripos($value, '_query_') === false && stripos($value, '_val_') === false;
+    }
+
+    /**
+     * The active outcome slice, or the empty string for "everything".
+     *
+     * @return string A key of self::OUTCOMES, or ''.
+     */
+    protected function outcome(): string
+    {
+        return self::param('outcome', array_keys(self::OUTCOMES), '');
+    }
+
+    /**
+     * The date filter every request-log query on this page carries, plus the active filters.
+     *
+     * The date bound is Solr date math evaluated by the platform against its own clock, so
+     * there is no timezone skew between this host and the analytics shards to get wrong.
+     *
+     * Values within one field are OR-ed by termsFq() — a facet is a multi-select — and
+     * different fields become separate `fq` entries so they AND together.
      *
      * @return array<int,string>
      */
     protected function logFqs(): array
     {
-        return [OpensolrLog::dateFq((string) $this->range['start'])];
+        return self::logFqsFor((string) $this->range['start'], $this->logFilters(), $this->outcome());
+    }
+
+    /**
+     * Build the filter list from explicit parts rather than from the request.
+     *
+     * Exists because a stepped scan does not have the request that started it: it is resumed
+     * from a stored context on every poll, so it has to be able to rebuild exactly the same
+     * filters from values it re-validates itself. A scan that quietly read the whole log while
+     * the page showed filter chips would be answering a different question under them.
+     *
+     * @param array<string,array<int,string>> $filters Already validated by logFilters() or decodeLogFilters().
+     * @return array<int,string>
+     */
+    protected static function logFqsFor(string $rangeStart, array $filters, string $outcome): array
+    {
+        $fqs = [OpensolrLog::dateFq($rangeStart)];
+
+        foreach ($filters as $field => $values) {
+            $fqs[] = OpensolrLog::termsFq((string) $field, $values);
+        }
+
+        $slice = self::outcomeFq($outcome);
+        if ($slice !== null) {
+            $fqs[] = $slice;
+        }
+        return $fqs;
+    }
+
+    /**
+     * Turn an outcome key into a range filter, or null when no slice is selected.
+     *
+     * Every bound here is a constant. Nothing about the request reaches the filter except
+     * the choice of which of these three to use.
+     */
+    private static function outcomeFq(string $outcome): ?string
+    {
+        return match ($outcome) {
+            'zero'  => OpensolrLog::numericFq('hits', '0', '0'),
+            'found' => OpensolrLog::numericFq('hits', '1', '*'),
+            'slow'  => OpensolrLog::numericFq('qtime', (string) self::SLOW_MS, '*'),
+            default => null,
+        };
+    }
+
+    /**
+     * Pack the active filters into one short string a job parameter can hold.
+     *
+     * The job store takes flat scalars of at most 256 bytes each (Jobs::normaliseParams),
+     * which is deliberate — a job parameter is part of a job's identity and is persisted —
+     * so the filter set is encoded as `field=v1,v2;field=v3` with every value percent-encoded.
+     * Percent-encoding is what makes the two separators unambiguous: a handler path or a query
+     * value containing a comma or a semicolon cannot split the string it is travelling in.
+     *
+     * It is truncated on a VALUE boundary at the budget, never mid-value, and decodeLogFilters()
+     * revalidates every field and value anyway. Callers report the applied set so a truncated
+     * filter is visible rather than silent.
+     */
+    protected function encodeLogFilters(): string
+    {
+        $budget = 240;
+        $out = '';
+
+        foreach ($this->logFilters() as $field => $values) {
+            $encoded = [];
+            foreach ($values as $value) {
+                $encoded[] = rawurlencode($value);
+            }
+            $part = ($out === '' ? '' : ';') . $field . '=' . implode(',', $encoded);
+            if (strlen($out) + strlen($part) > $budget) {
+                continue;
+            }
+            $out .= $part;
+        }
+        return $out;
+    }
+
+    /**
+     * Unpack a stored filter string, re-validating every part of it.
+     *
+     * The context is persisted between polls, so treating it as trusted would mean trusting a
+     * store a future bug could write anything into. A field that is not in logFilterFields()
+     * is dropped, control characters are stripped, and both the value length and the number of
+     * values are capped exactly as they are on the way in from a query string.
+     *
+     * @return array<string,array<int,string>>
+     */
+    protected static function decodeLogFilters(string $encoded): array
+    {
+        if ($encoded === '') {
+            return [];
+        }
+        $allowed = self::logFilterFields();
+
+        $out = [];
+        foreach (explode(';', $encoded) as $part) {
+            $split = explode('=', $part, 2);
+            if (count($split) !== 2) {
+                continue;
+            }
+            [$field, $joined] = $split;
+            if (!isset($allowed[$field]) || !Security::isSafeFieldName($field)) {
+                continue;
+            }
+            foreach (explode(',', $joined) as $raw) {
+                $value = rawurldecode($raw);
+                if (!self::isFilterableValue($value)) {
+                    continue;
+                }
+                $out[$field][] = mb_substr($value, 0, 256);
+            }
+            if (isset($out[$field])) {
+                $out[$field] = array_values(array_unique(array_slice($out[$field], 0, 20)));
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * The labels of sidebar filters this section cannot honour.
+     *
+     * ALL of them, always, and that is the point. `f[…]` filters name fields on Loghound's
+     * own cores; the platform's request log has none of them. A reader who filtered the
+     * session explorer to one country and then opened this section would otherwise see
+     * unfiltered search figures under a chip claiming otherwise. Reported in the envelope so
+     * the filter card can say which ones were ignored and why.
+     *
+     * @return array<int,string>
+     */
+    protected function ignoredSidebarFilters(): array
+    {
+        $labels = Query::filterFields();
+
+        $out = [];
+        foreach (array_keys($this->filters) as $field) {
+            $out[] = $labels[$field] ?? $field;
+        }
+        return $out;
     }
 
     /* ---------------------------------------------------------------------------------
@@ -464,11 +760,19 @@ abstract class OpensolrView extends Controller implements JobHost
             'note'     => (string) $result['message'],
             'core'     => $this->core(),
             'requests' => (int) $result['numFound'],
+            'active'   => $this->logFilters(),
+            'outcome'  => $this->outcome(),
+            'ignored'  => $this->ignoredSidebarFilters(),
+            'lf_packed' => $this->encodeLogFilters(),
         ], $extra));
     }
 
     /**
      * Answer the actions every Opensolr view shares, or null when it is not one of them.
+     *
+     * `facets` and `volume` are here rather than in each view because all three views carry
+     * the same filter rail and the same primary chart, and three copies of one facet call is
+     * three places for the field list to drift.
      *
      * @return array<string,mixed>|null
      */
@@ -476,6 +780,12 @@ abstract class OpensolrView extends Controller implements JobHost
     {
         if ($action === 'job_latest') {
             return $this->latestJob();
+        }
+        if ($action === 'facets') {
+            return $this->filterFacets();
+        }
+        if ($action === 'volume') {
+            return $this->volume();
         }
         if ($action !== 'indexes') {
             return null;
@@ -487,6 +797,124 @@ abstract class OpensolrView extends Controller implements JobHost
             'note'     => $list['message'],
             'indexes'  => $list['indexes'],
             'selected' => $this->core(),
+            'outcome'  => $this->outcome(),
+            'lf_packed' => $this->encodeLogFilters(),
+        ]);
+    }
+
+    /**
+     * The filter rail: one call, four terms facets and the outcome split.
+     *
+     * The counts are for the CURRENT slice, filters included. The platform's endpoint
+     * rewrites any parameter whose name contains an underscore into a dotted Solr parameter
+     * and strips braces out of its value, so Solr's `{!ex=…}` tag exclusion — the mechanism
+     * that gives a multi-select facet its own unfiltered counts — cannot survive the trip.
+     * Faceting under the filters is what is actually available; the card says so, and every
+     * active filter is a chip that removes itself, so a narrowed rail is never a dead end.
+     *
+     * The outcome counts come from a single-bucket range facet on `hits`: `[0 TO 1)` is the
+     * requests that matched nothing, and the facet's `after` counter is everything else. One
+     * facet, two numbers, no arithmetic that can drift apart. There is no cheap count for the
+     * slow slice — it would need a second call for a number the reader can get by selecting
+     * it — so it is offered without one rather than with a guess.
+     *
+     * @return array<string,mixed>
+     */
+    private function filterFacets(): array
+    {
+        $res = $this->fetch([
+            'fq'           => $this->logFqs(),
+            'rows'         => 0,
+            'facet_fields' => array_keys(self::logFilterFields()),
+            'facet_limit'  => self::FILTER_FACET_LIMIT,
+            'ranges'       => ['hits' => ['start' => '0', 'end' => '1', 'gap' => '1', 'other' => 'all']],
+        ]);
+
+        $groups = [];
+        foreach (self::logFilterFields() as $field => $label) {
+            $terms = (array) ($res['facet_fields'][$field] ?? []);
+            if ($terms === []) {
+                continue;
+            }
+            $buckets = [];
+            foreach ($terms as $value => $count) {
+                $buckets[] = ['value' => (string) $value, 'count' => (int) $count];
+            }
+            $groups[] = ['field' => $field, 'label' => $label, 'buckets' => $buckets];
+        }
+
+        $hits = $res['facet_ranges']['hits'] ?? null;
+
+        return $this->logEnvelope($res, [
+            'groups'   => $groups,
+            'limit'    => self::FILTER_FACET_LIMIT,
+            'outcomes' => [
+                'zero'  => is_array($hits) ? (int) ($hits['counts']['0'] ?? 0) : null,
+                'found' => is_array($hits) && $hits['after'] !== null ? (int) $hits['after'] : null,
+                'slow'  => null,
+            ],
+            'slow_ms'  => self::SLOW_MS,
+        ]);
+    }
+
+    /**
+     * Request volume over time, with the zero-result share drawn underneath it.
+     *
+     * THE PRIMARY CHART ON ALL THREE VIEWS, and the one thing every analytics dashboard has.
+     * It is here rather than on one view because it is the chart that makes the filter rail
+     * mean something: filtered to one caller it answers "when did this client hit us", and
+     * filtered to one handler it answers "when is this integration busy".
+     *
+     * Two calls rather than one, because the endpoint cannot express a nested facet: the
+     * second is the same range facet with `hits:0` added, which is cheap and is the only way
+     * to see whether a spike in traffic was a spike in USEFUL traffic. When an outcome slice
+     * is already selected the second call is skipped — `hits:0` intersected with "matched
+     * something" is empty by construction, and asking for it would spend a call to be told so.
+     *
+     * @return array<string,mixed>
+     */
+    private function volume(): array
+    {
+        $range = ['date' => [
+            'start' => (string) $this->range['start'],
+            'end'   => 'NOW',
+            'gap'   => (string) $this->range['gap'],
+            'other' => 'none',
+        ]];
+
+        $all = $this->fetch(['fq' => $this->logFqs(), 'rows' => 0, 'ranges' => $range]);
+        if ($all['state'] !== 'ok') {
+            return $this->logEnvelope($all, [
+                'times' => [], 'all' => [], 'zero' => [], 'zero_total' => 0, 'zero_known' => false,
+            ]);
+        }
+
+        $allCounts = (array) ($all['facet_ranges']['date']['counts'] ?? []);
+        $times = array_keys($allCounts);
+
+        $zeroKnown = $this->outcome() === '';
+        $zeroCounts = [];
+        $zeroTotal = 0;
+
+        if ($zeroKnown) {
+            $empty = $this->fetch([
+                'fq'     => array_merge($this->logFqs(), [OpensolrLog::numericFq('hits', '0', '0')]),
+                'rows'   => 0,
+                'ranges' => $range,
+            ]);
+            $found = (array) ($empty['facet_ranges']['date']['counts'] ?? []);
+            foreach ($times as $bucket) {
+                $zeroCounts[] = (int) ($found[$bucket] ?? 0);
+            }
+            $zeroTotal = (int) $empty['numFound'];
+        }
+
+        return $this->logEnvelope($all, [
+            'times'      => $times,
+            'all'        => array_values(array_map('intval', $allCounts)),
+            'zero'       => $zeroCounts,
+            'zero_total' => $zeroTotal,
+            'zero_known' => $zeroKnown,
         ]);
     }
 
@@ -547,5 +975,101 @@ abstract class OpensolrView extends Controller implements JobHost
             . '<label for="' . $e . '">Index</label>'
             . '<select id="' . $e . '" disabled><option value="">Loading&#8230;</option></select>'
             . '</div>';
+    }
+
+    /**
+     * The cards this view renders, in order, for the jump bar and the card numbering.
+     *
+     * @return array<int,array<int,string>>
+     */
+    public function sections(): array
+    {
+        return static::SECTIONS;
+    }
+
+    /** The number this card carries, from its position in sections() rather than a literal. */
+    protected function cardNumber(string $id): string
+    {
+        return Layout::cardNum($this->sections(), $id);
+    }
+
+    /**
+     * A row of headline figures, each stating what it counts.
+     *
+     * SPEC §10 requires every number to say what population it covers, so the hint is not
+     * optional and there is no overload without one. The values are placeholders — an
+     * em-dash — and are filled by the front end, because nothing log-derived is rendered by
+     * PHP on any view in this panel.
+     *
+     * @param array<int,array{0:string,1:string,2:string}> $stats field, label, hint
+     */
+    protected static function statRow(array $stats): void
+    {
+        echo '<div class="stats">';
+        foreach ($stats as [$field, $label, $hint]) {
+            echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
+            echo '<span class="stat-value mono" data-field="' . Security::esc($field) . '">&#8212;</span>';
+            echo '<span class="stat-hint">' . Security::esc($hint) . '</span></div>';
+        }
+        echo '</div>';
+    }
+
+    /**
+     * The filter rail: what the reader can slice this section by.
+     *
+     * Rendered as an ordinary async card rather than as a second sidebar. The panel already
+     * has a sidebar on the left and the session explorer has a facet rail of its own; a third
+     * vertical column on a page whose main chart wants the width would compete with both.
+     *
+     * The outcome buttons and the facet lists are links, not form controls, so a filtered
+     * view is a URL somebody can bookmark and send to a colleague — which is the whole reason
+     * the filters live in the query string and not in a session.
+     *
+     * @param string $id Card base id, e.g. 'ix-filters'.
+     */
+    protected function filterCard(string $id, string $tools = ''): void
+    {
+        self::cardOpen(
+            $id,
+            $this->cardNumber($id),
+            'Slice these figures',
+            'Every card on this page answers under the filters set here. They travel in the URL, so a '
+            . 'filtered page is a link.',
+            $tools
+        );
+        self::skeleton($id, 'rows', 0, 'Faceting the request log');
+
+        echo '<div class="lf-active" id="' . Security::esc($id) . '-active"></div>';
+        echo '<div class="lf-outcomes" id="' . Security::esc($id) . '-outcomes"></div>';
+        echo '<div class="lf-rail" id="' . Security::esc($id) . '-rail"></div>';
+        echo '<p class="faint" id="' . Security::esc($id) . '-note"></p>';
+
+        self::cardClose($id);
+    }
+
+    /**
+     * The primary chart: request volume over time.
+     *
+     * @param string $id Card base id, e.g. 'ix-volume'.
+     */
+    protected function volumeCard(string $id): void
+    {
+        self::cardOpen(
+            $id,
+            $this->cardNumber($id),
+            'Requests over time',
+            'Every request the platform logged for this index under the current filters, bucketed by time.'
+        );
+        self::skeleton($id, 'chart', 300, 'Faceting request volume');
+
+        self::statRow([
+            ['total', 'Requests', 'Logged by Opensolr in this range, under the current filters'],
+            ['mean', 'Average per bucket', 'Requests divided by the number of buckets in the chart'],
+            ['peak', 'Peak bucket', 'The busiest single bucket in the chart'],
+            ['points', 'Data points', 'How many buckets the range was divided into'],
+        ]);
+        echo '<div class="chart" id="' . Security::esc($id) . '-chart" style="height:300px"></div>';
+
+        self::cardClose($id);
     }
 }

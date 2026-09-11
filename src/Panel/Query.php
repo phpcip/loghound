@@ -266,6 +266,12 @@ final class Query
             'sec_ch_ua_s'      => 'Client hints (Sec-CH-UA)',
             'sec_ch_platform_s' => 'Client platform',
             'tls_proto_s'      => 'TLS version',
+            'ua_bot_name_s'    => 'Declared crawler',
+            'city_s'           => 'City',
+            'region_s'         => 'Region',
+            'asn_i'            => 'ASN',
+            'paths_ss'         => 'Path',
+            'signed_in_b'      => 'Signed in',
         ];
     }
 
@@ -287,7 +293,13 @@ final class Query
      */
     public static function hitFilterFields(): array
     {
-        $sessionOnly = ['bot_verdict_s', 'bot_class_s', 'bot_reasons_ss'];
+        $sessionOnly = [
+            'bot_verdict_s',
+            'bot_class_s',
+            'bot_reasons_ss',
+            'paths_ss',
+            'signed_in_b',
+        ];
 
         return array_diff_key(self::filterFields(), array_flip($sessionOnly));
     }
@@ -405,6 +417,7 @@ final class Query
             'referer_s', 'referer_host_s', 'referer_type_s',
             'fp_hash_s', 'fp_ips_24h_i',
             'provisional_b',
+            'ident_s', 'signed_in_b',
             'js_b', 'headless_b', 'automation_ss', 'ua_claim_ok_b', 'tz_match_b', 'webgl_s',
             'bot_score_f', 'bot_verdict_s', 'bot_reasons_ss', 'bot_class_s', 'rule_version_i',
         ]);

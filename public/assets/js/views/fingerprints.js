@@ -20,6 +20,8 @@ import {
     api, byId, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, shortHash, when
 } from '../core.js';
 import { sparkline, tokens } from '../charts.js';
+import { clientNode, countryNode, dimValue } from '../identity.js';
+import { markSortable } from '../sorttable.js';
 
 /** Rows currently expanded, so a re-sort can leave them open. */
 const expanded = new Set();
@@ -35,9 +37,36 @@ function hashNode(hash) {
 /** Verdict chip with the shared verdict colouring. */
 function verdictChip(verdict) {
     return el('span', {
-        class: 'chip v-' + String(verdict || 'unknown'),
+        class: 'chip chip-word v-' + String(verdict || 'unknown'),
         text: verdict || 'unknown'
     });
+}
+
+/**
+ * Where the cluster answers from, as filter controls.
+ *
+ * The organisation, the network type and the country are three separate dimensions and each one
+ * is worth slicing by on its own — "every cluster on a hosting network" and "every cluster in
+ * Brazil" are different questions and both get asked.
+ */
+function networkParts(row) {
+    const parts = [];
+    if (row.org) {
+        parts.push(dimValue('as_org_s', row.org));
+    }
+    if (row.as_type) {
+        if (parts.length) {
+            parts.push(el('span', { text: ' · ' }));
+        }
+        parts.push(dimValue('as_type_s', row.as_type));
+    }
+    if (row.country) {
+        if (parts.length) {
+            parts.push(el('span', { text: ' · ' }));
+        }
+        parts.push(countryNode(row.country, { short: true }));
+    }
+    return parts.length ? parts : [el('span', { text: '—' })];
 }
 
 /**
@@ -47,7 +76,13 @@ function verdictChip(verdict) {
  * @param {number} sparkBuckets
  */
 function clusterRow(row, sparkBuckets) {
-    const tr = el('tr', { class: row.fleet ? 'fleet' : null, dataset: { fp: row.fp } });
+    const tr = el('tr', {
+        class: 'row-link' + (row.fleet ? ' fleet' : ''),
+        tabindex: '0',
+        role: 'button',
+        title: 'Open everything known about this fingerprint',
+        dataset: { fp: row.fp, lhOpen: 'dim', field: 'fp_hash_s', value: row.fp }
+    });
 
     const button = el('button', {
         type: 'button',
@@ -58,16 +93,16 @@ function clusterRow(row, sparkBuckets) {
     });
     tr.appendChild(el('td', {}, [button]));
 
-    tr.appendChild(el('td', { class: 'mono' }, [hashNode(row.fp)]));
+    tr.appendChild(el('td', { class: 'mono', 'data-sort': row.fp }, [hashNode(row.fp)]));
 
-    tr.appendChild(el('td', { class: 'num' }, [
+    tr.appendChild(el('td', { class: 'num', 'data-sort': String(row.uniq_ips) }, [
         row.fleet
             ? el('strong', { text: num(row.uniq_ips) })
             : document.createTextNode(num(row.uniq_ips))
     ]));
-    tr.appendChild(el('td', { class: 'num', text: num(row.uniq_nets) }));
-    tr.appendChild(el('td', { class: 'num', text: num(row.uniq_asns) }));
-    tr.appendChild(el('td', { class: 'num', text: num(row.sessions) }));
+    tr.appendChild(el('td', { class: 'num', text: num(row.uniq_nets), 'data-sort': String(row.uniq_nets) }));
+    tr.appendChild(el('td', { class: 'num', text: num(row.uniq_asns), 'data-sort': String(row.uniq_asns) }));
+    tr.appendChild(el('td', { class: 'num', text: num(row.sessions), 'data-sort': String(row.sessions) }));
 
     const canvas = el('canvas', {
         class: 'spark',
@@ -75,17 +110,25 @@ function clusterRow(row, sparkBuckets) {
         role: 'img'
     });
     canvas.__spark = row.spark;
-    tr.appendChild(el('td', {}, [canvas]));
+    tr.appendChild(el('td', { 'data-sort': row.last || '' }, [canvas]));
 
-    tr.appendChild(el('td', { class: 'clip mono', title: row.ua || '' }, [
-        el('div', { text: row.ua || '—' }),
-        el('div', { class: 'muted', text: [row.org, row.as_type, row.country].filter(Boolean).join(' · ') || '—' })
+    tr.appendChild(el('td', {
+        class: 'clip',
+        title: [row.ua_bot_name, row.browser, row.os, row.device].filter(Boolean).join(' · '),
+        'data-sort': row.ua_bot_name || row.browser || ''
+    }, [
+        clientNode(row),
+        el('div', { class: 'sub clip-line' }, networkParts(row))
     ]));
 
-    tr.appendChild(el('td', { class: 'num', text: row.avg_score === null ? '—' : dec(row.avg_score, 0) }));
-    tr.appendChild(el('td', {}, [
+    tr.appendChild(el('td', {
+        class: 'num',
+        text: row.avg_score === null ? '—' : dec(row.avg_score, 0),
+        'data-sort': row.avg_score === null ? '' : String(row.avg_score)
+    }));
+    tr.appendChild(el('td', { 'data-sort': row.verdict || '' }, [
         verdictChip(row.verdict),
-        row.declared ? el('span', { class: 'chip chip-good', text: 'declared', style: 'margin-left:5px' }) : null
+        row.declared ? el('span', { class: 'chip chip-word chip-good', text: 'declared' }) : null
     ]));
 
     button.addEventListener('click', () => toggle(tr, row));
@@ -141,7 +184,14 @@ function renderMembers(inner, data) {
         (data.truncated ? ' Truncated to the busiest addresses.' : '')
     ]);
 
-    const table = el('table', { class: 'tight' }, [
+    const table = el('table', { class: 'tight table-fixed' }, [
+        el('colgroup', {}, [
+            el('col', { style: 'width:16ch' }), el('col', { style: 'width:15ch' }),
+            el('col', { style: 'width:9ch' }), el('col'), el('col', { style: 'width:18ch' }),
+            el('col', { style: 'width:10ch' }), el('col', { style: 'width:16ch' }),
+            el('col', { style: 'width:7ch' }), el('col', { style: 'width:6ch' }),
+            el('col', { style: 'width:13ch' })
+        ]),
         el('thead', {}, [
             el('tr', {}, [
                 el('th', { scope: 'col', text: 'Address' }),
@@ -151,7 +201,7 @@ function renderMembers(inner, data) {
                 el('th', { scope: 'col', text: 'Netname' }),
                 el('th', { scope: 'col', text: 'Type' }),
                 el('th', { scope: 'col', text: 'Where' }),
-                el('th', { scope: 'col', class: 'num', text: 'Sessions' }),
+                el('th', { scope: 'col', class: 'num', text: 'Sess.' }),
                 el('th', { scope: 'col', class: 'num', text: 'Score' }),
                 el('th', { scope: 'col', text: 'Last seen' })
             ])
@@ -160,23 +210,42 @@ function renderMembers(inner, data) {
 
     const body = el('tbody');
     for (const m of data.rows) {
-        body.appendChild(el('tr', {}, [
-            el('td', { class: 'mono nowrap' }, [
-                el('a', {
-                    href: '?v=sessions&f[ip_s][]=' + encodeURIComponent(m.ip),
-                    text: m.ip,
-                    title: 'Open this address in the session explorer'
-                })
+        body.appendChild(el('tr', {
+            class: 'row-link',
+            tabindex: '0',
+            role: 'button',
+            title: 'Open everything known about this address',
+            dataset: { lhOpen: 'dim', field: 'ip_s', value: m.ip }
+        }, [
+            el('td', { class: 'mono nowrap', 'data-sort': m.ip || '' }, [dimValue('ip_s', m.ip, { mono: true })]),
+            el('td', { class: 'mono clip', title: m.net || '', text: m.net || '—', 'data-sort': m.net || '' }),
+            el('td', { class: 'mono num', text: m.asn ? 'AS' + m.asn : '—', 'data-sort': m.asn || '' }),
+            el('td', { class: 'clip', title: m.org || 'Organisation not resolved', 'data-sort': m.org || '' }, [
+                m.org ? dimValue('as_org_s', m.org) : el('span', { class: 'muted', text: '—' })
             ]),
-            el('td', { class: 'mono', text: m.net || '—' }),
-            el('td', { class: 'mono num', text: m.asn ? 'AS' + m.asn : '—' }),
-            el('td', { class: 'clip', title: m.org || '', text: m.org || '—' }),
-            el('td', { class: 'mono clip', title: m.netname || '', text: m.netname || '—' }),
-            el('td', {}, [el('span', { class: 'chip', text: m.as_type || 'unknown' })]),
-            el('td', { class: 'clip', text: [m.city, m.country].filter(Boolean).join(', ') || '—' }),
-            el('td', { class: 'num', text: num(m.sessions) }),
-            el('td', { class: 'num', text: m.score === null ? '—' : dec(m.score, 0) }),
-            el('td', { class: 'mono nowrap', text: when(m.last) })
+            el('td', { class: 'mono clip', title: m.netname || '', 'data-sort': m.netname || '' }, [
+                m.netname ? dimValue('netname_s', m.netname, { mono: true }) : el('span', { class: 'muted', text: '—' })
+            ]),
+            el('td', { 'data-sort': m.as_type || '' }, [
+                m.as_type
+                    ? dimValue('as_type_s', m.as_type)
+                    : el('span', { class: 'chip chip-word', text: 'unknown' })
+            ]),
+            el('td', {
+                class: 'clip',
+                title: [m.city, m.country].filter(Boolean).join(', ') || 'Not geolocated',
+                'data-sort': [m.country, m.city].filter(Boolean).join(' ')
+            }, [
+                m.country ? countryNode(m.country, { short: true }) : el('span', { class: 'muted', text: '—' }),
+                m.city ? el('span', { class: 'sub', text: m.city }) : null
+            ]),
+            el('td', { class: 'num', text: num(m.sessions), 'data-sort': String(m.sessions) }),
+            el('td', {
+                class: 'num',
+                text: m.score === null ? '—' : dec(m.score, 0),
+                'data-sort': m.score === null ? '' : String(m.score)
+            }),
+            el('td', { class: 'mono nowrap', text: when(m.last), 'data-sort': m.last || '' })
         ]));
     }
     table.appendChild(body);
@@ -187,6 +256,7 @@ function renderMembers(inner, data) {
         el('div', { class: 'table-wrap' }, [table]),
         data.ua ? el('p', { class: 'muted mono wrap', text: data.ua }) : null
     );
+    markSortable(inner);
 }
 
 /**

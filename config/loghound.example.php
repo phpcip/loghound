@@ -305,6 +305,41 @@ return [
 
         /** Hard payload cap. Anything larger is rejected before it is parsed. */
         'max_payload' => 8192,
+
+        /**
+         * Store the identity string the measured site attaches to a session.
+         *
+         * WHAT IT STORES: whatever your site puts in `data-ident` on the beacon tag — in
+         * practice a signed-in visitor's email address, customer number or account id — on
+         * the session document, where it appears in the panel, in the Solr index and in
+         * every backup of that index. It is kept for `privacy.retention_days` like the rest
+         * of the session and is deleted with it.
+         *
+         * OFF by default, and deliberately: everything else Loghound collects is a
+         * measurement of a browser, and this is a name. Turning it on is a decision about
+         * personal data that only you can make. With it off the string is discarded by
+         * Beacon::normalise() before anything is written, so it never reaches the staging
+         * database either.
+         *
+         * Loghound never guesses an identity. No cookie is read, no form is scraped, no
+         * meta tag is looked for. If your site does not declare one, there is none.
+         */
+        'store_identity' => false,
+
+        /**
+         * Store whether the visitor was signed in — a boolean, and nothing else.
+         *
+         * WHAT IT STORES: `signed_in_b` on the session document, true or false, from your
+         * site's `data-signed-in` attribute. Nothing that identifies anybody. A session
+         * where your site said nothing gets NO field at all, which is why "not reported"
+         * is a third state in the panel rather than being counted as anonymous.
+         *
+         * ON by default and independent of `store_identity`: the split between signed-in
+         * and anonymous traffic — engaged time, paths, bounce, bot verdict — is one of the
+         * most useful things this panel can show, and it is worth having without storing a
+         * single email address.
+         */
+        'store_signed_in' => true,
     ],
 
     // =====================================================================

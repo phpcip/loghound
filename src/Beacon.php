@@ -50,6 +50,16 @@ final class Beacon
     public const MAX_INTERACTIONS = 100000;
 
     /**
+     * Length ceiling on the identity the measured site attaches to a session.
+     *
+     * 128 bytes holds any email address, customer number or account id anybody sensibly uses
+     * as one. It is a bound on a hostile string first and a field-length decision second: the
+     * collector is public, so this value is whatever the page chose to send, and an unbounded
+     * one would be a way to make every staging row large.
+     */
+    public const MAX_IDENT = 128;
+
+    /**
      * Slack allowed between a claimed wall_ms and the time actually elapsed since
      * the token was issued.
      *
@@ -161,6 +171,39 @@ final class Beacon
     public function tokenMaxAge(): int
     {
         return Security::clampInt($this->cfg['token_max_age'] ?? 43200, 60, 604800, 43200);
+    }
+
+    /**
+     * Does this installation store the identity string the measured site attaches?
+     *
+     * OFF BY DEFAULT, and that is the one default in this file that is a policy decision rather
+     * than a safety one. Everything else the beacon collects is a measurement of a browser; this
+     * is a name, usually an email address, and it turns a session document into personal data
+     * that appears in the panel, in the Solr index and in every backup of it. An operator has to
+     * say yes to that, and `beacon.store_identity` in config/loghound.php is where they say it.
+     *
+     * The gate is applied in normalise(), which is before anything is written anywhere: with it
+     * off the string does not reach the SQLite staging table, let alone Solr, so switching it off
+     * stops collection rather than merely hiding what was collected.
+     */
+    public function storesIdentity(): bool
+    {
+        return (bool) ($this->cfg['store_identity'] ?? false);
+    }
+
+    /**
+     * Does this installation store whether the visitor was signed in?
+     *
+     * ON by default, and independent of storesIdentity() on purpose. "Was this person logged
+     * in" is a boolean about a session with nothing in it that identifies anybody, and the split
+     * it enables — engaged time, paths, bounce and bot verdict for signed-in versus anonymous
+     * traffic — is one of the most useful things the product can show and one that only the
+     * measured site knows. An operator may well want that split while storing no emails at all,
+     * so the two switches are separate and either can be off.
+     */
+    public function storesSignedIn(): bool
+    {
+        return (bool) ($this->cfg['store_signed_in'] ?? true);
     }
 
     /**
@@ -293,6 +336,9 @@ final class Beacon
             'tz'           => $this->text($in['tz'] ?? '', self::MAX_STR),
             'webgl'        => $this->text($in['gl'] ?? '', self::MAX_STR),
             'path'         => $this->text($in['u'] ?? '', self::MAX_PATH),
+
+            'ident'        => $this->storesIdentity() ? $this->text($in['xi'] ?? '', self::MAX_IDENT) : '',
+            'signed_in'    => $this->storesSignedIn() ? $this->tri($in['xs'] ?? null) : null,
 
             'platform'     => $this->text($in['pl'] ?? '', self::MAX_STR),
             'touch'        => (int) $this->num($in['mt'] ?? 0, 0, 32),
@@ -509,6 +555,19 @@ final class Beacon
      * from the IP's geolocation and is absent when either side is unknown — a session with no
      * geo data has neither passed nor failed.
      *
+     * THE OPERATOR-SUPPLIED IDENTITY IS A THIRD, and the most important one to get right.
+     * `signed_in_b` is written ONLY when a payload actually said one or the other; a site that
+     * never sends it leaves the field absent, so "we were not told" cannot be read as
+     * "anonymous". A boolean that defaults to false here would invent an anonymous population
+     * out of every site that has not adopted the feature, and the signed-in/anonymous split —
+     * the reason the field exists — would be a fabrication. `ident_s` is likewise absent rather
+     * than empty when nothing was sent or when `beacon.store_identity` is off.
+     *
+     * Where payloads disagree across a session, the resolution follows what actually happened:
+     * the LAST non-empty identity wins, because a visitor who signs in halfway through is that
+     * person by the end of the visit; and signed-in wins over anonymous for the same reason —
+     * a session that was authenticated at any point was an authenticated session.
+     *
      * @param array<string,mixed>        $session    The session doc built from the log.
      * @param array<int,array<string,mixed>> $beaconRows Rows from `beacon_staging`.
      * @return array<string,mixed> The session doc with beacon fields folded in.
@@ -528,6 +587,8 @@ final class Beacon
         $uaClaimSeen = false;
         $tz = '';
         $webgl = '';
+        $ident = '';
+        $signedIn = null;
 
         foreach ($beaconRows as $row) {
             $rowId = $row['id'] ?? null;
@@ -578,6 +639,16 @@ final class Beacon
             if ($webgl === '' && !empty($row['webgl'])) {
                 $webgl = (string) $row['webgl'];
             }
+
+            if (isset($row['ident']) && is_string($row['ident']) && $row['ident'] !== '') {
+                $ident = mb_substr($row['ident'], 0, self::MAX_IDENT);
+            }
+            $claimedSignedIn = $this->tri($row['signed_in'] ?? null);
+            if ($claimedSignedIn === true) {
+                $signedIn = true;
+            } elseif ($claimedSignedIn === false && $signedIn === null) {
+                $signedIn = false;
+            }
         }
 
         $wall = $visible = $engaged = $interactions = $maxScroll = 0;
@@ -622,6 +693,13 @@ final class Beacon
 
         if ($webgl !== '') {
             $session['webgl_s'] = $webgl;
+        }
+
+        if ($ident !== '') {
+            $session['ident_s'] = $ident;
+        }
+        if ($signedIn !== null) {
+            $session['signed_in_b'] = $signedIn;
         }
 
         $geoTz = (string) ($session['tz_s'] ?? '');
@@ -733,6 +811,32 @@ final class Beacon
             return $min;
         }
         return max($min, min($max, $n));
+    }
+
+    /**
+     * Read a three-state boolean off the wire: true, false, or NOT REPORTED.
+     *
+     * The third state is the whole point and it is why this is not a cast. A site that never
+     * tells us whether its visitor was signed in must not be recorded as having said "no": the
+     * facet would then show every unauthenticated-by-omission session as anonymous and the
+     * signed-in/anonymous split would be a fabrication over traffic nobody classified. Null
+     * means not reported, and mergeIntoSession() writes NO FIELD AT ALL in that case, so a
+     * query asking for `signed_in_b:false` cannot match it.
+     *
+     * Anything that is not recognisably one of the two states is not reported either — an
+     * unparseable answer is unknown, never "no".
+     *
+     * @param mixed $v
+     */
+    private function tri($v): ?bool
+    {
+        if ($v === true || $v === 1 || $v === '1' || $v === 'true') {
+            return true;
+        }
+        if ($v === false || $v === 0 || $v === '0' || $v === 'false') {
+            return false;
+        }
+        return null;
     }
 
     /**

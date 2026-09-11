@@ -20,6 +20,13 @@
  *   - Switching index starts a different job rather than reusing the running one, because
  *     the target is part of the job's identity.
  *
+ * TWO CHARTS COME OUT OF THE SAME SCAN AND COST NOTHING EXTRA. Every shape carries a
+ * log-scaled latency histogram — that is how per-shape percentiles survive twenty pages of
+ * merging — so summing those histograms gives the distribution for the whole scanned
+ * population, which was being computed on the server and then never drawn. And the shapes
+ * themselves stack into matched versus matched-nothing, which is honest because a request did
+ * one or the other and never both.
+ *
  * Everything on screen that came out of a request — the shape, the example request, the
  * client address — is placed with textContent. The field names inside a shape are chosen
  * by whoever queried the index.
@@ -30,9 +37,10 @@
 import {
     api, byId, dur, el, hideEmpty, loadCard, num, pct, runJob, setPop, showEmpty, tbody, when
 } from '../core.js';
+import { barsHStacked, dispose, histogram } from '../charts.js';
 import {
-    cardFailure, handleState, histPercentile, rankShapes, resolveCore, revealCard, shapeNode,
-    shareBar
+    cardFailure, chartOrEmpty, fieldSetter, handleState, histPercentile, indexList, rankShapes,
+    renderFilters, renderVolume, resolveCore, revealCard, shapeNode, shareBar, tokens
 } from './opensolr.js';
 
 /** The two scans, and everything that differs between them. */
@@ -219,17 +227,128 @@ function population(state, shapes, noun, running) {
 }
 
 /**
+ * A readable label for one log-scaled latency bucket.
+ *
+ * The edges come from the server with every page of the scan, so the labels here cannot
+ * drift out of step with the buckets the server folded into.
+ */
+function bucketLabels(edges) {
+    const labels = [];
+    labels.push('< ' + edges[0] + ' ms');
+    for (let i = 0; i < edges.length - 1; i += 1) {
+        labels.push(edges[i] + '–' + edges[i + 1]);
+    }
+    labels.push('≥ ' + edges[edges.length - 1] + ' ms');
+    return labels;
+}
+
+/**
+ * Draw the latency distribution across everything the scan read.
+ *
+ * Costs no extra call: every shape already carries its own histogram over the same edges —
+ * that is how the per-shape percentiles survive twenty pages of merging — so summing them
+ * bucket by bucket is the distribution for the whole scanned population. It was being
+ * computed on the server and then never drawn.
+ */
+function renderLatency(state, running) {
+    const set = fieldSetter('qy-latency');
+    const edges = state.edges || [];
+
+    if (state.note) {
+        handleState('qy-latency-empty', { state: 'unreachable', note: state.note }, 'requests');
+        return;
+    }
+
+    const totals = edges.length ? new Array(edges.length + 1).fill(0) : [];
+    let timed = 0;
+    for (const hash of Object.keys(state.shapes)) {
+        const hist = state.shapes[hash].hist || [];
+        for (let i = 0; i < totals.length; i += 1) {
+            totals[i] += hist[i] || 0;
+            timed += hist[i] || 0;
+        }
+    }
+
+    if (chartOrEmpty('qy-latency-chart', 'qy-latency-empty', timed, 'Nothing has been timed yet', [
+        running
+            ? 'The scan is still reading. This chart fills in as it goes.'
+            : 'None of the scanned requests carried a QTime, so there is no distribution to draw.'
+    ])) {
+        for (const key of ['p50', 'p95', 'p99', 'timed']) {
+            set(key, '—');
+        }
+        return;
+    }
+
+    const readAt = (p) => {
+        const value = histPercentile(totals, edges, p);
+        if (value === null) {
+            return '—';
+        }
+        return value === Infinity ? '> ' + dur(edges[edges.length - 1]) : '≤ ' + dur(value);
+    };
+
+    set('p50', readAt(0.5));
+    set('p95', readAt(0.95));
+    set('p99', readAt(0.99));
+    set('timed', num(timed));
+
+    const t = tokens();
+    const labels = bucketLabels(edges);
+    histogram(
+        'qy-latency-chart',
+        labels.map((label, i) => ({ label: label, value: totals[i] || 0 })),
+        (row) => (row.label.indexOf('≥') === 0 ? t.pop.evasive : t.accent),
+        { noun: 'requests', prefix: '', interval: 1 }
+    );
+
+    setPop('qy-latency', num(timed) + ' of the ' + num(state.scanned) + ' scanned requests carried a ' +
+        'QTime and are counted here. The buckets are log-scaled because query latency is: the structure ' +
+        'worth seeing is between one and a hundred milliseconds, and a linear axis wide enough for a ' +
+        'thirty-second outlier would put every real query in its first bar. Percentiles are read off ' +
+        'these buckets, so they are upper bounds.' +
+        (running ? ' The scan is still running, so all four figures will move.' : ''));
+}
+
+/**
+ * Draw the shape composition: the busiest shapes, split into matched and matched-nothing.
+ *
+ * Stacked is honest here because the two parts are mutually exclusive — a request either
+ * matched a document or it did not — so the length of a bar is that shape's true request
+ * count and the dark part of it is the number to act on.
+ */
+function renderShapeChart(rows) {
+    const t = tokens();
+    const top = rows.slice(0, 12);
+
+    if (!top.length) {
+        dispose('qy-shapes-chart');
+        return;
+    }
+
+    barsHStacked('qy-shapes-chart', top.map((row) => ({
+        label: row.label,
+        parts: [
+            { name: 'Matched something', value: row.count - row.zero, color: t.pop.human },
+            { name: 'Matched nothing', value: row.zero, color: t.pop.evasive }
+        ]
+    })));
+}
+
+/**
  * Render the all-requests shape table from a job state.
  */
 function renderShapes(state, order, running) {
     const table = byId(SCANS.shapes.table);
     if (state.note) {
         tbody(table, []);
+        dispose('qy-shapes-chart');
         handleState('qy-shapes-empty', { state: 'unreachable', note: state.note }, 'requests');
         return;
     }
     if (!state.scanned) {
         tbody(table, []);
+        dispose('qy-shapes-chart');
         if (!running) {
             handleState('qy-shapes-empty', { state: 'ok', requests: 0 }, 'requests');
         }
@@ -239,6 +358,7 @@ function renderShapes(state, order, running) {
 
     const rows = rankShapes(state.shapes, order);
     scans.shapes = { rows: rows, state: state };
+    renderShapeChart(rows);
 
     tbody(table, rows.map((row, index) => ({
         attrs: { dataset: { row: String(index) } },
@@ -322,6 +442,7 @@ function paint(which, job) {
     const running = !job.done;
     if (which === 'shapes') {
         renderShapes(state, order(), running);
+        renderLatency(state, running);
     } else {
         renderZero(state, running);
     }
@@ -418,20 +539,49 @@ function refresh() {
             mount.replaceChildren();
         }
     }
+    revealCard('qy-latency');
 
+    /* `lf` and `outcome` are handed to the scan as job PARAMETERS rather than being read
+       from the query string on the server, because a job start and every poll after it are
+       POSTs to the bare view URL and carry no query string at all. `lf_packed` is the opaque
+       string the server itself put in this payload; it is decoded and re-validated
+       server-side, so it can express no more than a hand-written query string could. Being
+       part of the parameters also makes a different filter set a different scan, which is
+       correct: one job must not answer for two questions. */
     resolveCore('queries', 'qy-core', refresh).then((chosen) => {
         if (chosen === null) {
             nothingToScan('shapes', 'This Opensolr account has no indexes to scan.');
             nothingToScan('zero', 'This Opensolr account has no indexes to scan.');
             return;
         }
-        const target = { core: chosen, range: range };
-        attach('shapes', target);
-        attach('zero', target);
+        return indexList('queries').then((list) => {
+            const target = {
+                core: chosen,
+                range: range,
+                lf: list.lf_packed || '',
+                outcome: list.outcome || ''
+            };
+            attach('shapes', target);
+            attach('zero', target);
+        });
     }).catch((err) => {
         for (const which of Object.keys(SCANS)) {
             cardFailure(SCANS[which].card, err, refresh);
         }
+    });
+
+    loadCard('qy-filters', 'Faceting the request log', async () => {
+        const chosen = await resolveCore('queries', 'qy-core', refresh);
+        renderFilters('qy-filters', chosen === null
+            ? { state: 'no_index', requests: 0, groups: [], active: {}, ignored: [] }
+            : await api('queries', 'facets', { core: chosen }));
+    });
+
+    loadCard('qy-volume', 'Faceting request volume', async () => {
+        const chosen = await resolveCore('queries', 'qy-core', refresh);
+        renderVolume('qy-volume', chosen === null
+            ? { state: 'no_index', requests: 0, all: [], times: [] }
+            : await api('queries', 'volume', { core: chosen }));
     });
 
     loadCard('qy-slow', 'Asking the platform for the slowest requests', async () => {
@@ -447,7 +597,7 @@ function refresh() {
  * renders an explanation instead of cards.
  */
 export default function init() {
-    if (!byId('qy-shapes-card')) {
+    if (!byId('qy-filters-card')) {
         return;
     }
     const sort = byId('qy-sort');

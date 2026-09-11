@@ -108,7 +108,12 @@ final class Fingerprints extends Controller
                         'end'   => 'NOW',
                         'gap'   => Query::sparkGap($this->range),
                     ],
-                    'ua'      => ['type' => 'terms', 'field' => 'ua_s', 'limit' => 1],
+                    'browser' => ['type' => 'terms', 'field' => 'browser_s', 'limit' => 1],
+                    'bver'    => ['type' => 'terms', 'field' => 'browser_ver_i', 'limit' => 1],
+                    'os'      => ['type' => 'terms', 'field' => 'os_s', 'limit' => 1],
+                    'device'  => ['type' => 'terms', 'field' => 'device_s', 'limit' => 1],
+                    'botname' => ['type' => 'terms', 'field' => 'ua_bot_name_s', 'limit' => 1],
+                    'botcat'  => ['type' => 'terms', 'field' => 'ua_bot_cat_s', 'limit' => 1],
                     'org'     => ['type' => 'terms', 'field' => 'as_org_s', 'limit' => 1],
                     'astype'  => ['type' => 'terms', 'field' => 'as_type_s', 'limit' => 1],
                     'verdict' => ['type' => 'terms', 'field' => 'bot_verdict_s', 'limit' => 1],
@@ -136,7 +141,6 @@ final class Fingerprints extends Controller
             foreach (self::buckets($b, 'spark') as $sb) {
                 $spark[] = (int) ($sb['count'] ?? 0);
             }
-            $first = self::firstVal($b, 'ua');
             $rows[] = [
                 'fp'        => (string) ($b['val'] ?? ''),
                 'sessions'  => (int) ($b['count'] ?? 0),
@@ -148,7 +152,12 @@ final class Fingerprints extends Controller
                 'first'     => is_string($b['first'] ?? null) ? $b['first'] : null,
                 'last'      => is_string($b['last'] ?? null) ? $b['last'] : null,
                 'spark'     => $spark,
-                'ua'        => $first,
+                'browser'     => self::firstVal($b, 'browser'),
+                'browser_ver' => self::firstVal($b, 'bver'),
+                'os'          => self::firstVal($b, 'os'),
+                'device'      => self::firstVal($b, 'device'),
+                'ua_bot_name' => self::firstVal($b, 'botname'),
+                'ua_bot_cat'  => self::firstVal($b, 'botcat'),
                 'org'       => self::firstVal($b, 'org'),
                 'as_type'   => self::firstVal($b, 'astype'),
                 'verdict'   => self::firstVal($b, 'verdict'),
@@ -331,13 +340,17 @@ final class Fingerprints extends Controller
         );
         self::skeleton('fp-table', 'rows', 0, 'Building fingerprint clusters');
 
-        echo '<div class="table-wrap"><table id="fp-table-el"><thead><tr>'
+        echo '<div class="table-wrap"><table id="fp-table-el" class="table-fixed"><colgroup>'
+            . '<col style="width:30px"><col style="width:21ch"><col style="width:7ch">'
+            . '<col style="width:8ch"><col style="width:6ch"><col style="width:8ch">'
+            . '<col style="width:140px"><col><col style="width:6ch"><col style="width:11ch">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col" class="w-expand"><span class="sr-only">Expand</span></th>'
             . '<th scope="col">Fingerprint</th>'
-            . '<th scope="col" class="num">Distinct IPs</th>'
-            . '<th scope="col" class="num">Netblocks</th>'
+            . '<th scope="col" class="num">IPs</th>'
+            . '<th scope="col" class="num">Blocks</th>'
             . '<th scope="col" class="num">ASNs</th>'
-            . '<th scope="col" class="num">Sessions</th>'
+            . '<th scope="col" class="num">Sess.</th>'
             . '<th scope="col">Activity</th>'
             . '<th scope="col">Client</th>'
             . '<th scope="col" class="num">Score</th>'

@@ -16,6 +16,10 @@
  *    dynamic values here are config strings the operator typed themselves, and they still
  *    go through Security::esc().
  *
+ * It also owns the sticky section nav, because that bar has to be a sibling of `.view`
+ * rather than a child of it — see sectionNav() for the flex/sticky reason — and because the
+ * numbering it derives is then the one source every card's number comes from.
+ *
  * @package Loghound
  * @license MIT
  */
@@ -86,20 +90,153 @@ final class Layout
         self::skipLink();
         self::sidebar($siteName, $slug, (string) $cfg->get('auth.mode', 'none') === 'session');
 
+        /* The body is rendered into a buffer BEFORE anything after it is emitted, because the
+           jump bar has to appear above the page head and is built out of the cards the body
+           produced. A view that declares sections() names them itself; one that does not gets
+           a bar derived from the cards it actually rendered, so every page in the panel has
+           one rather than only the four that have been converted. Buffering costs nothing:
+           body() emits static markup and fetches no data. */
+        ob_start();
+        $view->body();
+        $body = (string) ob_get_clean();
+
         echo '<main id="main">' . "\n";
+        self::sectionNav($view, $body);
         self::header($view);
         self::banners($gw, $cfg);
 
         echo '<div class="view">' . "\n";
-        $view->body();
+        echo $body;
         echo "</div>\n";
 
         self::footer($gw);
         echo "</main>\n";
 
         echo '<script src="' . Security::esc($v('assets/vendor/echarts.min.js')) . '" defer></script>' . "\n";
+        echo '<script type="module" src="' . Security::esc($v('assets/js/sectionnav.js')) . '"></script>' . "\n";
         echo '<script type="module" src="' . Security::esc($v('assets/js/app.js')) . '"></script>' . "\n";
         echo "</body>\n</html>\n";
+    }
+
+    /**
+     * The sticky jump bar, built from the view's own card list.
+     *
+     * WHERE IT IS AND WHY IT HAS TO BE THERE. First child of <main>, a SIBLING of `.view`
+     * rather than a child of it. `.view` is `display: flex; flex-direction: column`, and a
+     * `position: sticky` element inside a flex container is sticky within its own flex item
+     * box — a box exactly as tall as the bar itself, so it has no travel and scrolls away
+     * with the rest of the page. Rendered here its containing block is <main>, which is the
+     * whole document, and it pins for the entire scroll including the last card.
+     *
+     * It sits ABOVE the H1, which is the one place the editorial system's "nothing above the
+     * H1" rule is set aside, deliberately: this is page chrome in the same class as the left
+     * sidebar, not an eyebrow or a badge on the article.
+     *
+     * ONE ROW, ALWAYS. The list scrolls horizontally and never wraps — eleven entries at
+     * full heading length do not fit on one line at any realistic width, and a bar that
+     * costs two rows of every screen is worse than the scrolling it was added to fix. The
+     * labels in the list are therefore short by contract, and assets/js/sectionnav.js keeps
+     * the active entry scrolled into view so a narrow window still says where the reader is.
+     *
+     * Plain anchors: the bar works with scripting off, and every entry is a real link that
+     * can be opened in a new tab or sent to somebody. Marking the active entry as the reader
+     * scrolls needs script, and is the only part that does.
+     *
+     * A view that declares sections() names its own entries and gets its card numbers from the
+     * same list. A view that does not gets a bar derived from the cards it just rendered, so
+     * EVERY page has one — several of them are six cards long and had the same unbroken-scroll
+     * problem Settings had. Declaring the list is still better: it gives short labels written
+     * for a one-row bar, and it takes the card numbering out of the call sites.
+     *
+     * @param string $body The view's already-rendered markup, for the derived case.
+     */
+    private static function sectionNav(Controller $view, string $body): void
+    {
+        $sections = $view instanceof Sections ? $view->sections() : self::cardsIn($body);
+        if (count($sections) < 2) {
+            return;
+        }
+
+        echo '<nav class="set-nav" id="lh-section-nav" aria-label="Sections on this page">';
+        echo '<ul>';
+        foreach ($sections as $i => $entry) {
+            $id = (string) ($entry[0] ?? '');
+            $label = (string) ($entry[1] ?? $id);
+            if ($id === '') {
+                continue;
+            }
+            echo '<li><a href="#' . Security::esc($id) . '-card" data-sect="' . Security::esc($id) . '">'
+                . '<span class="set-nav-num">' . Security::esc(self::pad($i)) . '</span>'
+                . '<span class="set-nav-label">' . Security::esc($label) . '</span></a></li>';
+        }
+        echo '</ul>';
+        echo "</nav>\n";
+    }
+
+    /**
+     * The cards a view rendered, read back out of its own markup.
+     *
+     * The fallback for a view that has not declared sections() yet. It matches exactly what
+     * Controller::cardOpen() emits — an id, a number and a heading — so it cannot pick up
+     * anything else on the page, and it skips a card with no id (the "not connected to
+     * Opensolr" explainer is one).
+     *
+     * The heading captured here has ALREADY been through Security::esc() inside cardOpen(),
+     * so it is decoded before it goes back out through esc() at the sink. Escaping an escaped
+     * string is how `&amp;` becomes `&amp;amp;` on screen, and re-escaping at the sink rather
+     * than trusting the capture is what keeps the rule "escape where you output" intact.
+     *
+     * Headings are written for a card, not for a one-row bar, so they are trimmed to a length
+     * the bar can carry. A view that wants a label chosen rather than cut declares sections().
+     *
+     * @return array<int,array{0:string,1:string}>
+     */
+    private static function cardsIn(string $body): array
+    {
+        $pattern = '#<section class="card" id="([A-Za-z0-9_-]+)-card"[^>]*>'
+            . '<div class="card-head"><h2>'
+            . '<span class="card-num">[^<]*</span>'
+            . '<span>([^<]*)</span>#';
+
+        if (!preg_match_all($pattern, $body, $matches, PREG_SET_ORDER)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($matches as $match) {
+            $label = html_entity_decode($match[2], ENT_QUOTES, 'UTF-8');
+            if (mb_strlen($label) > 22) {
+                $label = rtrim(mb_substr($label, 0, 21)) . '…';
+            }
+            $out[] = [$match[1], $label];
+        }
+        return $out;
+    }
+
+    /**
+     * The number a card carries, derived from its position in the view's own list.
+     *
+     * Called at the `cardOpen()` site instead of a literal, so inserting a card renumbers
+     * everything below it and the jump bar cannot disagree with the cards. An id that is not
+     * in the list gets no number rather than a wrong one: a card the view forgot to declare
+     * is a bug to see, not a figure to invent.
+     *
+     * @param array<int,array<int,string>> $sections The view's section list.
+     */
+    public static function cardNum(array $sections, string $id): string
+    {
+        foreach ($sections as $i => $entry) {
+            if ((string) ($entry[0] ?? '') === $id) {
+                return self::pad($i);
+            }
+        }
+        return '';
+    }
+
+    /** Zero-padded section number from a zero-based index. */
+    private static function pad(int $index): string
+    {
+        return sprintf('%02d', $index + 1);
     }
 
     /** Keyboard users land here first; the nav is long and skipping it matters. */
@@ -246,19 +383,46 @@ final class Layout
      * Only keys we recognise are carried over: the query string is rebuilt from scratch
      * rather than string-patched, so nothing unexpected survives a navigation.
      *
+     * Four namespaces travel, and each is re-validated here rather than trusted because it
+     * arrived in a URL the panel itself produced:
+     *
+     *  - `f[…]`  the sessions/hits sidebar filters, against Query::filterFields();
+     *  - `lf[…]` the Opensolr request-log filters, against OpensolrView::logFilterFields();
+     *  - `outcome` the request-log outcome slice, against its own small allowlist;
+     *  - `core`  the selected Opensolr index, shape-checked as an index name.
+     *
+     * The last three were missing, which meant changing the time range on any of the three
+     * Opensolr views silently dropped the index and every filter the reader had set and
+     * quietly answered a different question under the same chips.
+     *
      * @param array<string,string> $overrides
      */
     public static function urlWith(array $overrides): string
     {
         $params = [];
-        if (isset($_GET['f']) && is_array($_GET['f'])) {
-            $allowed = Query::filterFields();
-            foreach ($_GET['f'] as $field => $values) {
+
+        foreach ([['f', Query::filterFields()], ['lf', OpensolrView::logFilterFields()]] as [$key, $allowed]) {
+            $raw = $_GET[$key] ?? null;
+            if (!is_array($raw)) {
+                continue;
+            }
+            foreach ($raw as $field => $values) {
                 if (is_string($field) && isset($allowed[$field]) && Security::isSafeFieldName($field)) {
-                    $params['f'][$field] = array_values(array_filter((array) $values, 'is_string'));
+                    $params[$key][$field] = array_values(array_filter((array) $values, 'is_string'));
                 }
             }
         }
+
+        $outcome = $_GET['outcome'] ?? null;
+        if (is_string($outcome) && isset(OpensolrView::OUTCOMES[$outcome])) {
+            $params['outcome'] = $outcome;
+        }
+
+        $core = $_GET['core'] ?? null;
+        if (is_string($core) && $core !== '' && Security::isSafeCoreName($core)) {
+            $params['core'] = $core;
+        }
+
         foreach ($overrides as $k => $v) {
             $params[$k] = $v;
         }

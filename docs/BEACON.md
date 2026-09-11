@@ -40,10 +40,15 @@ Optional attributes:
 | `data-endpoint` | `<script src>` with `b.js` → `collect.php` | Collector URL, if it is not a sibling of `b.js` |
 | `data-hb` | `15000` | Heartbeat interval, ms. Clamped to 2 000–300 000 |
 | `data-idle` | `30000` | How long after an interaction a visitor still counts as engaged, ms. Clamped to 1 000–600 000 |
+| `data-ident` | — | An identity **your site** attaches to this session. See section 3.1 |
+| `data-signed-in` | — | `1` signed in, `0` anonymous. Omit it entirely to say nothing. See section 3.1 |
 
-These correspond to `beacon.heartbeat_ms` and `beacon.idle_timeout_ms` in
+The first three correspond to `beacon.heartbeat_ms` and `beacon.idle_timeout_ms` in
 `config/loghound.php`. The panel's Settings page renders the snippet with your
-configured values already filled in.
+configured values already filled in. The last two have no configuration
+counterpart on the page — your template supplies them per request — but whether
+Loghound *stores* what they carry is controlled by `beacon.store_identity` and
+`beacon.store_signed_in`, and section 3.1 is about exactly that.
 
 **Serving `b.js`.** Serve it from the Loghound vhost with a long `Cache-Control`
 and a version query string (`b.js?v=3`) so an upgrade actually reaches visitors.
@@ -157,6 +162,8 @@ One JSON object per POST. Every field, with nothing omitted:
 | `sw` `sh` | Screen size |
 | `aw` `ah` | Available screen size (screen minus taskbar/dock) |
 | `ow` `oh` | Browser window outer size |
+| `xi` | Identity your site declared, if any. Absent otherwise. Section 3.1 |
+| `xs` | `1` signed in, `0` anonymous. **Absent** when your site said nothing. Section 3.1 |
 
 **What is deliberately NOT collected:** no cookies, no `localStorage`, no canvas
 or audio fingerprint, no font enumeration, no battery/gamepad/WebRTC probing, no
@@ -164,6 +171,114 @@ page content, no form values, no keystrokes (we count `keydown` events; we never
 look at which key), no query string, no hash fragment, no clipboard, no mouse
 coordinates in the payload (they are analysed on the client and discarded), and
 no third-party requests of any kind.
+
+`xi` and `xs` are the only two fields in the table above that Loghound does not
+measure. **Nothing guesses them.** No cookie is read, no form is scraped, no meta
+tag is looked for, no `window` variable is hunted through. They exist only when
+your own template declares them, and section 3.1 says what happens to them.
+
+---
+
+## 3.1 Identity your site supplies
+
+Two facts only your site can know, and Loghound will not invent either:
+
+- **an identity string** — whatever you call the person: an email address, a
+  customer number, an account id;
+- **whether they were signed in** — a boolean.
+
+**They are independent, and that is the point.** You may pass an identity for a
+visitor who is not authenticated. You may want "this was a signed-in session"
+recorded without handing over who it was. Neither implies the other and neither
+is derived from the other.
+
+### How to send them
+
+The recommended channel is two attributes on the tag you already have. Your
+template renders them in the same response as the page, so there is **no second
+request**, no extra script and no ordering problem:
+
+```html
+<script src="https://loghound.example.com/b.js?v=1"
+        data-ident="ada@example.com" data-signed-in="1" defer></script>
+```
+
+Two globals are accepted as an exact equivalent, for templating systems where
+adding an attribute to a third-party tag is awkward but setting a variable above
+it is not. Set them anywhere in the document when the tag is `defer`red:
+
+```html
+<script>window.LoghoundIdent='ada@example.com';window.LoghoundSignedIn=true;</script>
+```
+
+And for an application that signs somebody in *after* the page loaded — a
+single-page app, where no attribute can express it — the beacon exposes:
+
+```js
+window.loghound.identify('ada@example.com', true);
+```
+
+Both arguments are optional, so `identify(null, true)` records the signed-in
+state and no identity. **It makes no request of its own:** the values ride the
+heartbeat that is already scheduled, or the final flush.
+
+For an anonymous visitor, send `data-signed-in="0"` and no `data-ident`. To say
+nothing at all, omit both.
+
+### Three states, not two
+
+`signed_in_b` on the session document is written **only when your site actually
+said one or the other.** A site that never sends `data-signed-in` leaves the
+field *absent*, and the panel reports that population as "not reported" — never
+as anonymous.
+
+This matters more than it sounds. A boolean defaulting to `false` would invent an
+anonymous population out of every site that has not adopted the attribute, and
+the signed-in-versus-anonymous split — the reason the field exists — would be a
+fabrication over traffic nobody classified. Absent is not false, here and
+everywhere else in Loghound.
+
+Where several payloads in one session disagree, the resolution follows what
+happened: the **last** non-empty identity wins, because somebody who signs in
+halfway through a visit is that person by the end of it; and signed-in beats
+anonymous, because a session that was authenticated at any point was an
+authenticated session.
+
+### Storage, and the two switches
+
+| Setting | Default | What it stores |
+|---|---|---|
+| `beacon.store_identity` | **`false`** | `ident_s` on the session document: the string your site sent, at most 128 bytes |
+| `beacon.store_signed_in` | `true` | `signed_in_b` on the session document: a boolean, or nothing when unreported |
+
+**`store_identity` is off by default and that is a deliberate policy default,
+not an oversight.** Everything else this beacon collects is a measurement of a
+browser. This is a name. With it on, an email address is written to the session
+document, appears in the panel, lives in the Solr index, and is in every backup
+of that index until `privacy.retention_days` deletes the session. That is a
+decision about personal data and only you can make it.
+
+With it off, `Beacon::normalise()` discards the string **before anything is
+written** — it never reaches the SQLite staging table, let alone Solr. Switching
+it off stops collection; it does not merely hide what was collected. Existing
+documents keep what they have until retention removes them.
+
+`store_signed_in` is on by default because the boolean identifies nobody, and
+because the split it enables — engaged time, paths taken, bounce and bot verdict
+for signed-in versus anonymous traffic — is one of the most useful things the
+panel can show and nothing else can compute it. **The two switches are
+independent:** storing the split while storing no identities at all is a
+perfectly ordinary configuration, and probably the right one for most sites.
+
+### In the panel
+
+Both appear on the session detail dialog, in a strip flagged with the accent
+because they are the only facts there that Loghound did not derive for itself.
+The signed-in split appears as a dimension in the filter bar with all three
+buckets counted. The identity string is rendered with `textContent` at every
+sink, like every other value that came off the wire — it is caller-supplied
+input on a public endpoint, and it is treated as hostile regardless of how
+trustworthy the site that sent it is.
 
 **Where the query string goes.** It is dropped before the payload is built. Real
 sites routinely carry session tokens, email addresses and password-reset codes in

@@ -16,6 +16,7 @@ import {
     api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, tbody, when
 } from '../core.js';
 import { barsHStacked, donut, histogram, tokens } from '../charts.js';
+import { dimRow, dimValue } from '../identity.js';
 
 /**
  * The chart colour a verdict keeps everywhere in the panel.
@@ -81,18 +82,25 @@ function renderReasons(data) {
     })), { labelWidth: 230 });
 
     tbody(byId('bf-reason-table'), data.reasons.map((row) => ({
+        attrs: dimRow('bot_reasons_ss', row.code),
         cells: [
             {
                 node: el('div', {}, [
-                    el('code', { class: 'mono', text: row.code }),
-                    el('br'),
-                    el('span', { class: 'muted', text: row.label })
-                ])
+                    dimValue('bot_reasons_ss', row.code, { mono: true }),
+                    el('div', { class: 'muted', text: row.label })
+                ]),
+                clip: true,
+                title: row.code,
+                sort: row.label || row.code
             },
-            { text: row.why, class: 'muted wrap' },
-            { text: num(row.evasive), num: true },
-            { text: num(row.declared), num: true },
-            { text: row.avg_score === null ? '—' : dec(row.avg_score, 0), num: true }
+            { text: row.why, class: 'muted wrap', sort: row.severity || '' },
+            { text: num(row.evasive), num: true, sort: row.evasive },
+            { text: num(row.declared), num: true, sort: row.declared },
+            {
+                text: row.avg_score === null ? '—' : dec(row.avg_score, 0),
+                num: true,
+                sort: row.avg_score === null ? '' : row.avg_score
+            }
         ]
     })));
 }
@@ -150,18 +158,24 @@ function renderClasses(data) {
     hideEmpty('bf-classes-empty');
 
     tbody(byId('bf-classes-table'), data.classes.map((row) => ({
+        attrs: dimRow('bot_class_s', row.class),
         cells: [
-            { node: el('code', { class: 'mono', text: row.class }) },
+            { node: dimValue('bot_class_s', row.class, { mono: true }), clip: true, title: row.class, sort: row.class },
             {
                 node: el('span', {
-                    class: 'chip ' + (row.declared ? 'chip-good' : 'chip-bad'),
+                    class: 'chip chip-word ' + (row.declared ? 'chip-good' : 'chip-bad'),
                     text: row.declared ? 'declared' : 'evasive'
-                })
+                }),
+                sort: row.declared ? 'declared' : 'evasive'
             },
-            { text: num(row.count), num: true },
-            { text: num(row.uniq_ips), num: true },
-            { text: num(row.hits), num: true },
-            { text: row.avg_score === null ? '—' : dec(row.avg_score, 0), num: true }
+            { text: num(row.count), num: true, sort: row.count },
+            { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
+            { text: num(row.hits), num: true, sort: row.hits },
+            {
+                text: row.avg_score === null ? '—' : dec(row.avg_score, 0),
+                num: true,
+                sort: row.avg_score === null ? '' : row.avg_score
+            }
         ]
     })));
 }
@@ -178,27 +192,32 @@ function renderCrawlers(data) {
     hideEmpty('bf-crawlers-empty');
 
     tbody(byId('bf-crawlers-table'), data.crawlers.map((row) => ({
+        attrs: dimRow('ua_bot_name_s', row.name),
         cells: [
             {
                 node: el('span', {}, [
                     el('strong', { text: row.name }),
-                    row.ai ? el('span', { class: 'chip chip-accent', text: 'AI', style: 'margin-left:8px' }) : null
-                ])
+                    row.ai ? el('span', { class: 'chip chip-accent', text: 'AI' }) : null
+                ]),
+                clip: true,
+                title: row.name,
+                sort: row.name
             },
-            { node: el('code', { class: 'mono', text: row.category || 'other' }) },
-            { text: num(row.sessions), num: true },
-            { text: num(row.hits), num: true },
-            { text: num(row.uniq_ips), num: true },
+            { node: dimValue('ua_bot_cat_s', row.category || 'other'), sort: row.category || 'other' },
+            { text: num(row.sessions), num: true, sort: row.sessions },
+            { text: num(row.hits), num: true, sort: row.hits },
+            { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
             {
                 node: el('span', {
-                    class: 'chip ' + (row.verified >= row.sessions ? 'chip-good' : 'chip-bad'),
+                    class: 'chip chip-word ' + (row.verified >= row.sessions ? 'chip-good' : 'chip-bad'),
                     text: num(row.verified) + '/' + num(row.sessions),
                     title: row.verified >= row.sessions
                         ? 'Every session passed forward-confirmed reverse DNS.'
                         : 'Some or all sessions failed forward-confirmed reverse DNS — that is an impersonator.'
-                })
+                }),
+                sort: row.sessions ? row.verified / row.sessions : 0
             },
-            { text: when(row.last), mono: true, nowrap: true }
+            { text: when(row.last), mono: true, nowrap: true, sort: row.last || '' }
         ]
     })));
 }

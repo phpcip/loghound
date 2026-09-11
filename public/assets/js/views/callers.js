@@ -20,7 +20,11 @@
 'use strict';
 
 import { api, byId, el, hideEmpty, loadCard, num, pct, setPop, tbody } from '../core.js';
-import { handleState, resolveCore, shareBar } from './opensolr.js';
+import { barsH, dispose, donut } from '../charts.js';
+import {
+    chartOrEmpty, fieldSetter, handleState, lfAdd, lfRemove, renderFilters, renderVolume,
+    resolveCore, shareBar, tokens
+} from './opensolr.js';
 
 /** How each classification is labelled and chipped in the table. */
 const CLASSES = {
@@ -31,7 +35,26 @@ const CLASSES = {
 };
 
 /**
- * Fill the busiest-addresses and handlers tables.
+ * A cell whose text is a link that filters the whole page to that value.
+ *
+ * The point of this page is finding the caller that should not be there; having found one,
+ * the next question is always "what is it doing", and that is the volume chart and the handler
+ * split on this same page narrowed to it. A real <a> so it can be opened in a new tab, and
+ * because the CSP forbids an inline handler.
+ */
+function pickCell(field, value, active, extra) {
+    const on = Array.isArray((active || {})[field]) && active[field].indexOf(value) !== -1;
+    return Object.assign({
+        node: el('a', {
+            href: on ? lfRemove(field, value) : lfAdd(field, value),
+            title: (on ? 'Remove this filter: ' : 'Filter this page to ') + value,
+            text: value
+        })
+    }, extra || {});
+}
+
+/**
+ * Fill the busiest-addresses and handlers cards: a chart each, then the exact table.
  */
 function renderWho(data) {
     if (handleState('cl-who-empty', data, 'requests')) {
@@ -45,17 +68,35 @@ function renderWho(data) {
     const handlers = Object.keys(data.handlers);
     const handlerTotal = handlers.reduce((sum, key) => sum + data.handlers[key], 0);
 
+    if (!chartOrEmpty('cl-ips-chart', 'cl-who-empty', ips.length, 'No caller recorded', [
+        'The platform returned no client address for these requests, so there is nobody to list.'
+    ])) {
+        barsH('cl-ips-chart', ips.slice(0, 12).map((ip) => ({
+            label: ip,
+            value: data.addresses[ip],
+            extra: pct(data.addresses[ip], data.requests) + ' of every logged request'
+        })));
+    }
+
+    barsH('cl-handlers-chart', handlers.slice(0, 12).map((path) => ({
+        label: path,
+        value: data.handlers[path],
+        extra: pct(data.handlers[path], handlerTotal) + ' of the requests listed'
+    })));
+
     tbody(byId('cl-ips-table'), ips.map((ip) => ({
+        attrs: { class: 'lf-pick' },
         cells: [
-            { text: ip, mono: true, nowrap: true },
+            pickCell('ip', ip, data.active, { mono: true, nowrap: true }),
             { text: num(data.addresses[ip]), num: true },
             { node: shareBar(data.addresses[ip], data.requests) }
         ]
     })));
 
     tbody(byId('cl-handlers-table'), handlers.map((path) => ({
+        attrs: { class: 'lf-pick' },
         cells: [
-            { text: path, mono: true, clip: true },
+            pickCell('path', path, data.active, { mono: true, clip: true }),
             { text: num(data.handlers[path]), num: true },
             { node: shareBar(data.handlers[path], handlerTotal) }
         ]
@@ -72,13 +113,7 @@ function renderWho(data) {
  * Fill the correlation headline, the state explainer and the table.
  */
 function renderCross(data) {
-    const scope = byId('cl-cross-content');
-    const set = (field, value) => {
-        const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
-        if (node) {
-            node.textContent = value;
-        }
-    };
+    const set = fieldSetter('cl-cross');
 
     if (handleState('cl-cross-empty', data, 'requests')) {
         tbody(byId('cl-cross-table'), []);
@@ -93,11 +128,13 @@ function renderCross(data) {
         set(key, web === 'ok' ? num(classes[key] || 0) : '—');
     }
 
+    renderClassChart(data);
     renderCrossState(data);
 
     tbody(byId('cl-cross-table'), (data.rows || []).map((row) => ({
+        attrs: { class: 'lf-pick' },
         cells: [
-            { text: row.ip, mono: true, nowrap: true },
+            pickCell('ip', row.ip, data.active, { mono: true, nowrap: true }),
             { text: num(row.requests), num: true },
             {
                 node: el('span', {
@@ -112,6 +149,40 @@ function renderCross(data) {
     })));
 
     setPop('cl-cross', crossPopulation(data));
+}
+
+/**
+ * Draw the split of search work across the four classifications.
+ *
+ * A donut, because this is a composition of one whole: every request covered by the facet is
+ * attributed to exactly one of the four, so the arcs sum to the figure in the centre. It is
+ * drawn ONLY when the web side actually answered — the four figures above it are em-dashes
+ * otherwise, and a chart of four zeroes under four em-dashes would look like a measurement
+ * rather than the absence of one.
+ */
+function renderClassChart(data) {
+    const classes = data.by_class || {};
+    const t = tokens();
+
+    if (data.web_state !== 'ok') {
+        dispose('cl-cross-chart');
+        return;
+    }
+
+    const rows = [
+        { key: 'bot', label: 'Serving bots', color: t.pop.evasive },
+        { key: 'human', label: 'Serving people', color: t.pop.human },
+        { key: 'unseen', label: 'No web traffic at all', color: t.pop.ai },
+        { key: 'unknown', label: 'Undecided', color: t.pop.unknown }
+    ].filter((row) => (classes[row.key] || 0) > 0)
+        .map((row) => ({ label: row.label, value: classes[row.key], color: row.color }));
+
+    if (!rows.length) {
+        dispose('cl-cross-chart');
+        return;
+    }
+
+    donut('cl-cross-chart', rows, 'requests', num(data.covered));
 }
 
 /**
@@ -210,6 +281,20 @@ function renderCrossState(data) {
  * Load both cards for the current index.
  */
 function refresh() {
+    loadCard('cl-filters', 'Faceting the request log', async () => {
+        const chosen = await resolveCore('callers', 'cl-core', refresh);
+        renderFilters('cl-filters', chosen === null
+            ? { state: 'no_index', requests: 0, groups: [], active: {}, ignored: [] }
+            : await api('callers', 'facets', { core: chosen }));
+    });
+
+    loadCard('cl-volume', 'Faceting request volume', async () => {
+        const chosen = await resolveCore('callers', 'cl-core', refresh);
+        renderVolume('cl-volume', chosen === null
+            ? { state: 'no_index', requests: 0, all: [], times: [] }
+            : await api('callers', 'volume', { core: chosen }));
+    });
+
     loadCard('cl-who', 'Faceting client addresses', async () => {
         const chosen = await resolveCore('callers', 'cl-core', refresh);
         renderWho(chosen === null
@@ -230,7 +315,7 @@ function refresh() {
  * renders an explanation instead of cards.
  */
 export default function init() {
-    if (!byId('cl-who-card')) {
+    if (!byId('cl-filters-card')) {
         return;
     }
     refresh();

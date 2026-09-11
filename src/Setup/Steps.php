@@ -781,4 +781,31 @@ final class Steps
             . 'headless automation is inferred rather than proven, and time-on-site falls back '
             . 'to the weak log-derived number every other log analyser reports.';
     }
+
+    /**
+     * The two optional attributes that let a site put a name against a visit.
+     *
+     * Shown next to the snippet during setup, because the moment somebody is pasting the tag into
+     * their template is the moment adding two attributes costs nothing — and the moment they
+     * should be told that one of the two stores personal data and is switched off until they say
+     * otherwise. A capability documented only in docs/BEACON.md is a capability nobody uses.
+     *
+     * Deliberately states the storage consequence rather than only the syntax: an operator who
+     * pastes `data-ident` without knowing that it writes an email address into the search index
+     * has not consented to anything.
+     */
+    public static function beaconIdentityNote(): string
+    {
+        return 'Optional, and only your site can supply them: add data-signed-in="1" or "0" to '
+            . 'record whether the visitor was signed in, and data-ident="..." to attach an '
+            . 'identity — an email address, a customer number, whatever you call the person. '
+            . 'Omit an attribute and Loghound stores nothing for it; it never guesses either, '
+            . 'reads no cookie and scrapes no form. The signed-in flag is a boolean that '
+            . 'identifies nobody and is stored by default, and it is the more useful of the two: '
+            . 'it splits engaged time, paths and bot verdicts between signed-in and anonymous '
+            . 'traffic. The identity string is personal data — it is written to the session '
+            . 'document, shows in the panel, lives in the search index and is in every backup of '
+            . 'it until retention deletes the session — so beacon.store_identity is false until '
+            . 'you set it to true, and the two switches are independent.';
+    }
 }

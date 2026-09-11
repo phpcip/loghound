@@ -1100,6 +1100,42 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
+     * What the site itself can tell Loghound about a visitor.
+     *
+     * Two facts nothing else can supply: whether the visitor was signed in, and who they
+     * were. Neither is inferred — no cookie is read, no form scraped, no meta tag hunted —
+     * so if the site does not declare them they simply do not exist on the session.
+     *
+     * The two are deliberately independent, and the reason is the difference in what they
+     * cost. The boolean identifies nobody and splits every number on the dashboard into
+     * signed-in and anonymous, which is the most useful cut the product can offer and one
+     * no log-only tool can compute. The identity string is personal data: it lands on the
+     * session document, shows in the panel, lives in the search index and sits in every
+     * backup of it until retention deletes the session. So it is off until somebody turns
+     * it on, and turning on one does not turn on the other.
+     *
+     * The prose is Steps::beaconIdentityNote(), the same sentences the installer's beacon
+     * step renders, so the two cannot drift.
+     */
+    private static function beaconIdentityBlock(): void
+    {
+        echo '<h3>Telling Loghound who the visitor is</h3>';
+        echo '<p class="muted">' . Security::esc(Steps::beaconIdentityNote()) . '</p>';
+
+        echo '<dl class="kv">';
+        echo '<dt>beacon.store_signed_in</dt><dd>On by default. A boolean that identifies nobody, '
+            . 'and the split it gives you — signed-in against anonymous — reads differently on '
+            . 'engaged time, on paths taken and on the bot verdict.</dd>';
+        echo '<dt>beacon.store_identity</dt><dd>Off by default. Personal data, stored until '
+            . 'retention deletes the session.</dd>';
+        echo '</dl>';
+
+        echo '<p class="muted">A third state matters and is easy to lose: a site that never '
+            . 'answers is <strong>not reported</strong>, not anonymous. Loghound keeps those apart '
+            . 'and counts them separately.</p>';
+    }
+
+    /**
      * The installation root, as the setup steps expect to be handed it.
      *
      * Steps::nextSteps() builds the `bin/loghound-tail --status` line from it and
@@ -1496,7 +1532,7 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<div id="job-solr"></div>';
         echo '<p class="muted">Each check runs as a sequence of steps with its own progress, so it cannot time '
             . 'out however slow the backend is. You can close this page and come back to it.</p>';
-        self::cardClose('set-solr');
+        self::cardEnd();
     }
 
     /**
@@ -1522,7 +1558,7 @@ final class Settings extends Controller implements JobHost, Sections
             . 'Preview what would be deleted</button>';
         echo '</div>';
         echo '<div id="job-retention"></div>';
-        self::cardClose('set-retention');
+        self::cardEnd();
     }
 
     /**
@@ -1638,6 +1674,8 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'snippets below were built from the address you happen to be using right now. Set it before '
                 . 'handing any of this to a colleague.</div>';
         }
+
+        self::beaconIdentityBlock();
 
         echo '<div class="planes">';
 

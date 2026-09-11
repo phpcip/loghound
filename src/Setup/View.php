@@ -887,6 +887,7 @@ final class View
         }
 
         echo '<p class="muted">' . Security::esc(Steps::beaconRationale()) . '</p>';
+        echo '<p class="muted">' . Security::esc(Steps::beaconIdentityNote()) . '</p>';
         echo '</section>';
     }
 

@@ -228,6 +228,24 @@
 
     <field name="visitor_s" type="string" indexed="true" stored="false" docValues="true"/>
 
+    <!-- ==================== IDENTITY THE SITE SUPPLIED ====================
+         Neither is ever guessed. Loghound reads no cookie, scrapes no form and hunts no
+         meta tag: a site declares these through the beacon or they are absent.
+
+         ident_s is whatever the site calls the person - an email, a customer number, an
+         account id. STORED, because the session dialog shows it back; indexed and
+         docValues so it can be searched and faceted. Writing it is OFF by default
+         (beacon.store_identity): it is a name, and a name is personal data.
+
+         signed_in_b HAS NO DEFAULT, deliberately, and this is the load-bearing part.
+         Three states have to survive: signed in, not signed in, and NOT REPORTED - a
+         site that never answers must not be counted as anonymous. A default would
+         collapse the third into the second on every document ever written, silently and
+         irreversibly, which is the same mistake provisional_b avoids by being written
+         only when true. Absence is the third state; nothing else can represent it. -->
+    <field name="ident_s"     type="string"  indexed="true" stored="true"  docValues="true"/>
+    <field name="signed_in_b" type="boolean" indexed="true" stored="false" docValues="true"/>
+
 
     <!-- ==================== TIMING — THE DIFFERENTIATOR ====================
          Four numbers that every other tool conflates into one. They are separate fields

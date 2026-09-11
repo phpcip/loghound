@@ -11,6 +11,7 @@
 
 import { api, byId, cardChart, dur, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody } from '../core.js';
 import { barsH, stackedTraffic, tokens } from '../charts.js';
+import { dimRow } from '../identity.js';
 
 /** Stacking order, bottom to top: most human at the bottom. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -152,13 +153,15 @@ function loadPages(population) {
 
         const top = data.rows[0].sessions || 1;
         tbody(byId('ov-pages-table'), data.rows.map((row) => ({
+            attrs: dimRow('paths_ss', row.path),
             cells: [
-                { text: row.path, mono: true, clip: true },
-                { text: num(row.sessions), num: true },
+                { text: row.path, mono: true, clip: true, sort: row.path },
+                { text: num(row.sessions), num: true, sort: row.sessions },
                 {
                     node: el('span', { class: 'bar' }, [
                         el('span', { style: 'width:' + Math.round((row.sessions / top) * 100) + '%' })
-                    ])
+                    ]),
+                    sort: row.sessions
                 }
             ]
         })));

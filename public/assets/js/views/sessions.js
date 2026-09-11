@@ -1,95 +1,92 @@
 /*
- * Loghound — Session explorer view.
+ * Loghound — Session explorer.
  *
- * The only view that renders documents, so it is the one that renders the most
- * attacker-controlled text: request paths, User-Agents, referers, AS organisation names.
- * Every one of them goes into the DOM with textContent. The only value that ever becomes
- * an href is `referer_href`, which the SERVER produced by passing the raw referer through
- * Security::safeUrl() — the client never decides that a scheme is safe.
+ * The recent-visitors list. Every row carries identity at a glance — the flag and the city, the
+ * network the address belongs to BY NAME, the parsed client rather than the raw User-Agent, the
+ * time and the page they came in on — and clicking a row opens the whole visit in the shared
+ * dialog, including every request in order. All of those facts were already on the session
+ * document; none of them were shown, and the table was a dead end.
  *
- * The drill-down shows the hit timeline with the beacon overlaid, and states plainly when
- * there is no beacon rather than drawing an empty overlay.
+ * Two affordances per row, and they answer different questions. The ROW opens the record: show
+ * me everything about this visit. A VALUE inside it is a link that filters the dashboard to it:
+ * show me only this network, only this browser, only this country. The link wins over the row
+ * because it is a real anchor, which is also what makes it work with scripting off.
+ *
+ * Everything rendered here came off the wire. It reaches the DOM through core.js's el({text}),
+ * which is textContent, and the only value that ever becomes an href is `referer_href`, which
+ * the SERVER produced with Security::safeUrl().
  */
 
 'use strict';
 
 import {
-    api, bytes, byId, clear, dec, durUs, dur, el, fill, hideEmpty, loadCard,
-    noDataYet, num, pct, shortHash, urlAddFilter, urlRemoveFilter, when
+    api, byId, dec, dur, el, fill, hideEmpty, loadCard, noDataYet, num, pct, when
 } from '../core.js';
+import { clientNode, countryNode, dimValue, drillRow } from '../identity.js';
+import { activeFilters, renderFacetPanel } from '../facets.js';
 
-/** Field → label, mirrored from Panel\Query::filterFields() for the chips. */
-const FILTER_LABELS = {
-    bot_verdict_s: 'Verdict',
-    bot_class_s: 'Bot class',
-    as_type_s: 'Network type',
-    country_s: 'Country',
-    browser_s: 'Browser',
-    os_s: 'OS',
-    device_s: 'Device',
-    ua_bot_cat_s: 'Declared bot category',
-    referer_type_s: 'Referrer type',
-    bot_reasons_ss: 'Signal fired',
-    as_org_s: 'AS organisation',
-    netname_s: 'Netname',
-    fp_hash_s: 'Fingerprint',
-    ip_s: 'IP',
-    session_id_s: 'Session'
-};
-
-/** Verdict chip. */
+/**
+ * Verdict chip, the same colouring the whole panel uses.
+ *
+ * `chip-word` puts it in the body face. A verdict is a word — "human", "likely_bot" — not
+ * something whose characters have to line up or be copied exactly, and the panel had drifted
+ * into setting every value in monospace regardless of what it was.
+ */
 function verdictChip(verdict) {
-    return el('span', { class: 'chip v-' + String(verdict || 'unknown'), text: verdict || 'unknown' });
+    return el('span', {
+        class: 'chip chip-word v-' + String(verdict || 'unknown'),
+        text: verdict || 'unknown'
+    });
 }
 
-/** The active-filter chips, each a link that removes itself. */
-function renderActive(active) {
-    const holder = byId('se-active');
-    if (!holder) {
-        return;
-    }
-    const chips = [];
-    for (const field of Object.keys(active || {})) {
-        for (const value of active[field]) {
-            chips.push(el('a', {
-                href: urlRemoveFilter(field, value),
-                title: 'Remove this filter'
-            }, [
-                el('span', { text: (FILTER_LABELS[field] || field) + ': ' + value }),
-                el('span', { text: '×' })
-            ]));
-        }
-    }
-    if (!chips.length) {
-        clear(holder);
-        return;
-    }
-    fill(holder, [el('div', { class: 'active-filters' }, chips)]);
-}
-
-/** The facet sidebar. */
-function renderFacets(facets) {
+/**
+ * The facet sidebar, rendered by the SHARED control.
+ *
+ * It used to have its own renderer, and that renderer was the one nobody recognised as a filter:
+ * five lists of `label   count` in body text with no affordance, no selected state and no
+ * alignment. There is one facet renderer now (assets/js/facets.js) and the sidebar, the
+ * page-wide bar and the detail dialog all use it, so none of them can drift into being the
+ * unrecognisable one again.
+ */
+function renderFacets(data) {
     const holder = byId('se-facet-list');
-    if (!holder) {
-        return;
+    if (holder) {
+        renderFacetPanel(holder, data.facets, data.multi, SIDEBAR_VALUES);
     }
-    const groups = facets.map((group) => el('div', { class: 'facet-group' }, [
-        el('h3', { text: group.label }),
-        el('ul', {}, group.buckets.map((b) => el('li', {}, [
-            el('a', { href: urlAddFilter(group.field, b.value), title: 'Filter to ' + b.value }, [
-                el('span', { class: 'fv', text: b.value }),
-                el('span', { class: 'fc', text: num(b.count) })
-            ])
-        ])))
-    ]));
-    fill(holder, groups.length ? groups : [el('p', { class: 'muted', text: 'No facet values in this result set.' })]);
 }
 
-/** The result table. */
+/**
+ * Values shown per dimension in the narrow sidebar before "show all".
+ *
+ * Nineteen dimensions at twelve values each is a two-hundred-row column nobody reads to the
+ * bottom of. Six is enough to see which value dominates, which is the question a facet list
+ * answers, and the rest are one press away. A value that is currently SELECTED is always shown
+ * regardless of where it falls in the order — a filter you cannot see is a filter you cannot
+ * remove.
+ */
+const SIDEBAR_VALUES = 6;
+
+/**
+ * The visitor rows.
+ *
+ * THE CLIENT COLUMN SHOWS THE PARSED FACTS, never the User-Agent string. Three rows of
+ * truncated `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7` look identical and tell the reader
+ * nothing; "Safari 17 · macOS · desktop" tells them what they wanted to know. The whole string is
+ * in the dialog for anybody who needs it.
+ *
+ * TYPEFACE PER VALUE, not per table. Monospace is for values whose characters line up or must be
+ * copied exactly — the address, the path, the timestamp being compared down the column, the
+ * netname — and the body face is for prose: an organisation name, a country, a device class, a
+ * verdict. The panel has both faces and had been using one for everything.
+ *
+ * EVERY CELL THAT IS NOT SORTABLE AS TEXT CARRIES ITS OWN SORT KEY. "2.3 s" and "09/11/2026
+ * 02:44" are rendered for a human and sort wrongly as strings, so the raw number goes on the cell
+ * and assets/js/sorttable.js reads it.
+ */
 function renderRows(data) {
     const table = byId('se-table');
     const body = table.tBodies[0];
-    clear(body);
+    body.replaceChildren();
 
     if (!data.docs.length) {
         noDataYet('se-table-empty', 'sessions');
@@ -98,39 +95,104 @@ function renderRows(data) {
     hideEmpty('se-table-empty');
 
     for (const doc of data.docs) {
-        const tr = el('tr', { class: 'row-link', dataset: { id: doc.id }, tabindex: '0' });
+        const tr = el('tr', drillRow('session', { id: doc.id }));
 
-        tr.appendChild(el('td', { class: 'mono nowrap', text: when(doc.ts_start) }));
-        tr.appendChild(el('td', {}, [
+        tr.appendChild(el('td', {
+            class: 'mono nowrap',
+            text: when(doc.ts_start),
+            'data-sort': doc.ts_start || ''
+        }));
+
+        tr.appendChild(el('td', { 'data-sort': doc.score === null ? '' : String(doc.score) }, [
             verdictChip(doc.verdict),
-            doc.score !== null ? el('span', { class: 'muted mono', text: ' ' + dec(doc.score, 0) }) : null
+            doc.score === null ? null : el('span', { class: 'muted mono score', text: dec(doc.score, 0) })
         ]));
-        tr.appendChild(el('td', { class: 'mono nowrap', text: doc.ip || '—' }));
-        tr.appendChild(el('td', { class: 'clip', title: (doc.as_org || '') + ' ' + (doc.netname || '') }, [
-            el('div', { text: doc.as_org || '—' }),
-            el('div', { class: 'muted mono', text: [doc.as_type, doc.country].filter(Boolean).join(' · ') || '—' })
-        ]));
-        tr.appendChild(el('td', { class: 'clip', title: doc.ua || '' }, [
-            el('div', {
-                text: doc.ua_bot_name || [doc.browser, doc.browser_ver].filter(Boolean).join(' ') || '—'
-            }),
-            el('div', { class: 'muted', text: [doc.os, doc.device].filter(Boolean).join(' · ') || '—' })
-        ]));
-        tr.appendChild(el('td', { class: 'num', text: num(doc.hits) }));
-        tr.appendChild(el('td', { class: 'num', text: dur(doc.log_span_ms) }));
-        tr.appendChild(el('td', { class: 'num', text: doc.beacon ? dur(doc.engaged_ms) : '—' }));
-        tr.appendChild(el('td', { class: 'clip mono', title: doc.entry || '', text: doc.entry || '—' }));
 
-        const open = () => openDetail(doc.id);
-        tr.addEventListener('click', open);
-        tr.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                open();
-            }
-        });
+        tr.appendChild(el('td', {
+            class: 'clip',
+            title: [doc.city, doc.region, doc.country].filter(Boolean).join(', ') || 'Not geolocated',
+            'data-sort': [doc.country, doc.city].filter(Boolean).join(' ')
+        }, [
+            doc.country ? countryNode(doc.country, { short: true }) : el('span', { class: 'muted', text: '—' }),
+            doc.city ? el('span', { class: 'sub clip-line', text: doc.city }) : null
+        ]));
+
+        tr.appendChild(el('td', { class: 'clip', title: doc.ip || 'Address not recorded', 'data-sort': doc.ip || '' }, [
+            doc.ip ? dimValue('ip_s', doc.ip, { mono: true }) : el('span', { class: 'muted', text: '—' }),
+            doc.ident ? el('span', { class: 'sub clip-line', text: doc.ident }) : null,
+            doc.signed_in === true
+                ? el('span', { class: 'sub' }, [el('span', { class: 'chip chip-word chip-good', text: 'signed in' })])
+                : null
+        ]));
+
+        tr.appendChild(el('td', {
+            class: 'clip',
+            title: [doc.as_org, doc.netname, doc.as_type].filter(Boolean).join(' · ') || 'Network not resolved',
+            'data-sort': doc.as_org || doc.netname || ''
+        }, [networkCell(doc)]));
+
+        tr.appendChild(el('td', {
+            class: 'clip',
+            title: doc.ua || 'User-Agent not recorded',
+            'data-sort': doc.ua_bot_name || doc.browser || ''
+        }, [clientNode(doc)]));
+
+        tr.appendChild(el('td', {
+            class: 'num',
+            text: num(doc.hits),
+            'data-sort': doc.hits === null ? '' : String(doc.hits)
+        }));
+        tr.appendChild(el('td', {
+            class: 'num',
+            text: dur(doc.log_span_ms),
+            'data-sort': doc.log_span_ms === null ? '' : String(doc.log_span_ms)
+        }));
+        tr.appendChild(el('td', {
+            class: 'num',
+            text: doc.beacon ? dur(doc.engaged_ms) : '—',
+            title: doc.beacon
+                ? 'Visible and within 30s of a real interaction'
+                : 'No beacon arrived, so this was never measured. It is unknown, not zero.',
+            'data-sort': doc.beacon && doc.engaged_ms !== null ? String(doc.engaged_ms) : ''
+        }));
+        tr.appendChild(el('td', { class: 'clip mono', title: doc.entry || '', 'data-sort': doc.entry || '' }, [
+            el('span', { text: doc.entry || '—' })
+        ]));
+
         body.appendChild(tr);
     }
+}
+
+/**
+ * The network cell: the organisation a reader recognises, then what qualifies it.
+ *
+ * The organisation is prose and gets the body face; the netname is an identifier out of a
+ * registry — `APPLE-ENGINEERING`, `TENCENT-NET-AP-CN` — and gets monospace. All three parts are
+ * filter controls.
+ *
+ * An absent fact is an em dash of its own, never a separator with nothing on one side of it: the
+ * `·` is only ever emitted between two values that both exist, which is what stops a row reading
+ * as "· hosting" when the organisation is unknown.
+ */
+function networkCell(doc) {
+    const lower = [];
+    if (doc.as_type) {
+        lower.push(dimValue('as_type_s', doc.as_type));
+    }
+    if (doc.netname) {
+        if (lower.length) {
+            lower.push(el('span', { text: ' · ' }));
+        }
+        lower.push(dimValue('netname_s', doc.netname, { mono: true }));
+    }
+    return el('div', { class: 'client' }, [
+        el('div', { class: 'clip-line' }, [
+            doc.as_org
+                ? dimValue('as_org_s', doc.as_org)
+                : el('span', { class: 'muted', text: doc.asn ? 'AS' + doc.asn : '—' })
+        ]),
+        el('div', { class: 'sub clip-line' }, lower.length ? lower : [el('span', { text: '—' })])
+    ]);
 }
 
 /** Paging controls. */
@@ -157,224 +219,29 @@ function renderPager(data) {
     fill(holder, parts);
 }
 
-/** A definition list from [label, value] pairs, skipping empty ones. */
-function kv(pairs) {
-    const dl = el('dl', { class: 'kv' });
-    for (const [label, value, mono] of pairs) {
-        if (value === null || value === undefined || value === '') {
-            continue;
-        }
-        dl.appendChild(el('dt', { text: label }));
-        dl.appendChild(typeof value === 'string' || typeof value === 'number'
-            ? el('dd', { class: mono ? 'mono' : null, text: String(value) })
-            : el('dd', { class: mono ? 'mono' : null }, [value]));
-    }
-    return dl;
-}
-
-/** Open a session and render its detail panel. */
-async function openDetail(id) {
-    const card = byId('se-detail');
-    const body = byId('se-detail-body');
-    card.hidden = false;
-    fill(body, [el('p', { class: 'muted', text: 'Loading session…' })]);
-    card.scrollIntoView({ block: 'nearest' });
-
-    try {
-        const data = await api('sessions', 'detail', { id: id });
-        renderDetail(body, data);
-    } catch (err) {
-        fill(body, [el('p', { class: 'muted', text: 'Could not load that session: ' + err.message })]);
-    }
-}
-
-/** Render the session detail: identity, timings, evidence, timeline. */
-function renderDetail(body, data) {
-    const s = data.session;
-
-    const timings = el('div', { class: 'timing-grid' });
-    const add = (key, label, value, defn) => {
-        timings.appendChild(el('div', { class: 'timing', dataset: { timing: key } }, [
-            el('span', { class: 'timing-label', text: label }),
-            el('span', { class: 'timing-value mono', text: value }),
-            el('span', { class: 'timing-defn', text: defn })
-        ]));
-    };
-    add('log_span', 'Log span', dur(s.log_span_ms), 'From the access log. Always available.');
-    if (s.beacon) {
-        add('wall', 'Wall clock', dur(s.wall_ms), 'Page open, tab in any state.');
-        add('visible', 'Visible', dur(s.visible_ms), 'Tab visible and window focused.');
-        add('engaged', 'Engaged', dur(s.engaged_ms), 'Within 30s of a real interaction.');
-    }
-
-    const beaconNote = s.beacon
-        ? el('p', { class: 'muted' }, [
-            'Beacon data present: ' + num(s.interactions) + ' interactions, ' +
-            (s.max_scroll === null ? 'no scroll recorded' : s.max_scroll + '% maximum scroll depth') +
-            ', ' + num(s.pageviews) + ' pageviews.'
-        ])
-        : el('p', { class: 'muted' }, [
-            'No beacon arrived for this session, so wall, visible and engaged time are unknown and are not ' +
-            'shown. They are not zero — nothing measured them. Log span is all there is.'
-        ]);
-
-    const reasons = el('ul', { class: 'plane-list' });
-    for (const code of (s.reasons || [])) {
-        const meta = data.reasons[code];
-        reasons.appendChild(el('li', {}, [
-            el('code', { class: 'mono', text: code }),
-            meta ? el('span', { text: ' — ' + meta.why }) : el('span', { class: 'muted', text: ' — unknown rule code' })
-        ]));
-    }
-    if (!(s.reasons || []).length) {
-        reasons.appendChild(el('li', { class: 'muted', text: 'No signals fired. This session looked ordinary on every plane.' }));
-    }
-
-    const execRows = [];
-    if (s.beacon) {
-        execRows.push(['JavaScript ran', s.js ? 'yes' : 'no', true]);
-        execRows.push(['Headless signals', s.headless ? 'yes' : 'no', true]);
-        execRows.push(['UA claim verified', s.ua_claim_ok === null ? null : (s.ua_claim_ok ? 'yes' : 'no — engine features contradict the User-Agent'), false]);
-        execRows.push(['Timezone matches IP', s.tz_match === null ? null : (s.tz_match ? 'yes' : 'no'), false]);
-        execRows.push(['WebGL renderer', s.webgl, true]);
-        if ((s.automation || []).length) {
-            execRows.push(['Automation markers', s.automation.join(', '), true]);
-        }
-    }
-
-    fill(body, [
-        el('div', { class: 'grid-2' }, [
-            el('div', {}, [
-                el('h3', { text: 'Identity' }),
-                kv([
-                    ['Session', s.id, true],
-                    ['Started', when(s.ts_start), true],
-                    ['Ended', when(s.ts_end), true],
-                    ['Address', el('a', {
-                        href: '?v=sessions&f[ip_s][]=' + encodeURIComponent(s.ip || ''),
-                        class: 'mono', text: s.ip || '—'
-                    })],
-                    ['Netblock', s.ip_net, true],
-                    ['ASN', s.asn ? 'AS' + s.asn + (s.as_org ? ' · ' + s.as_org : '') : null],
-                    ['Network type', s.as_type, true],
-                    ['Netname', s.netname, true],
-                    ['Reverse DNS', s.rdns ? s.rdns + (s.rdns_ok ? ' (forward-confirmed)' : ' (NOT confirmed)') : null, true],
-                    ['Location', [s.city, s.region, s.country].filter(Boolean).join(', ')],
-                    ['IP timezone', s.tz, true]
-                ])
-            ]),
-            el('div', {}, [
-                el('h3', { text: 'Client' }),
-                kv([
-                    ['Browser', [s.browser, s.browser_ver].filter(Boolean).join(' ')],
-                    ['OS', s.os],
-                    ['Device', s.device, true],
-                    ['Declared bot', s.ua_bot ? (s.ua_bot_name || 'yes') + (s.ua_bot_cat ? ' (' + s.ua_bot_cat + ')' : '') : null],
-                    ['AI crawler', s.ai_crawler ? 'yes' : null],
-                    ['Fingerprint', el('a', {
-                        href: '?v=fingerprints&f[fp_hash_s][]=' + encodeURIComponent(s.fp || ''),
-                        class: 'mono', text: shortHash(s.fp, 20) || '—',
-                        title: s.fp || ''
-                    })],
-                    ['IPs sharing it (±12h)', s.fp_ips_24h === null ? null : num(s.fp_ips_24h)],
-                    ['Referrer', s.referer
-                        ? (s.referer_href && s.referer_href !== '#'
-                            ? el('a', { href: s.referer_href, rel: 'noreferrer noopener', text: s.referer })
-                            : el('span', { class: 'mono', text: s.referer }))
-                        : null],
-                    ['Referrer type', s.referer_type, true],
-                    ['User-Agent', el('span', { class: 'mono wrap', text: s.ua || '—' })]
-                ])
-            ])
-        ]),
-
-        el('h3', { text: 'How long they stayed' }),
-        timings,
-        beaconNote,
-
-        el('h3', { text: 'Verdict' }),
-        kv([
-            ['Verdict', verdictChip(s.verdict)],
-            ['Score', s.score === null ? null : dec(s.score, 0) + ' / 100', true],
-            ['Class', s.class, true],
-            ['Rule version', s.rule_version === null ? null : String(s.rule_version), true]
-        ]),
-        el('h4', { text: 'Signals that fired' }),
-        reasons,
-
-        execRows.length ? el('h4', { text: 'Execution plane' }) : null,
-        execRows.length ? kv(execRows) : null,
-
-        el('h3', { text: 'Shape' }),
-        kv([
-            ['Requests', num(s.hits), true],
-            ['Pages / assets', num(s.pages) + ' / ' + num(s.assets), true],
-            ['Distinct paths', num(s.uniq_paths), true],
-            ['Bytes', bytes(s.bytes), true],
-            ['Asset ratio', s.asset_ratio === null ? null : dec(s.asset_ratio * 100, 1) + '%', true],
-            ['Median gap', dur(s.gap_p50_ms), true],
-            ['Gap std. deviation', dur(s.gap_stddev_ms), true],
-            ['Conditional requests', s.got_304 === null ? null : (s.got_304 ? 'yes' : 'none — never sent an If-None-Match')],
-            ['Status mix', ['2xx', '3xx', '4xx', '5xx']
-                .map((k) => k + ':' + num(s.status[k] || 0)).join('  '), true]
-        ]),
-
-        el('h3', { text: 'Request timeline' }),
-        renderTimeline(data)
-    ]);
-}
-
-/** The per-request timeline. */
-function renderTimeline(data) {
-    if (!data.timeline.length) {
-        return el('p', {
-            class: 'muted',
-            text: 'No individual requests were returned for this session. They may have aged past the retention ' +
-                'window on the hits core while the session rollup survived.'
-        });
-    }
-
-    const list = el('ul', { class: 'timeline' });
-    for (const hit of data.timeline) {
-        const cls = 't-status-' + String(hit.status || '').charAt(0);
-        list.appendChild(el('li', {}, [
-            el('span', { class: 'muted', text: when(hit.ts).split(' ')[1] || '' }),
-            el('span', { class: 't-method muted', text: hit.method }),
-            el('span', { class: 't-path', title: hit.path + (hit.query ? '?' + hit.query : '') }, [
-                el('span', { text: hit.path }),
-                hit.query ? el('span', { class: 'muted', text: '?' + hit.query }) : null
-            ]),
-            el('span', { class: cls, text: hit.status === null ? '—' : String(hit.status) }),
-            el('span', { class: 't-bytes muted', text: hit.dur_us === null ? bytes(hit.bytes) : durUs(hit.dur_us) })
-        ]));
-    }
-
-    const note = data.truncated
-        ? el('p', { class: 'muted', text: 'Timeline truncated — this session made more requests than the panel will fetch at once.' })
-        : null;
-    return el('div', {}, [list, note]);
-}
-
 /**
- * Load the facet sidebar.
+ * Load the facet sidebar, and say whether the headline count is a filtered one.
+ *
+ * "117 matching" reads as a total unless it says otherwise, and on a filtered page it is not one.
+ * The count line names how many filters produced it, which is the least it can do given the
+ * chips are in a strip at the top of the page rather than next to this number.
  */
 function loadFacets() {
     return loadCard('se-facets', 'Counting facet values', async () => {
         const data = await api('sessions', 'facets');
-        renderActive(data.active);
-        renderFacets(data.facets);
+        renderFacets(data);
 
         const count = byId('se-count');
         if (count) {
-            count.textContent = num(data.matched) + ' matching · ' + num(data.beacon_count) +
-                ' with beacon data (' + pct(data.beacon_count, data.matched) + ')';
+            const filters = activeFilters().length;
+            count.textContent = num(data.matched) +
+                (filters ? ' matching the ' + filters + ' active filter' + (filters === 1 ? '' : 's') : ' matching') +
+                ' · ' + num(data.beacon_count) + ' with beacon data (' + pct(data.beacon_count, data.matched) + ')';
         }
     });
 }
 
-/**
- * Load a page of results.
- */
+/** Load a page of results. */
 function loadResults() {
     return loadCard('se-results', 'Searching sessions', async () => {
         const data = await api('sessions', 'list');
@@ -386,20 +253,11 @@ function loadResults() {
 /**
  * Entry point.
  *
- * The table and the sidebar are separate requests: the rows appear as soon as the
- * documents are back rather than waiting on eight terms facets.
+ * The table and the sidebar are separate requests: the rows appear as soon as the documents are
+ * back rather than waiting on eight terms facets. The `?open=` deep link is handled by
+ * detail.js, which app.js wires on every view.
  */
 export default function init() {
-    const close = byId('se-detail-close');
-    if (close) {
-        close.addEventListener('click', () => { byId('se-detail').hidden = true; });
-    }
-
     loadResults();
     loadFacets();
-
-    const open = new URLSearchParams(window.location.search).get('open');
-    if (open) {
-        openDetail(open);
-    }
 }

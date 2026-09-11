@@ -71,6 +71,15 @@
  * a session's pageviews can be told apart in the panel, and the server treats even
  * that as untrusted. Full field-by-field list: docs/BEACON.md.
  *
+ * THE ONE EXCEPTION, AND IT IS THE SITE'S OWN DOING. A site may DECLARE an identity
+ * for the session — an email, a customer number — and whether the visitor was signed
+ * in, through the two data- attributes documented at the top of section 2. Nothing
+ * here guesses either: no cookie is read, no form is scraped, no meta tag is looked
+ * for. If the site does not say, the fields are absent. The identity is off by
+ * default on the server as well (`beacon.store_identity`), and the two can be
+ * switched independently, because a split between signed-in and anonymous traffic is
+ * worth having without storing anybody's address.
+ *
  * ============================================================================
  * GRACEFUL DEGRADATION
  * ============================================================================
@@ -89,9 +98,10 @@
  * b.js is served with a long Cache-Control, so a new version must be a new URL.
  *
  * Optional attributes: data-endpoint (collector URL), data-hb (heartbeat ms),
- * data-idle (engagement idle timeout ms). The collector is assumed to live next to
- * b.js unless data-endpoint says otherwise, so the install snippet is one line with
- * no second URL to keep in sync.
+ * data-idle (engagement idle timeout ms), data-ident (an identity the site attaches
+ * to the session) and data-signed-in (1 or 0). The collector is assumed to live next
+ * to b.js unless data-endpoint says otherwise, so the install snippet is one line
+ * with no second URL to keep in sync.
  */
 (function (w, d) {
     'use strict';
@@ -146,6 +156,63 @@
 
     var HB   = attrInt('data-hb', 15000, 2000, 300000);
     var IDLE = attrInt('data-idle', 30000, 1000, 600000);
+
+    /**
+     * ============================================================================
+     * IDENTITY THE SITE SUPPLIES — the one thing in this file we do not measure
+     * ============================================================================
+     * Two facts only the measured site knows, both optional and INDEPENDENT of each
+     * other:
+     *
+     *   xi  an identity string of the site's own choosing — an email address, a
+     *       customer number, an account id. Whatever it calls the person.
+     *   xs  whether the visitor was signed in: 1 yes, 0 no, OMITTED when the site
+     *       did not say. Omitted is not "no". A site may pass an identity without
+     *       the visitor being authenticated, and may want the signed-in split
+     *       recorded without handing over who it was, so neither implies the other.
+     *
+     * HOW A SITE SUPPLIES THEM, and why this shape. The primary channel is two
+     * attributes on the script tag, because the site's own template renders that tag
+     * in the same response as the page: no second request, no extra script, no
+     * ordering problem, and the value cannot be missed by a beacon that started
+     * before some later snippet ran. `d.currentScript` is already being read for the
+     * endpoint, so reading two more attributes costs nothing:
+     *
+     *   <script src="/b.js?v=1" data-ident="ada@example.com" data-signed-in="1" defer></script>
+     *
+     * Two globals are accepted as an equivalent, for templating systems where adding
+     * an attribute to a third-party tag is awkward but setting a variable above it is
+     * not. They must be set BEFORE b.js executes, which with `defer` means anywhere
+     * in the document:
+     *
+     *   <script>window.LoghoundIdent='ada@example.com';window.LoghoundSignedIn=true;</script>
+     *
+     * And `window.loghound.identify(ident, signedIn)` exists for an application that
+     * signs somebody in AFTER the page loaded, which no attribute can express. It
+     * makes NO request of its own: the values ride the heartbeat that is already
+     * scheduled, and the server folds the latest non-empty identity onto the session.
+     *
+     * WE NEVER GUESS. Nothing here reads a cookie, a form field, a meta tag or the
+     * DOM looking for an email. If the site does not say, the fields are absent, and
+     * the server treats absent as absent.
+     */
+    var xIdent = String(attr('data-ident') || T(function () { return w.LoghoundIdent; }) || '').slice(0, 128);
+    var xSigned = tri(attr('data-signed-in'), T(function () { return w.LoghoundSignedIn; }));
+
+    /**
+     * Collapse the two possible sources into 1, 0 or undefined.
+     *
+     * The attribute is a string and the global may be a real boolean, so both spellings of
+     * each state are accepted. Anything else — a typo, an empty attribute, a template that
+     * rendered nothing — is undefined, which the payload omits and the server reads as "not
+     * reported" rather than as "anonymous".
+     */
+    function tri(a, b) {
+        var v = (a === null || a === undefined || a === '') ? b : a;
+        if (v === true || v === 1 || v === '1' || v === 'true') { return 1; }
+        if (v === false || v === 0 || v === '0' || v === 'false') { return 0; }
+        return undefined;
+    }
 
     var t0, last, visMs, engMs, lastInt, visNow;
     var pv, beat, sentEng, ended;
@@ -646,7 +713,7 @@
         mouseCodes(codes);
         if (!scrolled && docH() > vpH() * 1.5) { codes.push('no_scroll_tall_page'); }
 
-        return {
+        var out = {
             v: 1,
             e: ev,
             s: sid,
@@ -674,7 +741,44 @@
             ow: w.outerWidth | 0,
             oh: w.outerHeight | 0
         };
+
+        if (xIdent) { out.xi = xIdent; }
+        if (xSigned !== undefined) { out.xs = xSigned; }
+
+        return out;
     }
+
+    /**
+     * The site's own hook for identity that arrives after the page has loaded.
+     *
+     * A single-page application signs somebody in without a navigation, so no script-tag
+     * attribute can carry it. Both arguments are optional and independent: pass only an
+     * identity, only a signed-in state, or both.
+     *
+     * IT SENDS NOTHING BY ITSELF. The values are stored and travel on the heartbeat that is
+     * already scheduled, or on the final flush — which is what keeps the documented promise
+     * that attaching identity costs the site no extra request. The heartbeat only fires when
+     * engaged time advanced, so the sign-in itself is nudged along by clearing the last-sent
+     * marker rather than by opening a socket.
+     *
+     * Wrapped in a try/catch like everything else that a host page can reach: a site calling
+     * this with nonsense must not take an exception into its own code path.
+     */
+    function identify(ident, signedIn) {
+        T(function () {
+            if (typeof ident === 'string' && ident !== '') {
+                xIdent = ident.slice(0, 128);
+            }
+            var state = tri(undefined, signedIn);
+            if (state !== undefined) {
+                xSigned = state;
+            }
+            sentEng = -1;
+        });
+    }
+
+    w.loghound = w.loghound || {};
+    w.loghound.identify = identify;
 
     /**
      * POST a body. `cb` receives the Response when one is available.

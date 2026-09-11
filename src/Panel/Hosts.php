@@ -239,7 +239,11 @@ final class Hosts extends Controller
         );
         self::skeleton('hosts-table', 'rows', 0, 'Grouping sessions by virtual host');
 
-        echo '<div class="table-wrap"><table id="hosts-table-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="hosts-table-table" class="table-fixed"><colgroup>'
+            . '<col><col style="width:10ch"><col style="width:9ch"><col style="width:9ch">'
+            . '<col style="width:11ch"><col style="width:10ch"><col style="width:11ch">'
+            . '<col style="width:130px">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Host</th>'
             . '<th scope="col" class="num">Sessions</th>'
             . '<th scope="col" class="num">Humans</th>'
@@ -248,7 +252,6 @@ final class Hosts extends Controller
             . '<th scope="col" class="num">Declared</th>'
             . '<th scope="col" class="num">Automation</th>'
             . '<th scope="col" class="bar-col">Share</th>'
-            . '<th scope="col"></th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('hosts-table');

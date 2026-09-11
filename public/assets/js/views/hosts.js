@@ -21,6 +21,7 @@
 
 import { api, byId, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody } from '../core.js';
 import { barsH, tokens } from '../charts.js';
+import { dimRow, dimValue } from '../identity.js';
 
 /** Population keys in the order the table and the bar use them. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -118,16 +119,20 @@ function renderTable(data) {
     hideEmpty('hosts-table-empty');
 
     tbody(table, data.rows.map((row) => ({
+        attrs: dimRow('host_s', row.host),
         cells: [
-            { text: row.host, mono: true, clip: true },
-            { text: num(row.sessions), num: true },
-            { text: num(row.counts.human), num: true },
-            { text: num(row.counts.evasive), num: true },
-            { text: num(row.counts.ai), num: true },
-            { text: num(row.counts.declared), num: true },
-            { text: row.bot_share === null ? '—' : row.bot_share + '%', num: true },
-            { node: splitBar(row) },
-            { node: el('a', { href: hostUrl(row.host), text: 'Scope to this host' }) }
+            { node: dimValue('host_s', row.host, { mono: true }), clip: true, title: row.host, sort: row.host },
+            { text: num(row.sessions), num: true, sort: row.sessions },
+            { text: num(row.counts.human), num: true, sort: row.counts.human },
+            { text: num(row.counts.evasive), num: true, sort: row.counts.evasive },
+            { text: num(row.counts.ai), num: true, sort: row.counts.ai },
+            { text: num(row.counts.declared), num: true, sort: row.counts.declared },
+            {
+                text: row.bot_share === null ? '—' : row.bot_share + '%',
+                num: true,
+                sort: row.bot_share === null ? '' : row.bot_share
+            },
+            { node: splitBar(row), sort: row.evasive_share === null ? '' : row.evasive_share }
         ]
     })));
 

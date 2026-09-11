@@ -321,7 +321,11 @@ final class Networks extends Controller
 
         echo '<div id="net-asns-legend" class="controls"></div>';
         echo '<div class="chart" id="net-treemap" style="height:420px"></div>';
-        echo '<div class="table-wrap"><table id="net-asns-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="net-asns-table" class="table-fixed"><colgroup>'
+            . '<col style="width:11ch"><col><col style="width:10ch"><col style="width:9ch">'
+            . '<col style="width:7ch"><col style="width:9ch"><col style="width:8ch">'
+            . '<col style="width:8ch"><col style="width:130px">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">ASN</th>'
             . '<th scope="col">Organisation</th>'
             . '<th scope="col">Type</th>'
@@ -348,7 +352,11 @@ final class Networks extends Controller
         );
         self::skeleton('net-netnames', 'rows', 0, 'Faceting netblocks');
 
-        echo '<div class="table-wrap"><table id="net-netnames-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="net-netnames-table" class="table-fixed"><colgroup>'
+            . '<col style="width:22ch"><col><col style="width:10ch"><col style="width:9ch">'
+            . '<col style="width:7ch"><col style="width:12ch"><col style="width:8ch">'
+            . '<col style="width:8ch"><col style="width:130px">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Netname</th>'
             . '<th scope="col">Organisation</th>'
             . '<th scope="col">Type</th>'
@@ -375,7 +383,10 @@ final class Networks extends Controller
         );
         self::skeleton('net-countries', 'rows', 0, 'Faceting countries');
 
-        echo '<div class="table-wrap"><table id="net-countries-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="net-countries-table" class="table-fixed"><colgroup>'
+            . '<col style="width:26ch"><col style="width:9ch"><col style="width:7ch">'
+            . '<col style="width:8ch"><col style="width:8ch"><col>'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Country</th>'
             . '<th scope="col" class="num">Sessions</th>'
             . '<th scope="col" class="num">IPs</th>'

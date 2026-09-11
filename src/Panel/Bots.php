@@ -413,7 +413,10 @@ final class Bots extends Controller
         self::skeleton('bf-reasons', 'chart', 420, 'Faceting signal codes');
 
         echo '<div class="chart" id="bf-reasons-chart" style="height:460px"></div>';
-        echo '<div class="table-wrap"><table id="bf-reason-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="bf-reason-table" class="table-fixed"><colgroup>'
+            . '<col style="width:26ch"><col><col style="width:9ch"><col style="width:9ch">'
+            . '<col style="width:9ch">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Signal</th>'
             . '<th scope="col">What it means</th>'
             . '<th scope="col" class="num">Evasive</th>'
@@ -435,7 +438,10 @@ final class Bots extends Controller
         );
         self::skeleton('bf-classes', 'rows', 0, 'Faceting bot classes');
 
-        echo '<div class="table-wrap"><table id="bf-classes-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="bf-classes-table" class="table-fixed"><colgroup>'
+            . '<col><col style="width:11ch"><col style="width:9ch"><col style="width:11ch">'
+            . '<col style="width:10ch"><col style="width:10ch">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Class</th>'
             . '<th scope="col">Kind</th>'
             . '<th scope="col" class="num">Sessions</th>'
@@ -459,7 +465,10 @@ final class Bots extends Controller
         );
         self::skeleton('bf-crawlers', 'rows', 0, 'Faceting crawler names');
 
-        echo '<div class="table-wrap"><table id="bf-crawlers-table"><thead><tr>'
+        echo '<div class="table-wrap"><table id="bf-crawlers-table" class="table-fixed"><colgroup>'
+            . '<col><col style="width:18ch"><col style="width:9ch"><col style="width:10ch">'
+            . '<col style="width:7ch"><col style="width:10ch"><col style="width:19ch">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Crawler</th>'
             . '<th scope="col">Category</th>'
             . '<th scope="col" class="num">Sessions</th>'

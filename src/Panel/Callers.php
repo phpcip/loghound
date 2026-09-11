@@ -42,7 +42,6 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
-use Loghound\Security;
 use Loghound\Solr;
 
 final class Callers extends OpensolrView
@@ -57,6 +56,19 @@ final class Callers extends OpensolrView
      * inflating every denominator on this page by one per day. Both queries below carry it.
      */
     private const SESSION_DOCS = 'doc_type_s:session';
+
+    /**
+     * The cards, in render order. Drives the jump bar and every card's number.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    protected const SECTIONS = [
+        ['cl-filters', 'Slice'],
+        ['cl-volume', 'Volume'],
+        ['cl-who', 'Callers'],
+        ['cl-cross', 'Cross-reference'],
+        ['cl-explain', 'Why both halves'],
+    ];
 
     public function slug(): string
     {
@@ -319,6 +331,8 @@ final class Callers extends OpensolrView
             return;
         }
 
+        $this->filterCard('cl-filters', self::indexPicker('cl-core'));
+        $this->volumeCard('cl-volume');
         $this->whoCard();
         $this->crossCard();
         $this->explainCard();
@@ -327,17 +341,21 @@ final class Callers extends OpensolrView
     /** Top addresses and handlers on the search side. */
     private function whoCard(): void
     {
-        self::cardOpen('cl-who', '01', 'Busiest addresses', '', self::indexPicker('cl-core'));
+        self::cardOpen('cl-who', $this->cardNumber('cl-who'), 'Busiest addresses', '');
         self::skeleton('cl-who', 'rows', 0, 'Faceting client addresses');
 
         echo '<div class="split-card">';
         echo '<div class="split-half"><h2>Addresses</h2>'
-            . '<p class="split-note">The clients that sent the most queries to this index.</p>'
+            . '<p class="split-note">The clients that sent the most queries to this index. Filter the page '
+            . 'to one of them to see when it calls and what it asks for.</p>'
+            . '<div class="chart" id="cl-ips-chart" style="height:260px"></div>'
             . '<div class="table-wrap"><table id="cl-ips-table"><thead><tr>'
             . '<th scope="col">Address</th><th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="bar-col">Share</th></tr></thead><tbody></tbody></table></div></div>';
         echo '<div class="split-half"><h2>Handlers</h2>'
-            . '<p class="split-note">Which endpoint they were calling.</p>'
+            . '<p class="split-note">Which endpoint they were calling. A handler that is neither your search '
+            . 'box nor a crawler is an integration, and this is where it shows up.</p>'
+            . '<div class="chart" id="cl-handlers-chart" style="height:260px"></div>'
             . '<div class="table-wrap"><table id="cl-handlers-table"><thead><tr>'
             . '<th scope="col">Handler</th><th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="bar-col">Share</th></tr></thead><tbody></tbody></table></div></div>';
@@ -349,22 +367,17 @@ final class Callers extends OpensolrView
     /** The correlation itself. */
     private function crossCard(): void
     {
-        self::cardOpen('cl-cross', '02', 'Cross-referenced with your web traffic', '');
+        self::cardOpen('cl-cross', $this->cardNumber('cl-cross'), 'Cross-referenced with your web traffic', '');
         self::skeleton('cl-cross', 'stats', 0, 'Matching search clients against web sessions');
 
-        echo '<div class="stats">';
-        foreach ([
-            ['bot',     'Serving bots',      'Requests from addresses whose web sessions Loghound scored as automation'],
-            ['human',   'Serving people',    'Requests from addresses whose web sessions look human'],
-            ['unseen',  'No web traffic',    'Requests from addresses that never appear in your web logs at all'],
-            ['unknown', 'Undecided',         'Scored, but the evidence reached no verdict either way'],
-        ] as [$key, $label, $hint]) {
-            echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
-            echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
-            echo '<span class="stat-hint">' . Security::esc($hint) . '</span></div>';
-        }
-        echo '</div>';
+        self::statRow([
+            ['bot',     'Serving bots',   'Requests from addresses whose web sessions Loghound scored as automation'],
+            ['human',   'Serving people', 'Requests from addresses whose web sessions look human'],
+            ['unseen',  'No web traffic', 'Requests from addresses that never appear in your web logs at all'],
+            ['unknown', 'Undecided',      'Scored, but the evidence reached no verdict either way'],
+        ]);
 
+        echo '<div class="chart" id="cl-cross-chart" style="height:260px"></div>';
         echo '<div id="cl-cross-state"></div>';
 
         echo '<div class="table-wrap"><table id="cl-cross-table"><thead><tr>'
@@ -382,7 +395,7 @@ final class Callers extends OpensolrView
     /** What the two questions are, and why they need both halves. */
     private function explainCard(): void
     {
-        self::cardOpen('cl-explain', '03', 'Why this needs both halves');
+        self::cardOpen('cl-explain', $this->cardNumber('cl-explain'), 'Why this needs both halves');
         echo '<div class="explain">';
         echo '<p>Your search index knows which addresses queried it. It has no idea which of them were '
             . 'people. Your web logs know which addresses were people. They have no idea what those '

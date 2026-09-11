@@ -11,6 +11,12 @@
  * it would be both slower and a larger privacy surface for no gain. Nothing is stored: the
  * platform already holds this data, and a second copy inside Loghound would be waste.
  *
+ * WHAT IS ON SCREEN. Four figures and a volume chart above the fold — the bar Opensolr's own
+ * analytics dashboard sets — then the three things that dashboard does not have: the latency
+ * distribution, the handler and status composition, and the split across cluster nodes.
+ * Everything answers under the filter rail, so the same page answers "what is this index
+ * doing" and "what is this one caller doing to it" without a second view.
+ *
  * THE HISTOGRAM IS BUCKETED AND SAYS SO. The platform's request-log endpoint rewrites any
  * parameter name containing an underscore into a dotted Solr parameter and strips braces
  * and quotes out of its value, so a JSON Facet — and with it Solr's exact `percentile()`
@@ -27,9 +33,6 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
-use Loghound\OpensolrLog;
-use Loghound\Security;
-
 final class Indexes extends OpensolrView
 {
     /** Upper edge of the QTime histogram, in milliseconds. Anything slower lands in `after`. */
@@ -37,6 +40,20 @@ final class Indexes extends OpensolrView
 
     /** Histogram bucket width, in milliseconds. 100 buckets across the ceiling. */
     private const QTIME_GAP = 10;
+
+    /**
+     * The cards, in render order. Drives the jump bar and every card's number.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    protected const SECTIONS = [
+        ['ix-headline', 'This index'],
+        ['ix-filters', 'Slice'],
+        ['ix-volume', 'Volume'],
+        ['ix-qtime', 'Latency'],
+        ['ix-handlers', 'Handlers'],
+        ['ix-nodes', 'Nodes'],
+    ];
 
     public function slug(): string
     {
@@ -65,7 +82,6 @@ final class Indexes extends OpensolrView
 
         return match ($action) {
             'headline' => $this->headline(),
-            'volume'   => $this->volume(),
             'qtime'    => $this->qtime(),
             'handlers' => $this->handlers(),
             'nodes'    => $this->nodes(),
@@ -102,52 +118,6 @@ final class Indexes extends OpensolrView
             'qtime'    => $res['stats']['qtime'] ?? null,
             'size'     => $res['stats']['size'] ?? null,
             'hits'     => $res['stats']['hits'] ?? null,
-        ]);
-    }
-
-    /**
-     * Request volume over time, with the zero-result share drawn underneath it.
-     *
-     * Two calls rather than one, because the platform's endpoint cannot express a nested
-     * facet: the second is the same range facet with `hits:0` added, which is cheap and is
-     * the only way to see whether a spike in traffic was a spike in USEFUL traffic.
-     *
-     * @return array<string,mixed>
-     */
-    private function volume(): array
-    {
-        $range = ['date' => [
-            'start' => (string) $this->range['start'],
-            'end'   => 'NOW',
-            'gap'   => (string) $this->range['gap'],
-            'other' => 'none',
-        ]];
-
-        $all = $this->fetch(['fq' => $this->logFqs(), 'rows' => 0, 'ranges' => $range]);
-        if ($all['state'] !== 'ok') {
-            return $this->logEnvelope($all, ['times' => [], 'all' => [], 'zero' => [], 'zero_total' => 0]);
-        }
-
-        $empty = $this->fetch([
-            'fq'     => array_merge($this->logFqs(), [OpensolrLog::numericFq('hits', '0', '0')]),
-            'rows'   => 0,
-            'ranges' => $range,
-        ]);
-
-        $allCounts  = (array) ($all['facet_ranges']['date']['counts'] ?? []);
-        $zeroCounts = (array) ($empty['facet_ranges']['date']['counts'] ?? []);
-
-        $times = array_keys($allCounts);
-        $zero = [];
-        foreach ($times as $bucket) {
-            $zero[] = (int) ($zeroCounts[$bucket] ?? 0);
-        }
-
-        return $this->logEnvelope($all, [
-            'times'     => $times,
-            'all'       => array_values(array_map('intval', $allCounts)),
-            'zero'      => $zero,
-            'zero_total' => (int) $empty['numFound'],
         ]);
     }
 
@@ -234,17 +204,8 @@ final class Indexes extends OpensolrView
         }
 
         $this->headlineCard();
-
-        self::chart(
-            'ix-volume',
-            '02',
-            'Requests over time',
-            'Every request the platform logged for this index in the selected range, bucketed. '
-            . 'The second series is the subset that matched no documents.',
-            300,
-            'Faceting request volume'
-        );
-
+        $this->filterCard('ix-filters');
+        $this->volumeCard('ix-volume');
         $this->qtimeCard();
         $this->handlersCard();
         $this->nodesCard();
@@ -253,22 +214,16 @@ final class Indexes extends OpensolrView
     /** Volume, latency and zero-result share, with the index picker. */
     private function headlineCard(): void
     {
-        self::cardOpen('ix-headline', '01', 'This index', '', self::indexPicker('ix-core'));
+        self::cardOpen('ix-headline', $this->cardNumber('ix-headline'), 'This index', '', self::indexPicker('ix-core'));
         self::skeleton('ix-headline', 'stats', 0, 'Reading the request log');
 
-        echo '<div class="stats">';
-        foreach ([
-            ['requests', 'Requests',       'Logged by Opensolr for this index in the selected range'],
-            ['zero',     'Zero results',   'Requests that matched no documents at all'],
-            ['qmean',    'Mean QTime',     'Solr\'s own measure of the time spent answering'],
-            ['qmax',     'Slowest',        'The single worst QTime in this range'],
-            ['size',     'Mean response',  'How much data each answer carried back'],
-        ] as [$key, $label, $hint]) {
-            echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
-            echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
-            echo '<span class="stat-hint">' . Security::esc($hint) . '</span></div>';
-        }
-        echo '</div>';
+        self::statRow([
+            ['requests', 'Requests',      'Logged by Opensolr for this index in the selected range'],
+            ['zero',     'Zero results',  'Requests that matched no documents at all'],
+            ['qmean',    'Mean QTime',    'Solr\'s own measure of the time spent answering'],
+            ['qmax',     'Slowest',       'The single worst QTime in this range'],
+            ['size',     'Mean response', 'How much data each answer carried back'],
+        ]);
 
         self::cardClose('ix-headline');
     }
@@ -278,26 +233,20 @@ final class Indexes extends OpensolrView
     {
         self::cardOpen(
             'ix-qtime',
-            '03',
+            $this->cardNumber('ix-qtime'),
             'How long answers take',
-            'All logged requests for this index in the selected range. QTime is Solr\'s own measure of '
+            'All logged requests for this index under the current filters. QTime is Solr\'s own measure of '
             . 'the time it spent answering, and it excludes network time and any time the request spent '
             . 'queued — a slow page can have a fast QTime.'
         );
         self::skeleton('ix-qtime', 'chart', 300, 'Building the QTime histogram');
 
-        echo '<div class="stats">';
-        foreach ([
-            ['p50', 'p50',  'Half of requests were answered within this'],
-            ['p95', 'p95',  'One request in twenty took longer'],
-            ['p99', 'p99',  'The worst one percent'],
+        self::statRow([
+            ['p50',  'p50',              'Half of requests were answered within this'],
+            ['p95',  'p95',              'One request in twenty took longer'],
+            ['p99',  'p99',              'The worst one percent'],
             ['over', 'Over the ceiling', 'Requests slower than the histogram\'s last bucket'],
-        ] as [$key, $label, $hint]) {
-            echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
-            echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
-            echo '<span class="stat-hint">' . Security::esc($hint) . '</span></div>';
-        }
-        echo '</div>';
+        ]);
         echo '<div class="chart" id="ix-qtime-chart" style="height:280px"></div>';
 
         self::cardClose('ix-qtime');
@@ -308,21 +257,25 @@ final class Indexes extends OpensolrView
     {
         self::cardOpen(
             'ix-handlers',
-            '04',
+            $this->cardNumber('ix-handlers'),
             'Handlers and status codes',
-            'All logged requests for this index in the selected range, grouped by the handler that '
+            'All logged requests for this index under the current filters, grouped by the handler that '
             . 'served them and by the status the platform recorded.'
         );
         self::skeleton('ix-handlers', 'rows', 0, 'Faceting handlers and status codes');
 
         echo '<div class="split-card">';
         echo '<div class="split-half"><h2>Handlers</h2>'
-            . '<p class="split-note">Which endpoint on the index took the request.</p>'
+            . '<p class="split-note">Which endpoint on the index took the request. A handler that is '
+            . 'neither your search box nor a crawler — an ingest or callback path, say — is a caller '
+            . 'worth naming, and clicking a row filters the whole page to it.</p>'
+            . '<div class="chart" id="ix-paths-chart" style="height:240px"></div>'
             . '<div class="table-wrap"><table id="ix-paths-table"><thead><tr>'
             . '<th scope="col">Handler</th><th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="bar-col">Share</th></tr></thead><tbody></tbody></table></div></div>';
         echo '<div class="split-half"><h2>Status codes</h2>'
             . '<p class="split-note">Anything other than 200 is the index refusing or failing.</p>'
+            . '<div class="chart" id="ix-status-chart" style="height:240px"></div>'
             . '<div class="table-wrap"><table id="ix-status-table"><thead><tr>'
             . '<th scope="col">Status</th><th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="bar-col">Share</th></tr></thead><tbody></tbody></table></div></div>';
@@ -336,13 +289,14 @@ final class Indexes extends OpensolrView
     {
         self::cardOpen(
             'ix-nodes',
-            '05',
+            $this->cardNumber('ix-nodes'),
             'Which node answered',
-            'All logged requests for this index in the selected range, grouped by the cluster node that '
-            . 'served them.'
+            'All logged requests for this index under the current filters, grouped by the cluster node '
+            . 'that served them.'
         );
         self::skeleton('ix-nodes', 'rows', 0, 'Faceting cluster nodes');
 
+        echo '<div class="chart" id="ix-nodes-chart" style="height:220px"></div>';
         echo '<div class="table-wrap"><table id="ix-nodes-table"><thead><tr>'
             . '<th scope="col">Node</th>'
             . '<th scope="col" class="num">Requests</th>'

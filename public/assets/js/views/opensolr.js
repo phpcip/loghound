@@ -11,15 +11,22 @@
  * and a rejection clears the memo so a card's own Retry button really does retry rather
  * than replaying a cached failure.
  *
+ * It also owns the two things all three views now share: the FILTER CARD, which turns the
+ * four dimensions the platform's request log can honestly be faceted on into links, and the
+ * VOLUME CHART, which is the primary chart on each of them. Both are here rather than copied
+ * three times because three copies of one field list is three places for it to drift.
+ *
  * Everything rendered from these payloads came off the wire and was chosen by whoever
  * queried the customer's search index — client addresses, handler names, and the field
  * names that survive query-shape normalisation. It is always placed in the DOM as text,
- * never as markup.
+ * never as markup. That includes the filter links: a value goes into a URL through
+ * URLSearchParams, which encodes it, and into the page through textContent.
  */
 
 'use strict';
 
-import { api, byId, el, showEmpty } from '../core.js';
+import { api, byId, dec, el, hideEmpty, num, pct, setPop, showEmpty } from '../core.js';
+import { dispose, lines, tokens } from '../charts.js';
 
 /** The in-flight or resolved index list, shared by every card on a page. */
 let listPromise = null;
@@ -155,6 +162,340 @@ export function handleState(emptyId, data, what) {
     }
     return false;
 }
+
+/* -------------------------------------------------------------------------
+ * Filters
+ *
+ * The request-log filters live in the query string under `lf[field][]`, a namespace of
+ * their own. They are NOT the `f[field][]` sidebar filters the rest of the panel uses:
+ * those name fields on Loghound's own cores, none of which exists on the platform's
+ * analytics shards, and an `fq` naming an absent field matches nothing — so sharing one
+ * namespace would make every figure here read zero under a chip that looked like it was
+ * working. The server reports those as ignored instead; see `data.ignored`.
+ *
+ * Everything below builds URLs and anchors. A filtered page is a link somebody can send.
+ * ---------------------------------------------------------------------- */
+
+/** Field labels, matching OpensolrView::logFilterFields(). */
+const FILTER_LABELS = {
+    path: 'Handler',
+    http_status: 'Status',
+    param_hostname: 'Node',
+    ip: 'Caller'
+};
+
+/** The outcome slices, matching OpensolrView::OUTCOMES. */
+const OUTCOME_LABELS = {
+    zero: 'Matched nothing',
+    found: 'Matched something',
+    slow: 'Slow answers'
+};
+
+/** The current URL with one request-log filter value added. */
+export function lfAdd(field, value) {
+    const params = new URLSearchParams(window.location.search);
+    params.append('lf[' + field + '][]', value);
+    params.delete('start');
+    return '?' + params.toString();
+}
+
+/** The current URL with one request-log filter value removed. */
+export function lfRemove(field, value) {
+    const params = new URLSearchParams(window.location.search);
+    const key = 'lf[' + field + '][]';
+    const kept = params.getAll(key).filter((v) => v !== value);
+    params.delete(key);
+    for (const v of kept) {
+        params.append(key, v);
+    }
+    params.delete('start');
+    return '?' + params.toString();
+}
+
+/** The current URL with a parameter replaced, or removed when the value is null. */
+function lfWith(key, value) {
+    const params = new URLSearchParams(window.location.search);
+    if (value === null) {
+        params.delete(key);
+    } else {
+        params.set(key, value);
+    }
+    params.delete('start');
+    return '?' + params.toString();
+}
+
+/** The current URL with every request-log filter and the outcome slice dropped. */
+function lfClear() {
+    const params = new URLSearchParams(window.location.search);
+    for (const key of Array.prototype.slice.call(params.keys())) {
+        if (key.indexOf('lf[') === 0 || key === 'outcome') {
+            params.delete(key);
+        }
+    }
+    return '?' + params.toString();
+}
+
+/** Is this value one of the active filters on this field? */
+function isActive(active, field, value) {
+    const values = (active || {})[field];
+    return Array.isArray(values) && values.indexOf(value) !== -1;
+}
+
+/**
+ * The chips for what is currently filtered, each a link that removes itself.
+ *
+ * The ignored-sidebar note is a chip too rather than a footnote, because a reader who
+ * arrived here from the session explorer with a country selected needs to be told, where
+ * they are looking, that it is not being applied — a number filtered by less than the page
+ * implies is a wrong answer presented as a right one.
+ */
+function renderActive(id, data) {
+    const mount = byId(id + '-active');
+    if (!mount) {
+        return;
+    }
+    const chips = [];
+
+    for (const field of Object.keys(data.active || {})) {
+        for (const value of data.active[field]) {
+            chips.push(el('a', { href: lfRemove(field, value), title: 'Remove this filter' }, [
+                el('span', { text: (FILTER_LABELS[field] || field) + ': ' + value }),
+                el('span', { text: '×' })
+            ]));
+        }
+    }
+    if (data.outcome && OUTCOME_LABELS[data.outcome]) {
+        chips.push(el('a', { href: lfWith('outcome', null), title: 'Remove this slice' }, [
+            el('span', { text: OUTCOME_LABELS[data.outcome] }),
+            el('span', { text: '×' })
+        ]));
+    }
+    if (chips.length > 1) {
+        chips.push(el('a', { class: 'lf-clear', href: lfClear(), title: 'Remove every filter' }, [
+            el('span', { text: 'Clear all' })
+        ]));
+    }
+
+    mount.replaceChildren(...chips);
+}
+
+/**
+ * The outcome slice buttons, with the two counts the facet actually produced.
+ *
+ * "Slow answers" carries no count on purpose: there is no cheap one, and a second API call
+ * to put a number on a button the reader can simply press would be spending a request to
+ * say what pressing it says.
+ */
+function renderOutcomes(id, data) {
+    const mount = byId(id + '-outcomes');
+    if (!mount) {
+        return;
+    }
+    const counts = data.outcomes || {};
+    const entries = [el('a', {
+        class: data.outcome ? '' : 'on',
+        href: lfWith('outcome', null),
+        text: 'Everything'
+    })];
+
+    for (const key of Object.keys(OUTCOME_LABELS)) {
+        const count = counts[key];
+        const label = key === 'slow'
+            ? 'Slow answers (' + num(data.slow_ms) + ' ms or worse)'
+            : OUTCOME_LABELS[key];
+        entries.push(el('a', {
+            class: data.outcome === key ? 'on' : '',
+            href: lfWith('outcome', key)
+        }, [
+            el('span', { text: label }),
+            count === null || count === undefined
+                ? null
+                : el('span', { class: 'lf-count', text: num(count) })
+        ]));
+    }
+
+    mount.replaceChildren(...entries);
+}
+
+/**
+ * The facet columns. Each value is a link that adds or removes itself as a filter.
+ */
+function renderRail(id, data) {
+    const mount = byId(id + '-rail');
+    if (!mount) {
+        return;
+    }
+    const groups = (data.groups || []).map((group) => el('div', {}, [
+        el('h3', { text: group.label }),
+        el('ul', {}, group.buckets.map((bucket) => {
+            const on = isActive(data.active, group.field, bucket.value);
+            return el('li', {}, [
+                el('a', {
+                    class: on ? 'on' : '',
+                    href: on ? lfRemove(group.field, bucket.value) : lfAdd(group.field, bucket.value),
+                    title: (on ? 'Remove ' : 'Filter to ') + group.label + ': ' + bucket.value
+                }, [
+                    el('span', { class: 'fv', text: bucket.value }),
+                    el('span', { class: 'fc', text: num(bucket.count) })
+                ])
+            ]);
+        }))
+    ]));
+
+    mount.replaceChildren(...groups);
+}
+
+/**
+ * Draw the whole filter card, or say why it is empty.
+ *
+ * @param {string} id   Card base id, e.g. 'ix-filters'.
+ * @param {Object} data The `facets` payload.
+ */
+export function renderFilters(id, data) {
+    renderActive(id, data);
+
+    if (handleState(id + '-empty', data, 'requests')) {
+        return;
+    }
+    hideEmpty(id + '-empty');
+
+    renderOutcomes(id, data);
+    renderRail(id, data);
+
+    const note = byId(id + '-note');
+    if (note) {
+        const parts = [
+            'Each column lists the ' + num(data.limit) + ' most common values under the filters ' +
+                'currently set, so picking one narrows the others. The platform cannot compute a facet ' +
+                'that excludes its own filter, so a narrowed column is expected — remove the chip above ' +
+                'to widen it again.'
+        ];
+        if ((data.ignored || []).length) {
+            parts.push('Not applied here: ' + data.ignored.join(', ') + '. Those filters describe web ' +
+                'sessions Loghound scored itself; the platform\'s request log has no such fields, and ' +
+                'applying them would match nothing rather than narrow anything.');
+        }
+        note.textContent = parts.join(' ');
+    }
+
+    setPop(id, num(data.requests) + ' requests match the current filters out of everything Opensolr ' +
+        'logged for this index in this range. Every other card on this page counts the same population.');
+}
+
+/* -------------------------------------------------------------------------
+ * The primary chart
+ * ---------------------------------------------------------------------- */
+
+/**
+ * Draw request volume over time and the four figures above it.
+ *
+ * The four are the ones Opensolr's own analytics dashboard shows — total, average, peak and
+ * how many buckets those came from — because a chart without them makes the reader estimate
+ * numbers off an axis. "Data points" is not decoration: it is what turns "average 40" into a
+ * statement about a known number of buckets.
+ *
+ * @param {string} id   Card base id, e.g. 'ix-volume'.
+ * @param {Object} data The `volume` payload.
+ */
+export function renderVolume(id, data) {
+    const set = fieldSetter(id);
+
+    if (handleState(id + '-empty', data, 'requests')) {
+        for (const key of ['total', 'mean', 'peak', 'points']) {
+            set(key, '—');
+        }
+        dispose(id + '-chart');
+        return;
+    }
+
+    const counts = data.all || [];
+    if (!counts.length) {
+        dispose(id + '-chart');
+        showEmpty(id + '-empty', 'No requests to plot', [
+            'Opensolr logged requests for this index in this range, but the platform returned no time ' +
+                'buckets for them. Try a wider range.'
+        ]);
+        return;
+    }
+    hideEmpty(id + '-empty');
+
+    let peak = 0;
+    let total = 0;
+    for (const value of counts) {
+        total += value;
+        peak = Math.max(peak, value);
+    }
+
+    set('total', num(data.requests));
+    set('mean', dec(total / counts.length, 1));
+    set('peak', num(peak));
+    set('points', num(counts.length));
+
+    const t = tokens();
+    const series = [{ name: 'All requests', color: t.accent, data: counts }];
+    if (data.zero_known) {
+        series.push({ name: 'Matched nothing', color: t.pop.declared, data: data.zero || [] });
+    }
+    lines(id + '-chart', data.times, series);
+
+    setPop(id, num(data.requests) + ' requests under the current filters, in ' + num(counts.length) +
+        ' buckets across this range. ' +
+        (data.zero_known
+            ? num(data.zero_total) + ' of them (' + pct(data.zero_total, data.requests) +
+              ') matched no documents, drawn as the second series.'
+            : 'An outcome slice is selected, so the zero-result series is not drawn — it would be the ' +
+              'whole of one slice and none of the other.'));
+}
+
+/* -------------------------------------------------------------------------
+ * Shared rendering helpers
+ * ---------------------------------------------------------------------- */
+
+/**
+ * A setter for the `[data-field]` placeholders inside one card's content.
+ *
+ * Scoped to the card rather than the document, because four cards on one page use the same
+ * field names and a document-wide lookup would fill in whichever came first.
+ */
+export function fieldSetter(id) {
+    const scope = byId(id + '-content');
+    return (field, value) => {
+        const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
+        if (node) {
+            node.textContent = value;
+        }
+    };
+}
+
+/**
+ * Refuse to draw a chart that has nothing to draw, and say so instead.
+ *
+ * These views query somebody else's platform and legitimately get nothing back — an index
+ * nobody queried, a filter that matches no requests. An ECharts instance handed an empty
+ * series renders an axis with no data, which reads as broken rather than as empty, and a
+ * previously drawn chart left in place reads as stale data. So the instance is disposed and
+ * the card's own empty state is shown.
+ *
+ * Returns true when the caller should stop.
+ *
+ * @param {string} chartId Element id of the .chart container.
+ * @param {string} emptyId Element id of the card's .empty slot.
+ * @param {number} rows    How many rows there are to draw.
+ * @param {string} heading Empty-state heading.
+ * @param {Array<string>} parts Empty-state paragraphs.
+ */
+export function chartOrEmpty(chartId, emptyId, rows, heading, parts) {
+    if (rows > 0) {
+        hideEmpty(emptyId);
+        return false;
+    }
+    dispose(chartId);
+    showEmpty(emptyId, heading, parts);
+    return true;
+}
+
+/** Re-exported so a view module takes its palette from the same place as this one. */
+export { tokens };
 
 /**
  * A share bar, used in every "top N" table on these views.

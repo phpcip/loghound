@@ -16,6 +16,7 @@ import {
 } from '../core.js';
 import { donut, geoScatter, tokens, treemap } from '../charts.js';
 import { countryName, locate } from '../geo.js';
+import { countryNode, dimRow, dimValue } from '../identity.js';
 
 /**
  * The colour for a network type.
@@ -97,22 +98,27 @@ function renderAsns(data) {
     renderTypeLegend(t);
 
     tbody(byId('net-asns-table'), data.asns.map((row) => ({
+        attrs: dimRow('asn_i', row.asn),
         cells: [
+            { text: 'AS' + row.asn, mono: true, nowrap: true, sort: row.asn },
             {
-                node: el('a', {
-                    href: '?v=sessions&f[as_org_s][]=' + encodeURIComponent(row.org || ''),
-                    class: 'mono',
-                    text: 'AS' + row.asn
-                })
+                node: row.org ? dimValue('as_org_s', row.org) : el('span', { class: 'muted', text: '—' }),
+                clip: true,
+                title: row.org || 'Organisation not resolved',
+                sort: row.org || ''
             },
-            { text: row.org || '—', clip: true },
-            { node: el('span', { class: 'chip', text: row.as_type || 'unknown' }) },
-            { text: num(row.sessions), num: true },
-            { text: num(row.uniq_ips), num: true },
-            { text: num(row.hits), num: true },
-            { text: num(row.human), num: true },
-            { text: num(row.evasive), num: true },
-            { node: mixBar(row) }
+            {
+                node: row.as_type
+                    ? dimValue('as_type_s', row.as_type)
+                    : el('span', { class: 'chip chip-word', text: 'unknown' }),
+                sort: row.as_type || ''
+            },
+            { text: num(row.sessions), num: true, sort: row.sessions },
+            { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
+            { text: num(row.hits), num: true, sort: row.hits },
+            { text: num(row.human), num: true, sort: row.human },
+            { text: num(row.evasive), num: true, sort: row.evasive },
+            { node: mixBar(row), sort: row.sessions ? row.evasive / row.sessions : 0 }
         ]
     })));
 }
@@ -203,27 +209,38 @@ function renderNetnames(data) {
     hideEmpty('net-netnames-empty');
 
     tbody(byId('net-netnames-table'), data.netnames.map((row) => ({
+        attrs: dimRow('netname_s', row.netname),
         cells: [
             {
-                node: el('a', {
-                    href: '?v=sessions&f[netname_s][]=' + encodeURIComponent(row.netname),
-                    class: 'mono',
-                    text: row.netname || '—'
-                })
+                node: dimValue('netname_s', row.netname, { mono: true }),
+                clip: true,
+                title: row.netname || '',
+                sort: row.netname || ''
             },
-            { text: row.org || '—', clip: true },
-            { node: el('span', { class: 'chip', text: row.as_type || 'unknown' }) },
-            { text: num(row.sessions), num: true },
-            { text: num(row.uniq_ips), num: true },
+            {
+                node: row.org ? dimValue('as_org_s', row.org) : el('span', { class: 'muted', text: '—' }),
+                clip: true,
+                title: row.org || 'Organisation not resolved',
+                sort: row.org || ''
+            },
+            {
+                node: row.as_type
+                    ? dimValue('as_type_s', row.as_type)
+                    : el('span', { class: 'chip chip-word', text: 'unknown' }),
+                sort: row.as_type || ''
+            },
+            { text: num(row.sessions), num: true, sort: row.sessions },
+            { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
             {
                 text: num(row.uniq_fps),
                 num: true,
+                sort: row.uniq_fps,
                 title: 'Distinct header fingerprints from this netblock. Many addresses sharing very few ' +
                     'fingerprints is the rotating-proxy pattern.'
             },
-            { text: num(row.human), num: true },
-            { text: num(row.evasive), num: true },
-            { node: mixBar(row) }
+            { text: num(row.human), num: true, sort: row.human },
+            { text: num(row.evasive), num: true, sort: row.evasive },
+            { node: mixBar(row), sort: row.sessions ? row.evasive / row.sessions : 0 }
         ]
     })));
 }
@@ -240,20 +257,22 @@ function renderCountries(data) {
     hideEmpty('net-countries-empty');
 
     tbody(byId('net-countries-table'), data.countries.map((row) => ({
+        attrs: dimRow('country_s', row.country),
         cells: [
             {
-                node: el('a', {
-                    href: '?v=sessions&f[country_s][]=' + encodeURIComponent(row.country),
-                    text: countryName(row.country)
-                })
+                node: countryNode(row.country),
+                clip: true,
+                title: countryName(row.country) + ' (' + row.country + ')',
+                sort: countryName(row.country) || row.country
             },
-            { text: num(row.sessions), num: true },
-            { text: num(row.uniq_ips), num: true },
-            { text: num(row.human), num: true },
-            { text: num(row.evasive), num: true },
+            { text: num(row.sessions), num: true, sort: row.sessions },
+            { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
+            { text: num(row.human), num: true, sort: row.human },
+            { text: num(row.evasive), num: true, sort: row.evasive },
             {
                 text: (row.cities || []).map((city) => city.city + ' (' + num(city.count) + ')').join(', ') || '—',
-                clip: true
+                clip: true,
+                sort: (row.cities || []).length ? row.cities[0].city : ''
             }
         ]
     })));

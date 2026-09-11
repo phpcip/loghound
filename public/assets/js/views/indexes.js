@@ -16,8 +16,11 @@
 import {
     api, bytes, byId, dec, dur, el, hideEmpty, loadCard, num, pct, setPop, tbody
 } from '../core.js';
-import { draw, lines, tokens } from '../charts.js';
-import { handleState, histPercentile, resolveCore, shareBar, stateMessage } from './opensolr.js';
+import { barsH, donut, draw } from '../charts.js';
+import {
+    chartOrEmpty, fieldSetter, handleState, histPercentile, lfAdd, lfRemove, renderFilters,
+    renderVolume, resolveCore, shareBar, stateMessage, tokens
+} from './opensolr.js';
 
 /** Plain-English meaning for the status codes an index actually answers with. */
 const STATUS_MEANING = {
@@ -38,14 +41,7 @@ const STATUS_MEANING = {
  * Fill the headline stats and the caption that says what they cover.
  */
 function renderHeadline(data) {
-    const scope = byId('ix-headline-content');
-    const set = (field, value) => {
-        const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
-        if (node) {
-            node.textContent = value;
-        }
-    };
-
+    const set = fieldSetter('ix-headline');
     const message = stateMessage(data);
     if (message) {
         for (const key of ['requests', 'zero', 'qmean', 'qmax', 'size']) {
@@ -74,46 +70,24 @@ function renderHeadline(data) {
 }
 
 /**
- * Draw request volume, with the zero-result subset underneath it.
- */
-function renderVolume(data) {
-    if (handleState('ix-volume-empty', data, 'requests')) {
-        return;
-    }
-    hideEmpty('ix-volume-empty');
-
-    const t = tokens();
-    lines('ix-volume', data.times, [
-        { name: 'All requests', color: t.accent, data: data.all },
-        { name: 'Matched nothing', color: t.pop.declared, data: data.zero }
-    ]);
-
-    setPop('ix-volume',
-        num(data.requests) + ' requests in this range, bucketed by time. ' +
-        num(data.zero_total) + ' of them matched no documents. Both series cover every logged ' +
-        'request for this index, not a sample.');
-}
-
-/**
  * Draw the QTime histogram and read the percentiles off it.
  */
 function renderQtime(data) {
+    const set = fieldSetter('ix-qtime');
+
     if (handleState('ix-qtime-empty', data, 'requests')) {
         return;
     }
-    hideEmpty('ix-qtime-empty');
 
     const edges = Object.keys(data.buckets).map(Number).sort((a, b) => a - b);
     const counts = edges.map((edge) => data.buckets[String(edge)] || 0);
     const over = data.over || 0;
 
-    const scope = byId('ix-qtime-content');
-    const set = (field, value) => {
-        const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
-        if (node) {
-            node.textContent = value;
-        }
-    };
+    if (chartOrEmpty('ix-qtime-chart', 'ix-qtime-empty', edges.length, 'No latency to plot', [
+        'The platform returned no QTime buckets for these requests, so there is no distribution to draw.'
+    ])) {
+        return;
+    }
 
     const hist = counts.concat([over]);
     const upper = edges.map((edge) => edge + data.gap);
@@ -178,7 +152,28 @@ function renderQtime(data) {
 }
 
 /**
- * Fill the handler and status tables.
+ * A cell whose text is a link that filters the whole page to that value.
+ *
+ * This is what makes the composition tables act on something rather than just report it: the
+ * operator who spots a handler they did not expect — the owner's example was a path that is
+ * neither a visitor nor a crawler — clicks it and every card on the page narrows to it.
+ *
+ * An <a> and not a click handler on the row: it is a real URL, so it can be opened in a new
+ * tab, and the CSP forbids inline handlers anyway.
+ */
+function pickCell(field, value, active, text) {
+    const on = Array.isArray((active || {})[field]) && active[field].indexOf(value) !== -1;
+    return {
+        node: el('a', {
+            href: on ? lfRemove(field, value) : lfAdd(field, value),
+            title: (on ? 'Remove this filter: ' : 'Filter this page to ') + value,
+            text: text === undefined ? value : text
+        })
+    };
+}
+
+/**
+ * Fill the handler and status cards: a chart each, then the exact table.
  */
 function renderHandlers(data) {
     if (handleState('ix-handlers-empty', data, 'requests')) {
@@ -192,20 +187,44 @@ function renderHandlers(data) {
     const statuses = Object.keys(data.statuses);
     const pathTotal = paths.reduce((sum, key) => sum + data.paths[key], 0);
     const statusTotal = statuses.reduce((sum, key) => sum + data.statuses[key], 0);
+    const t = tokens();
+
+    barsH('ix-paths-chart', paths.slice(0, 10).map((path) => ({
+        label: path,
+        value: data.paths[path],
+        extra: pct(data.paths[path], pathTotal) + ' of requests'
+    })));
 
     tbody(byId('ix-paths-table'), paths.map((path) => ({
+        attrs: { class: 'lf-pick' },
         cells: [
-            { text: path, mono: true, clip: true },
+            Object.assign(pickCell('path', path, data.active), { mono: true, clip: true }),
             { text: num(data.paths[path]), num: true },
             { node: shareBar(data.paths[path], pathTotal) }
         ]
     })));
 
+    /* A donut and not a second bar chart: status is a composition of one whole — every
+       request has exactly one status — and the centre carries the total. Colour is the one
+       accent for anything at or above 400 and the neutral population ramp below it, because
+       the design system has no red to reach for. */
+    donut('ix-status-chart', statuses.map((status) => ({
+        label: status + (STATUS_MEANING[Number(status)] ? ' · ' + STATUS_MEANING[Number(status)] : ''),
+        value: data.statuses[status],
+        color: Number(status) >= 400 ? t.pop.evasive : t.pop.human
+    })), 'requests', num(statusTotal));
+
     tbody(byId('ix-status-table'), statuses.map((status) => ({
+        attrs: { class: 'lf-pick' },
         cells: [
             {
-                node: el('span', {
+                node: el('a', {
                     class: 'chip ' + (Number(status) >= 400 ? 'chip-bad' : 'chip-good'),
+                    href: Array.isArray((data.active || {}).http_status)
+                        && data.active.http_status.indexOf(status) !== -1
+                        ? lfRemove('http_status', status)
+                        : lfAdd('http_status', status),
+                    title: 'Filter this page to status ' + status,
                     text: status
                 })
             },
@@ -221,29 +240,44 @@ function renderHandlers(data) {
     })));
 
     setPop('ix-handlers',
-        num(data.requests) + ' requests in this range. Handlers and status codes are faceted ' +
-        'independently, so each column totals the same population.' +
+        num(data.requests) + ' requests under the current filters. Handlers and status codes are faceted ' +
+        'independently, so each column totals the same population. The bar chart shows the ten busiest ' +
+        'handlers; the table below it is every one the facet returned.' +
         (statuses.some((s) => Number(s) >= 400)
             ? ' Some requests were refused or failed — see the status column.'
             : ' Every logged request was answered with a 2xx.'));
 }
 
 /**
- * Fill the cluster-node table.
+ * Fill the cluster-node card: the split as bars, then the exact table.
  */
 function renderNodes(data) {
     if (handleState('ix-nodes-empty', data, 'requests')) {
         tbody(byId('ix-nodes-table'), []);
         return;
     }
-    hideEmpty('ix-nodes-empty');
 
     const names = Object.keys(data.nodes);
     const total = names.reduce((sum, key) => sum + data.nodes[key], 0);
 
+    if (chartOrEmpty('ix-nodes-chart', 'ix-nodes-empty', names.length, 'No node recorded', [
+        'The platform returned no cluster hostname for these requests, so there is nothing to split ' +
+            'them across.'
+    ])) {
+        tbody(byId('ix-nodes-table'), []);
+        return;
+    }
+
+    barsH('ix-nodes-chart', names.map((name) => ({
+        label: name,
+        value: data.nodes[name],
+        extra: pct(data.nodes[name], total) + ' of the requests listed'
+    })));
+
     tbody(byId('ix-nodes-table'), names.map((name) => ({
+        attrs: { class: 'lf-pick' },
         cells: [
-            { text: name, mono: true, clip: true },
+            Object.assign(pickCell('param_hostname', name, data.active), { mono: true, clip: true }),
             { text: num(data.nodes[name]), num: true },
             { node: shareBar(data.nodes[name], total) }
         ]
@@ -277,10 +311,17 @@ function refresh() {
             : await api('indexes', 'headline', { core: chosen }));
     });
 
+    loadCard('ix-filters', 'Faceting the request log', async () => {
+        const chosen = await resolveCore('indexes', 'ix-core', refresh);
+        renderFilters('ix-filters', chosen === null
+            ? { state: 'no_index', requests: 0, groups: [], active: {}, ignored: [] }
+            : await api('indexes', 'facets', { core: chosen }));
+    });
+
     loadCard('ix-volume', 'Faceting request volume', async () => {
         const chosen = await resolveCore('indexes', 'ix-core', refresh);
-        renderVolume(chosen === null
-            ? { state: 'no_index', requests: 0 }
+        renderVolume('ix-volume', chosen === null
+            ? { state: 'no_index', requests: 0, all: [], times: [] }
             : await api('indexes', 'volume', { core: chosen }));
     });
 
@@ -311,7 +352,7 @@ function refresh() {
  * renders an explanation instead of cards and there is nothing to load.
  */
 export default function init() {
-    if (!byId('ix-headline-card')) {
+    if (!byId('ix-filters-card')) {
         return;
     }
     refresh();
