@@ -1209,9 +1209,14 @@ final class Sessions extends Controller
     private function resultsCard(): void
     {
         echo '<div class="results">';
+        /* THE THIRD NUMBER, which this card did not print. Layout::cardsIn() numbers the jump
+           bar by position, so the bar read "03 Recent visitors" while the card head above the
+           table showed nothing at all — the bar and the card disagreeing about the same card,
+           which is the one thing the section numbering exists to prevent. The population is
+           written by the front end once the result count is known, so it stays empty here. */
         self::cardOpen(
             'se-results',
-            '',
+            '03',
             'Recent visitors',
             '',
             '<span class="job-meta" id="se-count"></span>' . $this->exportTool('sessions')

@@ -843,6 +843,156 @@ return [
                 $browser->close();
             }
         },
+
+    /* THE BAR AND THE CARD MUST AGREE, AND ON SESSIONS THEY DID NOT. Layout::cardsIn() numbers
+       the jump bar by POSITION, while the number on the card head is passed in by the view —
+       so a card that passed an empty one got "03 Recent visitors" in the bar and a blank space
+       above the table, which is the single thing the section numbering exists to prevent. A
+       source-reading test cannot see it: both halves are correct on their own, and only the
+       rendered page holds them side by side. */
+    'every card head prints the number the jump bar gives it' =>
+        function (): void {
+            $probe = '(function () {'
+                . ' var cards = [];'
+                . ' document.querySelectorAll("section.card > .card-head > h2").forEach(function (h) {'
+                . '   var n = h.querySelector(".card-num");'
+                . '   var label = h.querySelector("span:last-child");'
+                . '   cards.push({ num: n ? n.textContent.trim() : "",'
+                . '     label: label ? label.textContent.trim() : "" }); });'
+                . ' var nav = [];'
+                . ' document.querySelectorAll(".set-nav a").forEach(function (a) {'
+                . '   var n = a.querySelector(".card-num");'
+                . '   nav.push(n ? n.textContent.trim() : ""); });'
+                . ' return JSON.stringify({ cards: cards, nav: nav });'
+                . ' })()';
+
+            foreach (['sessions', 'attacks', 'settings', 'overview'] as $view) {
+                $browser = lh_browser_panel($view, ['range' => '24h']);
+                try {
+                    $browser->settle(1.0);
+                    $seen = json_decode((string) $browser->evaluate($probe), true);
+                    $cards = (array) $seen['cards'];
+                    $nav = (array) $seen['nav'];
+
+                    lh_true(count($cards) > 1, $view . ': the cards were found');
+
+                    foreach ($cards as $i => $card) {
+                        lh_true(
+                            (string) $card['num'] !== '',
+                            $view . ': "' . $card['label'] . '" prints no number, and the jump bar '
+                            . 'numbers it by position anyway — so the two disagree about one card'
+                        );
+                        if (isset($nav[$i]) && (string) $nav[$i] !== '') {
+                            lh_same(
+                                (string) $nav[$i],
+                                (string) $card['num'],
+                                $view . ': the bar and the card head disagree about "'
+                                . $card['label'] . '"'
+                            );
+                        }
+                    }
+                } finally {
+                    $browser->close();
+                }
+            }
+        },
+
+    /* MEASURED, NOT READ. mobile.css floors dozens of controls at `--lh-tap` under
+       `(pointer: coarse), (max-width: 900px)`, and a source-reading test can only confirm that
+       the declarations exist. It cannot see that `.export` — the CSV control, on the newest
+       surface — was floored on HEIGHT only, so "CSV" came out 31px wide on a 375px viewport:
+       a target tall enough and too narrow, which is still a target you miss. This asks the
+       engine for the rectangle every control actually occupies. */
+    'every control a thumb has to hit is thumb-sized at every phone width' =>
+        function (): void {
+            $probe = '(function () {'
+                . ' var out = [];'
+                . ' document.querySelectorAll('
+                . '   \'a[href], button, summary, input, select, [tabindex="0"]\''
+                . ' ).forEach(function (n) {'
+                . '   var cs = window.getComputedStyle(n);'
+                . '   if (cs.display === "none" || cs.visibility === "hidden") { return; }'
+                . '   var r = n.getBoundingClientRect();'
+                . '   if (r.width === 0 && r.height === 0) { return; }'
+                . '   if (r.height < 40 || r.width < 40) {'
+                . '     out.push(n.tagName + "[" + (n.className || "") + "] "'
+                . '       + Math.round(r.width) + "x" + Math.round(r.height)); }'
+                . ' });'
+                . ' return JSON.stringify(out.filter(function (x, i, a) { return a.indexOf(x) === i; }));'
+                . ' })()';
+
+            foreach ([375, 414] as $width) {
+                foreach (['attacks', 'sessions', 'overview'] as $view) {
+                    $browser = lh_browser_panel($view, ['range' => '24h'], $width);
+                    try {
+                        $browser->settle(1.0);
+                        $small = json_decode((string) $browser->evaluate($probe), true);
+                        lh_same(
+                            [],
+                            (array) $small,
+                            $view . ' at ' . $width . 'px has a control under 40px in one dimension: '
+                            . implode(', ', (array) $small)
+                        );
+                    } finally {
+                        $browser->close();
+                    }
+                }
+            }
+        },
+
+    /* THE CAPTION THAT WAS THERE AND INVISIBLE.
+       A card whose denominators are only known after the fetch passes an empty population to
+       cardOpen(), which renders `<p class="pop" id="…-pop" hidden></p>`. setPop() then wrote
+       the real sentence into it with textContent and never touched the attribute, and
+       `[hidden] { display: none !important }` at the top of panel.css did the rest. So eight
+       cards shipped their numbers with no statement of what they counted — SPEC §10's one
+       hard rule — while every source-reading test agreed the caption was rendered, because it
+       was. Only a browser can see that it is not on screen, which is what this is.
+
+       Bot forensics card 01 is the worst of the eight: six figures, no range, no denominator,
+       no plane. */
+    'a population caption that is written is a population caption that is SHOWN' =>
+        function (): void {
+            foreach ([
+                'bots'        => 'bf-split',
+                'overview'    => 'ov-timing',
+                'performance' => 'pf-headline',
+            ] as $view => $card) {
+                $browser = lh_browser_panel($view, ['range' => '24h']);
+                try {
+                    $browser->settle(1.2);
+                    $state = json_decode((string) $browser->evaluate(
+                        '(function () {'
+                        . ' var n = document.getElementById(' . json_encode($card . '-pop') . ');'
+                        . ' if (!n) { return JSON.stringify({ missing: true }); }'
+                        . ' return JSON.stringify({'
+                        . '   text: n.textContent.trim(),'
+                        . '   hidden: n.hidden,'
+                        . '   display: window.getComputedStyle(n).display,'
+                        . '   height: Math.round(n.getBoundingClientRect().height) });'
+                        . ' })()'
+                    ), true);
+
+                    lh_true(empty($state['missing']), $card . ': the caption node must exist');
+                    lh_true(
+                        (string) $state['text'] !== '',
+                        $card . ': the card writes a population, so there is one to show'
+                    );
+                    lh_false($state['hidden'], $card . ': and it must not still be marked hidden');
+                    /* display, not height: a card the accordion has folded legitimately
+                       measures zero, and the question here is whether the caption is
+                       suppressed IN ITS OWN RIGHT. */
+                    lh_same(
+                        'block',
+                        (string) $state['display'],
+                        $card . ': a caption at display:none is a number with no population, '
+                        . 'which is the one thing SPEC §10 does not allow'
+                    );
+                } finally {
+                    $browser->close();
+                }
+            }
+        },
 ];
 
 /**

@@ -134,6 +134,22 @@ final class Schema
      */
     public const DRIFTED = 'drifted';
 
+    /**
+     * The exit codes `bin/loghound-schema` uses, which is the half a deployment script reads.
+     *
+     * MANAGED HAS ITS OWN, and that is the point of them living here rather than in the script.
+     * A deployment gate has to tell "I could not check" (EXIT_FAILED) from "this needs
+     * migrating off the managed schema factory" (EXIT_MANAGED): the first is a retry, the
+     * second is a push that will not happen on its own however many times the check is re-run.
+     * Folding the two together is what made a live installation print an unreadable-schema
+     * message about an index whose schema had been read perfectly well.
+     */
+    public const EXIT_OK       = 0;
+    public const EXIT_CONFIG   = 1;
+    public const EXIT_FAILED   = 2;
+    public const EXIT_OUTDATED = 3;
+    public const EXIT_MANAGED  = 4;
+
     /** Severity order, worst first, for reducing per-index states to one verdict. */
     private const SEVERITY = [
         self::UNCONFIGURED,
@@ -774,6 +790,8 @@ final class Schema
         $headline = match ($state) {
             self::CURRENT      => 'Both indexes declare every field this release writes.',
             self::BEHIND       => 'Your indexes are missing fields this release writes.',
+            self::MANAGED      => 'An index is still on Solr\'s managed schema factory, so schema '
+                . 'uploads to it do nothing.',
             self::UNCONFIGURED => 'There is no index to check yet.',
             default            => 'One of your indexes could not be read.',
         };
@@ -785,6 +803,15 @@ final class Schema
                 . 'throws the value away, with no error anywhere, so this does not show up as a failure '
                 . '— it shows up as a facet that is permanently empty. Push this release\'s configsets '
                 . 'to fix it; it is additive and it does not touch a document already in the index.',
+            /* NOT THE UNREADABLE WORDING. Both schemas were read; what they say is that Solr owns
+               the schema file on that index, which is a different problem with a different fix. */
+            self::MANAGED => 'The schemas were read — this is not a failure to reach your account. One '
+                . 'of your indexes declares ManagedIndexSchemaFactory in its solrconfig.xml, so Solr '
+                . 'owns the schema file there and the schema.xml Loghound uploads is ignored. Every '
+                . 'schema push to that index reports success and changes nothing, including the ones '
+                . 'already run. Pushing this release\'s configsets fixes it: the upload ends with the '
+                . 'solrconfig.xml that switches the index to the classic factory, and it does not touch '
+                . 'a document already in the index.',
             self::UNCONFIGURED => 'Finish setup first — there is no index name in the configuration.',
             default => 'A schema that cannot be read is never reported as matching. Run the check again; '
                 . 'if it keeps failing, confirm the account still owns both indexes.',
@@ -793,9 +820,9 @@ final class Schema
         return [
             'state'      => $state,
             'severity'   => match ($state) {
-                self::CURRENT => 'good',
-                self::BEHIND  => 'bad',
-                default       => 'warn',
+                self::CURRENT           => 'good',
+                self::BEHIND, self::MANAGED => 'bad',
+                default                 => 'warn',
             },
             'headline'   => $headline,
             'detail'     => $detail,
@@ -934,6 +961,193 @@ final class Schema
             $lines[] = (string) ($row['message'] ?? '');
         }
         return implode(' ', array_filter($lines));
+    }
+
+    /**
+     * The exit code one overall state deserves.
+     *
+     * After an --apply there is no "out of date" answer worth handing a script: the command was
+     * asked to fix it and either did or did not, so BEHIND becomes a failure. MANAGED keeps its
+     * own code either way, because "uploaded and the core did not reload onto it" is still a
+     * migration that has not happened rather than a check that could not be made.
+     */
+    public static function exitCode(string $state, bool $applied = false): int
+    {
+        return match ($state) {
+            self::CURRENT      => self::EXIT_OK,
+            self::MANAGED      => self::EXIT_MANAGED,
+            self::BEHIND       => $applied ? self::EXIT_FAILED : self::EXIT_OUTDATED,
+            self::UNCONFIGURED => self::EXIT_CONFIG,
+            default            => self::EXIT_FAILED,
+        };
+    }
+
+    /**
+     * One line per index for the command's table: role, name, verdict, and the short of it.
+     *
+     * EVERY STATE THAT IS NOT `CURRENT` CARRIES ITS MESSAGE, which MANAGED did not. The table
+     * printed the word MANAGED and then nothing — no count, no sentence — and the paragraph
+     * underneath talked about a schema that could not be read. An operator was shown a correct
+     * diagnosis with no explanation attached to it and a closing paragraph about a different
+     * problem.
+     *
+     * `ok` is the stdout/stderr decision: a cron that only mails stderr stays silent on a
+     * healthy installation and is loud on one that needs a hand.
+     *
+     * @param array<string,mixed> $report
+     * @return array<int,array{ok:bool,text:string}>
+     */
+    public static function tableLines(array $report): array
+    {
+        $out = [];
+
+        foreach ((array) ($report['indexes'] ?? []) as $row) {
+            $state = (string) ($row['state'] ?? self::UNREADABLE);
+            $core = (string) ($row['core'] ?? '');
+            $missing = array_map('strval', (array) ($row['missing'] ?? []));
+            $expected = (int) ($row['expected'] ?? 0);
+
+            $text = '  ' . str_pad((string) ($row['role'] ?? ''), 10)
+                . str_pad($core === '' ? '(none)' : $core, 32) . ' '
+                . str_pad(strtoupper($state), 13);
+
+            if ($state === self::BEHIND) {
+                $text .= count($missing) . ' missing: ' . self::namedList($missing);
+            } elseif ($state === self::CURRENT) {
+                $text .= $expected . ' fields, all present';
+            } elseif ($state === self::MANAGED) {
+                $text .= $missing === []
+                    ? 'schema.xml is ignored here; needs migrating'
+                    : 'schema.xml is ignored here; ' . count($missing) . ' missing: '
+                        . self::namedList($missing);
+            }
+
+            if ($state === self::CURRENT) {
+                $out[] = ['ok' => true, 'text' => $text];
+                continue;
+            }
+
+            $out[] = [
+                'ok'   => false,
+                'text' => $text . "\n      "
+                    . wordwrap((string) ($row['message'] ?? ''), 84, "\n      ", true),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * The closing paragraph: what the verdict means, and the exact command that resolves it.
+     *
+     * One paragraph per state, and none of them is the paragraph for another state. The failure
+     * this replaced was a `default` arm: MANAGED fell into the unreadable-schema wording, so a
+     * command that had read both schemas successfully told the operator their schemas could not
+     * be read and sent them to check that the account still owned the indexes.
+     *
+     * @param array<string,mixed> $report
+     * @param string|null $saved Where the verdict landed, or null when it could not be saved.
+     * @param bool $applied Whether this is the re-read that follows a push.
+     * @return array{ok:bool,text:string}
+     */
+    public static function verdictText(array $report, string $root, ?string $saved, bool $applied): array
+    {
+        $where = $saved === null
+            ? 'The result could not be saved to var/, so the panel will still ask you to check.'
+            : 'Saved to ' . $saved . ', which is what the panel\'s Settings page reads.';
+
+        $stamp = 'Checked at ' . gmdate('m/d/Y H:i:s', (int) ($report['checked_at'] ?? 0)) . ' UTC. '
+            . $where;
+
+        $state = (string) ($report['state'] ?? self::UNREADABLE);
+        $fix = self::command($root) . ' --apply';
+
+        if ($state === self::CURRENT) {
+            return [
+                'ok'   => true,
+                'text' => "\n" . ($applied
+                    ? 'Done. Both indexes now declare every field this release writes.'
+                    : 'Up to date. Both indexes declare every field this release writes.')
+                    . "\n" . $stamp . "\n",
+            ];
+        }
+
+        if ($state === self::MANAGED && $applied) {
+            return [
+                'ok'   => false,
+                'text' => "\nUploaded, and still on the managed factory. Opensolr ACCEPTED the configsets,\n"
+                    . "and re-reading the live solrconfig.xml still declares ManagedIndexSchemaFactory.\n"
+                    . "So the files landed and the core did not reload onto them. Running this again\n"
+                    . "uploads the same files to the same effect. Open this index in your Opensolr\n"
+                    . "control panel and reload it there; then run the check again.\n"
+                    . $stamp . "\n",
+            ];
+        }
+
+        if ($state === self::MANAGED) {
+            return [
+                'ok'   => false,
+                'text' => "\nNeeds migrating. Both schemas were read — this is not a failure to read anything.\n"
+                    . "An index above still declares Solr's MANAGED schema factory\n"
+                    . "(ManagedIndexSchemaFactory) in its solrconfig.xml, which means SOLR owns the schema\n"
+                    . "file on it. The schema.xml this release uploads sits in that index's configset\n"
+                    . "unused, so every schema upload to it reports success and changes nothing — including\n"
+                    . "the ones you have already run.\n\n"
+                    . "Fix it with:\n  " . $fix . "\n\n"
+                    . "That uploads the whole configset in dependency order and ends with the solrconfig.xml\n"
+                    . "that switches the index to the classic factory. From then on schema.xml is what the\n"
+                    . "index runs, and a field added by a later release is one push away. It is additive: no\n"
+                    . "document already in the index is touched, and nothing is deleted.\n"
+                    . $stamp . "\n",
+            ];
+        }
+
+        if ($state === self::BEHIND && $applied) {
+            return [
+                'ok'   => false,
+                'text' => "\nUploaded, and still behind. Opensolr ACCEPTED the configsets and re-reading the\n"
+                    . "live schemas still shows fields missing, so the files landed and the index is not\n"
+                    . "running them — the core did not reload onto the new configset. Running this again\n"
+                    . "will upload the same files to the same effect. Open this index in your Opensolr\n"
+                    . "control panel and reload it there.\n"
+                    . $stamp . "\n",
+            ];
+        }
+
+        if ($state === self::BEHIND) {
+            return [
+                'ok'   => false,
+                'text' => "\nOut of date. Solr accepts a document carrying a field its schema does not\n"
+                    . "declare and throws that value away without an error, so this will not surface as a\n"
+                    . "failure anywhere — it surfaces as a facet that is permanently empty.\n\n"
+                    . "Fix it with:\n  " . $fix . "\n\n"
+                    . "That is additive: it uploads this release's configsets and reloads the cores. It does\n"
+                    . "not touch a document already in the index.\n"
+                    . $stamp . "\n",
+            ];
+        }
+
+        if ($state === self::UNCONFIGURED) {
+            return [
+                'ok'   => false,
+                /* ABSOLUTE, like command() beside it. A refusal that says "run
+                   bin/loghound-setup" is followable from exactly one directory, and the person
+                   reading it is in a shell somewhere else. */
+                'text' => "\nNot set up yet. There is no index name in the configuration, so there is nothing\n"
+                    . "to compare this release against. Run this first:\n  php "
+                    . rtrim($root, '/') . "/bin/loghound-setup\n"
+                    . $stamp . "\n",
+            ];
+        }
+
+        return [
+            'ok'   => false,
+            'text' => "\nCould not tell. A schema that cannot be read is never reported as matching, so\n"
+                . "this is being reported as unknown rather than as fine. Run it again; if it keeps\n"
+                . "happening, check in your Opensolr control panel that the account still owns both\n"
+                . "indexes.\n"
+                . $stamp . "\n",
+        ];
     }
 
     /**

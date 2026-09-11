@@ -177,9 +177,17 @@ function sortBy(table, index, direction) {
     }
     body.appendChild(fragment);
 
+    /* ONLY THE COLUMNS THAT SORT. `aria-sort="none"` on every header announced the
+       expander column and the screen-reader-only "Open" header as sortable-but-unsorted, so a
+       reader was told there are more ways to order this table than there are, and two of them
+       do nothing. A header that cannot be sorted carries no aria-sort at all. */
     for (const th of table.tHead.querySelectorAll('th')) {
-        th.setAttribute('aria-sort', 'none');
         th.classList.remove('sorted-asc', 'sorted-desc');
+        if (th.classList.contains('sortable')) {
+            th.setAttribute('aria-sort', 'none');
+        } else {
+            th.removeAttribute('aria-sort');
+        }
     }
     const active = table.tHead.rows[table.tHead.rows.length - 1].cells[index];
     if (active) {

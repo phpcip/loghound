@@ -143,7 +143,7 @@ function renderTotals(data) {
  */
 function renderAsns(data) {
     if (!data.asns.length) {
-        noDataYet('net-asns-empty', 'network activity');
+        noDataYet('net-asns-empty', 'networks');
         return;
     }
     hideEmpty('net-asns-empty');

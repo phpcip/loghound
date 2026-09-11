@@ -514,8 +514,13 @@ final class OpensolrLog
         if ($this->apiKey !== '') {
             $text = str_replace($this->apiKey, '[redacted]', $text);
         }
-        $text = (string) preg_replace('/(api_key|apikey|token|secret|password)=[^&\s"\']*/i', '$1=[redacted]', $text);
-        return (string) preg_replace('#(https?://)[^/@\s:]+:[^/@\s]+@#i', '$1[redacted]@', $text);
+        /* `?? $text`, never a cast: preg_replace() answers NULL on a PCRE failure, and casting
+           that to a string blanks the whole message. A redactor that fails must lose nothing
+           but the redaction, or a long enough crafted string becomes a way to erase a
+           diagnostic. */
+        $text = preg_replace('/(api_key|apikey|token|secret|password)=[^&\s"\']*/i', '$1=[redacted]', $text)
+            ?? $text;
+        return preg_replace('#(https?://)[^/@\s:]+:[^/@\s]+@#i', '$1[redacted]@', $text) ?? $text;
     }
 
     /* ---------------------------------------------------------------------------------

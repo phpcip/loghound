@@ -319,6 +319,13 @@ $boot = [
     'query'   => $_SERVER['QUERY_STRING'] ?? '',
     'labels'  => Query::populationLabels(),
 
+    /* THE INSTALL ROOT, so the front end can print a command by its real path. Every command
+       the panel renders server-side is already absolute — the rule is written down in three
+       files — and the one exception was the default empty state of every async card, which is
+       in JavaScript and had no way to know where this checkout lives. It is not a secret: it
+       is on screen in a dozen places on Settings, and the page is behind authentication. */
+    'root'    => dirname(__DIR__),
+
     /* ONE country table, served once. Every surface in the panel shows a country as its flag
        and its full English name — a facet list of `SC VE ZA` names nothing a reader knows —
        and the mapping is Geo\Countries, in PHP, so there is exactly one of it. The browser

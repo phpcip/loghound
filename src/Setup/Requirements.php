@@ -292,14 +292,52 @@ final class Requirements
                 'label'  => 'PHP extension: ' . $ext,
                 'state'  => $ok ? 'pass' : 'fail',
                 'detail' => $ok ? 'Loaded.' : 'Not loaded.',
-                'fix'    => $ok ? [] : [
-                    'apt install php' . self::phpSeries() . '-' . $ext
-                        . '   # Debian/Ubuntu, then: systemctl restart php' . self::phpSeries() . '-fpm',
-                    'dnf install php-' . $ext . '   # RHEL/Fedora, then: systemctl restart php-fpm',
-                ],
+                /* ONE DISTRO, AND THE RESTART OUTSIDE THE COMMENT. Both lines went into one
+                   <pre> under one Copy button, so pasting the block ran `apt install` AND
+                   `dnf install` — one of which is not on the machine — while the restart that
+                   makes the extension take effect sat behind a `#` and never ran at all.
+                   Neither line had `sudo`, on a page that says every command on it is written
+                   for the user it runs as, which is never root. The distro is picked from what
+                   is actually on this machine; when neither package manager is present the
+                   generic instruction is given instead of a guess. */
+                'fix'    => $ok ? [] : self::extensionFix($ext),
             ];
         }
         return $rows;
+    }
+
+    /**
+     * The install line for one missing PHP extension, for THIS machine.
+     *
+     * A copy button is a promise that pasting the block achieves something, so the block holds
+     * one runnable sequence and not a menu. The package manager is detected rather than
+     * guessed; with neither on the box there is no honest command to print, so the operator is
+     * told what to install instead of being handed one that cannot work.
+     *
+     * @return string[]
+     */
+    private static function extensionFix(string $ext): array
+    {
+        $series = self::phpSeries();
+
+        if (is_file('/usr/bin/apt-get') || is_file('/usr/bin/apt')) {
+            return [
+                'sudo apt-get install -y php' . $series . '-' . $ext,
+                'sudo systemctl restart php' . $series . '-fpm',
+            ];
+        }
+
+        if (is_file('/usr/bin/dnf') || is_file('/usr/bin/yum')) {
+            return [
+                'sudo dnf install -y php-' . $ext,
+                'sudo systemctl restart php-fpm',
+            ];
+        }
+
+        return [
+            '# Install the "' . $ext . '" extension for PHP ' . $series . ' with this system\'s',
+            '# package manager, then restart PHP-FPM so it is loaded.',
+        ];
     }
 
     /** Major.minor of the running PHP, used to name the right distro package. */
@@ -351,10 +389,12 @@ final class Requirements
                 'label'  => $label . ' exists',
                 'state'  => 'fail',
                 'detail' => $dir . ' does not exist and could not be created.',
+                /* sudo ON EVERY LINE. chown is root-only without exception, so the block as
+                   it stood could not succeed as the user the caption above it names. */
                 'fix'    => [
-                    'mkdir -p ' . $dir,
-                    'chown ' . $user . ' ' . $dir,
-                    'chmod ' . ($id === 'config' ? '0700' : '0750') . ' ' . $dir,
+                    'sudo mkdir -p ' . $dir,
+                    'sudo chown ' . $user . ' ' . $dir,
+                    'sudo chmod ' . ($id === 'config' ? '0700' : '0750') . ' ' . $dir,
                 ],
             ];
         }
@@ -368,8 +408,8 @@ final class Requirements
                 ? $dir . ' is writable by ' . $user . '.'
                 : $dir . ' is not writable by ' . $user . ', so setup cannot save anything.',
             'fix'    => $ok ? [] : [
-                'chown ' . $user . ' ' . $dir,
-                'chmod ' . ($id === 'config' ? '0700' : '0750') . ' ' . $dir,
+                'sudo chown ' . $user . ' ' . $dir,
+                'sudo chmod ' . ($id === 'config' ? '0700' : '0750') . ' ' . $dir,
             ],
         ];
     }
@@ -416,12 +456,21 @@ final class Requirements
                 . implode(', ', $blocked) . '. Log detection will find nothing until that changes. '
                 . 'The ingest daemon is not affected — it runs from the command line, where the '
                 . 'restriction does not apply.',
+            /* ONE BLOCK, ONE SHELL. This mixed a PHP-FPM pool directive into a block under a
+               Copy button, so pasting it into a terminal made line two a syntax error before
+               anything useful ran. The pool edit is not a shell command and cannot be one, so
+               it is quoted inside a comment that says where it goes; the two lines that ARE
+               shell commands are the only ones that execute. The wizard is the honest way past
+               this screen and stays, because the restriction genuinely does not apply there. */
             'fix'    => [
-                '# Add this line to the PHP-FPM pool for this site, then reload PHP:',
-                'php_admin_value[open_basedir] = ' . $setting . ':' . implode(':', $blocked),
-                'systemctl reload php' . self::phpSeries() . '-fpm',
-                '# or skip this screen entirely and run the shell wizard, where the',
-                '# restriction does not apply:',
+                '# open_basedir is a PHP-FPM setting, not a shell command. Add this line to the',
+                '# pool file for this site (usually under /etc/php/' . self::phpSeries()
+                    . '/fpm/pool.d/), on its own:',
+                '#',
+                '#   php_admin_value[open_basedir] = ' . $setting . ':' . implode(':', $blocked),
+                '#',
+                '# then run these two:',
+                'sudo systemctl reload php' . self::phpSeries() . '-fpm',
                 $this->cliCommand(),
             ],
         ];

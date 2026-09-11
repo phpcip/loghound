@@ -168,6 +168,14 @@ function openNav(side) {
     }
     scrim.hidden = false;
 
+    /* SOMEWHERE INSIDE TO LAND. onNavKey() holds focus on the drawer when it has no focusable
+       children of its own rather than letting Tab out into the page behind it, and a drawer
+       that cannot take focus would make that a no-op. -1, so it is reachable from script and
+       never from the tab order. */
+    if (!side.hasAttribute('tabindex')) {
+        side.setAttribute('tabindex', '-1');
+    }
+
     const first = side.querySelector('ul li a');
     if (first) {
         first.focus();
@@ -216,15 +224,32 @@ function onNavKey(side, event) {
     }
     const focusable = Array.from(side.querySelectorAll('a[href], button:not([tabindex="-1"])'))
         .filter((node) => node.offsetParent !== null);
+
+    /* TWO LEAKS, BOTH THE SHAPE dialog.js ALREADY SOLVED.
+
+       An empty focusable set used to `return`, which lets Tab walk into the page behind a
+       drawer covering it. dialog.js does the opposite deliberately and holds focus on the
+       panel; the same reasoning applies here, and the drawer itself is focusable.
+
+       And the cycle only fired when focus was ON the first or last item. Anywhere else outside
+       the drawer — document.body after a re-render, or the scrim, which is tabindex="-1" —
+       matched neither test, so Tab went straight through to the page underneath. The
+       `!side.contains(document.activeElement)` clause is what recovers from that, and it is
+       the clause dialog.js carries and this did not. */
     if (focusable.length === 0) {
+        event.preventDefault();
+        side.focus();
         return;
     }
+
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    const outside = !side.contains(document.activeElement);
+
+    if (event.shiftKey && (document.activeElement === first || outside)) {
         event.preventDefault();
         last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && (document.activeElement === last || outside)) {
         event.preventDefault();
         first.focus();
     }

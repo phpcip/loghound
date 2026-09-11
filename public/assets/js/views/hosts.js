@@ -289,7 +289,7 @@ function splitBar(row) {
  */
 function renderChart(data) {
     if (!data.rows.length) {
-        noDataYet('hosts-share-empty', 'hosts to compare');
+        noDataYet('hosts-share-empty', 'hosts');
         return;
     }
     hideEmpty('hosts-share-empty');

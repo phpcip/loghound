@@ -45,7 +45,7 @@
  *
  * Usage
  *   loghound-setup                    the full wizard
- *   loghound-setup --detect-only      run detection, print the result, change nothing
+ *   loghound-setup --detect-only      run detection, print the result, change no configuration
  *   loghound-setup --beacon-doc       print the beacon reference as plain text and stop
  *   loghound-setup --base-url=URL     the address the beacon reference builds its snippet from
  *   loghound-setup --non-interactive  answer every prompt from the environment
@@ -233,7 +233,8 @@ if ($detectOnly) {
         presentSource((array) $d, $UI);
     }
     $UI->nl();
-    $UI->info('--detect-only: ' . count($detected) . ' source(s) found, nothing was written.');
+    $UI->info('--detect-only: ' . count($detected) . ' source(s) found. The detection report\n'
+        . '    above was refreshed; no configuration was changed and no source was confirmed.');
     exit($detected === [] ? 1 : 0);
 }
 
@@ -467,7 +468,9 @@ loghound-setup — configure Loghound, from a terminal.
   loghound-setup [options]
 
 Options
-  --detect-only         find the access logs, print what would be asked, change nothing
+  --detect-only         find the access logs and print what would be asked. It refreshes the
+                        detection report in var/detect.json, which is what the panel's Log
+                        sources card reads, and changes no configuration
   --beacon-doc          print the beacon reference — the snippet, every option it reads, what
                         this installation stores, and the two CSP directives — then stop
   --base-url=URL        the address --beacon-doc builds its snippet from, when the

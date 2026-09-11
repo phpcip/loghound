@@ -548,11 +548,28 @@ final class Steps
      * it identically. It is prose, never a copyable line: nothing here is pasteable into a
      * shell, and tests/test_setup_instructions.php holds the panel to that.
      */
-    public const RESCAN_ADVICE = 'Then tell Loghound the shape changed: rescan the source under '
-        . 'Settings, or re-run bin/loghound-setup. It stores the format per source, so until you '
-        . 'do, every newly written line is a parse error and nothing new reaches the panel. '
-        . 'Check bin/loghound-tail --status --human afterwards — parse errors should be back to '
-        . 'zero within a minute.';
+    /**
+     * What to do after changing the web server's log format, with the commands it names.
+     *
+     * A METHOD, NOT A CONSTANT, and that is the whole point of it. It was a const, so it could
+     * not interpolate an installation root and named its two commands as `bin/loghound-setup`
+     * and `bin/loghound-tail --status --human` — followable from exactly one directory, by a
+     * reader who is in a browser and will paste them into a shell somewhere else. Every other
+     * command this product prints is absolute; this was the exception, on two views.
+     *
+     * Still prose and never a pasteable line: it goes inside a <p>, and the panel puts a Copy
+     * button on <pre>. tests/test_doc_claims.php holds it to that.
+     */
+    public static function rescanAdvice(string $root): string
+    {
+        $bin = rtrim($root, '/') . '/bin/';
+
+        return 'Then tell Loghound the shape changed: rescan the source under Settings, or re-run '
+            . $bin . 'loghound-setup. It stores the format per source, so until you do, every '
+            . 'newly written line is a parse error and nothing new reaches the panel. Check '
+            . $bin . 'loghound-tail --status --human afterwards — parse errors should be back to '
+            . 'zero within a minute.';
+    }
 
     /**
      * The full recommended Apache LogFormat, exactly as docs/INSTALL.md publishes it.
@@ -722,10 +739,24 @@ final class Steps
                 'lines'   => ['sudo journalctl -u loghound-tail.service -f'],
                 'problem' => '',
             ],
+            /* THE FILE ONLY EXISTS IF install.sh WROTE THE POOL. `var/php-error.log` is named
+               by `php_admin_value[error_log]` in the FPM pool install.sh generates, so a tree
+               deployed any other way — copied into place, checked out, provisioned by a
+               control panel — has the code and no such file, and this copy button handed that
+               operator `tail: cannot open … No such file or directory`. ingestCommands() two
+               methods below already reasons about exactly that deployment and conditionalises
+               itself on unitsInstalled(); this did not. When the file is not there the command
+               that FINDS the log is given instead, which works on every deployment. */
             [
                 'key'     => 'ownlog',
                 'title'   => 'Its own errors, if a page misbehaves',
-                'lines'   => ['sudo tail -n 100 ' . $root . '/var/php-error.log'],
+                'lines'   => is_file($root . '/var/php-error.log')
+                    ? ['sudo tail -n 100 ' . $root . '/var/php-error.log']
+                    : [
+                        '# This installation has no ' . $root . '/var/php-error.log, so PHP is',
+                        '# logging elsewhere. This says where:',
+                        'php -i | grep -E \'^(error_log|log_errors)\'',
+                    ],
                 'problem' => '',
             ],
             [
@@ -766,10 +797,15 @@ final class Steps
             return '';
         }
 
-        return 'Finish setting up first — the button above. The ingest daemon reads the '
-            . 'configuration this screen is about to write, checks it before it starts, and '
-            . 'stops on an incomplete one, so there is nothing to start yet. This command '
-            . 'appears here once it will work, and it is in Settings afterwards.';
+        /* ONE SENTENCE FOR TWO SCREENS. This array is rendered by the installer AND by the
+           panel's Settings page, and the wording was written for the installer alone: it said
+           "the button above", which is not on Settings, and "it is in Settings afterwards" to
+           a reader who is already in Settings. Neither screen can be named here, so neither
+           is. */
+        return 'The configuration is not complete yet, so there is nothing to start: the ingest '
+            . 'daemon reads it, checks it before it runs, and stops on an incomplete one. Finish '
+            . 'the outstanding setup steps — each one says what it still needs — and this command '
+            . 'appears here, ready to paste, as soon as it would work.';
     }
 
     /** Where a systemd unit lives, and the one this installation is named after. */

@@ -483,6 +483,65 @@ return [
      * Packing filters into a job, which is the one place they leave the request
      * -------------------------------------------------------------------------- */
 
+    /* THE SCAN CRASH. A scan on the query-analysis view is started and polled by POST to the
+       bare view URL, so it carries its filters in the body as the packed string the server
+       itself minted. Queries::postedFilters() decoded that string and re-encoded it with its
+       OWN encoder — written against the older shape of a selection, a flat list of values,
+       and never updated when the operator moved inside it. It handed rawurlencode() an array,
+       PHP 8.1 threw a TypeError, and the front controller turned that into a blank 500. Every
+       scan on that view with any log filter active died on the first POST.
+
+       Surviving the call would not have been much better: the second encoder had no operator
+       in its output at all, so a "None of" filter would have come back as "Any of" and the
+       scan would have read the complement of what the chips on screen said. */
+    'a scan re-encodes its posted filters through the one encoder, operator included'
+        => function (): void {
+            $cfg = lh_sec_config();
+            $captured = [];
+            $_GET = ['lf' => ['path' => ['op' => 'none', '/select', '/admin']]];
+            $view = new Indexes($cfg, lh_sec_gateway($captured));
+            $packed = lh_sec_call($view, 'encodeLogFilters');
+            $_GET = [];
+
+            lh_contains($packed, 'none:', 'the minted form carries the operator');
+
+            $_POST = ['lf' => $packed];
+            $posted = (new ReflectionMethod(Queries::class, 'postedFilters'))->invoke(null);
+            $_POST = [];
+
+            lh_same(
+                $packed,
+                $posted,
+                'the re-encode is a no-op on a string the server minted; anything else is two encoders'
+            );
+
+            $back = (new ReflectionMethod(Queries::class, 'decodeLogFilters'))->invoke(null, $posted);
+            lh_same(
+                ['path' => ['values' => ['/select', '/admin'], 'op' => 'none']],
+                $back,
+                'and "none of" must not come back as "any of" — that is the complement of the question'
+            );
+        },
+
+    'the packed form a job carries can never be built by more than one encoder'
+        => function (): void {
+            $bodies = [
+                (string) file_get_contents(dirname(__DIR__) . '/src/Panel/Queries.php'),
+                (string) file_get_contents(dirname(__DIR__) . '/src/Panel/OpensolrView.php'),
+            ];
+
+            $encoders = 0;
+            foreach ($bodies as $body) {
+                $encoders += preg_match_all('/array_map\(\s*.rawurlencode./', $body);
+            }
+
+            lh_same(
+                1,
+                $encoders,
+                'two value encoders in the packing layer is how the two shapes drifted apart'
+            );
+        },
+
     'a packed filter set survives a round trip with its separators intact' => function (): void {
         $cfg = lh_sec_config();
         $captured = [];

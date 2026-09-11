@@ -259,6 +259,57 @@ abstract class Controller
     }
 
     /**
+     * The same statement in the other direction: filters a SESSIONS-core card cannot honour.
+     *
+     * The mirror of ignoredHitFilters(), and it was missing, so the reporting was one-sided.
+     * A status is a property of a REQUEST and lives only on the hits core, but the filter bar
+     * is drawn from the union of both planes (facetLayer()) precisely so that a status filter
+     * chosen on a hits-plane view stays visible and removable. On a view that mixes planes —
+     * Attacks is one, five hits-plane cards and one sessions-plane card — that left a card
+     * whose numbers did not move under a chip that said they had, with an EMPTY
+     * `filters_ignored` beside them saying nothing had been dropped.
+     *
+     * Read from the hits layer rather than the union for the same reason its mirror reads from
+     * the sessions one: each layer already holds exactly the fields of its own plane, so the
+     * difference is the set this plane cannot answer and nothing else.
+     *
+     * @return array<int,string>
+     */
+    /**
+     * The installation root, as the setup steps expect to be handed it.
+     *
+     * Steps::nextSteps() builds the `bin/loghound-tail --status` line from it and
+     * Steps::ingestStatus() finds the tailer's status document under it, so the panel and
+     * the installer describe the same checkout. Resolved rather than concatenated, so the
+     * command the operator copies has no `/../..` in the middle of it.
+     *
+     * ON THE BASE CLASS, because it was private to Settings and every view that prints a
+     * command needs it. Virtual hosts and Performance both render the rescan advice, and
+     * without a root to hand it they printed `bin/loghound-setup` — followable from exactly
+     * one directory, by a reader who is in a browser.
+     */
+    protected static function root(): string
+    {
+        $root = dirname(__DIR__, 2);
+        $real = realpath($root);
+        return $real === false ? $root : $real;
+    }
+
+    protected function ignoredSessionFilters(): array
+    {
+        $usable = array_keys(Query::sessionFilterFields());
+        $labels = Query::filterFields();
+
+        $out = [];
+        foreach (array_keys($this->hitFacets->flat()) as $field) {
+            if (!in_array($field, $usable, true)) {
+                $out[] = $labels[$field] ?? $field;
+            }
+        }
+        return $out;
+    }
+
+    /**
      * The filter that keeps a rollup document out of a session count.
      *
      * The sessions core holds two document types discriminated by `doc_type_s`: one per

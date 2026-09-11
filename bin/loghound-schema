@@ -34,6 +34,10 @@
  *   2  failed — a schema could not be read, or an upload was rejected
  *   3  out of date — at least one index is missing at least one field (--check only;
  *      --apply never leaves this state, it either fixes it or exits 2)
+ *   4  needs migrating — an index still declares Solr's MANAGED schema factory, so it owns the
+ *      schema file and every schema upload to that index is a silent no-op. Distinct from 2 on
+ *      purpose: 2 means the check could not be made and a retry may answer, 4 means the check
+ *      was made, the answer is known, and nothing changes until --apply switches the factory.
  *
  *   if loghound-schema --check; then deploy; else echo "run --apply first"; fi
  *
@@ -76,10 +80,11 @@ require __DIR__ . '/../src/autoload.php';
 use Loghound\Config;
 use Loghound\Setup\Schema;
 
-const LH_SCHEMA_OK        = 0;
-const LH_SCHEMA_CONFIG    = 1;
-const LH_SCHEMA_FAILED    = 2;
-const LH_SCHEMA_OUTDATED  = 3;
+const LH_SCHEMA_OK        = Schema::EXIT_OK;
+const LH_SCHEMA_CONFIG    = Schema::EXIT_CONFIG;
+const LH_SCHEMA_FAILED    = Schema::EXIT_FAILED;
+const LH_SCHEMA_OUTDATED  = Schema::EXIT_OUTDATED;
+const LH_SCHEMA_MANAGED   = Schema::EXIT_MANAGED;
 
 $root       = dirname(__DIR__);
 $configPath = getenv('LOGHOUND_CONFIG') ?: $root . '/config/loghound.php';
@@ -144,11 +149,7 @@ if (!$apply) {
     $saved = Schema::writeCache($cfg, $report);
     lh_schema_verdict($report, $root, $saved, false);
 
-    exit(match ($report['state']) {
-        Schema::CURRENT => LH_SCHEMA_OK,
-        Schema::BEHIND  => LH_SCHEMA_OUTDATED,
-        default         => LH_SCHEMA_FAILED,
-    });
+    exit(Schema::exitCode((string) $report['state']));
 }
 
 if ($report['state'] === Schema::CURRENT) {
@@ -206,37 +207,24 @@ lh_schema_table($after, $say);
 $saved = Schema::writeCache($cfg, $after);
 lh_schema_verdict($after, $root, $saved, true);
 
-exit(match ($after['state']) {
-    Schema::CURRENT => LH_SCHEMA_OK,
-    default         => LH_SCHEMA_FAILED,
-});
+exit(Schema::exitCode((string) $after['state'], true));
 
 /**
  * Print one line per index: role, name, verdict, and what is missing.
+ *
+ * The lines themselves are Schema::tableLines(), so the command and the panel cannot describe
+ * the same state in two different ways; this decides only which stream each one goes to.
  *
  * @param array<string,mixed> $report
  */
 function lh_schema_table(array $report, callable $say): void
 {
-    foreach ($report['indexes'] as $row) {
-        $state = (string) $row['state'];
-        $line = '  ' . str_pad((string) $row['role'], 10)
-            . str_pad((string) ($row['core'] === '' ? '(none)' : $row['core']), 32) . ' '
-            . str_pad(strtoupper($state), 13);
-
-        if ($state === Schema::BEHIND) {
-            $line .= count((array) $row['missing']) . ' missing: '
-                . Schema::namedList((array) $row['missing']);
-        } elseif ($state === Schema::CURRENT) {
-            $line .= (int) $row['expected'] . ' fields, all present';
-        }
-
-        if ($state === Schema::BEHIND || $state === Schema::UNREADABLE || $state === Schema::UNCONFIGURED) {
-            fwrite(STDERR, $line . "\n");
-            fwrite(STDERR, '      ' . wordwrap((string) $row['message'], 84, "\n      ", true) . "\n");
+    foreach (Schema::tableLines($report) as $line) {
+        if ($line['ok']) {
+            $say($line['text']);
             continue;
         }
-        $say($line);
+        fwrite(STDERR, $line['text'] . "\n");
     }
 }
 
@@ -250,46 +238,8 @@ function lh_schema_table(array $report, callable $say): void
  */
 function lh_schema_verdict(array $report, string $root, ?string $saved, bool $applied): void
 {
-    $where = $saved === null
-        ? 'The result could not be saved to var/, so the panel will still ask you to check.'
-        : 'Saved to ' . $saved . ', which is what the panel\'s Settings page reads.';
-
-    $stamp = gmdate('m/d/Y H:i:s', (int) $report['checked_at']) . ' UTC';
-
-    if ($report['state'] === Schema::CURRENT) {
-        fwrite(STDOUT, "\n" . ($applied
-            ? 'Done. Both indexes now declare every field this release writes.'
-            : 'Up to date. Both indexes declare every field this release writes.')
-            . "\nChecked at " . $stamp . '. ' . $where . "\n");
-        return;
-    }
-
-    if ($report['state'] === Schema::BEHIND && $applied) {
-        fwrite(STDERR, "\nUploaded, and still behind. Opensolr ACCEPTED the configsets and re-reading the\n"
-            . "live schemas still shows fields missing, so the files landed and the index is not\n"
-            . "running them — the core did not reload onto the new configset. Running this again\n"
-            . "will upload the same files to the same effect. Open this index in your Opensolr\n"
-            . "control panel and reload it there.\n"
-            . 'Checked at ' . $stamp . '. ' . $where . "\n");
-        return;
-    }
-
-    if ($report['state'] === Schema::BEHIND) {
-        fwrite(STDERR, "\nOut of date. Solr accepts a document carrying a field its schema does not\n"
-            . "declare and throws that value away without an error, so this will not surface as a\n"
-            . "failure anywhere — it surfaces as a facet that is permanently empty.\n\n"
-            . "Fix it with:\n  " . Schema::command($root) . " --apply\n\n"
-            . "That is additive: it uploads this release's configsets and reloads the cores. It does\n"
-            . "not touch a document already in the index.\n"
-            . 'Checked at ' . $stamp . '. ' . $where . "\n");
-        return;
-    }
-
-    fwrite(STDERR, "\nCould not tell. A schema that cannot be read is never reported as matching, so\n"
-        . "this is being reported as unknown rather than as fine. Run it again; if it keeps\n"
-        . "happening, check in your Opensolr control panel that the account still owns both\n"
-        . "indexes.\n"
-        . 'Checked at ' . $stamp . '. ' . $where . "\n");
+    $verdict = Schema::verdictText($report, $root, $saved, $applied);
+    fwrite($verdict['ok'] ? STDOUT : STDERR, $verdict['text']);
 }
 
 /** The help text, on stdout for --help and on stderr for a bad flag. */
@@ -309,6 +259,9 @@ Exit codes:
   1  unusable configuration, unknown flag, or no indexes provisioned yet
   2  failed: a schema could not be read, or an upload was rejected
   3  out of date: an index is missing a field this release writes (--check only)
+  4  needs migrating: an index still declares Solr's MANAGED schema factory, so Solr owns its
+     schema file and every schema upload to it succeeds while changing nothing. --apply fixes
+     it by uploading the configset that switches the index to the classic factory.
 
 Run it after every upgrade. A field this release writes that the live schema does not declare
 is accepted by Solr and silently discarded, with no error anywhere.

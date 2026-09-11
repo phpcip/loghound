@@ -576,6 +576,150 @@ return [
             );
         },
 
+    /* A COLUMN THAT IS ALWAYS EMPTY, AND A DRILL-THROUGH THAT NEVER FIRES — one cause.
+       requests() maps `session_id_s` and `ip_s` off every document it reads, and the query
+       asked Solr for Query::hitFl(), which carries neither. So `session` and `ip` came back
+       null on every row of every installation: the CSV export of this dataset shipped two
+       permanently blank columns ("Address", "Session"), and the row is only made clickable
+       when `session` is non-null, so the "the row opens the session that made the request"
+       this card's docblock promises had never once happened.
+
+       The general shape — a payload key read from a field the `fl` does not request — is what
+       this pins, by asking for the intersection rather than by naming two fields. */
+    'every field this view maps off a document is a field it asked Solr for'
+        => static function (): void {
+            $body = (string) file_get_contents(dirname(__DIR__) . '/src/Panel/Attacks.php');
+
+            $fn = strstr($body, 'private function requests(): array');
+            lh_true(is_string($fn), 'requests() not found');
+            $fn = substr((string) $fn, 0, (int) strpos((string) $fn, "\n    }"));
+
+            lh_true(
+                (bool) preg_match("/'fl'\s*=>\s*(.+?),\n/s", $fn, $m),
+                'the query must declare a field list'
+            );
+            $fl = $m[1];
+
+            $requested = [];
+            if (str_contains($fl, 'Query::hitFl()')) {
+                $requested = explode(',', \Loghound\Panel\Query::hitFl());
+            }
+            if (preg_match_all("/'([,\s]*)?([a-z0-9_,]+)'/", $fl, $extra)) {
+                foreach ($extra[2] as $chunk) {
+                    foreach (explode(',', $chunk) as $one) {
+                        if (trim($one) !== '') {
+                            $requested[] = trim($one);
+                        }
+                    }
+                }
+            }
+            lh_true(count($requested) > 5, 'the field list was read');
+
+            preg_match_all("/\\\$doc\['([a-z0-9_]+)'\]/", $fn, $read);
+            $used = array_values(array_unique($read[1]));
+            lh_true(count($used) > 5, 'the document reads were found');
+
+            foreach ($used as $field) {
+                lh_true(
+                    in_array($field, $requested, true),
+                    'requests() reads $doc[\'' . $field . '\'] and never asks Solr for it, so it '
+                    . 'is null on every row — which is an empty CSV column and, for a field the '
+                    . 'row\'s clickability depends on, a drill-through that cannot fire'
+                );
+            }
+        },
+
+    'every column this view exports is a key the payload actually carries'
+        => static function (): void {
+            $cfg = \Loghound\Config::load('/nonexistent-loghound-attacks-config');
+            $cfg->set('ui.demo', true);
+
+            $saved = $_GET;
+            $_GET = ['v' => 'attacks'];
+            try {
+                $view = new Attacks($cfg, \Loghound\Panel\Gateway::fromConfig($cfg));
+                $exports = (new ReflectionMethod(Attacks::class, 'exports'))->invoke($view);
+                $payload = $view->api('requests');
+            } finally {
+                $_GET = $saved;
+            }
+
+            $rows = (array) $payload['requests'];
+            lh_true($rows !== [], 'the demo world produced rows to judge');
+            $first = (array) $rows[0];
+
+            foreach ((array) $exports['requests']['columns'] as $column) {
+                $key = (string) $column[1];
+                lh_has_key($first, $key, 'the CSV declares a "' . $column[0] . '" column');
+                lh_true(
+                    $first[$key] !== null || $key === 'query' || $key === 'host',
+                    '"' . $column[0] . '" is null on every row, so the export ships a column that '
+                    . 'is blank by construction rather than blank because the data is absent'
+                );
+            }
+        },
+
+    /* THE REPORTING WAS ONE-SIDED. Five of this view's six cards run on the hits core and
+       honour a status filter. The sixth — impersonation — runs on the sessions core, where
+       there is no status field at all, so the filter is dropped. `filters_ignored` was
+       computed from the SESSIONS facet layer, which by construction can never contain a
+       hits-only dimension, so the one card that dropped the filter was the one card that
+       reported nothing dropped: a number that did not move, under a chip saying it had. */
+    'a status filter dropped by the sessions-plane card is named by that card'
+        => static function (): void {
+            $cfg = \Loghound\Config::load('/nonexistent-loghound-attacks-config');
+            $cfg->set('ui.demo', true);
+
+            $saved = $_GET;
+            $_GET = ['v' => 'attacks', 'f' => ['status_i' => ['404']]];
+            try {
+                $view = new Attacks($cfg, \Loghound\Panel\Gateway::fromConfig($cfg));
+                $sessionsPlane = $view->api('impersonation');
+                $hitsPlane = $view->api('answered');
+            } finally {
+                $_GET = $saved;
+            }
+
+            lh_true(
+                in_array('Status code', (array) $sessionsPlane['filters_ignored'], true),
+                'the sessions-plane card cannot answer a status filter, so it must say so'
+            );
+            lh_same(
+                [],
+                (array) $hitsPlane['filters_ignored'],
+                'and a hits-plane card, which DOES honour it, must not claim to have dropped it'
+            );
+        },
+
+    'every card that leaves its view\'s plane reports its own drops'
+        => static function (): void {
+            $cfg = \Loghound\Config::load('/nonexistent-loghound-attacks-config');
+            $cfg->set('ui.demo', true);
+
+            $saved = $_GET;
+            $_GET = ['v' => 'attacks', 'f' => ['status_i' => ['404'], 'bot_verdict_s' => ['bot']]];
+            try {
+                $view = new Attacks($cfg, \Loghound\Panel\Gateway::fromConfig($cfg));
+                $out = [];
+                foreach (['answered', 'patterns', 'requests', 'who', 'impersonation', 'when'] as $card) {
+                    $out[$card] = (array) ($view->api($card)['filters_ignored'] ?? null);
+                }
+            } finally {
+                $_GET = $saved;
+            }
+
+            foreach ($out as $card => $ignored) {
+                lh_true(
+                    $ignored !== [],
+                    $card . ': one of these two filters is unanswerable on whichever plane this '
+                    . 'card runs on, so no card may report nothing'
+                );
+            }
+
+            lh_true(in_array('Verdict', $out['answered'], true), 'a hits card drops the verdict');
+            lh_true(in_array('Status code', $out['impersonation'], true), 'a sessions card drops the status');
+        },
+
     'the filter bar is rendered from the union of both planes, so a hits-plane filter is visible'
         => static function (): void {
             $cfg = \Loghound\Config::load('/nonexistent-loghound-attacks-config');

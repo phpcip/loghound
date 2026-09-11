@@ -392,7 +392,7 @@ final class Hosts extends Controller
             . Security::esc(Steps::recommendedLogFormat()) . "\n"
             . Security::esc(Steps::customLogLine(Steps::RECOMMENDED_NICKNAME)) . '</pre>';
         echo '<p class="faint">nginx records the same thing as <code>$host</code>. '
-            . Security::esc(Steps::RESCAN_ADVICE)
+            . Security::esc(Steps::rescanAdvice(self::root()))
             . ' The log sources card is under <a href="?v=settings">Settings</a>. Old documents keep no '
             . 'host either way, so the comparison covers traffic from that point on.</p>';
         echo '</div>';

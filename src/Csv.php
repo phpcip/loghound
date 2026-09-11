@@ -213,8 +213,23 @@ final class Csv
             return '';
         }
 
+        /* AN ABSOLUTE INSTANT OR NOTHING. This handed the raw value to DateTimeImmutable,
+           which accepts date MATH as readily as a date: `now`, `tomorrow`, `-1 year`,
+           `yesterday 14:00` and `@0` all parse, and each one came out as a plausible,
+           well-formatted timestamp computed from the moment of export. A cell whose value was
+           not a date therefore did not read as absent — it read as a measurement, and a
+           different one every time the file was taken. number() directly above refuses to turn
+           an absent value into a 0 for exactly this reason and says so; this is the same rule,
+           and a document read back from Solr is untrusted input like any other.
+
+           The accepted shape is Solr's own date format, which is what a date field holds. */
+        $text = trim($value);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/D', $text) !== 1) {
+            return '';
+        }
+
         try {
-            $when = new \DateTimeImmutable($value);
+            $when = new \DateTimeImmutable($text);
             $when = $when->setTimezone(new \DateTimeZone($tz));
         } catch (\Throwable $e) {
             return '';
@@ -232,6 +247,13 @@ final class Csv
     public static function flag($value): string
     {
         if ($value === null) {
+            return '';
+        }
+        /* A STRUCTURE IS NOT A THIRD BOOLEAN. An array reached `$value ? 'yes' : 'no'` and came
+           out as a definite answer decided by whether it happened to be empty — "no" for `[]`
+           and "yes" for anything in it. That is the same fabrication the null branch above
+           exists to prevent, so it takes the same route: unknown stays unknown. */
+        if (is_array($value) || is_object($value)) {
             return '';
         }
         if (is_string($value)) {

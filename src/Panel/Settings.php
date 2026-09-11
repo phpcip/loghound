@@ -669,10 +669,16 @@ final class Settings extends Controller implements JobHost, Sections
         );
         Incidents::record($cfg->varDir(), $report);
 
+        /* THE REDACTED COPY, NOT THE ORIGINAL. $why is built from control-plane text —
+           OpensolrTeardown::safeMessage() flattens and truncates it and redacts nothing —
+           and it was returned raw as the detail the panel shows, while the identical string
+           inside the report beside it was redacted. The sibling refusal path two methods up
+           already returns $report['error']; this one did not, so the one refusal that quotes
+           the platform verbatim was the one that published it. */
         return [
             'ok'     => false,
             'note'   => 'stopped',
-            'detail' => $why,
+            'detail' => (string) $report['error'],
             'report' => Diagnostics::block($report),
         ];
     }
@@ -2216,9 +2222,36 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '<button type="submit" class="primary">Save sign-in method</button>';
         echo '</form>';
+        /* NAME THE DIRECTORY AND THE USER. "create that directory" left the operator to work
+           out which directory, on a page where every other instruction is an absolute command,
+           when ini_get() knows the answer and Requirements::phpUser() knows the user. An empty
+           save_path means PHP's own default, which is worth saying rather than printing an
+           empty <code>. */
+        $savePath = trim((string) ini_get('session.save_path'));
+        $sessionUser = Requirements::phpUser();
+
         echo '<p class="muted">The sign-in page keeps session files in the directory named by '
-            . '<code>session.save_path</code> in your PHP-FPM pool. If you have never used it, create that '
-            . 'directory and give it to the user this panel runs as before switching.</p>';
+            . '<code class="mono">session.save_path</code> in your PHP-FPM pool'
+            . ($savePath === ''
+                ? ', which is unset here, so PHP uses its own default — usually '
+                    . '<code class="mono">/var/lib/php/sessions</code> or '
+                    . '<code class="mono">/tmp</code>. Set it explicitly before switching.'
+                : ': <code class="mono">' . Security::esc($savePath) . '</code>.')
+            . ' It has to exist and be writable by <code class="mono">'
+            . Security::esc($sessionUser) . '</code>, the user this panel runs as.</p>';
+
+        if ($savePath !== '' && !str_contains($savePath, ';')) {
+            self::commandBlock('set-auth-session-dir', [
+                'key'     => 'sessiondir',
+                'title'   => 'Create it, if it is not there',
+                'lines'   => [
+                    'sudo mkdir -p ' . $savePath,
+                    'sudo chown ' . $sessionUser . ' ' . $savePath,
+                    'sudo chmod 0700 ' . $savePath,
+                ],
+                'problem' => '',
+            ]);
+        }
 
         $this->passwordPart();
 
@@ -3013,7 +3046,7 @@ final class Settings extends Controller implements JobHost, Sections
         ['set-cache', 'Cached queries', 'cacheSection'],
         ['set-beacon', 'Beacon', 'beaconSection'],
         ['set-privacy', 'Privacy', 'privacySection'],
-        ['set-retention', 'Maintenance', 'retentionSection'],
+        ['set-retention', 'How much data you keep', 'retentionSection'],
         ['set-scoring', 'Scoring', 'scoringSection'],
         ['set-auth', 'Sign-in', 'authSection'],
         ['set-2fa', 'Two-factor', 'twoFactorSection'],
@@ -3101,7 +3134,9 @@ final class Settings extends Controller implements JobHost, Sections
             . ' role="status">';
         echo '<span class="finish-dot" aria-hidden="true"></span>';
         echo '<div class="finish-text"><strong>' . Security::esc(self::ingestLabel($ingest)) . '</strong>';
-        echo '<span class="muted">' . Security::esc(self::ingestDetail($ingest)) . '</span>';
+        echo '<span class="muted">'
+            . Security::esc(self::ingestDetail($ingest, $this->cfg->validate() === []))
+            . '</span>';
         echo '</div></div>';
 
         echo '<div class="finish-state finish-unknown" id="finish-beacon" role="status">';
@@ -3179,8 +3214,14 @@ final class Settings extends Controller implements JobHost, Sections
             'What this installation needs from the machine, re-checked every time you open this page.'
         );
 
+        /* THE SENTENCE HAD TO CHANGE WITH THE COMMANDS. It promised every command below was
+           written for this user, while the directory fixes ran `chown`/`chmod` — root-only,
+           always — with no sudo at all. The blocks now carry sudo where root is genuinely
+           required, so the promise is restated as what is actually true: the paths and the
+           ownership are written for this user, and anything needing root says so. */
         echo '<p class="muted">Checked as <code>' . Security::esc(Requirements::phpUser())
-            . '</code>, the user this page runs as. Any command below is written for that user.</p>';
+            . '</code>, the user this page runs as. Every command below names that user and those '
+            . 'paths; the ones that genuinely need root carry <code class="mono">sudo</code>.</p>';
 
         if ($bad === []) {
             echo '<div class="finish-state finish-ok" role="status">';
@@ -3545,21 +3586,6 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
-     * The installation root, as the setup steps expect to be handed it.
-     *
-     * Steps::nextSteps() builds the `bin/loghound-tail --status` line from it and
-     * Steps::ingestStatus() finds the tailer's status document under it, so the panel and
-     * the installer describe the same checkout. Resolved rather than concatenated, so the
-     * command the operator copies has no `/../..` in the middle of it.
-     */
-    private static function root(): string
-    {
-        $root = dirname(__DIR__, 2);
-        $real = realpath($root);
-        return $real === false ? $root : $real;
-    }
-
-    /**
      * A source file, named as the heading of the block that follows it.
      *
      * A path set as another line of monospaced prose is a string the eye slides over, and on a
@@ -3661,8 +3687,14 @@ final class Settings extends Controller implements JobHost, Sections
      * lag or line count is simply not mentioned rather than printed as zero.
      *
      * @param array<string,mixed> $ingest From Steps::ingestStatus().
+     * @param bool $haveCommand Whether a runnable start command is rendered below this line.
+     *                          Steps::ingestProblem() withholds it on an incomplete
+     *                          configuration and puts a banner there instead, and the `absent`
+     *                          sentence used to say "run the first command below" regardless —
+     *                          pointing at a warning, in exactly the state where no command
+     *                          exists to run.
      */
-    private static function ingestDetail(array $ingest): string
+    private static function ingestDetail(array $ingest, bool $haveCommand = true): string
     {
         if ((string) $ingest['state'] === 'unreadable') {
             return $ingest['file'] . ' exists but is not a status document. Check that the user '
@@ -3678,7 +3710,10 @@ final class Settings extends Controller implements JobHost, Sections
         }
         if ((string) $ingest['state'] === 'absent') {
             return 'Nothing has ever written ' . $ingest['file'] . ', so no log line has been read on this '
-                . 'machine. Run the first command below.';
+                . 'machine. ' . ($haveCommand
+                    ? 'Run the first command below.'
+                    : 'Finish the outstanding setup steps first — until the configuration is '
+                        . 'complete the daemon refuses to start, so there is no command to run yet.');
         }
 
         $age = (int) $ingest['age_sec'];
@@ -3766,12 +3801,28 @@ final class Settings extends Controller implements JobHost, Sections
         if ($sources === []) {
             echo '<div class="empty show">';
             echo '<h3>No log sources detected yet</h3>';
+            /* THE COMMAND HERE COULD NOT BE RUN. It was `… /bin/loghound-setup detect`, and
+               `detect` is not an argument loghound-setup accepts: it falls through every
+               branch of the parser and exits 2 with "unknown option". The flag is
+               `--detect-only`. It also hard-coded `sudo -u loghound`, on a page that says two
+               paragraphs up that every command on it is written for the user this page runs
+               as — which `--user` at install time can make anything — and it named
+               `var/detect.json` by a relative path, which this file's own rule forbids. And
+               being a bare <pre> rather than a commandBlock(), it was the one command on the
+               page with no Copy button. */
+            $user = Requirements::phpUser();
+
             echo '<p>Use <strong>Scan this server again</strong> above, or run the setup command. Either one reads '
                 . 'your Apache or nginx configuration, finds the <code>CustomLog</code> / <code>access_log</code> '
-                . 'directives, works out the exact format for each one, and writes the result to '
-                . '<code>var/detect.json</code>:</p>';
-            echo '<pre class="snippet mono">sudo -u loghound ' . Security::esc(self::setupCommand())
-                . ' detect</pre>';
+                . 'directives, works out the exact format for each one, and writes what it found to '
+                . '<code class="mono">' . Security::esc(self::root() . '/var/detect.json') . '</code> — '
+                . 'which is the file this card reads. It changes no configuration:</p>';
+            self::commandBlock('set-sources-detect', [
+                'key'     => 'detect',
+                'title'   => 'Scan from a shell instead',
+                'lines'   => ['sudo -u ' . $user . ' ' . self::setupCommand() . ' --detect-only'],
+                'problem' => '',
+            ]);
             echo '<p>Then reload this page to review what it found.</p>';
             echo '</div>';
             $this->orphanSources($sources);
@@ -4175,21 +4226,32 @@ final class Settings extends Controller implements JobHost, Sections
 
         $this->schemaRows((array) $notice['indexes']);
 
+        /* MANAGED NEEDS --apply MORE THAN BEHIND DOES, and it was the one state that was not
+           offered it: the card diagnosed an index whose every schema push is a silent no-op and
+           then printed only the read-only check command, which is the command that had already
+           told them. A state whose fix exists and is not shown is a dead end. */
+        $state = (string) $notice['state'];
+        $fixable = $state === Schema::BEHIND || $state === Schema::MANAGED;
+
         $lines = [Schema::command(self::root())];
-        if ((string) $notice['state'] === Schema::BEHIND) {
+        if ($fixable) {
             $lines[] = Schema::command(self::root()) . ' --apply';
         }
         self::commandBlock('set-solr-schema', [
             'key'     => 'schema',
-            'title'   => (string) $notice['state'] === Schema::BEHIND
-                ? 'Check it, then push this release\'s configsets'
-                : 'Check it from a shell',
+            'title'   => $state === Schema::MANAGED
+                ? 'Check it, then migrate the index off the managed schema factory'
+                : ($fixable
+                    ? 'Check it, then push this release\'s configsets'
+                    : 'Check it from a shell'),
             'lines'   => $lines,
             'problem' => '',
         ]);
         echo '<p class="muted">The check changes nothing and exits 0 when both indexes are up to date, '
-            . '3 when one is behind and 2 when a schema could not be read, so a deployment script can '
-            . 'gate on it. <code class="mono">--apply</code> is additive: it uploads the configsets and '
+            . '3 when one is behind, 4 when one still has Solr owning its schema file, and 2 when a '
+            . 'schema could not be read at all, so a deployment script can gate on it and can tell '
+            . '&ldquo;I could not check&rdquo; from &ldquo;this needs migrating&rdquo;. '
+            . '<code class="mono">--apply</code> is additive: it uploads the configsets and '
             . 'reloads the cores, and it does not touch a document already in the index. Run it after '
             . 'every upgrade.</p>';
 
@@ -4234,8 +4296,18 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<dt>' . Security::esc((string) ($row['role'] ?? '')) . '</dt><dd>';
             echo '<span class="mono">' . Security::esc((string) ($row['core'] ?? '')) . '</span> — ';
 
+            /* THE FACTORY BEFORE THE FIELD COUNT. On a managed index the missing fields are real
+               but the count is the wrong headline: it reads as "push and they appear", and a push
+               is exactly what does nothing here until the factory is switched. */
             if ($state === Schema::CURRENT) {
                 echo 'all ' . (int) ($row['expected'] ?? 0) . ' fields this release writes are declared';
+            } elseif ($state === Schema::MANAGED) {
+                echo '<strong>Solr owns the schema file here</strong>, so uploads of it do nothing'
+                    . ($missing === []
+                        ? '. The schema in force happens to declare every field this release writes.'
+                        : ', and the schema in force is missing ' . count($missing) . ': '
+                            . '<span class="mono wrap">'
+                            . Security::esc(Schema::namedList($missing, 12)) . '</span>');
             } elseif ($missing !== []) {
                 echo '<strong>missing ' . count($missing) . '</strong>: <span class="mono wrap">'
                     . Security::esc(Schema::namedList($missing, 12)) . '</span>';
@@ -4413,12 +4485,27 @@ final class Settings extends Controller implements JobHost, Sections
 
         /* THE LIST IS EXACT, and tests/test_cache_surfaces.php proves it against the views
            themselves rather than against this sentence, so a view that changes its mind about
-           Controller::SCOPE_CACHE breaks the build instead of quietly making this prose wrong. */
-        echo '<p class="muted">Clear cache is in the page head of every page that reads cached data '
+           Controller::SCOPE_CACHE breaks the build instead of quietly making this prose wrong.
+
+           THE TENSE IS NOT. Layout::clearCache() renders nothing when the cache is off or is
+           not answering, and caching ships OFF — so the present tense made a false statement
+           about ten pages, on the one card where the operator is deciding whether to turn it
+           on, which is precisely the moment it is guaranteed to be false. */
+        $live = !empty($status['working']);
+
+        echo '<p class="muted">Clear cache ' . ($live ? 'is' : 'appears')
+            . ' in the page head of every page that reads cached data '
             . '&mdash; Overview, Bot forensics, Attacks, Fingerprints, Networks, Session explorer, Performance, '
             . 'Virtual hosts, Who is querying and Storage &amp; bandwidth &mdash; and deliberately not on '
             . 'Index analytics, Query analysis or this page: the first two read the Opensolr request '
-            . 'log, which is not cached, and Settings makes no cached read at all.</p>';
+            . 'log, which is not cached, and Settings makes no cached read at all.'
+            . ($live
+                ? ''
+                : ' It is not on any of them at the moment, because '
+                    . (empty($status['configured'])
+                        ? 'caching is switched off below.'
+                        : 'the cache is not answering &mdash; the state above says why.'))
+            . '</p>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
@@ -4736,10 +4823,29 @@ final class Settings extends Controller implements JobHost, Sections
         $logged = Incidents::all($this->cfg->varDir(), $this->cfg);
         $all    = array_merge($live, $logged);
 
-        self::cardOpen('set-errors', self::sectionNum('set-errors'), 'Critical errors');
+        /* THE POPULATION, which this card did not carry. Every other card states what its
+           figures cover; this one showed a list, or a four-word health verdict, with no
+           statement of what had been looked at or how far back. */
+        self::cardOpen(
+            'set-errors',
+            self::sectionNum('set-errors'),
+            'Critical errors',
+            'Conditions that stop Loghound working: what is failing on this machine right now, '
+            . 'plus the last ' . Incidents::KEEP . ' recorded failures. Nothing is read from the '
+            . 'indexes to build it.'
+        );
 
         if ($all === []) {
-            echo '<p class="muted">Nothing is broken. This card lists only the things that stop '
+            /* NOT "Nothing is broken." That is an unqualified claim about the whole
+               installation, built from three local file reads and a JSON ledger that
+               Incidents::read() answers [] for when it is unreadable or damaged — so a machine
+               whose var/ had gone read-only reported perfect health in four words. What is
+               true is what was checked and what it said. */
+            echo '<p class="muted">Nothing failing was found. This card checks the reader\'s own '
+                . 'status file, the saved schema verdict and this installation\'s writable '
+                . 'directories, and re-reads the recorded failures in '
+                . '<code class="mono">' . Security::esc($this->cfg->varDir() . '/incidents.json')
+                . '</code>. It lists only the things that stop '
                 . 'Loghound working — the reader stopped or unable to read a log, a configset '
                 . 'rejected, a schema push that failed, the control plane unreachable, Solr '
                 . 'refusing writes, a job that died, nowhere to write. Warnings, one slow query and '
@@ -4750,11 +4856,19 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         if ($live !== []) {
+            /* THE COUNT NAMES ITS OWN HALF. It counts only the live conditions, and the list
+               underneath it also holds recorded ones, so "N things are not working" beside a
+               longer list read as a miscount. */
             self::problemBanner(count($live) . ' thing' . (count($live) === 1 ? ' is' : 's are')
-                . ' not working right now.');
+                . ' not working right now' . (count($all) > count($live)
+                    ? ', and ' . (count($all) - count($live)) . ' more failed earlier.'
+                    : '.'));
         }
 
-        echo '<p class="muted">Each entry carries the whole failure. Copy the block and post it — '
+        /* "POST IT" NAMED NOWHERE TO POST IT. */
+        echo '<p class="muted">Each entry carries the whole failure. Copy the block and open an '
+            . 'issue at <a href="https://github.com/phpcip/loghound/issues" rel="noreferrer noopener" '
+            . 'target="_blank">github.com/phpcip/loghound/issues</a> — '
             . 'it names what was being attempted, where it died, what the platform or the system '
             . 'actually returned, and the release, PHP, operating system and web server it happened '
             . 'on. Every secret this installation holds is removed from it before it is shown.</p>';
@@ -4846,12 +4960,15 @@ final class Settings extends Controller implements JobHost, Sections
             ? Security::esc(sprintf(
                 'ON. When an index reaches %d%% of its Opensolr disk quota, the oldest data is '
                 . 'deleted until it is back down to %d%%. The ingest daemon does this BEFORE it '
-                . 'writes, so the index never actually reaches the quota, and bin/loghound-retention '
-                . 'runs the same pass daily. This is what decides how much history you have on a '
-                . 'busy site: more disk on the plan buys more history. The index is never blocked '
-                . 'for being full; the oldest data is what gives way.',
+                . 'writes, and %s runs the same pass daily, so in practice the index stays '
+                . 'below the quota rather than hitting it. It is a guard, not a guarantee: the '
+                . 'daemon works from a usage figure the platform refreshes every few minutes, so '
+                . 'a sudden burst can cross the line before the next pass brings it back. What '
+                . 'this decides is how much history you have on a busy site — more disk on the '
+                . 'plan buys more history — and the oldest data is what gives way.',
                 (int) round($quota->highWater() * 100),
-                (int) round($quota->target() * 100)
+                (int) round($quota->target() * 100),
+                self::root() . '/bin/loghound-retention'
             ))
             : 'OFF. Nothing is deleted for being large, so an index can reach its Opensolr disk '
                 . 'quota — and an index at its quota is BLOCKED by the platform: every request is '
@@ -5396,7 +5513,11 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<label for="retention">Delete hits and sessions older than</label> ';
         echo '<input type="number" id="retention" name="retention_days" min="0" max="3650" value="'
             . Security::esc((string) $days) . '" inputmode="numeric"> <span class="muted">days'
-            . ' (0 means no age limit — it does not switch retention off; the disk rule above is separate)</span>';
+            /* NAMED, NOT POINTED AT. The disk rule lives on the "How much data you keep"
+               card, which SECTIONS orders AFTER this one — so "above" pointed the reader
+               backwards past it. A card name survives a reordering; a direction does not. */
+            . ' (0 means no age limit — it does not switch retention off; the disk rule, on the'
+            . ' &ldquo;How much data you keep&rdquo; card, is separate)</span>';
         echo '<label class="check"><input type="checkbox" name="rollup_forever"'
             . ($this->cfg->get('privacy.rollup_forever') ? ' checked' : '') . '> '
             . 'Keep the daily rollup documents indefinitely <span class="muted">(they are tiny and hold no addresses)</span></label>';

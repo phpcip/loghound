@@ -227,7 +227,11 @@ function renderBandwidth(data) {
     if (!data.cores.length) {
         fill(mount, [el('p', { class: 'faint', text: data.demo_note ||
             'No Opensolr-managed index is configured, so there is no plan limit to report against.' })]);
-        setPop('usage-bw', 'Nothing to measure yet.');
+        /* A CAPTION NAMES ITS POPULATION EVEN WHEN THE POPULATION IS EMPTY. "Nothing to
+           measure yet" says nothing at all: not what would be measured, not why there is
+           none, not what would put something there. */
+        setPop('usage-bw', 'No Opensolr-managed index, so there is no metered bandwidth to '
+            + 'report. Finish setup, or point Loghound at a managed index, and this fills in.');
         return;
     }
 
@@ -274,7 +278,8 @@ function renderWindow(data) {
         fill(mount, [el('p', { class: 'faint', text: data.demo_note ||
             'No Opensolr-managed index is configured, so the retention window has no plan limit to '
             + 'work against. Only the time-based limit below applies.' })]);
-        setPop('usage-window', 'Nothing to measure yet.');
+        setPop('usage-window', 'No Opensolr-managed index, so there is no disk quota to size '
+            + 'a retention window against. The time-based limit still applies.');
         return;
     }
 

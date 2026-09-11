@@ -1002,6 +1002,79 @@ return [
             lh_rmtree($dir);
         },
 
+    /* THE STATE THE OWNER'S OWN INSTALLATION IS IN, rendered. MANAGED fell into the card's
+       `default` arm exactly as it fell into the command's, so the browser said "One of your
+       indexes could not be read" about two indexes it had read perfectly well — and then
+       printed only the read-only check command, withholding the one command that resolves it.
+       A state whose fix exists and is not offered is a dead end. */
+    'the Settings page explains a managed index and offers the migration, not a re-read'
+        => static function (): void {
+            $dir = lh_tmpdir('lh-panel-managed');
+            @mkdir($dir . '/config', 0750, true);
+            @mkdir($dir . '/var', 0750, true);
+
+            $cfg = Config::load($dir . '/config/loghound.php');
+            $cfg->set('solr.base_url', 'http://127.0.0.1:65535/solr');
+            $cfg->set('solr.hits_core', 'loghound_f8b6d12b_hits');
+            $cfg->set('solr.sessions_core', 'loghound_f8b6d12b_sessions');
+
+            Schema::writeCache($cfg, [
+                'checked_at' => 1757500000,
+                'release'    => Schema::release(lh_sch_root()),
+                'state'      => Schema::MANAGED,
+                'indexes'    => [
+                    [
+                        'role' => 'hits', 'core' => 'loghound_f8b6d12b_hits', 'state' => Schema::MANAGED,
+                        'expected' => 74, 'live' => 71, 'missing' => ['install_s'], 'extra' => [],
+                        'message' => 'still on the managed factory',
+                    ],
+                    [
+                        'role' => 'sessions', 'core' => 'loghound_f8b6d12b_sessions', 'state' => Schema::MANAGED,
+                        'expected' => 40, 'live' => 40, 'missing' => [], 'extra' => [],
+                        'message' => 'still on the managed factory',
+                    ],
+                ],
+            ]);
+
+            $transport = static fn (array $req): array => [
+                'status' => 200,
+                'body'   => (string) json_encode([
+                    'responseHeader' => ['status' => 0],
+                    'response'       => ['numFound' => 0, 'docs' => []],
+                ]),
+                'error'  => '',
+            ];
+            $gw = new Gateway($cfg, new Solr((array) $cfg->get('solr'), $transport), false);
+
+            ob_start();
+            (new Settings($cfg, $gw))->body();
+            $html = (string) ob_get_clean();
+
+            lh_false(
+                str_contains($html, 'One of your indexes could not be read'),
+                'the schemas WERE read; the card inherited the wrong sentence from a default arm'
+            );
+            lh_false(
+                str_contains($html, 'confirm the account still owns both indexes'),
+                'and the wrong errand came with it'
+            );
+            lh_contains($html, 'managed schema factory', 'it names the state');
+            lh_contains($html, 'ManagedIndexSchemaFactory', 'and the thing that is actually set');
+            lh_contains(
+                $html,
+                lh_sch_root() . '/bin/loghound-schema --apply',
+                'and offers the migration, which was withheld from the one state that needs it'
+            );
+            lh_contains(
+                $html,
+                'Solr owns the schema file here',
+                'the per-index row must not read as "push and the fields appear"'
+            );
+            lh_contains($html, 'Needs attention', 'managed is ranked worse than behind, and behind is bad');
+
+            lh_rmtree($dir);
+        },
+
     'the panel offers the check as a job rather than doing it while the page renders'
         => static function (): void {
             $body = (string) file_get_contents(lh_sch_root() . '/src/Panel/Settings.php');
@@ -1013,5 +1086,206 @@ return [
                 str_contains($body, 'Schema::inspect('),
                 'and never reaches the control plane from a page render, which is what a job is for'
             );
+        },
+
+    /* ---------------------------------------------------------------------------------
+     * The closing sentence belongs to the state it closes
+     *
+     * THE DEFECT THESE PIN, found on a live installation. Both of the owner's indexes were
+     * detected correctly as MANAGED — the third state, working exactly as designed — and the
+     * command then printed the paragraph belonging to UNREADABLE: "Could not tell. A schema
+     * that cannot be read is never reported as matching … check that the account still owns
+     * both indexes." The diagnosis was right, the sentence underneath it was about a different
+     * problem, and it sent the operator to check index ownership. The per-index message, which
+     * did explain the state, was never printed at all: the table wrote it only for BEHIND,
+     * UNREADABLE and UNCONFIGURED. And the exit code was 2, the same code as "I could not
+     * check", so a deployment gate could not tell a retry from a migration.
+     *
+     * The class of defect is "right detection, wrong sentence", so these walk EVERY state and
+     * assert the closing paragraph is about that state and not about another one.
+     * ------------------------------------------------------------------------------ */
+
+    'a managed index is closed with the managed paragraph, never the unreadable one'
+        => static function (): void {
+            [$root, $cfg] = lh_sch_install();
+            $uploads = [];
+
+            $report = Schema::inspect($cfg, $root, lh_sch_transport(
+                [
+                    'loghound_9f3c17ab_hits'     => lh_sch_xml(['id', 'ts', 'ip_s', 'install_s']),
+                    'loghound_9f3c17ab_sessions' => lh_sch_xml(['id', 'ts_start', 'planes_s', 'search_terms_ss']),
+                ],
+                $uploads,
+                null,
+                ['loghound_9f3c17ab_hits', 'loghound_9f3c17ab_sessions']
+            ));
+
+            lh_same(Schema::MANAGED, $report['state'], 'the detection itself was never the problem');
+
+            $verdict = Schema::verdictText($report, $root, $root . '/var/schema-check.json', false);
+
+            lh_false($verdict['ok'], 'a managed installation is not healthy, so this is stderr');
+            lh_false(
+                str_contains($verdict['text'], 'Could not tell'),
+                'the schemas WERE read; saying otherwise is the bug'
+            );
+            lh_false(
+                str_contains($verdict['text'], 'still owns both indexes'),
+                'and sending the operator to check index ownership is the wrong errand'
+            );
+            lh_contains($verdict['text'], 'ManagedIndexSchemaFactory', 'it names the thing that is set');
+            lh_contains(
+                $verdict['text'],
+                'reports success and changes nothing',
+                'because "my push worked" is what the operator currently believes'
+            );
+            lh_contains(
+                $verdict['text'],
+                Schema::command($root) . ' --apply',
+                'a state with a fix must print the fix'
+            );
+            lh_contains($verdict['text'], 'switches the index to the classic factory');
+
+            lh_rmtree($root);
+        },
+
+    'managed has an exit code of its own, so a deploy gate can tell it from a failed check'
+        => static function (): void {
+            lh_same(0, Schema::exitCode(Schema::CURRENT));
+            lh_same(3, Schema::exitCode(Schema::BEHIND));
+            lh_same(2, Schema::exitCode(Schema::UNREADABLE));
+            lh_same(1, Schema::exitCode(Schema::UNCONFIGURED));
+            lh_same(4, Schema::exitCode(Schema::MANAGED), 'not 2: a retry will never resolve it');
+
+            lh_same(
+                2,
+                Schema::exitCode(Schema::BEHIND, true),
+                'after --apply there is no "out of date" answer left to give a script'
+            );
+            lh_same(
+                4,
+                Schema::exitCode(Schema::MANAGED, true),
+                'and a migration that did not take is still a migration, not an unreadable schema'
+            );
+        },
+
+    'every index the table reports as unhealthy carries its explanation, managed included'
+        => static function (): void {
+            [$root, $cfg] = lh_sch_install();
+            $uploads = [];
+
+            $report = Schema::inspect($cfg, $root, lh_sch_transport(
+                [
+                    'loghound_9f3c17ab_hits'     => lh_sch_xml(['id', 'ts', 'ip_s']),
+                    'loghound_9f3c17ab_sessions' => lh_sch_xml(['id', 'ts_start', 'planes_s', 'search_terms_ss']),
+                ],
+                $uploads,
+                null,
+                ['loghound_9f3c17ab_hits']
+            ));
+
+            $lines = Schema::tableLines($report);
+            lh_same(2, count($lines), 'one line per index, always');
+
+            lh_false($lines[0]['ok'], 'a managed index is not a stdout line');
+            lh_contains($lines[0]['text'], 'MANAGED');
+            lh_contains(
+                $lines[0]['text'],
+                'schema.xml is ignored here',
+                'the row said MANAGED and then nothing at all'
+            );
+            lh_contains(
+                $lines[0]['text'],
+                'MANAGED schema factory',
+                'the per-index message was silently dropped for this state'
+            );
+
+            lh_true($lines[1]['ok'], 'the healthy index stays on stdout so cron stays quiet');
+            lh_contains($lines[1]['text'], 'fields, all present');
+
+            foreach ($lines as $line) {
+                if (!$line['ok']) {
+                    lh_true(
+                        strlen(trim(substr($line['text'], (int) strpos($line['text'], "\n")))) > 0,
+                        'no unhealthy row is reported without a sentence under it'
+                    );
+                }
+            }
+
+            lh_rmtree($root);
+        },
+
+    'no state is closed with another state\'s paragraph'
+        => static function (): void {
+            [$root, $cfg] = lh_sch_install();
+
+            $paragraph = static function (string $state) use ($root): string {
+                return Schema::verdictText(
+                    ['checked_at' => 1_700_000_000, 'release' => 'x', 'state' => $state, 'indexes' => []],
+                    $root,
+                    null,
+                    false
+                )['text'];
+            };
+
+            $seen = [];
+            foreach ([
+                Schema::CURRENT,
+                Schema::BEHIND,
+                Schema::MANAGED,
+                Schema::UNREADABLE,
+                Schema::UNCONFIGURED,
+            ] as $state) {
+                $text = $paragraph($state);
+                lh_true(trim($text) !== '', $state . ' must say something');
+                lh_false(
+                    in_array($text, $seen, true),
+                    'two states sharing one paragraph is how the managed defect happened: ' . $state
+                );
+                $seen[] = $text;
+            }
+
+            lh_contains($paragraph(Schema::UNCONFIGURED), 'bin/loghound-setup', 'the way out is named');
+            lh_false(
+                str_contains($paragraph(Schema::UNCONFIGURED), 'Could not tell'),
+                'an installation with no indexes is not an installation that could not be read'
+            );
+
+            foreach ([Schema::CURRENT, Schema::UNREADABLE, Schema::UNCONFIGURED] as $noFix) {
+                lh_false(
+                    str_contains($paragraph($noFix), '--apply'),
+                    $noFix . ' has no push that would help, so it must not offer one'
+                );
+            }
+
+            lh_rmtree($root);
+        },
+
+    'the panel describes a managed index the same way the command does'
+        => static function (): void {
+            [$root, $cfg] = lh_sch_install();
+
+            Schema::writeCache($cfg, [
+                'checked_at' => time(),
+                'release'    => Schema::release($root),
+                'state'      => Schema::MANAGED,
+                'indexes'    => [[
+                    'role' => 'hits', 'core' => 'loghound_9f3c17ab_hits', 'state' => Schema::MANAGED,
+                    'expected' => 4, 'live' => 3, 'missing' => ['install_s'], 'extra' => [],
+                    'message' => 'still on the managed factory',
+                ]],
+            ]);
+
+            $notice = Schema::notice($cfg, $root);
+
+            lh_same(Schema::MANAGED, $notice['state']);
+            lh_same('bad', $notice['severity'], 'managed is ranked worse than behind, and behind is bad');
+            lh_false(
+                str_contains($notice['headline'] . $notice['detail'], 'could not be read'),
+                'the panel inherited the same wrong sentence from the same default arm'
+            );
+            lh_contains($notice['detail'], 'ManagedIndexSchemaFactory');
+
+            lh_rmtree($root);
         },
 ];

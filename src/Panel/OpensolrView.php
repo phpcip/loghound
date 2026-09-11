@@ -446,7 +446,8 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      * filters from values it re-validates itself. A scan that quietly read the whole log while
      * the page showed filter chips would be answering a different question under them.
      *
-     * @param array<string,array<int,string>> $filters Already validated by logFilters() or decodeLogFilters().
+     * @param array<string,array{values:array<int,string>,op:string}> $filters Already validated by
+     *        logFilters() or decodeLogFilters().
      * @return array<int,string>
      */
     protected static function logFqsFor(string $rangeStart, array $filters, string $outcome): array
@@ -530,20 +531,52 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      */
     protected function encodeLogFilters(): string
     {
-        $budget = 240;
+        return self::packLogFilters($this->logFacets()->selection());
+    }
+
+    /**
+     * Encode a validated selection into the packed form, from either side of the round trip.
+     *
+     * ONE ENCODER, because there were two and they disagreed. The second one lived in
+     * Queries::postedFilters(), was written against the older shape of a selection — a flat
+     * list of values — and was never updated when the operator moved inside it. It therefore
+     * handed `rawurlencode()` an array and threw a TypeError, which the front controller turns
+     * into a blank 500: every scan started or polled on the query-analysis view while any log
+     * filter was active died there. Had it survived the call it would have dropped the
+     * operator, silently turning a "None of" filter into an "Any of" — the exact substitution
+     * the packed form carries the operator to prevent.
+     *
+     * Truncation is on a VALUE boundary at the budget, never mid-value, so what comes back out
+     * of decodeLogFilters() is always a filter set somebody could have asked for.
+     *
+     * @param array<string,array{values:array<int,string>,op:string}> $selection
+     */
+    protected static function packLogFilters(array $selection, int $budget = 240): string
+    {
         $out = '';
 
-        foreach ($this->logFacets()->selection() as $field => $spec) {
-            $encoded = [];
-            foreach ($spec['values'] as $value) {
-                $encoded[] = rawurlencode($value);
+        foreach ($selection as $field => $spec) {
+            if (!is_string($field) || !is_array($spec)) {
+                continue;
             }
-            $part = ($out === '' ? '' : ';') . $field . '=' . $spec['op'] . ':' . implode(',', $encoded);
+            $values = array_values(array_filter((array) ($spec['values'] ?? []), 'is_string'));
+            if ($values === []) {
+                continue;
+            }
+
+            $op = (string) ($spec['op'] ?? Facets::OP_ANY);
+            if (!in_array($op, Facets::OPERATORS, true)) {
+                $op = Facets::OP_ANY;
+            }
+
+            $part = ($out === '' ? '' : ';') . $field . '=' . $op . ':'
+                . implode(',', array_map('rawurlencode', $values));
             if (strlen($out) + strlen($part) > $budget) {
                 continue;
             }
             $out .= $part;
         }
+
         return $out;
     }
 
@@ -555,7 +588,7 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      * is dropped, control characters are stripped, and both the value length and the number of
      * values are capped exactly as they are on the way in from a query string.
      *
-     * @return array<string,array<int,string>>
+     * @return array<string,array{values:array<int,string>,op:string}>
      */
     protected static function decodeLogFilters(string $encoded): array
     {

@@ -360,14 +360,23 @@ export function noDataYet(id, what) {
 
     if (active.count > 0) {
         const named = active.dimensions.slice(0, 3).join(', ');
+        /* IT DOES NOT KNOW THAT THE RANGE HOLDS DATA, and it said so anyway. The branch is
+           taken on "filters are in force" alone — nothing measured the unfiltered range — so
+           on a fresh install with one chip lit the panel asserted "the selected time range
+           holds data", which is a confident wrong claim in the one place the reader has no way
+           to check it, and it sent them to unset filters instead of to Settings. What IS known
+           is that filters are in force and this card came back empty under them. Both routes
+           out are offered, because either could be the one. */
         showEmpty(id, 'No ' + what + ' match your filters', [
-            'The selected time range holds data, but nothing in it matches the ' +
+            'Nothing in the selected range matched the ' +
                 active.count + ' filter value' + (active.count === 1 ? '' : 's') +
                 (named ? ' you have set on ' + named : ' you have set') + '.',
             el('p', {}, [
                 'Remove a value from the filter bar above, or ',
                 el('a', { href: clearFiltersUrl(), text: 'clear every filter' }),
-                ' and start again.'
+                ' — if it is still empty with none set, the range itself holds nothing, and ',
+                el('a', { href: '?v=settings', text: 'Settings' }),
+                ' says whether anything is being read at all.'
             ])
         ]);
         return;
@@ -381,10 +390,25 @@ export function noDataYet(id, what) {
             ', then check that the reader is running. Under systemd that is ',
             el('code', { text: 'systemctl status loghound-tail.service' }),
             '; under any other supervisor, check the job you gave ',
-            el('code', { text: 'bin/loghound-tail' }),
+            /* ABSOLUTE. The reader is on a shell somewhere else on the machine, and this was
+               the one command in the panel still named by a relative path — in the empty state
+               every async card in the product falls back to. The root comes from the boot
+               payload because only the server knows it. */
+            el('code', { text: tailCommand() }),
             ' to.'
         ])
     ]);
+}
+
+/**
+ * The ingest command, by its real path on this installation.
+ *
+ * Falls back to the bare name only when the boot payload predates the field, which is better
+ * than printing nothing where a command belongs.
+ */
+export function tailCommand() {
+    const root = typeof boot.root === 'string' ? boot.root.replace(/\/+$/, '') : '';
+    return root === '' ? 'bin/loghound-tail' : root + '/bin/loghound-tail';
 }
 
 /**
@@ -1304,13 +1328,25 @@ export function cardChart(id, height) {
 /**
  * Update a card's population caption once the real denominators are known.
  *
- * The caption is rendered server-side so it is never missing; this refines it.
+ * THE `hidden` HAS TO COME OFF, and it did not. A card whose caption is only knowable
+ * after the fetch passes an empty population to cardOpen(), which renders
+ * `<p class="pop" id="…-pop" hidden></p>` — and this wrote the text into it and left the
+ * attribute alone. With `[hidden] { display: none !important }` at the top of panel.css
+ * the caption was present in the DOM, correct, and invisible. Eight cards shipped their
+ * numbers with no statement of what they counted, which is the one thing SPEC §10 does not
+ * allow, and the docblock here asserted the opposite ("rendered server-side so it is never
+ * missing") which is what stopped anybody looking.
+ *
+ * Empty text puts the attribute back rather than leaving an empty paragraph taking up space.
  */
 export function setPop(id, text) {
     const node = byId(id + '-pop');
-    if (node) {
-        node.textContent = text;
+    if (!node) {
+        return;
     }
+    const caption = typeof text === 'string' ? text : '';
+    node.textContent = caption;
+    node.hidden = caption.trim() === '';
 }
 
 /* -------------------------------------------------------------------------

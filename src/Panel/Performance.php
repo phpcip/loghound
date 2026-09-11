@@ -509,7 +509,7 @@ final class Performance extends Controller
         echo '<div id="pf-logformat" hidden'
             . ' data-line="' . Security::esc(Steps::durationLogFormat()) . '"'
             . ' data-custom="' . Security::esc(Steps::customLogLine(Steps::DURATION_NICKNAME)) . '"'
-            . ' data-rescan="' . Security::esc(Steps::RESCAN_ADVICE) . '"></div>';
+            . ' data-rescan="' . Security::esc(Steps::rescanAdvice(self::root())) . '"></div>';
 
         /* NO SECOND EMPTY SLOT. This card used to carry its own `pf-nodur` div inside the
            content wrapper, so the "no durations are being logged" explanation appeared BELOW

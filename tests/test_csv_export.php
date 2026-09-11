@@ -936,4 +936,57 @@ return [
         lh_contains($panel, 'white-space: nowrap', 'a two-word control must not wrap into two');
     },
 
+    /* A CELL THAT IS NOT A MEASUREMENT MUST COME OUT EMPTY, NEVER PLAUSIBLE.
+       moment() handed its value straight to DateTimeImmutable, which reads date MATH as
+       willingly as a date. So a `date` column fed anything PHP recognises relatively — `now`,
+       `tomorrow`, `-1 year`, `@0` — produced a correctly formatted timestamp computed from
+       the moment the file was taken, and produced a DIFFERENT one on the next export. number()
+       one method above refuses to turn an absent value into 0 and says why; this is that rule,
+       and a document read back from Solr is untrusted input like anything else. */
+    'a date cell is an absolute instant or it is empty' =>
+    function (): void {
+        foreach ([
+            'now',
+            'tomorrow',
+            'yesterday 14:00',
+            '-1 year',
+            '+1 day',
+            'next friday',
+            '@0',
+            'midnight',
+            '2026',
+            '09/11/2026',
+            'garbage',
+            ' ',
+        ] as $fabricator) {
+            lh_same(
+                '',
+                Csv::moment($fabricator, 'UTC'),
+                'a spreadsheet must not be handed a timestamp nobody measured: ' . $fabricator
+            );
+        }
+
+        lh_same(
+            '09/11/2026 10:00:00',
+            Csv::moment('2026-09-11T10:00:00Z', 'UTC'),
+            'and the shape a Solr date field actually holds still renders'
+        );
+        lh_same(
+            '09/11/2026 10:00:00',
+            Csv::moment('2026-09-11T10:00:00.250Z', 'UTC'),
+            'including with the fractional seconds Solr writes'
+        );
+    },
+
+    'a boolean cell has three states and a structure is none of them' =>
+    function (): void {
+        lh_same('', Csv::flag(null), 'absent stays absent');
+        lh_same('', Csv::flag([]), 'an array is not a "no"');
+        lh_same('', Csv::flag(['x']), 'and it is not a "yes" either');
+        lh_same('yes', Csv::flag(true));
+        lh_same('no', Csv::flag(false));
+        lh_same('no', Csv::flag('false'), 'the string Solr writes for a false boolean');
+        lh_same('yes', Csv::flag('true'));
+    },
+
 ];

@@ -22,7 +22,7 @@ import {
     api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, pct, setPop, tbody, when
 } from '../core.js';
 import { lines, stackedBars, tokens } from '../charts.js';
-import { dimRow, dimValue, drillRow, valueText, valueWords } from '../identity.js';
+import { dimRow, dimValue, drillRow, openButton, valueText, valueWords } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
 
 /**
@@ -184,7 +184,7 @@ function renderAnswered(data) {
 function renderPatterns(data) {
     if (!data.patterns.length) {
         tbody(byId('atk-patterns-table'), []);
-        noDataYet('atk-patterns-empty', 'requests matching a detection pattern');
+        noDataYet('atk-patterns-empty', 'matched patterns');
         return;
     }
     hideEmpty('atk-patterns-empty');
@@ -245,7 +245,7 @@ function stackedBarsFor(rows, t) {
 function renderRequests(data) {
     if (!data.requests.length) {
         tbody(byId('atk-requests-table'), []);
-        noDataYet('atk-requests-empty', 'matched requests the server answered with a 2xx or a 3xx');
+        noDataYet('atk-requests-empty', 'answered matched requests');
         return;
     }
     hideEmpty('atk-requests-empty');
@@ -263,7 +263,14 @@ function renderRequests(data) {
                 title: statusHint(row.status)
             },
             { text: row.bytes === null ? '—' : num(row.bytes), num: true, sort: row.bytes === null ? -1 : row.bytes },
-            { text: row.patterns || '—', clip: true, title: row.patterns || '', sort: row.patterns || '' }
+            { text: row.patterns || '—', clip: true, title: row.patterns || '', sort: row.patterns || '' },
+            /* The explicit opener every other drillable table ends in. An em dash where there
+               is no session to open, so the column reads as "this row has nothing behind it"
+               rather than as a control that does nothing. */
+            row.session
+                ? { node: openButton('session', { id: row.session }, 'Open this visit'),
+                    attrs: { class: 'rowopen-cell' } }
+                : { text: '—', attrs: { class: 'rowopen-cell' } }
         ]
     })));
 
@@ -321,7 +328,7 @@ function renderWho(data) {
     if (!data.actors.length) {
         tbody(byId('atk-who-table'), []);
         tbody(byId('atk-networks-table'), []);
-        noDataYet('atk-who-empty', 'addresses whose requests matched a pattern');
+        noDataYet('atk-who-empty', 'matched addresses');
         return;
     }
     hideEmpty('atk-who-empty');
@@ -408,7 +415,7 @@ function renderImpersonation(data) {
 
     if (!data.crawlers.length) {
         tbody(byId('atk-crawlers-table'), []);
-        noDataYet('atk-impersonation-empty', 'sessions declaring a named crawler');
+        noDataYet('atk-impersonation-empty', 'declared crawler sessions');
         return;
     }
     hideEmpty('atk-impersonation-empty');
@@ -448,7 +455,7 @@ function renderImpersonation(data) {
  */
 function renderWhen(data) {
     if (!data.times.length) {
-        noDataYet('atk-when-empty', 'requests matching a detection pattern');
+        noDataYet('atk-when-empty', 'matched requests');
         return;
     }
     hideEmpty('atk-when-empty');

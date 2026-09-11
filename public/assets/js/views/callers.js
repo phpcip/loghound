@@ -22,7 +22,7 @@
 import { api, byId, el, hideEmpty, loadCard, num, pct, setPop, tbody } from '../core.js';
 import { barsH, dispose, donut } from '../charts.js';
 import {
-    chartOrEmpty, fieldSetter, handleState, lfAdd, lfRemove, plotOrNote, renderFilters,
+    fieldSetter, handleState, lfAdd, lfRemove, plotOrNote, renderFilters,
     renderVolume, resolveCore, shareBar, tokens
 } from './opensolr.js';
 
@@ -68,9 +68,14 @@ function renderWho(data) {
     const handlers = Object.keys(data.handlers);
     const handlerTotal = handlers.reduce((sum, key) => sum + data.handlers[key], 0);
 
-    if (!chartOrEmpty('cl-ips-chart', 'cl-who-empty', ips.length, 'No caller recorded', [
-        'The platform returned no client address for these requests, so there is nobody to list.'
-    ])) {
+    /* plotOrNote, NOT chartOrEmpty. This is one half of a split card, and chartOrEmpty()
+       reaches showEmpty(), which hides `cl-who-content` — the element wrapping BOTH halves.
+       So an index with no client address recorded but plenty of handlers drew the Handlers
+       table, hid it along with everything else, and announced "No caller recorded" over live
+       data. plotOrNote() exists for exactly this and its docblock says so; the Handlers half
+       below already used it and this one did not. */
+    if (!plotOrNote('cl-ips-chart', ips.length,
+        'The platform returned no client address for these requests, so there is nobody to list.')) {
         barsH('cl-ips-chart', ips.slice(0, 12).map((ip) => ({
             label: ip,
             value: data.addresses[ip],

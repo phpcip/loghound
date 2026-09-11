@@ -347,15 +347,38 @@ final class View
 
         echo '<section class="card" id="unlock">';
         echo '<h2>Prove you have access to this server</h2>';
+
+        /* THE READ WAS PRINTED UNDER THE SENTENCE SAYING THE FILE DOES NOT EXIST. The `sudo
+           cat` went out unconditionally, directly beneath a banner that had just said the
+           token file could not be created — so the one operator who most needed a way forward
+           was handed a command guaranteed to answer "No such file or directory", and a
+           required form field whose value could not be obtained from anywhere. ensure() is
+           false only when there is definitively no usable token file, so this branch is not a
+           guess. The way out is to make the directory writable, or to run the wizard in a
+           shell, where no token exists at all; both are named, with absolute paths. */
+        if (!$haveToken) {
+            echo '<div class="banner banner-bad" role="alert">The setup token could not be '
+                . 'created, because Loghound cannot write to its own <code class="mono">var</code> '
+                . 'directory. There is nothing to paste yet, so this form is not shown.</div>';
+            echo '<p>Give this directory to the user this page runs as '
+                . '(<code class="mono">' . Security::esc(Requirements::phpUser()) . '</code>), '
+                . 'then reload:</p>';
+            echo '<pre class="snippet mono">sudo mkdir -p ' . Security::esc(dirname($this->token->path())) . "\n"
+                . 'sudo chown ' . Security::esc(Requirements::phpUser()) . ' '
+                . Security::esc(dirname($this->token->path())) . "\n"
+                . 'sudo chmod 0750 ' . Security::esc(dirname($this->token->path())) . '</pre>';
+            echo '<p class="muted">The System check below says the same thing about every '
+                . 'directory Loghound needs. Or skip the browser entirely: '
+                . '<code class="mono">' . Security::esc($this->req->cliCommand()) . '</code> runs '
+                . 'the same setup as a terminal wizard, needs no token, and produces exactly the '
+                . 'same configuration.</p>';
+            echo '</section>';
+            return;
+        }
+
         echo '<p>Anyone can reach this page — it is on the internet, and Loghound is not '
             . 'configured yet. So before anything can be saved, paste the setup token. It is in a '
             . 'file only this server\'s administrator can read:</p>';
-
-        if (!$haveToken) {
-            echo '<div class="banner banner-bad" role="alert">The token file could not be created, '
-                . 'because Loghound cannot write to its own <code>var</code> directory. Fix that '
-                . 'first — the commands are in the table below.</div>';
-        }
 
         echo '<pre class="snippet mono">sudo cat ' . Security::esc($this->token->path()) . '</pre>';
 
@@ -383,7 +406,8 @@ final class View
         echo '<section class="card">';
         echo '<h2>System check</h2>';
         echo '<p class="pop">Checked as <code>' . Security::esc(Requirements::phpUser())
-            . '</code>, the user this page runs as. A fix below is written for that user.</p>';
+            . '</code>, the user this page runs as. Every fix below names that user and those '
+            . 'paths; the ones that genuinely need root carry <code class="mono">sudo</code>.</p>';
 
         echo '<div class="table-wrap"><table class="tight checks"><thead><tr>'
             . '<th scope="col">Status</th><th scope="col">Requirement</th><th scope="col">Detail</th>'

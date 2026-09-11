@@ -264,4 +264,229 @@ return [
             }
         }
     },
+
+    /* ---------------------------------------------------------------------------------
+     * The block is designed to be pasted in public, so every secret is attacked by hand
+     *
+     * These were all found by construction rather than by reading: a sentinel per secret,
+     * planted in a message shaped the way the value would really arrive, and the assertion
+     * is that the sentinel is gone. Four of them survived.
+     * ------------------------------------------------------------------------------ */
+
+    'no secret this installation holds survives into a pasteable block'
+        => static function (): void {
+            $dir = lh_leak_tmpdir();
+            @mkdir($dir . '/config', 0700, true);
+            @mkdir($dir . '/var', 0700, true);
+
+            $cfg = Config::load($dir . '/config/loghound.php');
+            $cfg->set('opensolr.api_key', 'LEAKPROBE-APIKEY-0000000001');
+            $cfg->set('opensolr.email', 'leakprobe-account@example.com');
+            $cfg->set('beacon.secret', 'LEAKPROBE-BEACONSECRET-000000000000000001');
+            $cfg->set('privacy.ip_salt', 'LEAKPROBE-ADDRESSSALT-0001');
+            $cfg->set('auth.password_hash', 'LEAKPROBE-PASSWORDHASH-001');
+            $cfg->set('solr.http_pass', 'LEAKPROBE-INDEXPASSWORD-01');
+            $cfg->set('auth.totp', [
+                'enabled'  => true,
+                'secret'   => 'LEAKPROBETOTPSEEDAAAAAAAAAAAAAAA',
+                'recovery' => ['LEAKPROBE-RECOVERYHASH-001'],
+            ]);
+
+            $before = $_COOKIE;
+            $_COOKIE[\Loghound\Auth\Persistence::COOKIE] =
+                'LEAKPROBESELECTOR:LEAKPROBE-REMEMBERVERIFIER-01';
+
+            /* EACH SENTINEL IN THE SHAPE IT REALLY ARRIVES IN. Bare in a sentence is the one
+               that matters: the shape pass has nothing to anchor on there, so anything not on
+               the value list walks straight through. */
+            $sentinels = [
+                'LEAKPROBE-APIKEY-0000000001',
+                'leakprobe-account@example.com',
+                'LEAKPROBE-BEACONSECRET-000000000000000001',
+                'LEAKPROBE-ADDRESSSALT-0001',
+                'LEAKPROBE-PASSWORDHASH-001',
+                'LEAKPROBE-INDEXPASSWORD-01',
+                'LEAKPROBETOTPSEEDAAAAAAAAAAAAAAA',
+                'LEAKPROBE-RECOVERYHASH-001',
+                'LEAKPROBE-REMEMBERVERIFIER-01',
+            ];
+
+            foreach ($sentinels as $secret) {
+                $carriers = [
+                    'bare in a sentence'  => 'The platform refused: ' . $secret . ' is not valid',
+                    'in a fact label'     => null,
+                    'in a fact value'     => null,
+                    'quoted in json'      => '{"echo":"' . $secret . '"}',
+                    'in a header echo'    => 'Cookie: lh_remember=' . $secret . '; Path=/',
+                ];
+
+                foreach (['bare in a sentence', 'quoted in json', 'in a header echo'] as $how) {
+                    $block = \Loghound\Diagnostics::block(\Loghound\Diagnostics::capture(
+                        'Doing the thing',
+                        'A step',
+                        (string) $carriers[$how],
+                        [],
+                        $cfg,
+                        $dir
+                    ));
+                    lh_false(
+                        str_contains($block, $secret),
+                        $secret . ' survived a block ' . $how
+                    );
+                }
+
+                $block = \Loghound\Diagnostics::block(\Loghound\Diagnostics::capture(
+                    'Doing the thing',
+                    'A step',
+                    'boom',
+                    [$secret => 'a value', 'A label' => $secret],
+                    $cfg,
+                    $dir
+                ));
+                lh_false(
+                    str_contains($block, $secret),
+                    $secret . ' survived a block in a fact — labels are published too'
+                );
+            }
+
+            $_COOKIE = $before;
+            lh_leak_rmdir($dir);
+        },
+
+    /* A SECRET DOES NOT ONLY TRAVEL AS ITSELF. HTTP Basic sends `base64(user:pass)`, and that
+       is how Loghound authenticates to Solr — where `solr.http_pass` IS the account API key on
+       a managed installation. A reverse proxy or a Solr error page that reflects the request's
+       Authorization header puts the account key into a message in a spelling the shape pass
+       has nothing to match on and the literal pass did not know to look for, and this block is
+       designed to be pasted in public. */
+    'a credential is redacted in the form it is actually sent in, not only as itself'
+        => static function (): void {
+            $dir = lh_leak_tmpdir();
+            @mkdir($dir . '/config', 0700, true);
+            @mkdir($dir . '/var', 0700, true);
+
+            $cfg = Config::load($dir . '/config/loghound.php');
+            /* Deliberately full of characters that make the encodings differ from the literal;
+               a sentinel of plain hex would make this test pass without testing anything. */
+            $key = 'LEAKPROBE+key/with=specials?&#and-more';
+            $cfg->set('opensolr.api_key', $key);
+            $cfg->set('solr.http_user', 'loghound');
+            $cfg->set('solr.http_pass', $key);
+
+            $pair = base64_encode('loghound:' . $key);
+            $alone = base64_encode($key);
+
+            lh_true($pair !== $key && $alone !== $key, 'the encoded forms really are different strings');
+
+            foreach ([
+                'a reflected Basic header' => 'upstream said: Authorization: Basic ' . $pair,
+                'the key alone, encoded'   => 'rejected token ' . $alone,
+                'the key as itself'        => 'rejected key ' . $key,
+            ] as $how => $message) {
+                $block = \Loghound\Diagnostics::block(\Loghound\Diagnostics::capture(
+                    'Querying the index',
+                    'Reading a response',
+                    $message,
+                    [],
+                    $cfg,
+                    $dir
+                ));
+
+                foreach ([$pair, $alone, $key] as $form) {
+                    lh_false(
+                        str_contains($block, $form),
+                        'the account key survived a pasteable block via ' . $how
+                    );
+                }
+            }
+
+            lh_leak_rmdir($dir);
+        },
+
+    'a fact label cannot reformat or outgrow the block it is in'
+        => static function (): void {
+            $block = \Loghound\Diagnostics::block(\Loghound\Diagnostics::capture(
+                'Doing the thing',
+                'A step',
+                'boom',
+                [str_repeat('w', 4000) => 'v', "two\nlines" => 'v2'],
+                null,
+                null
+            ));
+
+            foreach (explode("\n", $block) as $line) {
+                lh_true(
+                    strlen($line) <= \Loghound\Diagnostics::MAX_LABEL + \Loghound\Diagnostics::MAX_FIELD + 8,
+                    'a label sets the width of every row, so an uncapped one reformats the artefact'
+                );
+            }
+            lh_false(
+                str_contains($block, str_repeat('w', 200)),
+                'the label is cut, not merely padded around'
+            );
+        },
+
+    'a redactor that cannot run loses the redaction, never the message'
+        => static function (): void {
+            foreach ([
+                'src/Panel/Jobs.php',
+                'src/OpensolrLog.php',
+                'src/Opensolr.php',
+                'src/Diagnostics.php',
+            ] as $file) {
+                $body = (string) file_get_contents(dirname(__DIR__) . '/' . $file);
+
+                foreach (explode("\n", $body) as $line) {
+                    if (!str_contains($line, 'preg_replace') || !str_contains($line, 'redacted')) {
+                        continue;
+                    }
+                    lh_false(
+                        (bool) preg_match('/\(string\)\s*preg_replace/', $line),
+                        $file . ': casting preg_replace() to string blanks the message on a PCRE '
+                        . 'failure, which hands an attacker a way to erase a diagnostic'
+                    );
+                }
+            }
+        },
+
+    'the platform\'s own words are redacted on every branch that keeps them'
+        => static function (): void {
+            $body = (string) file_get_contents(dirname(__DIR__) . '/src/Opensolr.php');
+
+            $push = strstr($body, 'public function pushConfigSet(');
+            lh_true(is_string($push), 'pushConfigSet() not found');
+            $push = substr((string) $push, 0, (int) strpos((string) $push, "\n    }"));
+
+            foreach (explode("\n", $push) as $line) {
+                $fromPlatform = str_contains($line, 'stringifyMsg')
+                    || str_contains($line, 'getMessage')
+                    || str_contains($line, "\$res['msg']");
+                if (!$fromPlatform) {
+                    continue;
+                }
+                lh_true(
+                    str_contains($line, 'redact'),
+                    'a msg kept from the platform must be redacted on EVERY branch, not only '
+                    . 'the one where an exception was thrown: ' . trim($line)
+                );
+            }
+        },
+
+    'a refusal shows the operator the same redacted text it wrote down'
+        => static function (): void {
+            $body = (string) file_get_contents(dirname(__DIR__) . '/src/Panel/Settings.php');
+
+            $fn = strstr($body, 'private static function teardownRefusal(');
+            lh_true(is_string($fn), 'teardownRefusal() not found');
+            $fn = substr((string) $fn, 0, (int) strpos((string) $fn, "\n    }"));
+
+            lh_false(
+                (bool) preg_match("/'detail'\s*=>\s*\\\$why/", $fn),
+                'the refusal returned the raw control-plane text beside a redacted copy of itself'
+            );
+            lh_true(
+                (bool) preg_match("/'detail'\s*=>[^,]*\\\$report\['error'\]/", $fn),
+                'the detail must be the redacted field, which is what the sibling path returns'
+            );
+        },
 ];

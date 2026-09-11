@@ -180,10 +180,18 @@ export function handleState(emptyId, data, what) {
             }
         }
         if (filters > 0) {
+            /* IT DOES NOT KNOW THAT OPENSOLR LOGGED ANYTHING, and it said so. The branch is
+               taken on "filters are in force" alone; nothing measured the unfiltered range. An
+               index nobody has queried, seen through one chip, was told the platform had
+               logged requests for it — and sent to adjust filters rather than to accept that
+               the index is simply idle, which the unfiltered branch below states correctly.
+               Same defect, same shape, as core.js's noDataYet(). */
             showEmpty(emptyId, 'No ' + what + ' match your filters', [
-                'Opensolr logged requests for this index in the selected range, but none of them match '
-                    + 'the ' + filters + ' filter value' + (filters === 1 ? '' : 's') + ' set above.',
-                'Remove a value from the chips above the card, or widen the time range.'
+                'Nothing in the selected range matched the ' + filters + ' filter value'
+                    + (filters === 1 ? '' : 's') + ' set above.',
+                'Remove a value from the chips above the card, or widen the time range. If it is '
+                    + 'still empty with none set, Opensolr logged no requests for this index in '
+                    + 'that range at all, which is not a fault.'
             ]);
             return true;
         }

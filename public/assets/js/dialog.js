@@ -112,7 +112,12 @@ function ensureDialog() {
         body
     ]);
 
-    const scrim = el('div', { class: 'lh-dialog-scrim' });
+    /* aria-hidden, because it is a surface and not a control. Clicking it closes the
+       dialog, which is a convenience: Close and Escape both do the same thing and both are
+       keyboard-reachable, so nothing is only available here. What it must not do is appear in
+       the accessibility tree as a nameless, roleless, unreachable element between the reader
+       and the dialog. */
+    const scrim = el('div', { class: 'lh-dialog-scrim', 'aria-hidden': 'true' });
     root = el('div', { class: 'lh-dialog', id: 'lh-dialog', hidden: true }, [scrim, panel]);
 
     close.addEventListener('click', closeDialog);

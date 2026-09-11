@@ -529,7 +529,7 @@ return [
 
     'the rescan advice says why, not just what, and is never a pasteable line'
         => static function (): void {
-            $advice = Steps::RESCAN_ADVICE;
+            $advice = Steps::rescanAdvice('/opt/loghound');
 
             foreach (['rescan', 'per source', 'parse error'] as $needle) {
                 lh_contains(
@@ -545,6 +545,17 @@ return [
                 str_contains($advice, "\n"),
                 'the advice is prose rendered inside a <p>; a newline in it suggests it was meant '
                 . 'for a <pre>, and the panel puts a Copy button on those'
+            );
+
+            /* IT NAMES TWO COMMANDS, AND BOTH WERE RELATIVE. It was a const, so it could not
+               interpolate a root, and printed `bin/loghound-setup` and `bin/loghound-tail
+               --status --human` on two views — followable from exactly one directory, by a
+               reader who is in a browser. Everything else the product prints is absolute. */
+            lh_contains($advice, '/opt/loghound/bin/loghound-setup', 'the root reaches the command');
+            lh_contains($advice, '/opt/loghound/bin/loghound-tail', 'and the one that checks it');
+            lh_false(
+                (bool) preg_match('#(?<![/\w])bin/loghound-#', $advice),
+                'no command in this sentence may be named by a relative path: ' . $advice
             );
         },
 
@@ -596,7 +607,7 @@ return [
             $php = lh_claims_doc('src/Panel/Performance.php');
             $js = lh_claims_doc('public/assets/js/views/performance.js');
 
-            foreach (['Steps::durationLogFormat()', 'Steps::RESCAN_ADVICE'] as $call) {
+            foreach (['Steps::durationLogFormat()', 'Steps::rescanAdvice('] as $call) {
                 lh_contains(
                     $php,
                     $call,

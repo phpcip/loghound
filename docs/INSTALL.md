@@ -969,6 +969,15 @@ adds the missing fields and does not touch a document already in the index.
 | `1` | Unusable configuration, unknown flag, or no indexes provisioned yet. |
 | `2` | Failed — a schema could not be read, or an upload was rejected. |
 | `3` | Out of date — an index is missing a field (`--check` only). |
+| `4` | Needs migrating — an index still declares Solr's **managed** schema factory. |
+
+`4` is deliberately not `2`. `2` means the check could not be made and running it again may
+answer; `4` means the check was made, the answer is known, and it will not change on its own.
+An index whose `solrconfig.xml` still declares `ManagedIndexSchemaFactory` is one where **Solr
+owns the schema file**: the `schema.xml` Loghound uploads sits in the configset unused, and
+every schema upload to it reports success and changes nothing — including the ones you have
+already run. `--apply` resolves it by uploading the whole configset in dependency order, which
+ends with the `solrconfig.xml` that switches the index to the classic factory.
 
 ```bash
 php bin/loghound-schema || php bin/loghound-schema --apply

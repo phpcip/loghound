@@ -1082,10 +1082,16 @@ function browserRow(bucket, group) {
         class: 'fb-value' + (on ? ' is-on' : '') + (path ? ' fb-value-url' : ''),
         dataset: { value: value }
     }, [
+        /* aria-current, NOT aria-pressed. aria-pressed is only defined on a button role;
+           on a link it is invalid and every screen reader ignores it — and the visible mark
+           that carries the state is aria-hidden, so a non-sighted reader was told nothing at
+           all about which facet values are applied, on the control this whole page turns on.
+           aria-current="true" is valid on a link and means exactly this: the item in the set
+           that is in force. */
         el('a', {
             href: stagedUrl(group, value),
             title: bucket.why || value,
-            'aria-pressed': on ? 'true' : 'false'
+            'aria-current': on ? 'true' : 'false'
         }, [
             el('span', { class: 'fb-mark', 'aria-hidden': 'true', text: on ? '✓' : '' }),
             el('span', { class: 'fb-name' + (group.mono ? ' mono' : ''), text: label }),
@@ -1136,7 +1142,7 @@ function onPick(event, group, footer, values) {
         const mark = node.querySelector('.fb-mark');
         if (link) {
             link.href = stagedUrl(group, node.dataset.value || '');
-            link.setAttribute('aria-pressed', picked ? 'true' : 'false');
+            link.setAttribute('aria-current', picked ? 'true' : 'false');
         }
         if (mark) {
             mark.textContent = picked ? '✓' : '';

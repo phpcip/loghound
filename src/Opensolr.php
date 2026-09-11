@@ -791,10 +791,16 @@ final class Opensolr
             try {
                 $res = $this->uploadFile($indexName, $path);
                 $ok = (bool) ($res['status'] ?? false);
+                /* A REJECTION IS PLATFORM TEXT AND WAS THE ONE BRANCH THAT DID NOT REDACT IT.
+                   The catch below redacts, decode() redacts, and this — the path a `status:
+                   false` answer takes — handed the platform's own words straight through into
+                   var/schema-check.json and onto the Settings page. An endpoint that echoes
+                   part of the request it refused would therefore publish the account API key,
+                   which on this platform is also the index HTTP auth password. */
                 $results[] = [
                     'file' => $name,
                     'ok'   => $ok,
-                    'msg'  => $ok ? 'uploaded' : self::stringifyMsg($res['msg'] ?? 'rejected'),
+                    'msg'  => $ok ? 'uploaded' : $this->redact(self::stringifyMsg($res['msg'] ?? 'rejected')),
                 ];
                 if (!$ok) {
                     $stoppedBy = $name;
@@ -1031,14 +1037,6 @@ final class Opensolr
      */
     private function redact(string $text): string
     {
-        /* TRUNCATED AS WELL AS SCRUBBED. These strings are stored in var/schema-check.json and
-           rendered into the Settings page on every load, so an `msg` of arbitrary length is a
-           file and a page of arbitrary length. install/opensolr-teardown.php already cuts its
-           platform messages at 300; there is no reason this one should not. */
-        if (strlen($text) > self::MAX_MESSAGE) {
-            $text = substr($text, 0, self::MAX_MESSAGE) . '…';
-        }
-
         /* THE NAMED PARAMETERS GO FIRST, then the bare literals. The other order replaces
            `api_key=SECRET` with `api_key=[api_key redacted]` and the pattern then matches the
            placeholder, leaving a mangled tail. Nothing leaks either way; this simply reads. */
@@ -1056,6 +1054,16 @@ final class Opensolr
         }
         if ($this->email !== '') {
             $text = str_replace($this->email, '[email redacted]', $text);
+        }
+
+        /* TRUNCATED AFTER SCRUBBING, NEVER BEFORE. These strings are stored in
+           var/schema-check.json and rendered into the Settings page on every load, so an `msg`
+           of arbitrary length is a file and a page of arbitrary length. But cutting first
+           leaves the HEAD of a credential that straddles the limit in the output, with the
+           literal pass unable to match what is left of it — the same reasoning that puts
+           Diagnostics::field()'s cap after its redaction. */
+        if (strlen($text) > self::MAX_MESSAGE) {
+            $text = substr($text, 0, self::MAX_MESSAGE) . '…';
         }
 
         return $text;

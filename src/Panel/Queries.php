@@ -398,13 +398,7 @@ final class Queries extends OpensolrView
             return '';
         }
 
-        $parts = [];
-        foreach (self::decodeLogFilters($raw) as $field => $values) {
-            $parts[] = $field . '=' . implode(',', array_map('rawurlencode', $values));
-        }
-        $packed = implode(';', $parts);
-
-        return strlen($packed) > 256 ? '' : $packed;
+        return self::packLogFilters(self::decodeLogFilters($raw), 256);
     }
 
     /** The outcome slice this scan is to run under, from the POST body. */

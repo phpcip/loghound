@@ -429,8 +429,12 @@ final class OpensolrTeardown
     /** Report a usage error on stderr and return the usage exit code. */
     private static function usage(string $problem): int
     {
+        /* THE REAL INVOCATION. This file is mode 0644, has no shebang and is not on PATH, so
+           `opensolr-teardown.php --plan` cannot work by any route — not by bare name, not by
+           ./ — and the usage line was the only instruction the operator gets. It is printed by
+           its own absolute path, which is the one thing that always works. */
         fwrite(STDERR, 'opensolr-teardown: ' . $problem . "\n");
-        fwrite(STDERR, "usage: opensolr-teardown.php --config=PATH (--plan | --delete)\n");
+        fwrite(STDERR, 'usage: php ' . __FILE__ . " --config=PATH (--plan | --delete)\n");
         return 2;
     }
 }

@@ -364,10 +364,16 @@ textarea {
        anything. It stays on its own line rather than being squeezed beside the heading: at
        375px `.card-head` wraps, and a two-word control that wraps mid-phrase reads as two. */
 
+    /* BOTH DIMENSIONS. The height was floored and the width was not, and "CSV" is three
+       characters — measured at 31px wide on a 375px viewport, well under the thumb-sized
+       target every other control on this page gets. A target that is tall and narrow is still
+       a target you miss. */
     .export {
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         min-height: var(--lh-tap);
+        min-width: var(--lh-tap);
         padding-top: 10px;
     }
 

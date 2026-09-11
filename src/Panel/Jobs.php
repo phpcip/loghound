@@ -206,8 +206,14 @@ final class Jobs
             '/(api_key|apikey|key|token|secret|password|passwd|pwd|salt)=([^&\s"\']*)/i' => '$1=[redacted]',
             '#(https?://)[^/@\s:]+:[^/@\s]+@#i' => '$1[redacted]@',
         ];
+        /* FALL BACK TO THE INPUT, NOT TO NOTHING. preg_replace() answers NULL on a PCRE
+           failure — a backtrack or recursion limit, which a long enough adversarial string
+           can reach — and casting that NULL to a string replaced the whole message with an
+           empty one. An attacker who can get a string into an error could therefore blank it,
+           erasing the diagnostic rather than leaking through it. Opensolr::redact() and
+           Diagnostics::redact() already use `?? $text`; this was the one that did not. */
         foreach ($patterns as $pattern => $replacement) {
-            $text = (string) preg_replace($pattern, $replacement, $text);
+            $text = preg_replace($pattern, $replacement, $text) ?? $text;
         }
         return $text;
     }
@@ -765,7 +771,11 @@ final class Jobs
                         return [
                             'ok'     => true,
                             'note'   => 'empty',
-                            'detail' => 'No sessions indexed yet. Confirm a log source and check that loghound-tail is running.',
+                            /* ABSOLUTE, like every other command this class emits —
+                               binPath() exists for exactly this and this one line did not
+                               use it. The reader is on a shell somewhere else. */
+                            'detail' => 'No sessions indexed yet. Confirm a log source and check that '
+                                . self::binPath('loghound-tail') . ' is running.',
                         ];
                     }
                     $age = time() - (int) strtotime($newest);

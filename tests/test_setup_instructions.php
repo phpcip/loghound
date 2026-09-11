@@ -395,6 +395,85 @@ return [
             lh_true($checked >= 12, 'every fix line in the file has to be reached, not a handful');
         },
 
+    /* A COPY BUTTON PROMISES THE BLOCK RUNS. Three fix blocks broke that promise in ways a
+       "would a shell choke on this token" test cannot see, because each line was individually
+       well-formed:
+
+         - the extension block offered `apt install …` AND `dnf install …` in one paste, so
+           whichever machine you are on, half the block fails — and the `systemctl restart`
+           that makes the extension take effect sat behind a `#` and never ran;
+         - the directory blocks ran `chown` and `chmod` with no `sudo`, which is root-only
+           without exception, under a caption promising the block is written for the
+           (never-root) user the page runs as;
+         - the open_basedir block put a PHP-FPM pool directive on line 2 of a shell paste.
+
+       So this judges the block as a whole: one package manager, sudo on the verbs that need
+       it, and nothing that is not a shell command outside a comment. */
+    'a fix block is one runnable sequence, not a menu and not a config file'
+        => static function (): void {
+            $root = lh_ins_root();
+            $req = new \Loghound\Setup\Requirements($root, \Loghound\Config::load('/nonexistent-lh-req'));
+
+            $rows = $req->all();
+            lh_true(count($rows) > 5, 'the requirement rows were produced');
+
+            $blocks = [];
+            foreach ($rows as $row) {
+                if ((array) $row['fix'] !== []) {
+                    $blocks[(string) $row['id']] = array_map('strval', (array) $row['fix']);
+                }
+            }
+
+            /* The rows that only fail on another kind of machine are unreachable from here, so
+               their blocks are asked for directly rather than left untested. */
+            $method = new \ReflectionMethod(\Loghound\Setup\Requirements::class, 'extensionFix');
+            $blocks['ext_intl'] = array_map('strval', (array) $method->invoke(null, 'intl'));
+
+            lh_true(count($blocks) >= 1, 'at least one fix block was available to judge');
+
+            foreach ($blocks as $id => $lines) {
+                $runnable = array_values(array_filter(
+                    $lines,
+                    static fn (string $l): bool => trim($l) !== '' && !str_starts_with(trim($l), '#')
+                ));
+
+                $managers = 0;
+                foreach (['apt-get', 'apt ', 'dnf', 'yum', 'zypper', 'pacman'] as $pm) {
+                    foreach ($runnable as $line) {
+                        if (str_contains($line, $pm)) {
+                            $managers++;
+                            break;
+                        }
+                    }
+                }
+                lh_true(
+                    $managers <= 1,
+                    $id . ': the block offers ' . $managers . ' package managers in one paste, so '
+                    . 'on any real machine at least one line cannot work'
+                );
+
+                foreach ($runnable as $line) {
+                    foreach (['chown', 'chmod', 'mkdir -p /', 'systemctl', 'apt-get install',
+                        'apt install', 'dnf install', 'yum install'] as $needsRoot) {
+                        if (!str_starts_with($line, $needsRoot) && !str_contains($line, ' ' . $needsRoot)) {
+                            continue;
+                        }
+                        lh_true(
+                            str_starts_with($line, 'sudo '),
+                            $id . ': "' . $line . '" cannot succeed as the user this page runs as, '
+                            . 'and the caption above the block says it is written for that user'
+                        );
+                    }
+
+                    lh_false(
+                        (bool) preg_match('/^[a-z_]+\[[a-z_]+\]\s*=/', $line),
+                        $id . ': "' . $line . '" is a PHP-FPM directive in a shell paste — a '
+                        . 'syntax error before anything below it runs'
+                    );
+                }
+            }
+        },
+
     'every line the next-steps and operations cards offer to copy is too'
         => static function (): void {
             [$dir, $cfg] = lh_ins_install();

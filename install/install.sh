@@ -2021,10 +2021,16 @@ start_and_verify() {
     info "      been no requests, and by default a newly watched log file is read from"
     info "      its END rather than replayed from the beginning."
     info ""
+    # ABSOLUTE, AND HONEST ABOUT WHAT --dry-run PROVES.
+    # "loghound-tail" relies on /usr/local/bin/loghound-tail, which link_commands() refuses to
+    # create — with a warning, not an error — when something else already owns that name. And
+    # --dry-run parses and counts without writing to Solr, so it proves the PARSER reads this
+    # log; it proves nothing about indexing, which is the half an operator is usually asking
+    # about when they say "the pipeline".
     info "      Check it yourself:"
-    info "        loghound-tail --status --human"
+    info "        $PREFIX/bin/loghound-tail --status --human"
     info "        journalctl -u loghound-tail -n 50 --no-pager"
-    info "      Force a replay of an existing log to prove the pipeline works:"
+    info "      Replay an existing log to prove the FORMAT parses (this writes nothing to Solr):"
     info "        sudo -u $RUN_USER $PHP_BIN $PREFIX/bin/loghound-tail --once --from-start --dry-run --verbose"
     return 0
 }
@@ -3127,10 +3133,11 @@ if [[ "$MODE" == "upgrade" ]]; then
     say "    php $PREFIX/bin/loghound-schema"
     say "    php $PREFIX/bin/loghound-schema --apply"
     say ""
-    say "Exit codes: 0 up to date, 3 out of date, 2 could not tell. The panel's Settings"
-    say "page shows the same verdict, and says how old it is."
+    say "Exit codes: 0 up to date, 3 out of date, 4 needs migrating off Solr's managed"
+    say "schema factory, 2 could not tell. The panel's Settings page shows the same"
+    say "verdict, and says how old it is."
     say ""
-    say "loghound-tail --status --human"
+    say "$PREFIX/bin/loghound-tail --status --human"
     exit 0
 fi
 
@@ -3249,7 +3256,7 @@ fi
 
 cat <<EOF
     CHECK IT
-      loghound-tail --status --human
+      $PREFIX/bin/loghound-tail --status --human
       systemctl status loghound-tail.service
       systemctl list-timers 'loghound-*'
       journalctl -u loghound-tail -f

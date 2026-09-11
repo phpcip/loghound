@@ -567,7 +567,17 @@ final class Attacks extends Controller implements Sections
             'fq'   => $fqs,
             'sort' => 'ts desc',
             'rows' => $rows,
-            'fl'   => Query::hitFl(),
+            /* THE TWO FIELDS THIS CARD ACTUALLY READS, which Query::hitFl() does not carry.
+               The mapper below reads `session_id_s` and `ip_s` off every document and the
+               query never asked Solr for either, so both came back null on every row of every
+               installation. That is two permanently empty columns in this dataset's CSV export
+               — "Address" and "Session" — and a drill-through that never fires: the row is
+               only made clickable when `session` is non-null, so the "row opens the session
+               that made the request" this card's own docblock promises has never happened.
+               Both are docValues, so they return in `fl` despite stored="false". Added here
+               rather than to hitFl() because the other caller is a timeline already scoped to
+               one session, where a session id on every row is dead weight. */
+            'fl'   => Query::hitFl() . ',session_id_s,ip_s',
         ]);
 
         $out = [];
@@ -773,12 +783,19 @@ final class Attacks extends Controller implements Sections
             return [$bn, $b['sessions']] <=> [$an, $a['sessions']];
         });
 
+        /* THE ONE SESSIONS-PLANE CARD ON A HITS-PLANE VIEW, so it reports the other plane's
+           drops. envelope() below defaults every card to ignoredHitFilters(), which can never
+           name a status filter because a status is not a sessions field at all — so with
+           `status_i` active this card quietly answered a different question from the five
+           around it and declared nothing ignored. `+` keeps the left operand's key, which is
+           what lets a card override the default. */
         return $this->envelope([
-            'declared'    => (int) ($declared['count'] ?? 0),
-            'verified'    => self::qcount($declared, 'verified'),
-            'rdns_failed' => self::qcount($declared, 'rdns_failed'),
-            'tenant'      => self::qcount($declared, 'tenant'),
-            'crawlers'    => $rows,
+            'declared'        => (int) ($declared['count'] ?? 0),
+            'verified'        => self::qcount($declared, 'verified'),
+            'rdns_failed'     => self::qcount($declared, 'rdns_failed'),
+            'tenant'          => self::qcount($declared, 'tenant'),
+            'crawlers'        => $rows,
+            'filters_ignored' => $this->ignoredSessionFilters(),
         ]);
     }
 
@@ -876,19 +893,24 @@ final class Attacks extends Controller implements Sections
         echo '<p class="split-note">The server declined: not found, forbidden, unauthorised. This is '
             . 'the webserver doing its job, and on any address on the public internet it is almost '
             . 'all of the traffic on this page.</p>';
+        /* TWO WHOLE-CARD TOTALS WERE PARKED UNDER "Refused" TO BALANCE THE LAYOUT, and a tile
+           takes its population from the heading above it. "Matched in all" and "Distinct
+           addresses" count every matched request and every address on the card — not the
+           refused subset — so under that heading they read as a claim about refusals and were
+           wrong by a factor of whatever the answered share happens to be. They belong in the
+           block below with the other card-wide figures, where every tile also carries a hint
+           saying what it counts. The Refused half keeps the one figure that is about refusals. */
         echo '<div class="split-stats">';
         echo '<div><span class="stat-value mono" data-field="status_refused">—</span>'
             . '<span class="stat-label">Refused 4xx</span></div>';
-        echo '<div><span class="stat-value mono" data-field="matched">—</span>'
-            . '<span class="stat-label">Matched in all</span></div>';
-        echo '<div><span class="stat-value mono" data-field="uniq_ips">—</span>'
-            . '<span class="stat-label">Distinct addresses</span></div>';
         echo '</div></div>';
 
         echo '</div>';
 
         echo '<div class="stats">';
         foreach ([
+            ['matched',     'Matched, all classes', 'Every request in range that matched a pattern, whatever the server answered'],
+            ['uniq_ips',    'Distinct addresses',   'Addresses behind those matched requests, across all four status classes'],
             ['evaluated',   'Requests evaluated',  'Requests the detector has actually looked at'],
             ['unevaluated', 'Never evaluated',     'Indexed before detection existed. NOT the same as clean'],
             ['uniq_patterns', 'Distinct patterns', 'How many of the named patterns appeared at all'],
@@ -951,9 +973,16 @@ final class Attacks extends Controller implements Sections
         );
         self::skeleton('atk-requests', 'rows', 0, 'Reading the answered requests');
 
+        /* THE OPENER COLUMN, which this table did not have. Its rows open the session that
+           made the request — identity.js documents that as the drill-through that makes a URL
+           actionable — and the only thing saying so was a `title` on the <tr>. Every other
+           drillable table in the panel ends in one explicit control with an accessible name,
+           and a row that does something on click with no visible affordance is a control
+           nobody finds. Widths re-cut so the colgroup still sums to 100. */
         echo '<div class="table-wrap"><table id="atk-requests-table" class="table-fixed"><colgroup>'
-            . '<col style="width:16%"><col style="width:8%"><col style="width:40%">'
-            . '<col style="width:9%"><col style="width:10%"><col style="width:17%">'
+            . '<col style="width:15%"><col style="width:8%"><col style="width:37%">'
+            . '<col style="width:9%"><col style="width:9%"><col style="width:17%">'
+            . '<col style="width:5%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">When</th>'
             . '<th scope="col">Method</th>'
@@ -961,6 +990,7 @@ final class Attacks extends Controller implements Sections
             . '<th scope="col" class="num">Status</th>'
             . '<th scope="col" class="num">Bytes</th>'
             . '<th scope="col">Pattern</th>'
+            . '<th scope="col" class="rowopen-cell"><span class="sr-only">Open</span></th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('atk-requests');

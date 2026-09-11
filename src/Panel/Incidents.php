@@ -514,23 +514,23 @@ final class Incidents
      */
     private static function clean(array $entry, ?Config $cfg): array
     {
-        $facts = [];
-        foreach ((array) ($entry['facts'] ?? []) as $label => $value) {
-            $facts[(string) $label] = Diagnostics::redact((string) $value, $cfg);
-        }
-
-        $env = [];
-        foreach ((array) ($entry['environment'] ?? []) as $label => $value) {
-            $env[(string) $label] = Diagnostics::redact((string) $value, $cfg);
-        }
+        /* BOTH HALVES OF A PAIR, AND THE TWO FIELDS THAT WERE ONLY CAST. A label was carried
+           through with a bare (string) cast, so a ledger row whose label held a credential —
+           written by an older release, or by a path whose redaction was narrower, which is the
+           whole reason this method exists — published it. `error_class` and `raised_at` are
+           cast-only for the same reason and are free strings in that file, not the values of
+           get_class() and getFile() they were when the row was written. Nothing here is capped
+           on the way in either, so cleanPairs()/field() cap as well as redact. */
+        $facts = Diagnostics::cleanPairs((array) ($entry['facts'] ?? []), $cfg);
+        $env = Diagnostics::cleanPairs((array) ($entry['environment'] ?? []), $cfg);
 
         return [
             'at'          => (int) ($entry['at'] ?? 0),
             'doing'       => Diagnostics::redact((string) ($entry['doing'] ?? ''), $cfg),
             'step'        => Diagnostics::redact((string) ($entry['step'] ?? ''), $cfg),
             'error'       => Diagnostics::redact((string) ($entry['error'] ?? ''), $cfg),
-            'error_class' => (string) ($entry['error_class'] ?? ''),
-            'raised_at'   => (string) ($entry['raised_at'] ?? ''),
+            'error_class' => Diagnostics::redact((string) ($entry['error_class'] ?? ''), $cfg),
+            'raised_at'   => Diagnostics::redact((string) ($entry['raised_at'] ?? ''), $cfg),
             'facts'       => $facts,
             'environment' => $env,
             'seen'        => max(1, (int) ($entry['seen'] ?? 1)),

@@ -49,10 +49,15 @@ declare(strict_types=1);
 
 namespace Loghound;
 
+use Loghound\Auth\Persistence;
+
 final class Diagnostics
 {
     /** Longest any single field may be before it is cut. A report is for reading. */
     public const MAX_FIELD = 1200;
+
+    /** Longest a row label may be. Short, because every other label is padded to match it. */
+    public const MAX_LABEL = 60;
 
     /**
      * Shortest configured secret that is worth replacing by value.
@@ -86,6 +91,26 @@ final class Diagnostics
         'privacy.ip_salt'    => '[address salt redacted]',
         'auth.password_hash' => '[password hash redacted]',
         'solr.http_pass'     => '[index password redacted]',
+        /* THE SECOND FACTOR IS A SECRET AND WAS NOT ON THIS LIST. Anyone who reads the Base32
+           seed can mint the operator's codes forever, which makes it worth more than the
+           password hash directly above it. It reached a published block whenever a message
+           quoted it without an `api_key=`-shaped label — "code rejected for SEED" — because
+           the shape pass has nothing to match on and the value pass did not know it. */
+        'auth.totp.secret'   => '[two-factor seed redacted]',
+    ];
+
+    /**
+     * Configuration keys holding a LIST of secrets rather than one.
+     *
+     * Separate because secretValues() type-checks for a string, so an array-valued key put on
+     * SECRET_KEYS would be skipped in silence — present on the list, doing nothing, and
+     * reading as covered. The recovery codes are stored as hashes, which is not a reason to
+     * publish them: a hash of a ten-character code is a target, not a protection.
+     *
+     * @var array<string,string>
+     */
+    private const SECRET_LIST_KEYS = [
+        'auth.totp.recovery' => '[recovery code redacted]',
     ];
 
     /**
@@ -136,12 +161,16 @@ final class Diagnostics
             $where = self::relative((string) $error->getFile(), $root) . ':' . $error->getLine();
         }
 
+        /* A LABEL IS PUBLISHED EXACTLY AS LOUDLY AS A VALUE. Both halves of a fact come from
+           the caller, and a caller building a label out of what failed — a URL, a parameter
+           name, a filename it was handed — put whatever that was into the block untouched,
+           because only the value side was ever redacted. */
         $clean = [];
         foreach ($facts as $label => $value) {
             if (!is_string($label) || $label === '') {
                 continue;
             }
-            $clean[$label] = self::field((string) $value, $cfg);
+            $clean[self::label($label, $cfg)] = self::field((string) $value, $cfg);
         }
 
         return [
@@ -149,11 +178,48 @@ final class Diagnostics
             'doing'       => self::field($doing, $cfg),
             'step'        => self::field($step, $cfg),
             'error'       => self::field($message, $cfg),
-            'error_class' => $class,
-            'raised_at'   => $where,
+            'error_class' => self::field($class, $cfg),
+            'raised_at'   => self::field($where, $cfg),
             'facts'       => $clean,
-            'environment' => self::environment($cfg),
+            'environment' => self::cleanPairs(self::environment($cfg), $cfg),
         ];
+    }
+
+    /**
+     * Redact and cap both halves of a label/value map.
+     *
+     * @param array<string,string> $pairs
+     * @return array<string,string>
+     */
+    public static function cleanPairs(array $pairs, ?Config $cfg = null): array
+    {
+        $out = [];
+        foreach ($pairs as $label => $value) {
+            $label = self::label((string) $label, $cfg);
+            if ($label === '') {
+                continue;
+            }
+            $out[$label] = self::field(is_scalar($value) ? (string) $value : '', $cfg);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Redact, flatten and hard-cap a row label.
+     *
+     * Capped far shorter than a value because block() pads every label to the width of the
+     * longest one: an uncapped label does not merely appear in the report, it reformats the
+     * whole of it, and one long enough turns a readable artefact into a single unwrappable
+     * line nobody can paste anywhere.
+     */
+    private static function label(string $label, ?Config $cfg): string
+    {
+        $label = self::oneLine(self::redact($label, $cfg));
+
+        return strlen($label) > self::MAX_LABEL
+            ? substr($label, 0, self::MAX_LABEL) . '…'
+            : $label;
     }
 
     /**
@@ -213,12 +279,17 @@ final class Diagnostics
 
         $rows['When'] = gmdate('m/d/Y H:i:s', (int) ($report['at'] ?? time())) . ' UTC';
 
+        /* THE LEDGER IS A FILE, SO A REPORT REACHING HERE IS UNTRUSTED INPUT. Labels are
+           flattened and capped again on the way out rather than only on the way in, because
+           this is the last point before the block is shown and a label is what sets the width
+           of every row in it. */
         foreach ((array) ($report['facts'] ?? []) as $label => $value) {
-            $rows[(string) $label] = (string) $value;
+            $rows[self::label((string) $label, null)] = is_scalar($value) ? (string) $value : '';
         }
         foreach ((array) ($report['environment'] ?? []) as $label => $value) {
-            $rows[(string) $label] = (string) $value;
+            $rows[self::label((string) $label, null)] = is_scalar($value) ? (string) $value : '';
         }
+        unset($rows['']);
 
         $width = 0;
         foreach (array_keys($rows) as $label) {
@@ -278,6 +349,14 @@ final class Diagnostics
                     $out[$value] = $marker;
                 }
             }
+
+            foreach (self::SECRET_LIST_KEYS as $key => $marker) {
+                foreach ((array) $cfg->get($key, []) as $value) {
+                    if (is_string($value) && strlen($value) >= self::MIN_SECRET) {
+                        $out[$value] = $marker;
+                    }
+                }
+            }
         }
 
         if (PHP_SAPI !== 'cli' && session_status() === PHP_SESSION_ACTIVE) {
@@ -294,6 +373,53 @@ final class Diagnostics
                 $out[$owner] = '[session token redacted]';
             }
         }
+
+        /* THE STAY-SIGNED-IN TOKEN IS A BEARER CREDENTIAL AND LIVES IN NO CONFIGURATION FILE.
+           It is worth a signed-in panel for as long as it lasts, it arrives on every request
+           as `lh_remember=selector:verifier`, and a transport or a proxy that quotes a request
+           header back puts it straight into a message. Both halves are registered, because a
+           message may carry the verifier on its own. */
+        $remember = $_COOKIE[Persistence::COOKIE] ?? null;
+        if (is_string($remember) && $remember !== '') {
+            if (strlen($remember) >= self::MIN_SECRET) {
+                $out[$remember] = '[stay signed in token redacted]';
+            }
+            foreach (explode(':', $remember) as $half) {
+                if (strlen($half) >= self::MIN_SECRET) {
+                    $out[$half] = '[stay signed in token redacted]';
+                }
+            }
+        }
+
+        /* THE CREDENTIAL'S OWN WIRE FORM. A secret does not only travel as itself: HTTP Basic
+           sends `base64(user:pass)`, and that is how Loghound authenticates to Solr — where
+           `solr.http_pass` IS the account API key on a managed installation. A proxy or a Solr
+           error page that reflects the request's `Authorization` header therefore puts the
+           account key into a message in a spelling no pattern matches and the literal pass
+           does not see, and this block is designed to be pasted in public. Registering the
+           encoded forms costs one pass over a handful of short strings.
+
+           Built from the values already collected above, so a secret added to either list is
+           covered in both spellings without a second place to remember. */
+        foreach (array_keys($out) as $secret) {
+            $encoded = base64_encode((string) $secret);
+            if (strlen($encoded) >= self::MIN_SECRET) {
+                $out[$encoded] = $out[$secret];
+            }
+        }
+
+        if ($cfg !== null) {
+            $user = (string) $cfg->get('solr.http_user', '');
+            $pass = (string) $cfg->get('solr.http_pass', '');
+            if ($user !== '' && strlen($pass) >= self::MIN_SECRET) {
+                $out[base64_encode($user . ':' . $pass)] = '[index password redacted]';
+            }
+        }
+
+        /* LONGEST FIRST. str_replace() runs in array order, so a short value that is a
+           substring of a longer one would otherwise cut the longer one in half and leave the
+           remainder of it in the block. */
+        uksort($out, static fn ($a, $b): int => strlen((string) $b) <=> strlen((string) $a));
 
         return $out;
     }
@@ -317,7 +443,9 @@ final class Diagnostics
     /** Flatten newlines so one row of the block is one line. */
     private static function oneLine(string $value): string
     {
-        return trim((string) preg_replace('/\s+/', ' ', str_replace(["\r", "\n"], ' ', $value)));
+        $flat = str_replace(["\r", "\n"], ' ', $value);
+
+        return trim(preg_replace('/\s+/', ' ', $flat) ?? $flat);
     }
 
     /**

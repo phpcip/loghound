@@ -178,6 +178,56 @@ return [
             }
         },
 
+    /* THE SAME DEFECT, ONE STEP SHORT OF THE ONE ABOVE. noDataYet()'s noun is interpolated
+       into TWO headings — "No <what> in this time range" and "No <what> match your filters" —
+       and the second is the one that breaks. Attacks, the newest view, passed relative
+       clauses: 'requests matching a detection pattern' rendered "No requests matching a
+       detection pattern match your filters", and 'matched requests the server answered with a
+       2xx or a 3xx' rendered a heading with three verbs in it. The pivot test above pins the
+       shape it already found; this pins the shape for every caller, so the next view cannot
+       reintroduce it. */
+    'every empty state is handed a plural noun, because it is interpolated into a heading' =>
+        function (): void {
+            $files = glob(dirname(__DIR__) . '/public/assets/js/views/*.js') ?: [];
+            lh_true(count($files) > 8, 'the view modules were found');
+
+            /* Verbs only. A prepositional phrase — "sessions with a virtual host" — still
+               reads as a plural noun in the heading and is not the defect. */
+            $verbs = ['matching', 'whose', 'that ', 'which ', ' the server ', ' declaring ', ' answered '];
+            $seen = 0;
+
+            foreach ($files as $file) {
+                $src = (string) file_get_contents($file);
+                if (preg_match_all("/noDataYet\('[a-z0-9-]+',\s*'([^']+)'\)/", $src, $m) === 0) {
+                    continue;
+                }
+
+                foreach ($m[1] as $noun) {
+                    $seen++;
+                    $heading = 'No ' . $noun . ' match your filters';
+
+                    lh_true(
+                        strlen($noun) <= 30,
+                        basename($file) . ': "' . $noun . '" is a clause, not a noun — it is '
+                        . 'interpolated into "' . $heading . '"'
+                    );
+                    foreach ($verbs as $verb) {
+                        lh_false(
+                            str_contains($noun, $verb),
+                            basename($file) . ': "' . $noun . '" carries its own verb, so the '
+                            . 'heading reads "' . $heading . '"'
+                        );
+                    }
+                    lh_false(
+                        str_contains($noun, '.') || str_contains($noun, ','),
+                        basename($file) . ': "' . $noun . '" is punctuated like a sentence'
+                    );
+                }
+            }
+
+            lh_true($seen > 15, 'every view module was actually scanned, not silently skipped');
+        },
+
     'a card never shows two contradicting empty states at once' =>
         function (): void {
             // Virtual hosts revealed the server-rendered "no virtual host is being recorded —
