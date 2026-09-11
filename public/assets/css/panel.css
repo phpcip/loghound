@@ -1356,3 +1356,60 @@ td .shape { white-space: nowrap; }
 .check-row:last-child { border-bottom: 0; }
 .check-row p { margin: 0 0 4px; font-size: 14px; }
 .check-row .muted { overflow-wrap: anywhere; }
+
+/*
+ * The Settings jump bar.
+ *
+ * Eleven cards in one scroll is not navigable, so this sticks under the page header and
+ * stays reachable wherever the reader is. Horizontal and wrapping rather than a sidebar:
+ * the panel already has one on the left and a second would compete with it.
+ *
+ * scroll-margin-top on the cards keeps a jumped-to heading clear of the bar instead of
+ * landing underneath it.
+ */
+.set-nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    margin: 0 0 24px;
+    padding: 10px 0;
+    background: var(--bg);
+    border-bottom: 1px solid var(--rule);
+}
+.set-nav ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.set-nav a {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    font-size: 14px;
+    line-height: 1.2;
+    color: var(--ink);
+    text-decoration: none;
+    white-space: nowrap;
+}
+.set-nav a:hover,
+.set-nav a:focus-visible { border-color: var(--accent); color: var(--accent); }
+.set-nav-num {
+    font-family: var(--mono, monospace);
+    font-size: 14px;
+    color: var(--muted);
+}
+.set-nav a:hover .set-nav-num,
+.set-nav a:focus-visible .set-nav-num { color: var(--accent); }
+
+.setup .card[id$="-card"],
+.card[id^="set-"] { scroll-margin-top: 76px; }
+
+@media (max-width: 640px) {
+    .set-nav { position: static; }
+}

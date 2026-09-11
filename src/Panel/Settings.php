@@ -717,7 +717,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-auth',
-            '08',
+            '10',
             'Sign-in',
             'Applies to the next request. Changing this does not change your username or password.'
         );
@@ -831,20 +831,59 @@ final class Settings extends Controller implements JobHost
         echo '<input type="hidden" name="csrf" value="' . Security::esc(Security::csrfToken()) . '">';
     }
 
+    /**
+     * The sections on this page, in the order they render.
+     *
+     * One list drives three things that used to be maintained separately and drifted: the
+     * order sections are rendered in, the number printed on each card, and the jump links.
+     * Before it, two cards both claimed 02 and two both claimed 03.
+     *
+     * @var array<int,array{0:string,1:string,2:string}> id, label, renderer
+     */
+    private const SECTIONS = [
+        ['set-finish', 'Finish setting up', 'finishSection'],
+        ['set-ops', 'Running it', 'operationsSection'],
+        ['set-check', 'System check', 'systemCheckSection'],
+        ['set-sources', 'Log sources', 'sourcesSection'],
+        ['set-solr', 'Solr connection', 'solrSection'],
+        ['set-beacon', 'Beacon / JavaScript tracking', 'beaconSection'],
+        ['set-privacy', 'Privacy', 'privacySection'],
+        ['set-retention', 'Retention preview', 'retentionSection'],
+        ['set-scoring', 'Scoring weights', 'scoringSection'],
+        ['set-auth', 'Sign-in', 'authSection'],
+        ['set-display', 'Display', 'displaySection'],
+    ];
+
     public function body(): void
     {
         self::flash();
-        $this->finishSection();
-        $this->operationsSection();
-        $this->systemCheckSection();
-        $this->sourcesSection();
-        $this->solrSection();
-        $this->beaconSection();
-        $this->privacySection();
-        $this->retentionSection();
-        $this->scoringSection();
-        $this->authSection();
-        $this->displaySection();
+        self::sectionNav();
+
+        foreach (self::SECTIONS as $i => [$id, $label, $method]) {
+            $this->{$method}();
+        }
+    }
+
+    /**
+     * The jump bar that makes this page navigable.
+     *
+     * Settings is eleven cards long and was a single unbroken scroll: finding the scoring
+     * weights meant remembering roughly how far down they were. It sticks under the page
+     * header so it is reachable from anywhere on the page, and the entries are numbered to
+     * match the cards they point at.
+     *
+     * Plain anchors, so it works with scripting off and every entry is a real link somebody
+     * can open in a new tab or send to a colleague.
+     */
+    private static function sectionNav(): void
+    {
+        echo '<nav class="set-nav" aria-label="Settings sections"><ul>';
+        foreach (self::SECTIONS as $i => [$id, $label, $method]) {
+            echo '<li><a href="#' . Security::esc($id) . '-card">'
+                . '<span class="set-nav-num">' . sprintf('%02d', $i + 1) . '</span>'
+                . Security::esc($label) . '</a></li>';
+        }
+        echo '</ul></nav>';
     }
 
     /**
@@ -1191,7 +1230,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-sources',
-            '02',
+            '04',
             'Log sources',
             'Detected by reading your webserver configuration where possible, and by scoring sample lines against '
             . 'the known-format library where it is not. Nothing is ingested until you confirm the mapping below.'
@@ -1420,7 +1459,7 @@ final class Settings extends Controller implements JobHost
     {
         $mode = (string) $this->cfg->get('solr.mode', Config::SOLR_MODE);
 
-        self::cardOpen('set-solr', '03', 'Solr connection');
+        self::cardOpen('set-solr', '05', 'Solr connection');
 
         if ($mode !== Config::SOLR_MODE) {
             echo '<p class="pop">This configuration is not usable.</p>';
@@ -1475,7 +1514,7 @@ final class Settings extends Controller implements JobHost
     {
         $days = (int) $this->cfg->get('privacy.retention_days', 0);
 
-        self::cardOpen('set-retention', '06', 'Retention preview');
+        self::cardOpen('set-retention', '08', 'Retention preview');
         echo '<p class="pop">' . ($days > 0
             ? Security::esc('Documents older than ' . $days . ' days are eligible for deletion.')
             : 'Retention is disabled, so nothing is ever deleted.') . '</p>';
@@ -1581,7 +1620,7 @@ final class Settings extends Controller implements JobHost
         $src = $base . '/b.js?v=' . $ver;
         $enabled = (bool) $this->cfg->get('beacon.enabled');
 
-        self::cardOpen('set-beacon', '04', 'Beacon / JavaScript tracking');
+        self::cardOpen('set-beacon', '06', 'Beacon / JavaScript tracking');
         echo '<p class="pop">One line of JavaScript, optional. Loghound works without it. This section explains '
             . 'exactly what changes if you add it.</p>';
 
@@ -1779,7 +1818,7 @@ final class Settings extends Controller implements JobHost
         $mode = (string) $this->cfg->get('privacy.ip_mode', 'full');
         $days = (int) $this->cfg->get('privacy.retention_days', 90);
 
-        self::cardOpen('set-privacy', '05', 'Privacy');
+        self::cardOpen('set-privacy', '07', 'Privacy');
 
         echo '<p class="muted">Setup does not ask about these. A new installation keeps the full '
             . 'address and deletes hits after 90 days; this card is where both are changed.</p>';
@@ -1835,7 +1874,7 @@ final class Settings extends Controller implements JobHost
 
         self::cardOpen(
             'set-scoring',
-            '07',
+            '09',
             'Scoring weights',
             'Points added to bot_score_f when a rule fires. Saving bumps rule_version_i, so sessions scored under '
             . 'the old weights stay identifiable. Existing documents are not rescored.'
@@ -1882,7 +1921,7 @@ final class Settings extends Controller implements JobHost
     {
         $tz = (string) $this->cfg->get('ui.timezone', 'UTC');
 
-        self::cardOpen('set-display', '09', 'Display');
+        self::cardOpen('set-display', '11', 'Display');
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="ui">';
