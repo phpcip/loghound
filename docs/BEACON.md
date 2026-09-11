@@ -22,7 +22,7 @@ unreachable the host page is completely unaffected.
 ```
 
 That is the whole installation, and it is the snippet the panel's Settings page
-hands you. Put it anywhere — `<head>` or before `</body>`. `defer` never blocks
+hands you. Put it in `<head>`. `defer` never blocks
 rendering and starts the clocks at parse time rather than after the last image has
 loaded; `async` works too and is marginally earlier, at the cost of a
 non-deterministic start point. The collector URL is derived from the script's own

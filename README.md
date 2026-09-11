@@ -194,7 +194,7 @@ sudo systemctl enable --now loghound-tail.service
 loghound-tail --status --human
 ```
 
-And add one line to your site — anywhere in the page, `<head>` earliest:
+And add one line to your site, in `<head>`:
 
 ```html
 <script src="https://loghound.example.com/b.js?v=1789104523" defer></script>

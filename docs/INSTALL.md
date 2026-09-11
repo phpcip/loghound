@@ -546,7 +546,10 @@ detector will recognise it.
 
 ## The beacon
 
-One line on your site. Put it anywhere — `<head>` is earliest, before `</body>` works too:
+One line on your site, in `<head>`. With `defer` it never blocks rendering wherever it
+sits, so the only thing placement changes is when the browser starts fetching it: in
+`<head>` that is immediately, before `</body>` not until the parser has walked the whole
+document. Both work; one starts sooner.
 
 ```html
 <script src="https://loghound.example.com/b.js?v=1757000000" defer></script>
