@@ -694,6 +694,17 @@ final class View
             echo '<p><a class="btn primary" href="?setup=' . Security::esc(Installer::STEP_PRIVACY)
                 . '">Continue</a></p>';
             echo '</section>';
+
+            echo '<details class="card">';
+            echo '<summary>Provision again on a different region</summary>';
+            echo '<p class="muted">The two indexes above already exist and answer. Running this '
+                . 'again creates a NEW pair under a fresh name and leaves the current two on your '
+                . 'account, where they keep counting against the plan until you delete them. '
+                . 'Normally there is nothing to do here — carry on with Continue.</p>';
+            $this->opensolrPanel();
+            echo '</details>';
+
+            return;
         }
 
         $this->opensolrPanel();
