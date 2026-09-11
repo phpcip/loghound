@@ -1,25 +1,31 @@
 /*
- * Loghound — the two detail dialogs every view opens.
+ * Loghound — the three detail dialogs every view opens.
  *
- * A row in this panel names one of two things, so there are two dialogs and no more:
+ * A row in this panel names one of three things, so there are three dialogs and no more:
  *
- *   SESSION — one visitor's visit. Who they are, what they used, how long they were really
- *   there across all four clocks, how they arrived, what the scorer concluded and WHICH RULES
- *   FIRED to produce it, and then every request they made in order with timestamps, status
- *   codes and bytes. The rule list is the thing no JavaScript analytics product can show,
- *   because it never computed a verdict in the first place.
+ *   VISIT — one person's or one client's visit, written for a person to read. Who they were,
+ *   what they used, how long they were really here, how they arrived, what the scorer concluded
+ *   and WHICH RULES FIRED to produce it, and then every request they made in order. The rule
+ *   list is the thing no JavaScript analytics product can show, because it never computed a
+ *   verdict in the first place.
  *
- *   DIMENSION — one value of one dimension: a country, an AS organisation, a netname, a
- *   browser, a verdict, a path. How much traffic it accounts for and of what kind, how it
- *   breaks down along every other dimension, and a sample of the actual recent visitors behind
- *   it — each of which opens their own session dialog, so a drill-down keeps going rather than
- *   ending in a number.
+ *   DIMENSION — one value of one dimension: a country, an AS organisation, a netname, a browser,
+ *   a verdict, a path, a client signature. How much traffic it accounts for and of what kind,
+ *   how it breaks down along every other dimension, and then EVERY visit behind it, twenty to a
+ *   page — not a sample, and not "the most recent 12 of 1,890".
  *
- * WHY THEY ARE HERE AND NOT IN A VIEW. Every view wants both. The Networks page opens a
- * netname, the Bots page opens a verdict, the Overview opens a path, and the session explorer
- * opens all of them plus a session — and each of them was previously a dead end. Registering
- * the two openers once means a table anywhere in the panel becomes drillable by adding data
- * attributes to its rows (see identity.js drillRow / dimRow) and nothing else.
+ *   POPULATION — one of the five headline counts on the Overview. The tiles used to be inert
+ *   text: five numbers naming five populations with no way to see a single member of any of
+ *   them. Pressing one now opens the visits behind it, in the same paged table.
+ *
+ * WHAT THIS DIALOG DOES NOT SHOW, AND THAT IS THE POINT. No session id. No header fingerprint.
+ * Both were rendered as labelled fields — `SESSION 34ff9f7f1e69…`, `HEADER FINGERPRINT
+ * 9e1a8b26e001…` — and a forty-character hash is not a fact about a visitor, it is a database
+ * key that happened to be in the payload. What a reader can act on is what the hash MEANS: that
+ * the same client configuration arrived from eleven different addresses this afternoon. So that
+ * is what is written. The same rule demoted the raw User-Agent to a disclosure the curious can
+ * open, and turned the ASN number and the netblock from two labelled rows into one sentence
+ * about whose address space the visitor was on.
  *
  * EVERY VALUE IN HERE IS HOSTILE. Paths, User-Agents, referrers, AS organisation names, RIR
  * netnames and any identity the measured site chose to attach are all somebody else's input.
@@ -29,23 +35,25 @@
  * never decides that a scheme is safe — and the filter links are built with encodeURIComponent
  * by identity.js.
  *
- * A PATH IS NEVER SHOWN BARE. The trail, the entry and exit pages and the recent-visitors table
- * all carry the full URL beside the path, as a link that opens in a new tab. A hit's own host is
- * preferred and the session's host is the fallback, because a session can cross virtual hosts.
+ * A PATH IS NEVER SHOWN BARE. The trail, the entry and exit pages and the visit table all carry
+ * the full URL beside the path, as a link that opens in a new tab. A hit's own host is preferred
+ * and the session's host is the fallback, because a session can cross virtual hosts.
  */
 
 'use strict';
 
 import {
-    api, bytes, dec, dur, durUs, el, fill, num, pct, populationLabel, shortHash, when
+    api, bytes, dec, dur, durUs, el, fill, num, pct, populationLabel, when
 } from './core.js';
 import { closeDialog, dialogFail, isCurrent, openDialog, registerOpener } from './dialog.js';
 import {
-    clientNode, countryNode, dimLabel, dimValue, flagNode, networkNode, valueText, verdictChip
+    dimLabel, dimValue, flagNode, valueText, verdictChip
 } from './identity.js';
 import { markSortable } from './sorttable.js';
 import { countryName } from './geo.js';
 import { outLink, pathCell, urlMark } from './url.js';
+import { renderPager } from './pager.js';
+import { fillVisits, visitCaption, visitTable } from './visits.js';
 
 /** Population keys in the order every other chart in the panel stacks them. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -71,12 +79,17 @@ function kv(pairs) {
     return dl;
 }
 
+/** A plain sentence, or nothing when there is no sentence to say. */
+function say(text, klass) {
+    return text ? el('p', { class: klass || 'muted', text: text }) : null;
+}
+
 /** A note saying which filters produced the numbers below it, or nothing when none did. */
 function filterNote(active) {
     const parts = [];
     for (const field of Object.keys(active || {})) {
         for (const value of active[field]) {
-            parts.push(dimLabel(field) + ': ' + value);
+            parts.push(dimLabel(field) + ': ' + valueText(field, value));
         }
     }
     if (!parts.length) {
@@ -84,38 +97,117 @@ function filterNote(active) {
     }
     return el('p', {
         class: 'faint',
-        text: 'Scoped to the filters currently in force — ' + parts.join(', ') +
-            ' — and to the selected time range. Clearing them changes every number here.'
+        text: 'Scoped to ' + parts.join(', ') + ', and to the selected range.'
     });
 }
 
 /* -------------------------------------------------------------------------
- * The session dialog
+ * The paged visit table, shared by all three dialogs
  * ---------------------------------------------------------------------- */
 
 /**
- * The four clocks, each with the sentence that says what it measures.
+ * A caption, a five-column visit table and its pager, wired to page server-side.
  *
- * Log span is always drawn because it always exists. The other three are drawn only when a
- * beacon arrived, and when one did not the dialog says so in words rather than showing three
- * zeroes — a zero is a measurement and "nobody measured this" is not the same claim.
+ * WHY IT PAGES OVER THE WIRE AND NOT IN THE BROWSER. A fingerprint dialog can stand behind 1,890
+ * visits and a country dialog behind a hundred times that. Fetching them all so the browser can
+ * slice twenty would be a request whose cost is the size of the population, from a dialog the
+ * reader opened out of curiosity — so each page is its own bounded read of twenty documents and
+ * the one before it is thrown away.
+ *
+ * A failed page turn leaves the table it had and offers to try again, rather than replacing a
+ * dialog full of working content with an error.
+ *
+ * @param {Array<Object>} rows  First page of visits.
+ * @param {Object} page         The server's `page` block.
+ * @param {Function} fetchPage  (start) => Promise<{visitors, page}>
+ * @returns {HTMLElement}
  */
-function clocks(s) {
-    const grid = el('div', { class: 'timing-grid' });
-    const add = (key, label, value, defn) => {
-        grid.appendChild(el('div', { class: 'timing', dataset: { timing: key } }, [
-            el('span', { class: 'timing-label', text: label }),
-            el('span', { class: 'timing-value mono', text: value }),
-            el('span', { class: 'timing-defn', text: defn })
-        ]));
+function visitBlock(rows, page, fetchPage) {
+    const wrap = visitTable(rows);
+    const table = wrap.querySelector('table');
+    const mount = el('div', { class: 'pager-mount' });
+    const caption = el('p', { class: 'faint', text: visitCaption(page) });
+
+    const show = (state) => {
+        renderPager(mount, state, async (start) => {
+            const busy = el('p', { class: 'muted', text: 'Loading page…' });
+            mount.replaceChildren(busy);
+            try {
+                const next = await fetchPage(start);
+                fillVisits(table, next.visitors || []);
+                markSortable(wrap);
+                show(next.page);
+            } catch (err) {
+                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                again.addEventListener('click', () => show(state));
+                mount.replaceChildren(
+                    el('p', { class: 'muted', text: 'That page could not be loaded: ' +
+                        String(err && err.message ? err.message : err) }),
+                    el('div', { class: 'card-error-actions' }, [again])
+                );
+            }
+        });
     };
-    add('log_span', 'Log span', dur(s.log_span_ms), 'Last request minus first. From the access log, always present.');
-    if (s.beacon) {
-        add('wall', 'Wall clock', dur(s.wall_ms), 'The page existed for this long, tab in any state.');
-        add('visible', 'Visible', dur(s.visible_ms), 'Tab visible and window focused.');
-        add('engaged', 'Engaged', dur(s.engaged_ms), 'Visible, within 30s of a real interaction.');
+    show(page);
+
+    return el('div', { class: 'visit-block' }, [caption, wrap, mount]);
+}
+
+/* -------------------------------------------------------------------------
+ * The visit dialog
+ * ---------------------------------------------------------------------- */
+
+/**
+ * How long they were here, written for whichever of the three cases this visit is.
+ *
+ * ONE REQUEST IS THE CASE THIS EXISTS FOR. A visit with a single hit used to render three
+ * labelled fields reading `STARTED 21:51:53`, `ENDED 21:51:53` and `LOG SPAN 0 ms`, followed by
+ * three paragraphs explaining what could not be known — a lot of apology for an empty block, and
+ * a `0 ms` that looks like a measurement of something. One request has no duration; the honest
+ * output is one sentence saying so, and then the section is over.
+ *
+ * With a beacon the four clocks are worth the room, because the difference between them is the
+ * product's headline claim. Without one they are not shown at all: a zero is a measurement and
+ * "nobody measured this" is a different statement.
+ */
+function howLong(s) {
+    const oneRequest = s.hits !== null && s.hits <= 1;
+
+    if (oneRequest && !s.beacon) {
+        return [
+            el('h3', { text: 'How long they were here' }),
+            say('One request, at ' + when(s.ts_start) + ', and no beacon: nothing measured a duration.')
+        ];
     }
-    return grid;
+
+    const parts = [el('h3', { text: 'How long they were here' })];
+
+    if (s.beacon) {
+        const grid = el('div', { class: 'timing-grid' });
+        const add = (key, label, value, defn) => {
+            grid.appendChild(el('div', { class: 'timing', dataset: { timing: key } }, [
+                el('span', { class: 'timing-label', text: label }),
+                el('span', { class: 'timing-value mono', text: value }),
+                el('span', { class: 'timing-defn', text: defn })
+            ]));
+        };
+        add('log_span', 'Requesting things for', dur(s.log_span_ms), 'First request to last. Blind to the final page.');
+        add('wall', 'Page open for', dur(s.wall_ms), 'Tab in any state.');
+        add('visible', 'Looking at it for', dur(s.visible_ms), 'Visible and focused.');
+        add('engaged', 'Actually engaged for', dur(s.engaged_ms), 'Within 30s of an interaction.');
+        parts.push(grid);
+        parts.push(say(num(s.interactions) + ' interactions, '
+            + (s.max_scroll === null ? 'no scroll depth recorded' : s.max_scroll + '% deepest scroll')
+            + ', ' + num(s.pageviews) + ' pageviews.'));
+        return parts;
+    }
+
+    parts.push(say('They were requesting things for ' + dur(s.log_span_ms) + ', from '
+        + when(s.ts_start) + ' to ' + when(s.ts_end) + '.'));
+    parts.push(say('That is the log span, which cannot see the last page. No beacon ran, so how long they '
+        + 'stayed is unknown rather than zero.'));
+
+    return parts;
 }
 
 /** The rules that fired, each with the plain-English description of what it means. */
@@ -131,68 +223,84 @@ function firedRules(s, catalogue) {
         ]));
     }
     if (!(s.reasons || []).length) {
-        list.appendChild(el('li', {
-            class: 'muted',
-            text: 'No signal fired. This session looked ordinary on the transport, behaviour and execution planes ' +
-                'alike, which is why the verdict is what it is.'
-        }));
+        list.appendChild(el('li', { class: 'muted', text: 'No signal fired.' }));
     }
     return list;
 }
 
 /**
- * The request trail: every hit in the session, in order.
+ * The request trail: every request in the visit, in order, twenty to a page.
  *
- * This is the thing an operator reads behaviour from — what somebody was trying to do and what
- * they wanted — so it is the last and largest block in the dialog rather than a footnote. One
- * query against the hits core tied by `session_id_s` and sorted by time is the whole trail; the
- * server caps it and says when it did, because "the last 200 of 4,000 requests" presented as
- * the trail would be a lie by omission.
+ * THE THING AN OPERATOR READS BEHAVIOUR FROM — what somebody was trying to do and what they
+ * wanted — so it is the last and largest block in the dialog rather than a footnote. It used to
+ * fetch two hundred requests and then admit, in a sentence under them, that a busy session had
+ * more and they were not reachable. A scraper's session is exactly the one that overflows, and
+ * what it asked for at the END is exactly what was being cut off.
+ *
+ * @param {string} id       Session id, for the page fetches. Never rendered.
+ * @param {Object} data     The detail payload.
+ * @param {string|null} host The session's own virtual host, as the fallback for a hit with none.
  */
-function trail(data) {
+function trailBlock(id, data, host) {
+    const list = el('ul', { class: 'timeline' });
+    const mount = el('div', { class: 'pager-mount' });
+
+    const paint = (hits) => {
+        list.replaceChildren();
+        for (const hit of (hits || [])) {
+            const statusClass = 't-status-' + String(hit.status === null ? '' : hit.status).charAt(0);
+            list.appendChild(el('li', {}, [
+                el('span', { class: 'muted mono', text: when(hit.ts).split(' ')[1] || '' }),
+                el('span', { class: 't-method muted', text: hit.method || '' }),
+                el('span', { class: 't-path urlwrap', title: hit.path + (hit.query ? '?' + hit.query : '') }, [
+                    el('span', { class: 'urlpath' }, [
+                        el('span', { text: hit.path }),
+                        hit.query ? el('span', { class: 'muted', text: '?' + hit.query }) : null
+                    ]),
+                    urlMark(hit.path, { host: hit.host, fallback: host, query: hit.query })
+                ]),
+                el('span', { class: statusClass + ' mono', text: hit.status === null ? '—' : String(hit.status) }),
+                el('span', { class: 't-bytes muted mono', text: bytes(hit.bytes) }),
+                el('span', {
+                    class: 't-dur muted mono',
+                    text: hit.dur_us === null ? '' : durUs(hit.dur_us),
+                    title: hit.dur_us === null ? '' : 'Time the server took to answer'
+                })
+            ]));
+        }
+    };
+
+    const show = (state) => {
+        renderPager(mount, state, async (start) => {
+            mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page…' }));
+            try {
+                const next = await api('sessions', 'trail', { id: id, start: start, rows: state.rows });
+                paint(next.timeline);
+                show(next.page);
+            } catch (err) {
+                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                again.addEventListener('click', () => show(state));
+                mount.replaceChildren(
+                    el('p', { class: 'muted', text: 'That page could not be loaded: ' +
+                        String(err && err.message ? err.message : err) }),
+                    el('div', { class: 'card-error-actions' }, [again])
+                );
+            }
+        });
+    };
+
     if (!data.timeline.length) {
         return el('p', {
             class: 'muted',
-            text: 'No individual requests came back for this session. They may have aged past the retention ' +
-                'window on the hits core while the session rollup survived — the rollup is kept longer on purpose.'
+            text: 'No individual requests came back: they have aged out of the request log, which is kept '
+                + 'for less time than the summary of a visit.'
         });
     }
 
-    const list = el('ul', { class: 'timeline' });
-    const sessionHost = (data.session && data.session.host) || null;
+    paint(data.timeline);
+    show(data.page);
 
-    for (const hit of data.timeline) {
-        const statusClass = 't-status-' + String(hit.status === null ? '' : hit.status).charAt(0);
-        list.appendChild(el('li', {}, [
-            el('span', { class: 'muted mono', text: when(hit.ts).split(' ')[1] || '' }),
-            el('span', { class: 't-method muted', text: hit.method || '' }),
-            el('span', { class: 't-path urlwrap', title: hit.path + (hit.query ? '?' + hit.query : '') }, [
-                el('span', { class: 'urlpath' }, [
-                    el('span', { text: hit.path }),
-                    hit.query ? el('span', { class: 'muted', text: '?' + hit.query }) : null
-                ]),
-                urlMark(hit.path, { host: hit.host, fallback: sessionHost, query: hit.query })
-            ]),
-            el('span', { class: statusClass + ' mono', text: hit.status === null ? '—' : String(hit.status) }),
-            el('span', { class: 't-bytes muted mono', text: bytes(hit.bytes) }),
-            el('span', {
-                class: 't-dur muted mono',
-                text: hit.dur_us === null ? '' : durUs(hit.dur_us),
-                title: hit.dur_us === null ? '' : 'Time the server took to answer'
-            })
-        ]));
-    }
-
-    return el('div', {}, [
-        list,
-        data.truncated
-            ? el('p', {
-                class: 'muted',
-                text: 'Trail truncated — this session made more requests than the panel fetches at once, so what ' +
-                    'you are reading is the beginning of it, not all of it.'
-            })
-            : null
-    ]);
+    return el('div', {}, [list, mount]);
 }
 
 /**
@@ -214,79 +322,239 @@ function identStrip(s) {
 
     const parts = [];
     if (s.ident) {
-        parts.push(el('span', { class: 'ident-label', text: 'Identified as' }));
+        parts.push(el('span', { class: 'ident-label', text: 'The site knows them as' }));
         parts.push(el('span', { class: 'ident-value mono', text: s.ident }));
     }
     parts.push(el('span', {
         class: 'chip ' + (s.signed_in === true ? 'chip-good' : ''),
-        text: s.signed_in === true ? 'signed in' : (s.signed_in === false ? 'anonymous' : 'sign-in state not reported')
+        text: s.signed_in === true ? 'signed in' : (s.signed_in === false ? 'not signed in' : 'sign-in state not reported')
     }));
-    parts.push(el('span', {
-        class: 'faint',
-        text: 'Declared by the measured site through the beacon. Loghound never derives, guesses or scrapes ' +
-            'either of these.'
-    }));
+    parts.push(el('span', { class: 'faint', text: 'Declared by the site, not derived.' }));
 
     return el('div', { class: 'ident-strip' }, parts);
 }
 
 /**
- * Render one session into the dialog body.
+ * Where they were, as a place rather than a code.
+ */
+function placeNode(s) {
+    if (!s.country) {
+        return null;
+    }
+    return el('span', { class: 'geo' }, [
+        flagNode(s.country),
+        el('span', { text: [s.city, s.region, countryName(s.country) || s.country].filter(Boolean).join(', ') })
+    ]);
+}
+
+/**
+ * Whose network they were on, in words, with the numbers demoted to one sentence.
  *
- * The order is the order the questions get asked: who, what they used, who they say they are,
- * how long, how they arrived, what we concluded and why, what shape the visit had, and finally
- * the trail.
+ * THE ASN AND THE NETBLOCK ARE NOT FIRST-CLASS FIELDS ANY MORE. `ASN AS7922` and `NETBLOCK
+ * 73.0.0.0/8` were two labelled rows of a dialog that is supposed to be readable, and neither
+ * says anything on its own — the fact is "they were on Comcast's consumer broadband", and the
+ * numbers are how you'd look that up. So the name and the kind of network lead, as filter
+ * controls, and the identifiers follow in a faint line for the operator who needs to quote them.
+ */
+function networkBlock(s) {
+    if (!s.as_org && !s.asn && !s.netname) {
+        return null;
+    }
+
+    const head = el('div', {}, [
+        s.as_org
+            ? dimValue('as_org_s', s.as_org)
+            : el('span', { class: 'muted', text: 'An unnamed network' }),
+        s.as_type ? el('span', { text: ' — ' }) : null,
+        s.as_type ? dimValue('as_type_s', s.as_type) : null
+    ]);
+
+    const bits = [];
+    if (s.ip_net) {
+        bits.push('address block ' + s.ip_net);
+    }
+    if (s.asn) {
+        bits.push('network AS' + s.asn);
+    }
+    if (s.netname) {
+        bits.push('registered as ' + s.netname);
+    }
+
+    return el('div', {}, [
+        head,
+        bits.length ? el('div', { class: 'sub', text: 'Looked up as ' + bits.join(', ') + '.' }) : null
+    ]);
+}
+
+/**
+ * What the address's own network calls it, and whether that claim can be believed.
+ *
+ * A reverse DNS name is only evidence when it resolves back to the address it came from; the
+ * panel used to print `crawl-66-249-66-1.googlebot.com (NOT forward-confirmed)` and leave the
+ * reader to know what that means. Anyone can point a name at anything, and only the forward
+ * lookup makes it a fact.
+ */
+function rdnsSentence(s) {
+    if (!s.rdns) {
+        return null;
+    }
+    return s.rdns_ok
+        ? 'Reverse DNS says ' + s.rdns + ', forward-confirmed.'
+        : 'Reverse DNS claims ' + s.rdns + ', which does not resolve back to this address. The claim is '
+            + 'worth nothing.';
+}
+
+/**
+ * What the header signature means for this visit, WITHOUT ever printing the hash.
+ *
+ * The hash is a database key. What the reader can act on is how many unrelated addresses wore
+ * the same client configuration in the same day: one is what a browser looks like, and a dozen
+ * is what one scraper behind a rotating proxy pool looks like.
+ */
+function signatureSentence(s) {
+    if (s.fp_ips_24h === null || s.fp_ips_24h === undefined) {
+        return null;
+    }
+    const n = Number(s.fp_ips_24h);
+    if (n <= 1) {
+        return 'This exact set of request headers came from this address alone in the surrounding day.';
+    }
+    if (n < 5) {
+        return 'The same headers came from ' + num(n) + ' addresses in the surrounding day.';
+    }
+    return 'The same headers came from ' + num(n) + ' unrelated addresses in the surrounding day — the shape '
+        + 'a proxy fleet makes.';
+}
+
+/**
+ * The raw User-Agent, behind a disclosure rather than as a labelled field.
+ *
+ * It is real evidence and it stays available, but it is a hundred and forty characters of
+ * packaging — `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 …` — whose
+ * content the parser has already turned into the three facts above it. As a first-class field
+ * it pushed those three off the top of the dialog.
+ *
+ * `<details>` rather than a scripted toggle, because the panel's CSP allows no inline handler
+ * and the browser's own disclosure needs none.
+ */
+function rawAgent(s) {
+    if (!s.ua) {
+        return null;
+    }
+    return el('details', { class: 'raw-ua' }, [
+        el('summary', { text: 'The raw User-Agent string' }),
+        el('p', { class: 'mono wrap', text: s.ua })
+    ]);
+}
+
+/**
+ * What they did, as sentences rather than as eleven labelled numbers.
+ *
+ * The request count, the page/asset split and the byte total are readable as figures. The asset
+ * ratio, the median gap and the gap standard deviation are not: they are inputs to the scorer,
+ * and printed as `0.94` and `2300 ms` they are three rows a reader skips. What they MEAN — a
+ * visit that fetched almost no page HTML, a rhythm too regular for a hand on a mouse — is worth
+ * a sentence, so that is what they get.
+ */
+function whatTheyDid(s) {
+    const facts = kv([
+        ['Requests', s.hits === null ? null : num(s.hits), true],
+        ['Pages / other files', s.pages === null && s.assets === null
+            ? null
+            : num(s.pages) + ' / ' + num(s.assets), true],
+        ['Distinct pages', s.uniq_paths === null ? null : num(s.uniq_paths), true],
+        ['Data sent', s.bytes === null ? null : bytes(s.bytes), true]
+    ]);
+
+    const notes = [];
+
+    const bad = (s.status['4xx'] || 0) + (s.status['5xx'] || 0);
+    if (bad > 0) {
+        notes.push(num(s.status['2xx'] || 0) + ' answered, ' + num(s.status['3xx'] || 0) + ' redirected, '
+            + num(s.status['4xx'] || 0) + ' refused, ' + num(s.status['5xx'] || 0) + ' broke the server.');
+    }
+
+    if (s.asset_ratio !== null && s.hits !== null && s.hits > 3) {
+        if (s.asset_ratio < 0.2) {
+            notes.push('Almost nothing they fetched was an image, a stylesheet or a script. A browser loads '
+                + 'the trimmings; something that only wants the text does not.');
+        }
+    }
+
+    if (s.gap_p50_ms !== null && s.hits !== null && s.hits > 3) {
+        const steady = s.gap_stddev_ms !== null && s.gap_p50_ms > 0
+            && s.gap_stddev_ms < s.gap_p50_ms * 0.15;
+        notes.push('A request about every ' + dur(s.gap_p50_ms)
+            + (s.gap_stddev_ms === null ? '.' : ', varying by ' + dur(s.gap_stddev_ms) + '.')
+            + (steady ? ' That even a rhythm is a timer, not a hand on a mouse.' : ''));
+    }
+
+    if (s.got_304 === false && s.hits !== null && s.hits > 3) {
+        notes.push('Never asked whether anything had changed since last time, which a browser cache does.');
+    }
+
+    return [el('h3', { text: 'What they did' }), facts].concat(notes.map((n) => say(n)));
+}
+
+/**
+ * Render one visit into the dialog body.
+ *
+ * The order is the order the questions get asked: who they say they are, who they were and what
+ * they used, how long they were here, how they arrived, what we concluded and why, what they
+ * did, and finally every request in order.
  */
 function renderSession(body, data) {
     const s = data.session;
 
-    const identity = [
-        ['Session', s.id, true],
-        ['Started', when(s.ts_start), true],
-        ['Ended', when(s.ts_end), true],
+    const who = [
         ['Address', s.ip ? dimValue('ip_s', s.ip, { mono: true }) : null],
-        ['Netblock', s.ip_net, true],
-        ['Where', s.country
-            ? el('span', { class: 'geo' }, [
-                flagNode(s.country),
-                el('span', { text: [s.city, s.region, countryName(s.country) || s.country].filter(Boolean).join(', ') })
-            ])
-            : null],
-        ['Network', s.as_org || s.asn ? networkNode(s) : null],
-        ['ASN', s.asn ? 'AS' + s.asn : null, true],
-        ['Reverse DNS', s.rdns
-            ? s.rdns + (s.rdns_ok ? ' (forward-confirmed)' : ' (NOT forward-confirmed)')
-            : null, true],
-        ['IP timezone', s.tz, true]
+        ['Where', placeNode(s)],
+        ['Network', networkBlock(s)],
+        ['Timezone of the address', s.tz, true]
     ];
 
-    const client = [
+    const used = [
         ['Browser', s.browser ? dimValue('browser_s', s.browser, {
             text: [s.browser, s.browser_ver].filter(Boolean).join(' ')
         }) : null],
-        ['OS', s.os ? dimValue('os_s', s.os) : null],
-        ['Device', s.device ? dimValue('device_s', s.device, { mono: true }) : null],
-        ['Declared bot', s.ua_bot
-            ? (s.ua_bot_name || 'yes') + (s.ua_bot_cat ? ' (' + s.ua_bot_cat + ')' : '')
-            : null],
-        ['AI crawler', s.ai_crawler ? 'yes' : null],
-        ['Header fingerprint', s.fp
-            ? dimValue('fp_hash_s', s.fp, { mono: true, text: shortHash(s.fp, 20), title: s.fp })
-            : null],
-        ['Addresses sharing it (±12h)', s.fp_ips_24h === null ? null : num(s.fp_ips_24h)],
-        ['User-Agent', el('span', { class: 'mono wrap', text: s.ua || 'not recorded' })]
+        ['Operating system', s.os ? dimValue('os_s', s.os) : null],
+        ['Kind of device', s.device ? dimValue('device_s', s.device) : null],
+        ['Says it is a crawler', s.ua_bot
+            ? el('span', {}, [
+                el('span', { text: (s.ua_bot_name || 'yes') }),
+                s.ua_bot_cat ? el('span', { text: ' — ' }) : null,
+                s.ua_bot_cat ? dimValue('ua_bot_cat_s', s.ua_bot_cat) : null,
+                s.ai_crawler ? el('span', { class: 'chip chip-accent', text: 'collects for AI' }) : null
+            ])
+            : null]
     ];
 
+    const execution = [];
+    if (s.beacon) {
+        execution.push(['Scripts ran on the page', s.js ? 'yes' : 'no']);
+        execution.push(['Headless signals', s.headless ? 'yes' : 'none']);
+        execution.push(['The browser it claimed to be', s.ua_claim_ok === null
+            ? null
+            : (s.ua_claim_ok ? 'matches the engine' : 'contradicts the engine')]);
+        execution.push(['Its clock against its address', s.tz_match === null
+            ? null
+            : (s.tz_match ? 'agree' : 'disagree')]);
+        execution.push(['Graphics hardware reported', s.webgl]);
+        if ((s.automation || []).length) {
+            execution.push(['Automation markers', s.automation.join(', ')]);
+        }
+    }
+
     const arrival = [
-        ['Entry page', s.entry ? pathCell(s.entry, { fallback: s.host }) : null],
-        ['Exit page', s.exit ? pathCell(s.exit, { fallback: s.host }) : null],
-        ['Referrer', s.referer
+        ['First page they asked for', s.entry ? pathCell(s.entry, { fallback: s.host }) : null],
+        ['Last page the log saw', s.exit ? pathCell(s.exit, { fallback: s.host }) : null],
+        ['Came from', s.referer
             ? (s.referer_href && s.referer_href !== '#'
                 ? el('a', { href: s.referer_href, rel: 'noreferrer noopener', text: s.referer })
                 : el('span', { class: 'mono wrap', text: s.referer }))
-            : 'none sent'],
-        ['Referrer type', s.referer_type ? dimValue('referer_type_s', s.referer_type) : null],
-        ['Virtual host', s.host
+            : 'no referrer sent'],
+        ['Which counts as', s.referer_type ? dimValue('referer_type_s', s.referer_type) : null],
+        ['Site they were on', s.host
             ? el('span', { class: 'urlwrap' }, [
                 el('span', { class: 'urlpath' }, [dimValue('host_s', s.host, { mono: true })]),
                 outLink(s.host, '/')
@@ -294,107 +562,75 @@ function renderSession(body, data) {
             : null]
     ];
 
-    const execution = [];
-    if (s.beacon) {
-        execution.push(['JavaScript ran', s.js ? 'yes' : 'no', true]);
-        execution.push(['Headless signals', s.headless ? 'yes' : 'no', true]);
-        execution.push(['UA claim verified', s.ua_claim_ok === null
-            ? null
-            : (s.ua_claim_ok ? 'yes' : 'no — the engine\'s features contradict the User-Agent')]);
-        execution.push(['Timezone matches IP', s.tz_match === null ? null : (s.tz_match ? 'yes' : 'no')]);
-        execution.push(['WebGL renderer', s.webgl, true]);
-        if ((s.automation || []).length) {
-            execution.push(['Automation markers', s.automation.join(', '), true]);
-        }
-    }
+    const signature = signatureSentence(s);
+    const rdns = rdnsSentence(s);
 
     fill(body, [
         identStrip(s),
 
         el('div', { class: 'grid-2' }, [
-            el('div', {}, [el('h3', { text: 'Who' }), kv(identity)]),
-            el('div', {}, [el('h3', { text: 'What they used' }), kv(client)])
+            el('div', {}, [el('h3', { text: 'Who was here' }), kv(who), say(rdns)]),
+            el('div', {}, [
+                el('h3', { text: 'What they used' }),
+                kv(used),
+                say(signature),
+                rawAgent(s)
+            ])
         ]),
 
-        el('h3', { text: 'How long they were really there' }),
-        clocks(s),
-        s.beacon
-            ? el('p', { class: 'muted', text:
-                'Beacon data present: ' + num(s.interactions) + ' interactions, ' +
-                (s.max_scroll === null ? 'no scroll recorded' : s.max_scroll + '% deepest scroll') +
-                ', ' + num(s.pageviews) + ' pageviews.' })
-            : el('p', { class: 'muted', text:
-                'No beacon arrived for this session, so wall, visible and engaged time are unknown and are not ' +
-                'shown. They are not zero — nothing measured them. Log span is all there is, and it cannot see ' +
-                'the last page of the visit at all.' }),
+        ...howLong(s),
 
         el('h3', { text: 'How they arrived' }),
         kv(arrival),
 
-        el('h3', { text: 'The verdict, and why' }),
+        el('h3', { text: 'What we concluded, and why' }),
         kv([
             ['Verdict', verdictChip(s.verdict)],
-            ['Score', s.score === null ? null : dec(s.score, 0) + ' / 100', true],
-            ['Class', s.class ? dimValue('bot_class_s', s.class) : null],
-            ['Ruleset version', s.rule_version === null ? null : String(s.rule_version), true]
+            ['Bot score', s.score === null ? null : dec(s.score, 0) + ' / 100', true],
+            ['Kind of client', s.class ? dimValue('bot_class_s', s.class) : null]
         ]),
-        el('h4', { text: 'Rules that fired' }),
+        el('h4', { text: 'What led to that' }),
         firedRules(s, data.reasons),
 
-        execution.length ? el('h4', { text: 'Execution plane' }) : null,
+        execution.length ? el('h4', { text: 'What the browser could actually do' }) : null,
         execution.length ? kv(execution) : null,
 
-        el('h3', { text: 'The shape of the visit' }),
-        kv([
-            ['Requests', num(s.hits), true],
-            ['Pages / assets', num(s.pages) + ' / ' + num(s.assets), true],
-            ['Distinct paths', num(s.uniq_paths), true],
-            ['Bytes', bytes(s.bytes), true],
-            ['Asset ratio', s.asset_ratio === null ? null : dec(s.asset_ratio * 100, 1) + '%', true],
-            ['Median gap between requests', dur(s.gap_p50_ms), true],
-            ['Gap standard deviation', dur(s.gap_stddev_ms), true],
-            ['Conditional requests', s.got_304 === null
-                ? null
-                : (s.got_304 ? 'yes' : 'none — never sent an If-None-Match, which a browser cache would have')],
-            ['Status mix', ['2xx', '3xx', '4xx', '5xx']
-                .map((k) => k + ':' + num(s.status[k] || 0)).join('  '), true]
-        ]),
+        ...whatTheyDid(s),
 
-        el('h3', { text: 'Everything they requested, in order' }),
-        trail(data)
+        el('h3', { text: 'Everything they asked for, in order' }),
+        trailBlock(data.session.id, data, s.host)
     ]);
 }
 
 /**
- * Open one session.
+ * Open one visit.
  *
- * Exported so a view can open a session it already has the id of — the `?open=` deep link on
- * the session explorer does exactly that.
+ * Exported so a view can open a visit it already has the id of — the `?open=` deep link on the
+ * session explorer does exactly that.
+ *
+ * NEITHER THE HEADING NOR THE SUBTITLE IS THE SESSION ID. Both used to be: the heading was a
+ * twelve-character prefix of the hash and the subtitle carried the whole forty characters "so an
+ * operator reporting this has something to quote". Nobody reports a visit by its hash, and a
+ * dialog whose title is a hash tells the reader nothing about whose visit they are looking at.
+ * It is the visitor, by whatever name the data can give them.
+ *
+ * THE HANDLE IS REASSIGNED, and that is not tidying up. The second openDialog() below bumps the
+ * generation, so a catch that tested the FIRST handle's token could never be true: every throw
+ * out of renderSession() or markSortable() was swallowed whole, leaving the dialog frozen on
+ * "Loading" with nothing on screen and nothing in the console to say why.
  */
 export async function openSession(id) {
-    /* THE WHOLE ID IS IN THE SUBTITLE. The heading is a 12-character prefix because a full
-       session id does not fit one, and on the failure path that prefix was all that stayed on
-       screen — so an operator reporting "this visit will not open" had nothing to quote. */
-    /* THE HANDLE IS REASSIGNED, and that is not tidying up. The second openDialog() below bumps
-       the generation, so a catch that tested the FIRST handle's token could never be true: every
-       throw out of renderSession() or markSortable() was swallowed whole, leaving the dialog
-       frozen on "Loading" with nothing on screen and nothing in the console to say why. */
-    let handle = openDialog(
-        'Session ' + String(id).slice(0, 12),
-        'Loading the visit and its request trail\u2026 · ' + String(id)
-    );
+    let handle = openDialog('This visit', 'Loading the visit and every request in it…');
     try {
         const data = await api('sessions', 'detail', { id: id });
         if (!isCurrent(handle.generation)) {
             return;
         }
         const s = data.session;
-        const where = [s.city, s.country].filter(Boolean).join(', ');
+        const where = [s.city, countryName(s.country) || s.country].filter(Boolean).join(', ');
 
-        /* THE VERDICT IS A SLUG IN THE PAYLOAD AND MUST NOT BE ONE ON SCREEN. `likely_human` is
-           what Solr stores and what the URL carries; a person reads "Likely human". */
         handle = openDialog(
-            s.ident || s.ip || 'Session',
+            s.ident || s.ip || 'This visit',
             [when(s.ts_start), where, s.as_org, valueText('bot_verdict_s', s.verdict)]
                 .filter(Boolean).join(' · ')
         );
@@ -432,87 +668,6 @@ function breakdown(group, total) {
     ]);
 }
 
-/**
- * The recent visitors behind a dimension value.
- *
- * The point of the whole exercise: a count becomes people, each row carries enough identity to
- * read at a glance, and each row opens the visit. Kept short on purpose — this is a sample to
- * start from, and the session explorer with the filter applied is where the full list lives.
- */
-function visitorTable(rows) {
-    if (!rows.length) {
-        return el('p', { class: 'muted', text: 'No session in range carries this value.' });
-    }
-
-    const body = el('tbody');
-    for (const v of rows) {
-        const tr = el('tr', {
-            class: 'row-link',
-            tabindex: '0',
-                dataset: { lhOpen: 'session', id: v.id },
-            title: 'Open this visit'
-        });
-        tr.appendChild(el('td', { class: 'mono nowrap', text: when(v.ts_start), 'data-sort': v.ts_start || '' }));
-        tr.appendChild(el('td', { 'data-sort': [v.country, v.city].filter(Boolean).join(' ') }, [
-            v.country ? countryNode(v.country, { short: true }) : el('span', { class: 'muted', text: '—' }),
-            v.city ? el('div', { class: 'sub', text: v.city }) : null
-        ]));
-        tr.appendChild(el('td', { class: 'mono clip', title: v.ip || '' }, [
-            el('span', { text: v.ident || v.ip || '—' }),
-            v.signed_in === true ? el('span', { class: 'chip chip-good', text: 'signed in' }) : null
-        ]));
-        tr.appendChild(el('td', {
-            class: 'clip',
-            title: [v.as_org, v.netname].filter(Boolean).join(' · ') || 'Network not resolved',
-            'data-sort': v.as_org || v.netname || ''
-        }, [networkNode(v)]));
-        tr.appendChild(el('td', {
-            class: 'clip',
-            'data-sort': v.ua_bot_name || v.browser || ''
-        }, [clientNode(v)]));
-        tr.appendChild(el('td', { class: 'num', text: num(v.hits), 'data-sort': v.hits === null ? '' : String(v.hits) }));
-        tr.appendChild(el('td', {
-            class: 'clip urlcell',
-            title: v.entry || '',
-            'data-sort': v.entry || ''
-        }, [
-            v.entry
-                ? pathCell(v.entry, { host: v.host })
-                : el('span', { class: 'muted', text: '—' })
-        ]));
-        tr.appendChild(el('td', { 'data-sort': v.verdict || '' }, [verdictChip(v.verdict)]));
-        body.appendChild(tr);
-    }
-
-    const table = el('table', { class: 'tight table-fixed' }, [
-        /* ONE UNIT, AND THEY SUM TO 100. This colgroup mixed `ch` with `%` and left the
-           seventh <col> with no width at all. On `table-layout: fixed` with a 680px
-           min-width that over-constrains the table: 56ch plus 36% demanded more than the
-           table had, and the width-less Page column resolved to ZERO — measured at 0px for
-           every column in the rendered dialog. Percentages only, adding to 100, is the rule
-           the nine server-rendered colgroups already follow. */
-        el('colgroup', {}, [
-            el('col', { style: 'width:11%' }), el('col', { style: 'width:13%' }),
-            el('col', { style: 'width:16%' }), el('col', { style: 'width:17%' }),
-            el('col', { style: 'width:15%' }), el('col', { style: 'width:6%' }),
-            el('col', { style: 'width:12%' }), el('col', { style: 'width:10%' })
-        ]),
-        el('thead', {}, [el('tr', {}, [
-            el('th', { scope: 'col', text: 'Started' }),
-            el('th', { scope: 'col', text: 'Where' }),
-            el('th', { scope: 'col', text: 'Who' }),
-            el('th', { scope: 'col', text: 'Network' }),
-            el('th', { scope: 'col', text: 'Client' }),
-            el('th', { scope: 'col', class: 'num', text: 'Reqs' }),
-            el('th', { scope: 'col', text: 'Page' }),
-            el('th', { scope: 'col', text: 'Verdict' })
-        ])]),
-        body
-    ]);
-
-    return el('div', { class: 'table-wrap' }, [table]);
-}
-
 /** What the webserver actually returned for a path, when the dimension is one. */
 function requestProfile(req) {
     if (!req) {
@@ -526,18 +681,55 @@ function requestProfile(req) {
     return el('div', {}, [
         el('h3', { text: 'What the server actually returned' }),
         kv([
-            ['Requests', num(req.hits), true],
-            ['Bytes served', bytes(req.bytes), true],
-            ['Median response time', req.dur_p50 === null ? null : durUs(req.dur_p50), true],
-            ['95th percentile', req.dur_p95 === null ? null : durUs(req.dur_p95), true]
+            ['Times it was requested', num(req.hits), true],
+            ['Data sent', bytes(req.bytes), true],
+            ['Usually answered in', req.dur_p50 === null ? null : durUs(req.dur_p50), true],
+            ['Slowest one request in twenty', req.dur_p95 === null ? null : durUs(req.dur_p95), true]
         ]),
-        el('div', { class: 'fgroup' }, [el('h4', { text: 'Status codes' }), el('ul', {}, statuses)]),
+        el('div', { class: 'fgroup' }, [el('h4', { text: 'What it answered with' }), el('ul', {}, statuses)]),
         (req.ignored || []).length
-            ? el('p', { class: 'faint', text: 'These figures come from the hits core, which cannot answer ' +
-                (req.ignored || []).join(', ') + ' — those filters are not applied here and the numbers above ' +
-                'are therefore wider than the session counts.' })
+            ? el('p', { class: 'faint', text: 'Counted per request. ' + (req.ignored || []).join(', ')
+                + ' do not exist on a request, so those filters are not applied and these figures cover a '
+                + 'wider population than the visit counts.' })
             : null
     ]);
+}
+
+/**
+ * The heading and caption for a dimension value, with NO stored value anywhere in either.
+ *
+ * A HASH IS NOT A TITLE. The fingerprint dialog was headed with its forty-character hash,
+ * because the title was simply the value and a fingerprint's value is a hash. It is now named
+ * for what it is — a client signature — and described by what it does, which is the only part a
+ * reader can act on. An address is its own name and stays one; everything else gets the
+ * dimension's label in front of its value, so "Romania" reads as "Country: Romania" and cannot
+ * be mistaken for a city.
+ *
+ * @returns {{title: string, sub: string}}
+ */
+function dimHeading(data) {
+    const field = String(data.field || '');
+    const label = String(data.label || dimLabel(field));
+    const sessions = num(data.sessions) + ' visit' + (data.sessions === 1 ? '' : 's');
+    const range = data.range_label || 'the selected range';
+
+    if (field === 'fp_hash_s') {
+        return {
+            title: 'One client signature',
+            sub: sessions + ' in ' + range + ' shared this exact set of request headers, across '
+                + num(data.uniq_ips) + ' address' + (data.uniq_ips === 1 ? '' : 'es')
+                + ' and ' + num(data.uniq_asns) + ' network' + (data.uniq_asns === 1 ? '' : 's') + '.'
+        };
+    }
+
+    if (field === 'ip_s' || field === 'session_id_s') {
+        return { title: String(data.value), sub: sessions + ' in ' + range };
+    }
+
+    return {
+        title: label + ': ' + valueText(field, data.value),
+        sub: sessions + ' in ' + range
+    };
 }
 
 /** Render one dimension value into the dialog body. */
@@ -546,10 +738,10 @@ function renderDimension(body, data) {
 
     fill(body, [
         el('div', { class: 'stats' }, [
-            statTile('Sessions', num(total), 'In the selected range and filters'),
-            statTile('Distinct addresses', num(data.uniq_ips), 'Approximate above ~100 (Solr unique())'),
-            statTile('Header fingerprints', num(data.uniq_fps), 'Few fingerprints across many addresses is a fleet'),
-            statTile('Requests', num(data.hits), 'Log lines attributed to these sessions')
+            statTile('Visits', num(total), 'In range, under the active filters'),
+            statTile('Addresses', num(data.uniq_ips), 'Approximate above ~100'),
+            statTile('Client signatures', num(data.uniq_fps), 'Few across many addresses is one client'),
+            statTile('Requests', num(data.hits), 'Log lines in these visits')
         ]),
 
         filterNote(data.active),
@@ -566,42 +758,41 @@ function renderDimension(body, data) {
         kv([
             ['First seen', when(data.first), true],
             ['Last seen', when(data.last), true],
-            ['Median log span', data.log_span_p50 === null ? null : dur(data.log_span_p50), true],
-            ['Sessions with beacon data', num(data.beacon.sessions), true],
-            ['Median engaged time', data.beacon.sessions
+            ['Typical time spent requesting', data.log_span_p50 === null ? null : dur(data.log_span_p50), true],
+            ['Visits a beacon reported on', num(data.beacon.sessions), true],
+            ['Typical time actually engaged', data.beacon.sessions
                 ? (data.beacon.engaged_p50 === null ? null : dur(data.beacon.engaged_p50))
                 : null, true],
-            ['Median wall clock', data.beacon.sessions
+            ['Typical time the page was open', data.beacon.sessions
                 ? (data.beacon.wall_p50 === null ? null : dur(data.beacon.wall_p50))
                 : null, true],
-            ['Average bot score', data.score === null ? null : dec(data.score, 0) + ' / 100', true],
-            ['Bytes served', bytes(data.bytes), true]
+            ['Average bot score', data.score === null ? null : dec(data.score, 0) + ' out of 100', true],
+            ['Data sent', bytes(data.bytes), true]
         ]),
         data.beacon.sessions === 0
-            ? el('p', { class: 'muted', text: 'No session with this value produced beacon data, so the three ' +
-                'measured clocks are unknown rather than zero. Log span is all there is here.' })
+            ? say('No beacon on any of these visits, so the measured clocks are unknown rather than zero.')
             : null,
 
         requestProfile(data.requests),
 
         el('h3', { text: 'How it breaks down' }),
-        el('p', { class: 'faint', text: 'Every value below is a filter: clicking one scopes the whole dashboard ' +
-            'to it on top of what is already filtered.' }),
         el('div', { class: 'fpanel' }, data.breakdowns.map((group) => breakdown(group, total))),
 
-        el('h3', { text: 'Recent visitors' }),
-        el('p', { class: 'faint', text: 'The most recent ' + num(data.visitors.length) +
-            ' of ' + num(total) + '. Each row opens the whole visit.' }),
-        visitorTable(data.visitors),
+        el('h3', { text: 'The visits' }),
+        visitBlock(data.visitors, data.page, (start) => api('sessions', 'visitors', {
+            field: data.field,
+            value: data.value,
+            start: start,
+            rows: data.page.rows
+        })),
 
         data.filterable
             ? el('p', {}, [
                 dimValue(data.field, data.value, {
-                    text: 'Filter the whole dashboard to this ' + String(data.label).toLowerCase()
+                    text: 'Filter everything to this ' + String(data.label).toLowerCase()
                 })
             ])
-            : el('p', { class: 'faint', text: 'This dimension can be inspected but not filtered on: ' +
-                data.field + ' is not in the panel\'s filter allowlist yet.' })
+            : null
     ]);
 }
 
@@ -621,24 +812,14 @@ function statTile(label, value, hint) {
  * @param {string} value The value, exactly as it was rendered.
  */
 export async function openDimension(field, value) {
-    /* THE HEADING IS THE WORDS, NEVER THE SLUG. Both of these openDialog() calls printed the
-       stored value straight out: a bot class dialog was titled `proxy_fleet`, a verdict dialog
-       `likely_human`, a network type `hosting`. The slug is what the URL carries and what Solr
-       holds; valueText() is the one place that says what a person reads, and the reason it
-       exists is that every surface kept growing its own answer.
-
-       `handle` is reassigned for the same reason as in openSession(): the second open bumps the
-       generation, so a catch testing the first token could never fire. */
-    let handle = openDialog(valueText(field, value), dimLabel(field) + ' — counting sessions…');
+    let handle = openDialog(dimLabel(field), 'Counting the visits behind this…');
     try {
         const data = await api('sessions', 'dimension', { field: field, value: value });
         if (!isCurrent(handle.generation)) {
             return;
         }
-        handle = openDialog(
-            valueText(field, data.value),
-            data.label + ' · ' + num(data.sessions) + ' sessions in ' + (data.range_label || 'range')
-        );
+        const heading = dimHeading(data);
+        handle = openDialog(heading.title, heading.sub);
         renderDimension(handle.body, data);
         markSortable(handle.body);
     } catch (err) {
@@ -648,15 +829,62 @@ export async function openDimension(field, value) {
     }
 }
 
+/* -------------------------------------------------------------------------
+ * The population dialog
+ * ---------------------------------------------------------------------- */
+
 /**
- * Register both openers.
+ * Open the visits behind one of the five headline populations.
+ *
+ * WHAT THIS FIXES. The Overview's five tiles — human sessions, evasive bots, declared crawlers,
+ * AI crawlers, unknown — were inert text. Five numbers naming five populations, with no way to
+ * look at a single member of any of them: the most natural gesture on a dashboard, pressing the
+ * big number, did nothing at all.
+ *
+ * @param {string} key  A population key the server allowlists (human, evasive, declared, ai, unknown).
+ * @param {string} why  The one sentence that says what the population is, from the tile itself.
+ */
+export async function openPopulation(key, why) {
+    const name = populationLabel(key);
+    let handle = openDialog(name, 'Listing the visits behind this figure…');
+    try {
+        const data = await api('sessions', 'visitors', { pop: key, start: 0, rows: 20 });
+        if (!isCurrent(handle.generation)) {
+            return;
+        }
+        const total = data.page && data.page.total !== null ? data.page.total : null;
+        handle = openDialog(
+            name,
+            (total === null ? '' : num(total) + ' visits in ') + (data.range_label || 'the selected range')
+        );
+
+        fill(handle.body, [
+            say(why, 'muted'),
+            filterNote(data.active),
+            visitBlock(data.visitors, data.page, (start) => api('sessions', 'visitors', {
+                pop: key,
+                start: start,
+                rows: data.page.rows
+            }))
+        ]);
+        markSortable(handle.body);
+    } catch (err) {
+        if (isCurrent(handle.generation)) {
+            dialogFail(handle.body, err, () => openPopulation(key, why));
+        }
+    }
+}
+
+/**
+ * Register the three openers.
  *
  * Called once from app.js, so every view has them without each view remembering to. The
- * registration is idempotent: a second call replaces the same two entries.
+ * registration is idempotent: a second call replaces the same entries.
  */
 export function initDetail() {
     registerOpener('session', (data) => openSession(data.id || ''));
     registerOpener('dim', (data) => openDimension(data.field || '', data.value || ''));
+    registerOpener('pop', (data) => openPopulation(data.pop || '', data.why || ''));
 
     const open = new URLSearchParams(window.location.search).get('open');
     if (open) {

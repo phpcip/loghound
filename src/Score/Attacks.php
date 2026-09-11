@@ -681,6 +681,72 @@ final class Attacks
     ];
 
     /**
+     * The codes that are enough, ON THEIR OWN, to say a person was not driving.
+     *
+     * READ BY Score\Rules::ruleHostileProbe(), AND THAT IS WHY IT LIVES HERE. The detection
+     * plane and the scoring plane were disconnected: this file named an exploit probe on the
+     * hit, Sessionizer folded the codes up into the session, and the ruleset never looked at
+     * them — so a client that requested nothing but `/xmlrpc.php`, `/main/xmlrpc.php` and
+     * `/new/xmlrpc.php` tripped no rule at all, scored 15, and was published as a HUMAN
+     * session. A tool whose headline claim is "we can tell a person from a scraper" cannot put
+     * a WordPress exploit sweep in the human population.
+     *
+     * IT IS NOT THE SAME SET AS `severity: high`, and the difference is the whole care in this
+     * list. Severity answers "how bad is this if it worked"; this answers "could a browser with
+     * a person behind it have produced it by accident". Each row's own `over` paragraph decides
+     * membership, and every high-severity code NOT here was excluded for the reason that
+     * paragraph states:
+     *
+     *   atk_traversal            a JavaScript bundler emits `../` inside a source-map URL, and
+     *                            devtools fetches it from a real browser.
+     *   atk_sql_injection        documentation sites, developer forums and any query box.
+     *   atk_template_injection   an un-rendered `{{name}}` in a share link, which is a broken
+     *                            front end rather than an attacker.
+     *   atk_backup_file (med)    a downloads directory serving `release-1.2.tar.gz`.
+     *   atk_xss (med)            a bug-bounty programme, or a search box with HTML pasted in.
+     *   atk_admin_probe (low)    your own editors reaching `/wp-login.php`. The table calls this
+     *                            "the loudest and least alarming row" and means it.
+     *   atk_installer_probe      a site that is genuinely being upgraded right now.
+     *   atk_login_probe (info)   one of these is a person signing in.
+     *   atk_method_abuse         a real WebDAV, CalDAV or SVN endpoint.
+     *   atk_proxy_probe          a machine that IS a forward proxy.
+     *   atk_wellknown_abuse      a private convention under that prefix.
+     *
+     * What is left is seven patterns no browser emits by accident: a JNDI lookup, a request for
+     * `/etc/passwd` or `.git/config`, a published CVE probe path, shell metacharacters with a
+     * shell verb, an address only a server would fetch, a User-Agent that names a fuzzer, and a
+     * crawler claim answered from a rented cloud machine.
+     *
+     * A code that over-reports is still worth SEEING — the Attacks view lists every one of them
+     * — it is simply not worth a verdict on its own. The weaker codes reach the scorer through
+     * Score\Rules::ruleProbeSweep() instead, which asks what the server ANSWERED before it says
+     * anything.
+     *
+     * @var array<int,string>
+     */
+    public const DECISIVE = [
+        'atk_sensitive_file',
+        'atk_command_injection',
+        'atk_log4shell',
+        'atk_ssrf',
+        'atk_known_exploit',
+        'atk_scanner_ua',
+        'atk_crawler_impersonation',
+    ];
+
+    /**
+     * Is this code one a verdict may rest on with no corroboration?
+     *
+     * An unknown code answers false. A document written by a newer detector can carry a code
+     * this build has never heard of, and inferring "decisive" from a name would be exactly the
+     * guess the whole file refuses to make.
+     */
+    public static function isDecisive(string $code): bool
+    {
+        return in_array($code, self::DECISIVE, true);
+    }
+
+    /**
      * The catalogue entry for one code, with a safe fallback for an unknown one.
      *
      * An older `hit_rules_i` can have written a code this build no longer defines. The panel
@@ -966,6 +1032,14 @@ final class Attacks
      * clients and some proxies in front of us send them), different means the client asked
      * this machine to go and fetch somebody else's site.
      *
+     * AN UNKNOWN VHOST IS NOT A MISMATCH. This used to answer TRUE when `host_s` was absent —
+     * `return $own === '' || $abs !== $own` — which is a finding manufactured out of a missing
+     * measurement, the one thing this project refuses to publish. A log format with no `%v` and
+     * no configured source host produces no `host_s` at all, so on those installations EVERY
+     * absolute-form request was reported as an open-proxy probe, and absolute form is sent by
+     * more ordinary clients than it should be. There is nothing to compare the claimed authority
+     * against, so there is nothing to say.
+     *
      * @param array<string,mixed> $hit
      */
     private static function proxyProbe(array $hit): bool
@@ -975,8 +1049,11 @@ final class Attacks
             return false;
         }
         $own = strtolower(trim((string) ($hit['host_s'] ?? '')));
+        if ($own === '') {
+            return false;
+        }
 
-        return $own === '' || $abs !== $own;
+        return $abs !== $own;
     }
 
     /**

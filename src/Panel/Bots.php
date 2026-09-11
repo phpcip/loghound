@@ -30,6 +30,21 @@ use Loghound\Security;
 
 final class Bots extends Controller
 {
+
+    /**
+     * The pages this view has, in render order.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    public const SECTIONS = [
+        ['bf-split', 'Declared versus evasive'],
+        ['bf-reasons', 'Signals'],
+        ['bf-verdicts', 'Verdicts'],
+        ['bf-histogram', 'Score spread'],
+        ['bf-classes', 'Bot classes'],
+        ['bf-crawlers', 'Declared crawlers'],
+        ['bf-pivot', 'Class by network'],
+    ];
     /**
      * Human-readable descriptions of the scoring rules from SPEC §7.
      *

@@ -105,10 +105,9 @@ abstract class Controller
     /**
      * This view reads cached Solr answers, so clearing the cache changes what it shows.
      *
-     * The same rule as the other three, stated once: Index analytics and Query analysis make no
-     * Solr read at all — their cards come from the Opensolr request-log plane, which is not
-     * cached — so a Clear cache control there would discard nothing and refresh nothing. Who is
-     * querying makes two Solr reads alongside its request-log cards and keeps it.
+     * The same rule as the other three, stated once: Index analytics makes no Solr read at all —
+     * its cards come from the Opensolr request-log plane, which is not cached — so clearing the
+     * cache would discard nothing that page is showing.
      */
     public const SCOPE_CACHE = 'cache';
 
@@ -149,6 +148,140 @@ abstract class Controller
     public function honours(string $control): bool
     {
         return in_array($control, $this->toolbar(), true);
+    }
+
+    /**
+     * The sections this view renders, in render order.
+     *
+     * ONE ORDERED LIST, FOUR CONSUMERS: the left navigation's sub-items, the URL that names
+     * each page, the number printed on each card, and the order body() walks where the view
+     * chooses to. Each entry is `[card id, short label]` and may carry further elements the
+     * view uses for its own dispatch; nothing outside the view reads past the second.
+     *
+     * Declared as a class constant rather than computed, because \Loghound\Panel\Layout has to
+     * build the whole navigation tree — every view's sub-items, not only the current view's —
+     * and rendering twelve view bodies to discover their headings would make the navigation
+     * cost more than the page under it.
+     *
+     * @var array<int,array<int,string>>
+     */
+    public const SECTIONS = [];
+
+    /**
+     * This view's section list, for the navigation and for the router.
+     *
+     * Static so the navigation can ask a view class what pages it has without constructing it.
+     * `static::` rather than `self::`, so a subclass's own list is the one that answers.
+     *
+     * @return array<int,array<int,string>>
+     */
+    public static function sectionList(): array
+    {
+        return static::SECTIONS;
+    }
+
+    /**
+     * The same list, through an instance.
+     *
+     * Kept because Layout renders from the instance it already has, and because the views that
+     * declared sections() before this constant existed keep working unchanged.
+     *
+     * @return array<int,array<int,string>>
+     */
+    public function sections(): array
+    {
+        return static::sectionList();
+    }
+
+    /**
+     * The URL segment that names one section, derived from its card id.
+     *
+     * Card ids carry a per-view prefix — `atk-answered`, `set-solr`, `ix-volume` — which is
+     * exactly right for an element id and is noise in a URL that already names the view. The
+     * prefix is dropped, so the page is `?v=attacks&s=answered`. A card id with no prefix
+     * answers as itself.
+     *
+     * The router accepts the full card id as well (see sectionFor), so every link that was ever
+     * minted against an id keeps resolving.
+     */
+    public static function sectionSlug(string $cardId): string
+    {
+        $cut = strpos($cardId, '-');
+        $slug = $cut === false ? $cardId : substr($cardId, $cut + 1);
+        return $slug === '' ? $cardId : $slug;
+    }
+
+    /**
+     * Resolve a requested section to one of this view's card ids.
+     *
+     * An unknown, absent or malformed value lands on the FIRST section rather than on a 404: a
+     * stale bookmark to a section that has been renamed or deleted should show the view it named,
+     * and a prober learns nothing from the answer either way. Returns '' when the view has fewer
+     * than two sections, which is the signal to render the whole body.
+     */
+    public function sectionFor(?string $requested): string
+    {
+        $sections = $this->sections();
+        if (count($sections) < 2) {
+            return '';
+        }
+
+        $first = (string) ($sections[0][0] ?? '');
+        if (!is_string($requested) || $requested === '') {
+            return $first;
+        }
+
+        foreach ($sections as $entry) {
+            $id = (string) ($entry[0] ?? '');
+            if ($id !== '' && ($requested === $id || $requested === self::sectionSlug($id))) {
+                return $id;
+            }
+        }
+        return $first;
+    }
+
+    /* ---------------------------------------------------------------------------------
+     * Rendering one section
+     *
+     * A section is a PAGE now, not a card in a stack, so body() has to be able to emit one
+     * card and nothing else. Rather than making every view file dispatch by section — twelve
+     * places to forget, and three of them already dispatch by a different mechanism — the
+     * gate sits at the one pair of methods every card in the product is built from.
+     * ------------------------------------------------------------------------------ */
+
+    /** The card id being rendered alone, or null when the whole body is wanted. */
+    private static ?string $gateOnly = null;
+
+    /** The card cardOpen() most recently opened while the gate is on. */
+    private static string $gateCard = '';
+
+    /** Did the wanted card actually get rendered? Layout falls back when it did not. */
+    private static bool $gateHit = false;
+
+    /**
+     * Render only the named card the next time body() runs.
+     *
+     * OUTPUT OUTSIDE A CARD IS KEPT, and that is deliberate rather than an oversight. Two things
+     * live there and both have to survive: the layout wrappers a view opens around a pair of
+     * cards (`<div class="grid-2">`, the session explorer's `<div class="explorer">`), which are
+     * balanced and therefore harmless when the cards between them are dropped; and page-level
+     * output that belongs to the view rather than to any one card — the Settings page's flash
+     * message after a save is the case that matters, and swallowing it would mean an operator
+     * who just changed a setting was told nothing at all.
+     *
+     * @param string|null $id Card id to keep, or null to render everything.
+     */
+    public static function renderOnlySection(?string $id): void
+    {
+        self::$gateOnly = $id === '' ? null : $id;
+        self::$gateCard = '';
+        self::$gateHit = false;
+    }
+
+    /** Did the last gated render actually emit the card it was asked for? */
+    public static function sectionWasRendered(): bool
+    {
+        return self::$gateHit;
     }
 
     /** URL slug for this view, e.g. 'overview'. Used for routing and nav highlighting. */
@@ -352,9 +485,8 @@ abstract class Controller
      * "time on site" read low — which is precisely the lie the timing card exists to expose.
      *
      * Every sessions-core query reached through a Controller subclass goes through one of these
-     * two. The two queries in Panel\Callers build their own `fq` list and carry the document-type
-     * clause themselves; Panel\Jobs deliberately counts the whole core, because "how many
-     * documents are in this index" is the question that diagnostic asks.
+     * two. Panel\Jobs deliberately counts the whole core, because "how many documents are in this
+     * index" is the question that diagnostic asks.
      *
      * @return array<int,string>
      */
@@ -673,6 +805,8 @@ abstract class Controller
         string $population = '',
         string $tools = ''
     ): void {
+        self::gateOpen($id);
+
         $e = Security::esc($id);
         echo '<section class="card" id="' . $e . '-card" data-card="' . $e . '">';
         echo '<div class="card-head"><h2>'
@@ -741,12 +875,49 @@ abstract class Controller
         echo '</div>';
         echo '<div class="empty" id="' . Security::esc($id) . '-empty" hidden></div>';
         echo '</section>';
+
+        self::gateClose();
     }
 
     /** Close a card whose content was rendered server-side and needs no loading state. */
     protected static function cardEnd(): void
     {
         echo '</section>';
+
+        self::gateClose();
+    }
+
+    /**
+     * Start capturing a card, when only one of them is wanted.
+     *
+     * A buffer per card rather than a running suppression flag, because the decision to keep or
+     * drop is made at the same call site either way and a buffer cannot leave half a card in the
+     * output if a view returns early. A card opened and never closed unwinds with the page: PHP
+     * flushes the remaining buffers at the end of the request, which is the same outcome as not
+     * gating at all and is strictly better than a blank page.
+     */
+    private static function gateOpen(string $id): void
+    {
+        if (self::$gateOnly === null) {
+            return;
+        }
+        self::$gateCard = $id;
+        ob_start();
+    }
+
+    /** Finish a card: emit it when it is the one this page is, discard it when it is not. */
+    private static function gateClose(): void
+    {
+        if (self::$gateOnly === null || self::$gateCard === '') {
+            return;
+        }
+
+        $html = (string) ob_get_clean();
+        if (self::$gateCard === self::$gateOnly) {
+            self::$gateHit = true;
+            echo $html;
+        }
+        self::$gateCard = '';
     }
 
     /* ---------------------------------------------------------------------------------

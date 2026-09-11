@@ -1,6 +1,7 @@
 # The web panel
 
 - [Running it](#running-it)
+- [A section is a page](#a-section-is-a-page)
 - [Two planes, and what talks to which](#two-planes-and-what-talks-to-which)
 - [Nothing blocks: the async contract](#nothing-blocks-the-async-contract)
 - [Anatomy of a card](#anatomy-of-a-card)
@@ -65,6 +66,60 @@ writes.
 
 ---
 
+## A section is a page
+
+Every section a view declares is its own page, with its own URL, reached from the left
+navigation. `?v=attacks&s=patterns` is one page carrying one card.
+
+**The list is a class constant.** `Controller::SECTIONS` on each view — `[card id, short nav
+label]`, in render order — and it drives four things at once: the sub-items under that view in
+the navigation, the URL that names each page, the number printed on the card, and, where the
+view chooses, the order `body()` walks. `Layout::nav()` reads the constant off the class, so
+building the navigation constructs nothing and renders nothing.
+
+**No view file had to be rewritten for it.** `body()` still emits the whole view;
+`Controller::renderOnlySection()` gates `cardOpen()`/`cardClose()`, which every card in the
+product is built from, and `Layout` keeps the one the URL names. Output *outside* a card is
+kept — the layout wrappers a view opens around a pair of cards are balanced, and the Settings
+page's flash after a save is page-level and has to survive. A section whose card never rendered
+falls back to the whole body, which is what makes the "no Opensolr credentials" explainer reach
+the reader whichever section they asked for.
+
+**On the front end, one line does it.** `loadCard()` returns early when the card is not in the
+document, so a view module's `refresh()` can keep listing every card it has and only the one on
+screen is fetched.
+
+**The one exception is the session explorer.** Its search box, its facet rail and its results
+are one instrument, so its `SECTIONS` is deliberately empty and the whole body renders.
+
+**Old deep links still land.** Every section used to be an anchor — `?v=attacks#atk-patterns-card`
+— and `assets/js/app.js` matches the fragment against the view's section list in the boot payload
+and replaces the URL with the page that holds it.
+
+### The top bar
+
+One sticky row, rendered by `Panel\Layout::topBar()` from what the view declares in
+`Controller::toolbar()`, containing four controls and nothing else: applied filters (a button
+with a count, shown only when something is applied, opening a dialog that lists every value on
+both filter planes and removes them), duration, hostname, and Opensolr resources. It is a GET
+form, so duration and hostname work with scripting off; `assets/js/topbar.js` submits it on
+change.
+
+It replaced a jump bar plus a toolbar that `assets/js/responsive.js` assembled at runtime by
+moving whatever furniture it found into a strip and condensing it on scroll — four different
+layouts across four pages, one of which clipped its own last control off the right edge.
+
+### Scope is remembered
+
+`src/Panel/Scope.php`, in the session. The rule, per namespace: **the URL wins when it speaks;
+the session fills the silence.** A namespace the URL names is taken from the URL and stored; one
+the URL says nothing about is restored. `fx=1`/`lfx=1` are how a URL states an *empty* filter set
+rather than an absent one, so clearing the last filter is not undone on the next page load. What
+is restored is put back in the address bar with one redirect, because the JSON endpoint each card
+fetches and every CSV export link read the query string and cannot be reached from PHP.
+
+---
+
 ## Two planes, and what talks to which
 
 The panel draws on two completely separate sources, and keeping them straight is the single
@@ -75,8 +130,7 @@ most load-bearing fact about this codebase.
 | What it is | Your webserver's access logs, parsed and indexed by Loghound | The request log of the Opensolr search indexes your account owns |
 | Where it lives | Loghound's **own two indexes**, `solr.hits_core` and `solr.sessions_core` | Opensolr's analytics shards, on the platform |
 | How the panel reads it | `src/Panel/Gateway.php` → `src/Solr.php` → `solr.base_url` | `src/OpensolrLog.php` / `src/Opensolr.php` → `https://opensolr.com/solr_manager/api` |
-| Views | Overview, Bot forensics, Attacks, Fingerprint clusters, Networks, Session explorer, Performance, Virtual hosts | Index analytics, Query analysis, Who is querying |
-| Both at once | — | Who is querying, and only that view |
+| Views | Overview, Where they came from, Pages, Site search, Engagement, When they come, Bot forensics, Attacks, Fingerprint clusters, Networks, Session explorer, Performance, Virtual hosts | Solr (Index analytics) |
 
 ### Gateway is the only route to Loghound's own Solr — and nothing else has a route to Solr at all
 
@@ -90,11 +144,11 @@ ship documents by accident. The base URL it uses is `solr.base_url` and nothing 
 core it queries is always `Gateway::hitsCore()` or `Gateway::sessionsCore()` — never a name
 that came from a request.
 
-**Newly true, and not covered by that sentence:** the three Opensolr views do not go through
-Gateway. `Indexes`, `Queries` and `Callers` extend `src/Panel/OpensolrView.php`, which reads
-the search plane through `src/OpensolrLog.php` (`GET /solr_manager/api/request_log`) and
-`src/Opensolr.php` (`get_index_list`), both against the Opensolr platform API. `Plan usage`
-reaches the platform the same way, through `src/Quota.php` → `get_core_info`.
+**Newly true, and not covered by that sentence:** the Solr view does not go through Gateway.
+`Indexes` extends `src/Panel/OpensolrView.php`, which reads the search plane through
+`src/OpensolrLog.php` (`GET /solr_manager/api/request_log`) and `src/Opensolr.php`
+(`get_index_list`), both against the Opensolr platform API. `Plan usage` reaches the platform
+the same way, through `src/Quota.php` → `get_core_info`.
 
 The property that matters to a customer follows from both halves together, and it is stronger
 than either:
@@ -112,11 +166,6 @@ customer's node. `Opensolr::connectionDetails()` — the one method that returns
 an arbitrary index — has exactly one caller in the repository, `Setup\Storage::fetchConnection()`,
 which uses it to learn where **Loghound's own** indexes live during provisioning. Nothing in
 `src/Panel/` references it.
-
-The one view that crosses the two planes is **Who is querying**, and it crosses them in the
-panel's own PHP: one facet on the platform for the addresses, one facet on Loghound's own
-sessions core for what those addresses did on the website, joined in memory. Two calls total,
-whatever the number of addresses.
 
 ---
 
@@ -490,7 +539,7 @@ are two renderings of one facet rather than two questions.
 | 01 Who was here | `totals` | Five mutually exclusive population counts, plus `unique(visitor_s)` and sums for the human half |
 | 02 How long they actually stayed | `timing` | The four clocks as `avg` + `percentile(…,50)` over human-with-beacon sessions, and the log-only figure over all human sessions |
 | 03 Sessions over time | `series` | One range facet on `ts_start` with the five populations nested per bucket |
-| 04 Top pages | `toppages` | Terms facet on `paths_ss`, re-run when the humans/all/bots toggle changes |
+| 04 Top pages | `toppages` | Terms facet on `path_s` in the HITS core, counting REQUESTS, with `unique(session_id_s)` beside each row. Re-run when the pages/every-request toggle changes. It is on the request plane because a session count cannot rank paths — `paths_ss` is a set per session, so every row reads 1 on a short window — and the population toggle went with it, because a verdict is a session-level conclusion that the hits core does not carry. |
 
 Overview was one request feeding three cards. It is now four: the timing block appears the
 moment it is ready instead of waiting on the hourly series.
@@ -568,12 +617,15 @@ selector is never inserted into the page at all.
 `meter` and `plan`, both from `src/Quota.php` against the Opensolr control plane
 (`get_core_info`), not from Solr.
 
-`meter` is the small one, and it is requested by *every* view because it feeds the
-always-visible bandwidth strip. It answers from the quota cache on all but one call in
+`meter` is the small one. It answers from the quota cache on all but one call in
 `quota.refresh_sec` (default 300s), which matters because the panel's own queries consume the
-bandwidth this meter reports. The two cores have independent quotas and are reported
-separately; the **worst** of them drives the strip, because averaging a blocked index with an
-idle one tells the operator they are fine when they are not.
+bandwidth it reports. The two cores have independent quotas and are reported separately; the
+**worst** of them is the one a summary shows, because averaging a blocked index with an idle
+one tells the operator they are fine when they are not.
+
+`account` is what the top bar's **Opensolr resources** control opens: `plan` plus the index
+allowance from `get_account_summary`, so one dialog carries every quota the account has rather
+than the one figure a header strip had room for.
 
 The two dimensions are given deliberately different weight. **Bandwidth** is the hard limit:
 it cannot be reclaimed by deleting anything, it resets on the 1st, and going over it makes
@@ -581,15 +633,17 @@ Opensolr answer 403 to every request against that index — reads included — u
 or the monthly reset, with access returning by itself about 17 minutes after usage is back
 under. So it gets the meter, a warning state well before the limit, and an upgrade link; the
 warning has to arrive early, because after the limit the panel that would have shown it is
-dark. **Disk** is not presented as a risk at all, because the rolling trim in `src/Quota.php`
+dark — which is why it is reachable from the top bar of every page. **Disk** is not presented as
+a risk at all, because the rolling trim in `src/Quota.php`
 runs *before* a write and the index therefore never reaches its disk quota. It is reported as
 a fact about how far back the data goes. The single exception is a trim that **failed** while
 the index is genuinely near the limit — then the blackout really is coming, and that is loud.
 
-### Index analytics — 5 requests, plus the index picker
+### Solr — 4 requests, plus the index picker
 
-`headline`, `volume`, `qtime`, `handlers`, `nodes`, and the shared `indexes` action that fills
-the picker. What one Opensolr search index is being asked and how well it answers.
+`headline`, `volume`, `qtime`, `handlers`, and the shared `indexes` action that fills the
+picker. What one Opensolr search index is being asked and how well it answers. Each of them is
+its own page; the chosen index is kept in the session, so it survives moving between them.
 
 Everything on this page is an **aggregate**. Not one card fetches a request document: a facet
 answers all of it, and shipping a customer's query log through the panel in order to count it
@@ -604,61 +658,13 @@ histogram and the percentiles read off it are reported as "at most" a bucket edg
 approximate number labelled approximate is honest; a precise-looking number that is not
 precise is not.
 
-### Query analysis — 1 request, plus two stepped scans
+### The two states of an Opensolr view
 
-`slowest` is a single call: the highest-QTime requests in the range, sorted by the platform,
-exactly and not a sample. Each row carries its shape, so a one-off outlier can be told apart
-from the worst instance of a pattern that runs constantly.
-
-The two shape tables are **jobs**, not requests — see [the next section](#long-operations-are-stepped-jobs).
-A shape cannot be faceted: it has to be computed from `full_request`, which means reading
-documents, which means the work is unbounded and belongs in something that can be stopped and
-resumed rather than in one request.
-
-This is the page the section exists for. A request log grouped by exact query string is
-useless — a search box produces a different string for every visitor, so "top queries" is a
-list of one-hit wonders and the expensive pattern underneath never surfaces. Grouping by
-**shape** (the query with its literals removed and its structure kept, `src/OpensolrShape.php`)
-makes `title:"foo"` and `title:"bar"` one row and `title:"foo"` and `body:"foo"` two. Once
-queries are grouped that way the single most actionable number in search becomes visible:
-**which shapes return nothing**. A shape that runs ten thousand times a day and matches zero
-documents every time is a broken filter, a renamed field, or a UI asking a question the schema
-cannot answer — and on an ungrouped list it is invisible, because each of those ten thousand
-requests looks unique.
-
-### Who is querying — 2 requests, and the only view that reads both planes
-
-`who` (one facet on the platform: the busiest addresses and handlers, bounded at 60 terms) and
-`cross` (the correlation).
-
-`cross` is the page that justifies the whole section, because it needs both planes at once and
-nothing else can produce it. Loghound already classifies every address it sees in a web log;
-Opensolr already records every address that queried a search index. Cross-referencing answers
-two questions neither side can answer alone:
-
-1. **How much of the search backend's work is being done for traffic already classified as a
-   bot?** That turns an abstract bot problem into a concrete cost.
-2. **Which Solr traffic has no matching web traffic at all?** An address that queries the index
-   but never appears in the web log did not come through the site — a leaked API key, a scraper
-   that found the endpoint, or an integration somebody forgot about.
-
-It is **two calls total, whatever the number of addresses**: one facet on the platform, one
-faceted query against Loghound's own sessions index. A lookup per address would be the obvious
-implementation and the wrong one — sixty round trips to answer what one facet answers.
-
-When Loghound holds Opensolr credentials but is not running on the machine that serves the
-website — a perfectly reasonable way to install it — the correlation cannot be computed. The
-card then says what it *would* have told them, in terms of the numbers already on screen. It
-never renders a broken table and never blames a technical problem that does not exist.
-
-### The three states of an Opensolr view
-
-`src/Panel/OpensolrView.php` handles all three, and all three have to read well:
+`src/Panel/OpensolrView.php` handles both, and both have to read well:
 
 | State | What the page does |
 |---|---|
-| Credentials configured, Loghound on the web server | Everything works, including the correlation. |
-| Credentials configured, Loghound elsewhere | The Solr analytics are shown in full; the correlation card explains concretely what installing Loghound at the web server would add — the specific question, not a vague upsell. |
+| Credentials configured | Everything works. |
 | No Opensolr credentials | `noCredentials()` renders instead of the cards: what this section is for and where the two values go. No broken cards, no failed requests. **Loghound is a complete product without Opensolr and must never imply otherwise.** |
 
 Two more conditions are handled once, in `OpensolrView::fetch()`, rather than in each card:

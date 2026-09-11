@@ -346,10 +346,12 @@ export function clearFiltersUrl() {
  * IT NAMES THE REASON RATHER THAN LISTING THE CANDIDATES. It used to say "Either nothing has
  * been indexed yet, or nothing matched the selected range and filters", which is an admission
  * that the panel did not look — and the panel does know: the boot payload carries the filters
- * the server applied. So a page with filters in force says the filters excluded everything and
- * offers the control that undoes them, and a page with none says the range is empty and points
- * at the two things that make a fresh install empty. A reader is never left to guess which of
- * the two they are in, and neither branch is a dead end.
+ * the server applied. So a page with filters in force says the filters excluded everything, and
+ * a page with none points at what makes a fresh install empty. Neither branch is a dead end.
+ *
+ * BOTH ARE ONE SENTENCE. They were three and four, walking the reader through what a filter is
+ * and how to widen a range. The person in front of this panel runs a search platform; what they
+ * need from an empty card is the reason and the way out, not a lesson.
  *
  * @param {string} id   The `.empty` slot's element id, as emitted by Controller::cardClose().
  * @param {string} what A PLURAL NOUN naming the population — "sessions", "netblocks". Never a
@@ -368,34 +370,29 @@ export function noDataYet(id, what) {
            is that filters are in force and this card came back empty under them. Both routes
            out are offered, because either could be the one. */
         showEmpty(id, 'No ' + what + ' match your filters', [
-            'Nothing in the selected range matched the ' +
-                active.count + ' filter value' + (active.count === 1 ? '' : 's') +
-                (named ? ' you have set on ' + named : ' you have set') + '.',
             el('p', {}, [
-                'Remove a value from the filter bar above, or ',
-                el('a', { href: clearFiltersUrl(), text: 'clear every filter' }),
-                ' — if it is still empty with none set, the range itself holds nothing, and ',
-                el('a', { href: '?v=settings', text: 'Settings' }),
-                ' says whether anything is being read at all.'
+                'Nothing in range matched the ' + active.count + ' filter value'
+                    + (active.count === 1 ? '' : 's') + (named ? ' on ' + named : '') + '. ',
+                el('a', { href: clearFiltersUrl(), text: 'Clear every filter' }),
+                ', or check ',
+                el('a', { href: '?v=settings&s=sources', text: 'Settings' }),
+                ' if the range itself is empty.'
             ])
         ]);
         return;
     }
 
     showEmpty(id, 'No ' + what + ' in this time range', [
-        'Nothing in the selected range produced a row. Try a wider range first — the range buttons are at the top of the page.',
         el('p', {}, [
-            'If this is a fresh install: confirm a log source under ',
-            el('a', { href: '?v=settings', text: 'Settings' }),
-            ', then check that the reader is running. Under systemd that is ',
-            el('code', { text: 'systemctl status loghound-tail.service' }),
-            '; under any other supervisor, check the job you gave ',
+            'Try a wider duration. On a fresh install, confirm a log source under ',
+            el('a', { href: '?v=settings&s=sources', text: 'Settings' }),
+            ' and check that ',
             /* ABSOLUTE. The reader is on a shell somewhere else on the machine, and this was
                the one command in the panel still named by a relative path — in the empty state
                every async card in the product falls back to. The root comes from the boot
                payload because only the server knows it. */
             el('code', { text: tailCommand() }),
-            ' to.'
+            ' is running.'
         ])
     ]);
 }
@@ -428,12 +425,8 @@ export function noPivotYet(id, both) {
     showEmpty(id, 'Nothing to cross-tabulate', [
         'A row needs ' + both + ', and no session in this range carries both.',
         active.count > 0
-            ? el('p', {}, [
-                'Your filters may be excluding the sessions that do — ',
-                el('a', { href: clearFiltersUrl(), text: 'clear every filter' }),
-                ' to check.'
-            ])
-            : 'Both are recorded once a session has been scored, so a range with only unscored sessions in it produces no rows here.'
+            ? el('p', {}, [el('a', { href: clearFiltersUrl(), text: 'Clear every filter' }), ' to check.'])
+            : 'Both are recorded once a session has been scored.'
     ]);
 }
 
@@ -1010,16 +1003,13 @@ function raiseConnectionBanner(message) {
 const cardLoaders = new Map();
 
 /**
- * What the control says it is, and — the part that matters — what it is not.
+ * What the control does, and the one thing about it that would otherwise be assumed wrongly.
  *
- * TWO CONTROLS ON ONE PAGE THAT BOTH SOUND LIKE "GET ME NEW NUMBERS". Clear cache in the page
- * header discards the stored answers; this re-runs one card's fetch down the ordinary path,
- * cache included, and will happily hand back the same cached figure it had a second ago. An
- * operator who presses this expecting the other one has been misled by the product, so the
- * difference is stated on the control rather than left to be discovered.
+ * It re-runs the card's fetch down the ordinary path — CACHE INCLUDED — so it will happily hand
+ * back the same figure it had a second ago. That is the half a reader would get wrong, and it is
+ * the half the tip states; the rest of what pressing a refresh control does needs no explaining.
  */
-const REFRESH_TIP = 'Reloads this section only, exactly the way it loaded the first time — '
-    + 'a cached answer is reused. Clear cache in the page header is what discards stored answers.';
+const REFRESH_TIP = 'Reload this section. A cached answer is reused; Settings is where the cache is cleared.';
 
 /** Where the SVG the reload mark is drawn in lives. */
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -1171,6 +1161,20 @@ function wireRefresh() {
  * @param {Function} loader async () => void — renders into the card's content element.
  */
 export async function loadCard(id, label, loader) {
+    /* A CARD THAT IS NOT ON THIS PAGE IS NOT LOADED, and that one line is what makes sections
+       into pages on the front end. Every view module still asks for all of its cards — one
+       `refresh()` listing the whole view, which is the right shape for a module and the wrong
+       thing to have running eleven fetches on a page that shows one card. Without this the
+       loader ran regardless: the DOM lookups below all answered null, nothing was rendered, and
+       the panel quietly issued every other section's Solr query on every page.
+
+       Checked here rather than in each view for the same reason the refresh control is created
+       here: the set is then exactly the cards that exist, and a view added later is covered
+       without anybody remembering. */
+    if (!document.querySelector('[data-card="' + id + '"]')) {
+        return;
+    }
+
     cardLoaders.set(id, { id: id, label: label, loader: loader });
     ensureRefresh(id, label);
     wireRefresh();

@@ -11,7 +11,9 @@
  * A trained classifier would score better on a benchmark and would be useless here. The
  * product's claim is not "we detect bots", it is "we can tell you WHY this is a bot", and
  * an operator has to be able to disagree with a specific rule, change its weight, and
- * re-run. Seventeen readable rules with published weights is the feature.
+ * re-run. A readable table of rules with published weights is the feature, and the table is
+ * WEIGHTS below — never a count written down somewhere else, which goes stale the moment a rule
+ * is added and has already done so twice.
  *
  * ---------------------------------------------------------------------------------------
  * WHY THESE NUMBERS
@@ -19,10 +21,10 @@
  * The weights follow one principle: a weight of 80 or more is a claim that this signal
  * ALONE is enough to call something a bot, because 80 is the `bot` threshold. So the
  * question for every rule is not "how suspicious is this" but "am I willing to publish a
- * verdict on this evidence and nothing else". Seven of the seventeen clear that bar —
+ * verdict on this evidence and nothing else". The rules that clear that bar are
  * automation_marker, ua_declared_bot, rdns_claim_failed, headless_renderer, beacon_forged,
- * ua_claim_failed and fp_cluster_proxy_fleet — and each one is a fact about the client that
- * has no innocent explanation.
+ * ua_claim_failed, hostile_probe, fp_cluster_proxy_fleet and never_served — and each one is a
+ * fact about the client that has no innocent explanation.
  *
  * Everything below 80 is designed to STACK. Three 30-point behavioural rules reaching 90
  * is the intended path for a scraper that leaves no single decisive mark, and it is why
@@ -63,8 +65,14 @@ final class Rules
      * over all of it to no effect. What a consumer actually needs to know — "was this verdict
      * reached before the session ended" — is a property of the DOCUMENT, not of the ruleset, and
      * it is on the document as `provisional_b`.
+     *
+     * BUMPED TO 2. Three changes in one pass, each of which genuinely alters what a past session
+     * would score today, which is precisely the condition this field exists to record:
+     * `hostile_probe` and `probe_sweep` are new rules, and the `fp_cluster_proxy_fleet` mobile
+     * exemption was narrowed from "any client on a mobile ASN" to "a client that is actually a
+     * handset". A rescoring pass over anything judged under version 1 has real work to do.
      */
-    public const RULE_VERSION = 1;
+    public const RULE_VERSION = 2;
 
     /**
      * Rules that may not be evaluated until the session has ENDED.
@@ -84,6 +92,15 @@ final class Rules
      *                     scrolled or clicked. "Has not interacted yet" is not "did not".
      *   single_page_10s   at second one EVERY session is one page inside ten seconds. This one
      *                     fires on literally every visitor, human or not.
+     *   probe_sweep       two of its three conditions are absences — "the server has answered
+     *                     nothing with a body" and "no sub-resource was fetched" — and a
+     *                     visitor who has just followed a stale bookmark to an admin path has
+     *                     both of them true for the moment between the 404 line and the error
+     *                     page's stylesheet. Same trap as no_assets, same answer.
+     *
+     * `hostile_probe` is deliberately NOT here, though it reads the same attack plane: a request
+     * for `/etc/passwd` that has already been made is a fact about the past, not a prediction,
+     * so there is nothing to wait for and a sweep is called what it is on its first line.
      *
      * What is left is every rule that reads evidence already PRESENT — a declared bot UA,
      * contradictory client hints, a failed rDNS check, a datacentre address, a software
@@ -99,6 +116,13 @@ final class Rules
         'no_304_on_repeat',
         'no_interaction',
         'single_page_10s',
+        'probe_sweep',
+
+        /* Both read a ratio over a session that is still growing. "Every request so far was
+           refused" and "four fifths of them were" are statements about the future while the
+           visitor is still here, and the scorer can land between a 403 and the 200 after it. */
+        'never_served',
+        'mostly_refused',
     ];
 
     /**
@@ -125,7 +149,7 @@ final class Rules
      * exists to stop publishing, and it is worse than a missed detection: it is a finding
      * manufactured out of an absence, reported with the same confidence as a real one.
      *
-     * Why each of the five is here, and not one more:
+     * Why each entry is here, and not one more:
      *
      *   no_js_on_html     asks whether HTML was served and no beacon followed. On a
      *                     beacon-only session the beacon is the ONLY thing that happened.
@@ -135,6 +159,14 @@ final class Rules
      *   single_page_10s   counts pages and measures a log span. Neither exists.
      *   periodic_timing   measures inter-request gaps from log lines. There are none, and an
      *                     empty gap list must not read as a perfectly regular rhythm.
+     *   hostile_probe     reads the attack codes Score\Attacks matched on LOG LINES. A
+     *                     beacon-only session has none, and an empty list would otherwise be
+     *                     indistinguishable from "the detector looked and found nothing".
+     *   probe_sweep       reads those codes AND the status-class counters, and every one of
+     *                     those is a log fact. On a beacon-only session `st2` is absent, which
+     *                     PHP hands back as zero — and "the server answered nothing with a body"
+     *                     is half of this rule's accusation. This is the exact shape of the
+     *                     danger the list exists for: an absent counter read as a finding.
      *
      * `no_interaction` is deliberately NOT in this list, though it is in DEFERRED_CODES: it
      * reads the beacon's own interaction count, which a beacon-only session has, and it is one
@@ -148,6 +180,14 @@ final class Rules
         'no_304_on_repeat',
         'single_page_10s',
         'periodic_timing',
+        'hostile_probe',
+        'probe_sweep',
+
+        /* Both count status classes, which exist only where there is a request log. On a
+           beacon-only session every counter is absent and reads back as zero, and "nothing was
+           ever served" built out of four zeros is a verdict manufactured from an absence. */
+        'never_served',
+        'mostly_refused',
     ];
 
     /**
@@ -168,13 +208,83 @@ final class Rules
      * The verdict a provisional session may not be better than.
      *
      * A session that has tripped nothing scores 0 and would be called `human`. On one request,
-     * with five rules not yet evaluated, that is not a finding — it is the absence of one, and
+     * with the absence-based rules not yet evaluated, that is not a finding — it is the absence of
+     * one, and
      * publishing it as `human` is the trap this whole feature could have walked into: the
      * verdict would then FLIP as the session continued, and a bot detector that exonerates and
      * then accuses is worse than one that waits. So a provisional verdict is floored here. It
      * can be worse than this on positive evidence; it can never be better.
      */
     public const PROVISIONAL_FLOOR = 'unknown';
+
+    /**
+     * The verdict a session nobody could actually TEST may not be better than.
+     *
+     * ------------------------------------------------------------------------------------
+     * THE HOLE THIS CLOSES, WHICH IS THE LARGEST ONE IN THE FILE
+     * ------------------------------------------------------------------------------------
+     * `human` is what a score of 0 maps to, and a score of 0 means "no rule fired". Those are
+     * not the same statement, and for most of this ruleset's life the ladder has treated them
+     * as one: a session on which almost nothing COULD be evaluated scored 0 and was published
+     * as a person.
+     *
+     * The file already knew this. CLEAN_REASON's own docblock says, in as many words, that a
+     * session carrying it "has not been shown to be human; it has been shown not to be caught",
+     * and that reading it as a positive finding is a fabricated conclusion. Nothing enforced it.
+     * The reason code was emitted, labelled `info`, worth no points, and the verdict came out
+     * `human` regardless.
+     *
+     * Three separate field reports were the same defect wearing different clothes:
+     *
+     *   * `GET /de-at/opensolr-search?f_product_category_sm=…` answered 403 by a captcha wall.
+     *     One request, no assets, no validators, a deep faceted URL nothing links to. Verdict
+     *     human, score 15, the only rule that fired being the weakest in the set.
+     *   * `/xmlrpc.php`, `/main/xmlrpc.php`, `/new/xmlrpc.php`. Verdict human.
+     *   * A macOS desktop User-Agent on China Mobile sharing a fingerprint with ten addresses.
+     *     Verdict human.
+     *
+     * ------------------------------------------------------------------------------------
+     * WHY A FLOOR AND NOT MORE RULES
+     * ------------------------------------------------------------------------------------
+     * Because the specific mechanism is general. `no_js_on_html`, `no_assets` and
+     * `no_304_on_repeat` — the three rules that catch an ordinary scraper — all need the site to
+     * have SERVED something before they can speak, which is correct on its own terms: you cannot
+     * hold a client to account for not fetching the stylesheet of a page it was never given. But
+     * the consequence is that THE MOMENT A SITE DEFENDS ITSELF, THE ATTACKER GOES QUIET. A 403,
+     * a 401, a captcha wall or a rate limiter removes exactly the evidence that would have
+     * condemned the client, and on a defended site that is the majority case, so the default
+     * verdict — human — is handed out most freely to precisely the traffic the product exists
+     * to name.
+     *
+     * Adding a rule per symptom would leave the mechanism intact and the next symptom
+     * undetected. So the ladder itself is fixed: a verdict of `human` or `likely_human` is a
+     * POSITIVE claim about a session, and this file will not publish one unless at least one
+     * plane of evidence actually spoke. See hadTestableEvidence() for what counts and why.
+     *
+     * ------------------------------------------------------------------------------------
+     * THE HONEST DIRECTION
+     * ------------------------------------------------------------------------------------
+     * A real person hits a 403 too, and a captcha in front of a search page refuses humans
+     * daily. So this deliberately does NOT say "a refusal is suspicious" — it adds no points, it
+     * changes no score, and it cannot push a session toward `bot`. It says the narrower and
+     * defensible thing: nothing exculpating was observable, so the answer is `unknown`, which is
+     * a finding rather than a shrug (Panel\Vocabulary says so where the operator reads it).
+     *
+     * It is the same device as PROVISIONAL_FLOOR one step further out: that one refuses to
+     * exonerate a session that has not FINISHED, this one refuses to exonerate a session that
+     * was never TESTABLE.
+     */
+    public const UNTESTED_FLOOR = 'unknown';
+
+    /**
+     * The reason code recorded when the evidence floor changes the verdict.
+     *
+     * Worth no points, like the other two synthetic reasons, and it rides in `bot_reasons_ss` so
+     * that "how much of my traffic could this installation not actually test" is a one-facet
+     * question — which is also the question that tells an operator whether deploying the beacon
+     * or widening their LogFormat would pay for itself.
+     */
+    public const UNTESTED_REASON = 'no_testable_evidence';
 
     /**
      * The reason code recorded when the floor above changes the verdict.
@@ -205,15 +315,20 @@ final class Rules
         'headless_renderer'      => 90,
         'beacon_forged'          => 90,
         'ua_claim_failed'        => 85,
+        'hostile_probe'          => 85,
         'fp_cluster_proxy_fleet' => 80,
+        'never_served'           => 80,
 
         'ua_secch_mismatch'      => 75,
         'platform_mismatch'      => 70,
         'no_js_on_html'          => 70,
 
+        'probe_sweep'            => 50,
+        'mostly_refused'         => 45,
         'hosting_asn_browser_ua' => 45,
         'periodic_timing'        => 45,
         'no_interaction'         => 40,
+        'desktop_on_mobile_asn'  => 40,
         'tz_mismatch'            => 35,
         'no_304_on_repeat'       => 30,
         'no_assets'              => 25,
@@ -316,7 +431,7 @@ final class Rules
      *   ua_declared_bot   is honest traffic. It produces the verdict `bot` because the thing
      *                     IS a bot, and it produces no threat whatsoever; severity `info`.
      *   no_bot_signals    is the absence of evidence, never evidence of a person.
-     *   provisional_session  means the session had not ended when it was scored, so five rules
+     *   provisional_session  means the session had not ended when it was scored, so the deferred rules
      *                     were not evaluated. Nothing was detected.
      *
      * A code with no entry here renders as its own slug — never as a wrong-but-plausible
@@ -361,6 +476,39 @@ final class Rules
             'severity' => 'high',
             'why' => 'Five or more distinct IPs shared this exact header fingerprint within 24 hours on non-mobile networks. One client, many exits.',
         ],
+        'hostile_probe' => [
+            'label' => 'Exploit probe',
+            'severity' => 'high',
+            'why' => 'This session requested something no browser asks for by accident: a JNDI lookup, a '
+                . 'credentials file, a published CVE path, shell syntax, a server-side-fetch address, or it '
+                . 'arrived under a User-Agent that names a fuzzer. Only the patterns with no innocent browser '
+                . 'explanation count here — the noisy ones are listed on the Attacks view and are not worth a '
+                . 'verdict on their own.',
+        ],
+        'probe_sweep' => [
+            'label' => 'Refused probe sweep',
+            'severity' => 'med',
+            'why' => 'Every request in this session matched a named attack pattern or a well-known admin path, '
+                . 'the server answered none of them with a body, and the client fetched no stylesheet, script, '
+                . 'font, image or favicon. A person whose browser lands on a 404 still renders the error page.',
+        ],
+        'never_served' => [
+            'label' => 'Never served anything',
+            'severity' => 'high',
+            'why' => 'The site refused every single request this client made and served it nothing at all — '
+                . 'no page, no redirect, not one byte of body. Somebody browsing a site gets something back; '
+                . 'a client that collects nothing but refusals and keeps asking, or asks once and leaves, is '
+                . 'not reading anything. Authentication challenges and rate-limit responses do not count '
+                . 'towards this on their own.',
+        ],
+        'mostly_refused' => [
+            'label' => 'Mostly refused',
+            'severity' => 'med',
+            'why' => 'This session opened with a refusal and the great majority of everything it asked for '
+                . 'afterwards was refused too, with only occasional success. That is the shape of something '
+                . 'enumerating paths until one works, rather than of a visitor who happened to find a dead '
+                . 'link partway through reading.',
+        ],
         'ua_secch_mismatch' => [
             'label' => 'Sec-CH-UA mismatch',
             'severity' => 'high',
@@ -391,6 +539,13 @@ final class Rules
             'severity' => 'med',
             'why' => 'The beacon ran, the session ended, and not one scroll, click or keypress ever happened.',
         ],
+        'desktop_on_mobile_asn' => [
+            'label' => 'Desktop on a mobile carrier',
+            'severity' => 'low',
+            'why' => 'A User-Agent claiming a desktop operating system arriving from cellular address space. '
+                . 'Weak alone — tethering a laptop to a phone looks exactly like this — and meaningful when it '
+                . 'stacks, because a mobile ASN is also where an address rotates fastest.',
+        ],
         'tz_mismatch' => [
             'label' => 'Timezone mismatch',
             'severity' => 'low',
@@ -414,12 +569,22 @@ final class Rules
         self::PROVISIONAL_REASON => [
             'label' => 'Session still open',
             'severity' => 'info',
-            'why' => 'The session had not ended when it was scored, so the five signals that can only be read after it ends were not evaluated and the verdict is held at unknown. Nothing was detected.',
+            'why' => 'The session had not ended when it was scored, so the signals that can only be read after it ends were not evaluated and the verdict is held at unknown. Nothing was detected.',
+        ],
+        self::UNTESTED_REASON => [
+            'label' => 'Nothing testable',
+            'severity' => 'info',
+            'why' => 'No beacon reported, the log format captured no client hints to check the User-Agent '
+                . 'against, the client fetched no sub-resource and sent no conditional request — so nothing '
+                . 'that could exculpate this session was observable, and the verdict is held at unknown. '
+                . 'Nothing was detected: this is the absence of a test, not the result of one. It is the '
+                . 'usual shape of a request a site REFUSED, because a refusal removes the evidence a '
+                . 'successful page would have produced.',
         ],
         self::SINGLE_PLANE_REASON => [
             'label' => 'One plane only',
             'severity' => 'info',
-            'why' => 'This site has no access log in this installation, so the session was measured by the beacon alone and the five signals that read the request log were not evaluated. Nothing was detected — but the evidence that remains is the plane a determined client controls, so treat the verdict as weaker than the same verdict on a session with a log behind it.',
+            'why' => 'This site has no access log in this installation, so the session was measured by the beacon alone and every signal that reads the request log was not evaluated. Nothing was detected — but the evidence that remains is the plane a determined client controls, so treat the verdict as weaker than the same verdict on a session with a log behind it.',
         ],
         self::CLEAN_REASON => [
             'label' => 'Nothing fired',
@@ -455,7 +620,12 @@ final class Rules
     {
         return array_merge(
             array_keys(self::WEIGHTS),
-            [self::PROVISIONAL_REASON, self::SINGLE_PLANE_REASON, self::CLEAN_REASON]
+            [
+                self::PROVISIONAL_REASON,
+                self::SINGLE_PLANE_REASON,
+                self::UNTESTED_REASON,
+                self::CLEAN_REASON,
+            ]
         );
     }
 
@@ -511,10 +681,15 @@ final class Rules
             case 'beacon_forged':          return $this->ruleBeaconForged($s);
             case 'ua_claim_failed':        return $this->ruleUaClaimFailed($s);
             case 'fp_cluster_proxy_fleet': return $this->ruleFpClusterProxyFleet($s);
+            case 'hostile_probe':          return $this->ruleHostileProbe($s);
+            case 'probe_sweep':            return $this->ruleProbeSweep($s);
+            case 'never_served':           return $this->ruleNeverServed($s);
+            case 'mostly_refused':         return $this->ruleMostlyRefused($s);
             case 'ua_secch_mismatch':      return $this->ruleUaSecChMismatch($s);
             case 'platform_mismatch':      return $this->rulePlatformMismatch($s);
             case 'no_js_on_html':          return $this->ruleNoJsOnHtml($s, $ctx);
             case 'hosting_asn_browser_ua': return $this->ruleHostingAsnBrowserUa($s);
+            case 'desktop_on_mobile_asn':  return $this->ruleDesktopOnMobileAsn($s);
             case 'periodic_timing':        return $this->rulePeriodicTiming($s);
             case 'no_interaction':         return $this->ruleNoInteraction($s);
             case 'tz_mismatch':            return $this->ruleTzMismatch($s);
@@ -537,12 +712,22 @@ final class Rules
      * makes "how many sessions tripped nothing at all" a one-facet question.
      *
      * A clean PROVISIONAL session gets PROVISIONAL_REASON instead of `no_bot_signals`, and that
-     * is not an oversight: five rules were not evaluated, so "nothing fired" is not yet a fact
+     * is not an oversight: the deferred rules were not evaluated, so "nothing fired" is not yet a fact
      * about the session. The facet stays honest by counting only sessions that were fully tested.
      *
      * That invariant is asserted rather than merely documented. If the assertion ever throws,
      * the bug is that a rule contributed points without recording why, which would produce a
      * verdict nobody can defend and that someone would nonetheless act on.
+     *
+     * TWO FLOORS APPLY TO THE VERDICT, IN THIS ORDER, and neither can make a session look more
+     * like a bot — both only refuse to publish a claim of humanity that the evidence does not
+     * support. PROVISIONAL_FLOOR refuses to exonerate a session that has not FINISHED.
+     * UNTESTED_FLOOR refuses to exonerate one that was never TESTABLE: no beacon, no client
+     * hints in the log format, no sub-resource fetched, no conditional request — a session made
+     * of request lines and nothing else, which is the usual shape of traffic a site REFUSED,
+     * because a refusal removes the very evidence that would have condemned the client. The
+     * second is checked only when the first did not already apply, so a session never collects
+     * both explanations for one decision.
      *
      * A PROVISIONAL session — one that has not ended — is scored with the DEFERRED_CODES rules
      * silenced and the verdict floored at PROVISIONAL_FLOOR. Both halves are needed and neither
@@ -595,6 +780,18 @@ final class Rules
                 'why'    => 'This session has not ended yet, so the ' . count(self::DEFERRED_CODES)
                     . ' signals that can only be read once it has were not evaluated. '
                     . 'Not enough evidence to call it human.',
+            ];
+        }
+
+        if (self::isBetterThanFloor($verdict) && !self::hadTestableEvidence($s)) {
+            $verdict = self::UNTESTED_FLOOR;
+            $reasons[] = self::UNTESTED_REASON;
+            $detail[self::UNTESTED_REASON] = [
+                'weight' => 0,
+                'why'    => 'Nothing that could exculpate this session was observable: no beacon reported, '
+                    . 'the log format captured no client hints to check the User-Agent against, and the '
+                    . 'client never fetched a sub-resource or sent a conditional request. A verdict of '
+                    . 'human is a positive claim and there is nothing here to base one on.',
             ];
         }
 
@@ -664,6 +861,77 @@ final class Rules
     }
 
     /**
+     * Did ANY plane of evidence actually say something about this session?
+     *
+     * The gate behind UNTESTED_FLOOR, and the whole question it answers is: could this session
+     * have been caught if it had been a bot? If the answer is no, it may not be called a person.
+     *
+     * FOUR WAYS TO PASS, one per plane the product is built on, and each is a POSITIVE fact
+     * rather than an absence — that is the discipline the rest of this file keeps about null and
+     * the one that was missing from the ladder.
+     *
+     *  1. THE EXECUTION PLANE SPOKE. A beacon reported. That is the strongest evidence there is:
+     *     scripts ran, the engine's feature set was probed against the version the User-Agent
+     *     claims, automation properties were looked for, interactions were counted. A session
+     *     with a beacon has been tested properly whatever else is true of it.
+     *
+     *  2. THE HEADER PLANE WAS TESTABLE. secChMismatch() or platformMismatch() returned a real
+     *     boolean rather than null, which happens only when the log format actually captures the
+     *     client hints AND the User-Agent claims a browser that must send them. A Chrome whose
+     *     Sec-CH-UA agrees with its User-Agent has passed a check a spoofed header set fails, and
+     *     that is genuine exculpating evidence from the log alone.
+     *
+     *  3. THE CLIENT DEMONSTRABLY RAN A RENDERER. It went back to the server for a stylesheet, a
+     *     script, a font, an image or a favicon. Something parsed markup and followed what it
+     *     referenced — an HTTP library fetching a URL does not. `own_assets` counts alongside
+     *     `sub_resources` for the same reason ruleNoAssets() reads it: a visitor whose only
+     *     sub-resource was Loghound's own `/b.js` did exactly what our script tag told their
+     *     browser to do, and must not be punished for it.
+     *
+     *     NOT CONDITIONAL ON A 200. This is the precise correction to the three rules whose
+     *     precondition created the hole: they need a successful HTML response because they
+     *     accuse a client of not fetching the assets of a page it WAS given. This asks the
+     *     opposite and weaker question — did anything render — and the answer survives any
+     *     status code. A person who lands on a 404 or a 403 page whose own stylesheet loads has
+     *     still demonstrated a browser.
+     *
+     *  4. AN HTTP CACHE SPOKE. The client received a 304, so it sent an If-None-Match or an
+     *     If-Modified-Since and had a warm cache to validate. Scripted clients overwhelmingly do
+     *     not, and this is a fact about the client that no status code on another request erases.
+     *
+     * WHAT FAILS ALL FOUR is a session consisting of request lines and nothing else: a
+     * User-Agent string anyone can set, an address, a path and a count. The 403 on a deep
+     * faceted search URL is that. So is a `/xmlrpc.php` sweep. So, for that matter, is a
+     * returning visitor with a completely warm cache on a site that logs no client hints and has
+     * no beacon — and calling that one `unknown` is the right answer too, because there is
+     * genuinely nothing in the record that separates them.
+     *
+     * It reads only the signal map and never `$ctx`, deliberately: `beacon_deployed` and
+     * `site_sends_304` describe what the INSTALLATION can do, and the question here is what this
+     * SESSION showed. An installation with no beacon does not make a session untestable; it
+     * makes every session on it rest on the remaining three.
+     *
+     * @param array<string,mixed> $s
+     */
+    private static function hadTestableEvidence(array $s): bool
+    {
+        if (!empty($s['beacon'])) {
+            return true;
+        }
+        if (($s['secch_mismatch'] ?? null) !== null || ($s['platform_mismatch'] ?? null) !== null) {
+            return true;
+        }
+        if ((int) ($s['sub_resources'] ?? 0) > 0 || (int) ($s['own_assets'] ?? 0) > 0) {
+            return true;
+        }
+        if (!empty($s['got_304'])) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Map a 0–100 score onto a verdict (SPEC §7 thresholds).
      */
     public function verdictFor(float $score): string
@@ -724,6 +992,16 @@ final class Rules
         if (isset($fired['ua_declared_bot'])) {
             if (isset($fired['rdns_claim_failed'])) {
                 return 'spoofed_ua';
+            }
+            /* A SELF-DECLARED CLIENT THAT PROBED IS NOT HONEST TRAFFIC. `declared_crawler` is
+               labelled "said what it was and was telling the truth" everywhere in the panel and
+               is presented as the group an operator does NOT need to act on, so a client that
+               announced itself — sqlmap does, and so does every HTTP library on Enrich\Ua's
+               table — and then asked for `/etc/passwd` must not land there. It declared a
+               non-browser accurately and then behaved hostilely, which is `scripted`: we are
+               confident it is not a person and cannot say what it is. */
+            if (isset($fired['hostile_probe'])) {
+                return 'scripted';
             }
             if (!empty($s['ai_crawler'])) {
                 return 'ai_crawler';
@@ -908,6 +1186,249 @@ final class Rules
     }
 
     /**
+     * hostile_probe — the session asked for something no browser asks for by accident.
+     *
+     * WEIGHT 85, decisive alone, and it exists because the two halves of this product were not
+     * speaking. Score\Attacks has named hostile request patterns at ingest since it was written,
+     * Sessionizer folds the codes up onto the session as `hit_flags_ss`, and the RULESET never
+     * read them — so a client whose entire visit was `/xmlrpc.php`, `/main/xmlrpc.php` and
+     * `/new/xmlrpc.php` tripped nothing, scored 15 for `single_page_10s`, and was published in
+     * the HUMAN population. The whole product claim is that it can tell a person from a scraper;
+     * a WordPress exploit sweep filed under "humans" is that claim failing in public.
+     *
+     * IT READS Score\Attacks::DECISIVE AND NOT `severity: high`. Severity says how bad a match
+     * would be if it worked; DECISIVE says whether a browser with a person behind it could have
+     * produced it by accident, and the two are genuinely different sets — a downloads directory
+     * serving `release-1.2.tar.gz` matches a medium-severity backup-file pattern, and a bundler's
+     * source map matches a high-severity traversal one. Both are ordinary browsing. The selection
+     * and the reason for every exclusion live in that constant's docblock, which is also where
+     * the `over` paragraph for each pattern is written, so there is one place to argue with.
+     *
+     * Eighty-five rather than 100 for one reason worth stating: a code can be matched on a
+     * request somebody else made THROUGH this session's client key. The key is a /24 plus a
+     * User-Agent hash, so a corporate NAT can merge a scanner and a colleague into one session,
+     * and at 100 the colleague would be unappealable. At 85 it still reaches `bot` alone, and a
+     * single point of contrary evidence is still worth something.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleHostileProbe(array $s): ?string
+    {
+        $codes = (array) ($s['attack_decisive'] ?? []);
+        if ($codes === []) {
+            return null;
+        }
+
+        $labels = [];
+        foreach ($codes as $code) {
+            $labels[] = Attacks::describe((string) $code)['label'];
+        }
+
+        return 'This session requested ' . (count($labels) === 1 ? 'a pattern' : 'patterns')
+            . ' with no innocent browser explanation: ' . implode(', ', $labels)
+            . '. A person\'s browser does not ask for these by accident.';
+    }
+
+    /**
+     * probe_sweep — everything it asked for was a probe, and the server gave it nothing.
+     *
+     * WEIGHT 50, designed to stack, and it is the rule that catches the case the decisive list
+     * deliberately will not: `/xmlrpc.php`. That path is `atk_admin_probe`, which Score\Attacks
+     * itself calls "the loudest and least alarming row in the table" because every one of your
+     * own editors reaching `/wp-login.php` lands in it. A rule that fired on the code alone would
+     * accuse your staff.
+     *
+     * SO THE RULE ASKS WHAT THE SERVER ANSWERED, which is this product's stated position on
+     * hostile traffic everywhere else: a probe refused is noise and a probe answered is an
+     * incident, and here the refusal is what makes the CLIENT suspicious rather than the request.
+     * Three conditions, all required:
+     *
+     *  1. At least one named pattern matched, of any severity. Without one this is just a
+     *     session that got a 404, which is a broken link.
+     *  2. The server answered NOTHING with a body — no 2xx at all. An editor signing in gets the
+     *     login form with a 200; a scanner enumerating paths that do not exist does not. This is
+     *     also what keeps the rule off a real download, a real source map and a real search box,
+     *     every one of which is a successful request.
+     *  3. The client fetched no sub-resource whatsoever — not a stylesheet, script, font, image
+     *     or favicon, and not Loghound's own beacon script either (`own_assets`, the same
+     *     evidence ruleNoAssets() reads, for the same reason). A person whose browser lands on a
+     *     404 still renders the error page and still goes back for its assets. Something that
+     *     takes the status line and leaves did not render anything.
+     *
+     * Fifty, so it cannot reach `bot` alone but comfortably clears `unknown` — and on the sweep
+     * that prompted it, stacked with `single_page_10s`, it reaches `likely_bot` and the session
+     * leaves the human population, which is the whole point. The known over-report is a visitor
+     * with a stale bookmark to an admin path whose 404 page carries no sub-resources at all; that
+     * is a narrow population and it lands on `likely_bot`, not on `bot`.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleProbeSweep(array $s): ?string
+    {
+        $codes = (array) ($s['attack_codes'] ?? []);
+        if ($codes === []) {
+            return null;
+        }
+        if ((int) ($s['hits'] ?? 0) === 0) {
+            return null;
+        }
+        if ((int) ($s['st2'] ?? 0) > 0) {
+            return null;
+        }
+        if ((int) ($s['sub_resources'] ?? 0) > 0 || (int) ($s['own_assets'] ?? 0) > 0) {
+            return null;
+        }
+
+        $labels = [];
+        foreach ($codes as $code) {
+            $labels[] = Attacks::describe((string) $code)['label'];
+        }
+
+        return 'Every request in this session matched a named probe pattern (' . implode(', ', $labels)
+            . '), the server answered none of them with a body, and the client fetched no stylesheet, '
+            . 'script, font, image or favicon afterwards. A person\'s browser renders the error page.';
+    }
+
+    /**
+     * Refusal statuses that say more about the SITE than about the client.
+     *
+     * A 401 is "you need to be signed in", which is the correct answer to a person who followed
+     * a link to a members-only page, and it is what every browser collects on the way to a login
+     * prompt. A 407 is the same statement made by a proxy. A 429 is the operator's own rate
+     * limiter firing, which is a fact about request volume and about how the limiter is
+     * configured, not about whether a human is driving.
+     *
+     * A session refused only in these ways has not been shown to be anything, so it is carved
+     * out of ruleNeverServed(). Everything else in the 4xx and 5xx classes counts: a 403, a 404,
+     * a 410, a 400 and a 500 are all the site saying no to something that was asked for.
+     *
+     * @var array<int,int>
+     */
+    private const SOFT_REFUSALS = [401, 407, 429];
+
+    /**
+     * never_served — the site refused everything and served this client nothing at all.
+     *
+     * WEIGHT 80, decisive alone, and it is the answer to the largest structural hole in this
+     * ruleset: A REFUSAL SILENCES THE RULES THAT WOULD HAVE CAUGHT THE CLIENT. `no_assets`,
+     * `no_js_on_html` and `no_304_on_repeat` all require the site to have SERVED something
+     * before they can speak, which is right on its own terms — you cannot hold a client to
+     * account for not fetching the stylesheet of a page it never received. The consequence is
+     * that the moment a site defends itself, the attacker goes quiet: a 403 from a captcha wall,
+     * a 401 from an auth gate or a rate limiter removes precisely the evidence that would have
+     * condemned the client, and on a defended site that is the majority case.
+     *
+     * Score\Rules::UNTESTED_FLOOR answers half of that by refusing to call such a session
+     * HUMAN. This answers the other half: on a site's own owner's instruction, a client that was
+     * served nothing whatsoever is not a person, and that is worth a verdict rather than a
+     * shrug. `GET /de-at/opensolr-search?f_product_category_sm=…` answered 403, one request, no
+     * assets, no validators, a deep faceted URL nothing links to — the session that prompted
+     * this was published as a human with a score of 15.
+     *
+     * ------------------------------------------------------------------------------------
+     * THE GUARDS, AND EACH IS THERE TO STOP A NAMED FALSE POSITIVE
+     * ------------------------------------------------------------------------------------
+     *  1. NOTHING WAS SERVED AND NOTHING WAS REDIRECTED. Not "a 4xx happened" — EVERY request in
+     *     the session was refused. A session with twenty served pages and one 404 is a person
+     *     who clicked a dead link, and calling that automation is the false positive that would
+     *     discredit the product. It is also why `st3` has to be zero: a site that answers `http`
+     *     with a 301 to `https` produces sessions whose only recorded request is that redirect,
+     *     and a redirect is the server cooperating, not refusing.
+     *
+     *  2. THE REFUSALS WERE NOT ALL AUTHENTICATION OR RATE LIMITING. See SOFT_REFUSALS. A
+     *     session consisting entirely of 401s may be credential stuffing and may equally be a
+     *     person one click from signing in, and this rule reaches `bot` on its own, so it does
+     *     not get to decide that case.
+     *
+     *  3. It is DEFERRED (see DEFERRED_CODES), so it never judges a session that is still
+     *     running. "Every request so far was refused" is a statement about the future when the
+     *     session has not ended, and the scorer can easily land between a 403 and the 200 that
+     *     follows it.
+     *
+     * ------------------------------------------------------------------------------------
+     * WHAT IT STILL GETS WRONG, STATED PLAINLY
+     * ------------------------------------------------------------------------------------
+     * A real person stopped by a captcha wall on their very first request, who then leaves
+     * without their browser fetching a single sub-resource of the challenge page, looks
+     * identical to a scraper and is scored `bot`. That population is narrow — a browser
+     * rendering a challenge page almost always goes back for its script or its favicon, and
+     * those requests are still counted into the session even though they are no longer indexed
+     * — but it is not empty, and it is the price of the decisive form.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleNeverServed(array $s): ?string
+    {
+        $hits = (int) ($s['hits'] ?? 0);
+        if ($hits === 0) {
+            return null;
+        }
+        if ((int) ($s['st2'] ?? 0) > 0 || (int) ($s['st3'] ?? 0) > 0) {
+            return null;
+        }
+        $refused = (int) ($s['refused'] ?? 0);
+        if ($refused < $hits) {
+            return null;
+        }
+        if ((int) ($s['soft_refusals'] ?? 0) >= $refused) {
+            return null;
+        }
+
+        return 'The site refused every one of this client\'s ' . $hits . ' request'
+            . ($hits === 1 ? '' : 's') . ' and served it nothing at all — no page, no redirect, not one '
+            . 'byte of body. Somebody browsing a site gets something back.';
+    }
+
+    /**
+     * mostly_refused — it opened with a refusal and almost everything after that was refused too.
+     *
+     * WEIGHT 45, designed to corroborate, and it is the middle of the range never_served leaves
+     * open: a client enumerating paths until one of them works has a 2xx in it somewhere, so the
+     * decisive rule correctly declines, and without this the session would be judged as though
+     * the fifteen refusals had not happened.
+     *
+     * TWO CONDITIONS DO THE WORK, and the second is the one that makes the rule safe.
+     *
+     * The RATIO says most of what was asked for was refused. A threshold rather than a slope
+     * because a rule an operator cannot check by hand is a rule they cannot disagree with, and
+     * four fifths is a number somebody can hold against a session in the explorer.
+     *
+     * THE FIRST REQUEST HAVING BEEN REFUSED is what separates the two shapes a ratio alone
+     * conflates. A person reads twenty pages, then follows a stale link and collects a 404: the
+     * session OPENED with a 200 and this rule stays silent no matter what the tail looks like. A
+     * scanner's first request is refused, because its first request is a guess. That single fact
+     * removes the entire "human who found some dead links" population from the rule, which is
+     * why the ratio can be as low as four fifths without being reckless.
+     *
+     * A floor of five requests keeps it away from the small numbers where a ratio means nothing:
+     * one refusal out of one is 100% and is a single dead link.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleMostlyRefused(array $s): ?string
+    {
+        $hits = (int) ($s['hits'] ?? 0);
+        if ($hits < 5) {
+            return null;
+        }
+        $first = $s['first_status'] ?? null;
+        if ($first === null || (int) $first < 400) {
+            return null;
+        }
+        $refused = (int) ($s['refused'] ?? 0);
+        if ($refused >= $hits) {
+            return null;
+        }
+        if (($refused / $hits) < 0.8) {
+            return null;
+        }
+
+        return 'This session opened with a refusal (' . (int) $first . ') and ' . $refused . ' of its '
+            . $hits . ' requests were refused — ' . (int) round(($refused / $hits) * 100)
+            . '% — with only occasional success. That is something trying paths until one works.';
+    }
+
+    /**
      * fp_cluster_proxy_fleet — one header fingerprint, many unrelated IP addresses.
      *
      * WEIGHT 80. THE SIGNAL THIS PRODUCT EXISTS FOR.
@@ -929,8 +1450,26 @@ final class Rules
      * behind one browser fingerprint has no innocent explanation — but two guards keep it
      * from being reckless:
      *
-     *   * `as_type != mobile`, per SPEC §7: a phone on a carrier network genuinely changes
-     *     address repeatedly, and mobile CGNAT would otherwise flag real people.
+     *   * A CLIENT THAT IS ACTUALLY A PHONE on a carrier network, per SPEC §7: a handset
+     *     genuinely changes address repeatedly, and mobile CGNAT would otherwise flag real
+     *     people.
+     *
+     *     THE EXEMPTION USED TO BE `as_type === 'mobile'` AND NOTHING ELSE, AND THAT WAS A HOLE
+     *     THE SIZE OF A CATEGORY. It tested the NETWORK and was written about the DEVICE, so
+     *     anything at all on a mobile ASN was excused — and the client it excused in the field
+     *     was a User-Agent claiming a macOS DESKTOP, Chrome 148, on China Mobile AS56041, whose
+     *     header fingerprint was shared by TEN distinct addresses in the window. Ten is twice
+     *     the threshold; the rule is worth 80 on its own; the session was published as HUMAN.
+     *     A desktop operating system on a cellular network is not the innocent case the
+     *     exemption was written for — it is the opposite of it, and it is the shape a
+     *     residential-proxy fleet sells.
+     *
+     *     So the exemption now requires the DEVICE to be a phone or a tablet as well.
+     *     Enrich\Ua sets `device_s` on every hit where a User-Agent was logged, so this is a
+     *     fact that is already on the document. An UNKNOWN device is not exempt, deliberately:
+     *     the exemption has to be earned by evidence, exactly as the crawler exemption below
+     *     is, and "we could not tell what this is" is not evidence that it is a handset. A real
+     *     phone always says so in its User-Agent — that is how `device_s` was derived.
      *
      *   * NOT a forward-confirmed declared crawler. THIS IS A CORRECTION TO SPEC §7, which
      *     omits it. Googlebot crawls from hundreds of addresses with one fingerprint and
@@ -951,7 +1490,7 @@ final class Rules
         if ($ips === null || (int) $ips < $this->fpFleetMinIps) {
             return null;
         }
-        if (($s['as_type'] ?? null) === 'mobile') {
+        if (self::isHandsetOnCarrier($s)) {
             return null;
         }
         if (!empty($s['ua_bot']) && ($s['rdns_ok'] ?? null) === true) {
@@ -961,8 +1500,50 @@ final class Rules
         return 'This exact browser fingerprint was seen from ' . (int) $ips
             . ' distinct IP addresses in a 24-hour window around this session'
             . (isset($s['as_type']) && $s['as_type'] !== null ? ' (network type: ' . $s['as_type'] . ')' : '')
+            . (($s['device'] ?? null) !== null ? ', on a ' . (string) $s['device'] . ' client' : '')
             . '. One browser cannot be on ' . (int) $ips
             . ' unrelated networks; this is a rotating-proxy fleet.';
+    }
+
+    /**
+     * Device classes that make a client a HANDSET rather than merely a client on a carrier.
+     *
+     * Enrich\Ua::matchDevice() can answer desktop, mobile, tablet, bot or unknown. Only the
+     * first two of those are a thing that legitimately moves between cell towers with a person
+     * carrying it. A tablet is included because a cellular iPad is an ordinary subscriber; a
+     * desktop is not, and `unknown` is not either — see isHandsetOnCarrier().
+     *
+     * @var array<int,string>
+     */
+    private const HANDSET_DEVICES = ['mobile', 'tablet'];
+
+    /**
+     * Is this client the innocent case the mobile exemption was written about?
+     *
+     * BOTH HALVES, and that is the entire point of the method existing rather than the network
+     * test being written inline as it was. The exemption's justification is a HANDSET moving
+     * between towers on carrier-grade NAT; testing only the network excused every client that
+     * happened to arrive over a cellular ASN, which is where a residential-proxy fleet's mobile
+     * exits live. A separate method makes the pairing hard to take apart again and gives the
+     * next reader one place to argue with.
+     *
+     * An absent device is NOT a handset. That direction is deliberate and is the same discipline
+     * the rest of this file keeps about null: an exemption is a decision to IGNORE evidence, so
+     * it has to be earned by a positive fact, never granted by a missing one. The cost of
+     * getting that backwards is a fleet going unscored; the cost of getting it right is that a
+     * phone whose User-Agent we failed to parse loses its exemption, and a phone always names
+     * itself — `device_s` is derived from the User-Agent that is sitting on the document.
+     *
+     * @param array<string,mixed> $s
+     */
+    private static function isHandsetOnCarrier(array $s): bool
+    {
+        if (($s['as_type'] ?? null) !== 'mobile') {
+            return false;
+        }
+        $device = strtolower((string) ($s['device'] ?? ''));
+
+        return in_array($device, self::HANDSET_DEVICES, true);
     }
 
     /**
@@ -1085,6 +1666,56 @@ final class Rules
             . ') arriving from hosting/datacentre address space'
             . (isset($s['asn']) && $s['asn'] !== null ? ' (AS' . (int) $s['asn'] . ')' : '')
             . '. People do not browse from servers.';
+    }
+
+    /**
+     * desktop_on_mobile_asn — a desktop operating system on a cellular network.
+     *
+     * WEIGHT 40, AND IT IS DELIBERATELY NOT DECISIVE. This is the same shape as
+     * hosting_asn_browser_ua one category over: a client whose CLAIMED device contradicts the
+     * kind of network it arrived on. Cellular address space is sold to handsets; a machine
+     * announcing macOS or Windows on it is announcing something a carrier does not usually
+     * carry, and mobile exits are exactly what a residential-proxy operator advertises as the
+     * hardest addresses to block.
+     *
+     * THE FALSE-POSITIVE STORY IS REAL AND IT IS WHY THIS IS 40. Tethering is ordinary: a laptop
+     * on a phone's hotspot presents a desktop User-Agent from a mobile ASN and is a person. So
+     * does a cellular USB modem, a 4G office failover link, and a fixed-wireless home connection
+     * whose operator's AS name reads as a carrier. Those populations are large enough that a
+     * decisive weight here would accuse real people daily, which is the failure this whole
+     * ruleset is built to avoid. Forty cannot reach any verdict past `unknown` on its own and is
+     * meant to corroborate — and the session that prompted it had a ten-address fingerprint
+     * cluster to corroborate with.
+     *
+     * IT DOES NOT DOUBLE-COUNT THE EXEMPTION IT SITS BESIDE. isHandsetOnCarrier() decides
+     * whether fp_cluster_proxy_fleet is silenced; this decides whether the same contradiction is
+     * worth points of its own. They read the same two facts and answer different questions, and
+     * a session can legitimately trip this one while tripping nothing else.
+     *
+     * A declared crawler is excluded for the same reason it is excluded from
+     * hosting_asn_browser_ua: a client that never claimed to be a desktop browser is not
+     * contradicting itself, and a crawler on a carrier ASN is just a crawler with an odd exit.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleDesktopOnMobileAsn(array $s): ?string
+    {
+        if (($s['as_type'] ?? null) !== 'mobile') {
+            return null;
+        }
+        if (!empty($s['ua_bot'])) {
+            return null;
+        }
+        if (strtolower((string) ($s['device'] ?? '')) !== 'desktop') {
+            return null;
+        }
+
+        return 'A User-Agent claiming a desktop operating system'
+            . (($s['os'] ?? null) !== null ? ' (' . (string) $s['os'] . ')' : '')
+            . ' arriving from cellular address space'
+            . (isset($s['asn']) && $s['asn'] !== null ? ' (AS' . (int) $s['asn'] . ')' : '')
+            . '. Carriers sell those addresses to handsets. Weak alone — a tethered laptop looks '
+            . 'identical — and meaningful alongside another signal.';
     }
 
     /**

@@ -1055,23 +1055,27 @@ final class Facets
     }
 
     /**
-     * The sentence that says what this group's counts count.
+     * The sentence that says what this group's counts count — when it is not the obvious one.
      *
-     * Required by the same rule that puts a population caption under every chart: a number
-     * whose label describes a different question than the number answers is a wrong number,
-     * and with exclusions in play that is very easy to do by accident.
+     * SILENCE IS THE DEFAULT NOW, and that is the change. Every group used to carry "Counts are
+     * what each value matches on this page as filtered", which is what a reader of an analytics
+     * panel assumes before they read it, printed once per dimension down a column of them. The
+     * note survives only where the count would be MISREAD without it: a dimension counted with
+     * its own filter lifted, and a multi-valued dimension whose values overlap so the column
+     * does not sum to the total. Both change what the reader concludes; the default does not.
      */
     private function basisNote(string $field, bool $excluded): string
     {
         $label = mb_strtolower($this->labels[$field] ?? $field);
-        $note = $excluded
-            ? 'Counts are what each value would match with the ' . $label . ' filter lifted, so a second value can be added.'
-            : 'Counts are what each value matches on this page as filtered.';
+        $parts = [];
 
-        if ($this->arity($field) === self::ARITY_MULTI) {
-            $note .= ' One session can hold several ' . $label . ' values, so these counts overlap and do not sum to the total.';
+        if ($excluded) {
+            $parts[] = 'Counted with the ' . $label . ' filter lifted.';
         }
-        return $note;
+        if ($this->arity($field) === self::ARITY_MULTI) {
+            $parts[] = 'Values overlap; they do not sum to the total.';
+        }
+        return implode(' ', $parts);
     }
 
     /**

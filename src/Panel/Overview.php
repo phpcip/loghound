@@ -27,10 +27,32 @@ use Loghound\Setup\Steps;
 
 final class Overview extends Controller
 {
+
+    /**
+     * The pages this view has, in render order.
+     *
+     * Drives the sub-items under Overview in the left navigation, the URL that names each page,
+     * and every card's number. The labels are written for a navigation column — short, and
+     * distinct from each other rather than from the headings, which stay as they are on the
+     * cards themselves.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    public const SECTIONS = [
+        ['ov-stats', 'Who was here'],
+        ['ov-timing', 'How long they stayed'],
+        ['ov-series', 'Over time'],
+        ['ov-pages', 'Top pages'],
+        ['ov-searches', 'Searches'],
+        ['ov-pivot', 'Country by verdict'],
+    ];
     /**
      * Which page-toolbar controls this view honours.
      *
-     * Every card runs under sessionFqs(), which carries the range, the host and every facet.
+     * Every card runs under sessionFqs(), which carries the range, the host and every facet —
+     * except Top pages, which counts requests and therefore runs under hitFqs(). That one
+     * honours the same range, the same host and every facet the HITS core can answer, and
+     * reports the ones it cannot through `ignored`, exactly as the hits-plane views do.
      *
      * @return array<int,string>
      */
@@ -76,17 +98,20 @@ final class Overview extends Controller
                 'label'   => 'Top pages',
                 'action'  => 'toppages',
                 'unit'    => 'paths',
-                'ranked'  => 'ranked by the number of sessions that requested them',
+                'ranked'  => 'ranked by the number of requests made to them',
                 'cap'     => 50,
                 'params'  => ['limit' => 50],
                 'carry'   => ['pop'],
-                'note'    => 'Counted as sessions that requested the path at least once, not as a raw '
-                    . 'request count. Loghound\'s own beacon and collector requests are excluded here, '
-                    . 'because this reads the path set on the session document; a Performance export reads '
-                    . 'the hits index, where they are still present.',
-                'scope'   => ['population_label' => 'Population'],
+                'note'    => 'Counted in REQUESTS, from the hits index, with the distinct sessions that '
+                    . 'made them beside each row. Sub-resources — images, stylesheets, scripts, fonts — are '
+                    . 'not stored at all unless ingest.index_assets is on, and Loghound\'s own collector, '
+                    . 'favicons and robots.txt are excluded here because nobody visited those. A verdict is '
+                    . 'a conclusion about a whole SESSION and does not exist on the request plane, so this '
+                    . 'file cannot be scoped to humans; the Sessions export can.',
+                'scope'   => ['population_label' => 'Counting'],
                 'columns' => [
                     ['Path', 'path', 'text'],
+                    ['Requests', 'requests', 'number'],
                     ['Sessions', 'sessions', 'number'],
                     ['Virtual host', 'host', 'text'],
                     ['Distinct hosts serving this path', 'hosts', 'number'],
@@ -185,19 +210,41 @@ final class Overview extends Controller
     }
 
     /**
-     * The four timing numbers, and the log-only figure they are contrasted with.
+     * The four timing numbers, each over the population it can honestly describe.
      *
-     * All four cover the same population — human sessions that produced beacon data —
-     * because comparing averages across two different denominators is exactly the sleight
-     * of hand this card exists to expose. The denominators travel with the numbers so the
-     * front end never has to guess which population a figure belongs to.
+     * COMPLETED SESSIONS ONLY, for all of them. An open session's log span is the gap between
+     * its first hit and its most recent one, so averaging it in measures how long ago the
+     * visitor arrived rather than how long they stayed — which is precisely the lie this card
+     * exists to expose. Counting a live session is honest; measuring one is not.
+     *
+     * ------------------------------------------------------------------------------------
+     * THREE DENOMINATORS, NOT ONE, AND THAT IS A CORRECTION
+     * ------------------------------------------------------------------------------------
+     * This method used to compute all four figures over a single population — human sessions
+     * with beacon data — on the stated principle that comparing averages across two
+     * denominators is a sleight of hand. The principle is right and the application was wrong,
+     * because it produced a card that was empty far more often than it was informative:
+     *
+     *   * The three BEACON clocks genuinely only exist for sessions where the beacon ran, so
+     *     they keep that population. Nothing changes.
+     *   * The LOG SPAN exists for every log-backed session, and taking it over the beacon
+     *     population meant that on any range where no human session happened to have a beacon
+     *     — which on a one-hour window is most of them — the log-span figure was an em-dash
+     *     too, under a card whose own copy says the span "exists for every session". A
+     *     structurally-available number reported as unavailable is worse than a missing one.
+     *   * And the span's own population is narrower than "all human sessions": a session with
+     *     ONE request has a span of zero by construction. Measured on a real index, 3,205 of
+     *     4,132 sessions are single-request, so the median span over all of them is 0 — which
+     *     is what the card printed.
+     *
+     * So each figure states its own denominator and the front end prints it. That is not
+     * comparing across denominators, it is refusing to hide which one each number has.
+     *
+     * `beaconed` keeps a log span of its own precisely SO the comparison sentence can be
+     * like-for-like: "a log-only tool would have said X, we measured Y" is only honest when X
+     * and Y describe the same sessions.
      *
      * @return array<string,mixed>
-     * COMPLETED SESSIONS ONLY. An open session's log span is the gap between its first hit
-     * and its most recent one, so averaging it in measures how long ago the visitor arrived
-     * rather than how long they stayed — which is precisely the lie this card exists to
-     * expose. Counting a live session is honest; measuring one is not.
-     *
      */
     private function timing(): array
     {
@@ -207,9 +254,23 @@ final class Overview extends Controller
             'q'  => '*:*',
             'fq' => $this->settledSessionFqs(),
         ], [
-            'humans' => ['type' => 'query', 'q' => $human, 'facet' => [
+            'humans' => ['type' => 'query', 'q' => $human],
+
+            /* THE SPAN IS TAKEN OVER SESSIONS THAT CAN HAVE ONE, AND THAT IS THE WHOLE FIX.
+               It used to be an average over every settled human session, three quarters of
+               which are a single request — and a single request has a span of zero by
+               construction, not by measurement. The median of that population is 0, the card
+               printed `0 ms` under a heading that says "how long they actually stayed", and the
+               distribution chart beside it drew four empty bars with an axis reading
+               "0 ms 0 ms 0 ms 1 ms 1 ms 1 ms".
+
+               `floored` rides inside this facet rather than beside it so it cannot drift out of
+               step with its own denominator: it is the multi-request sessions whose span is
+               STILL zero, which is the log clock's resolution rather than a duration. */
+            'spanned' => ['type' => 'query', 'q' => $human . ' AND ' . Query::POP_MULTI_REQUEST, 'facet' => [
                 'log_span_avg' => 'avg(log_span_ms_l)',
                 'log_span_p50' => 'percentile(log_span_ms_l,50)',
+                'floored'      => ['type' => 'query', 'q' => Query::POP_SPAN_FLOORED],
             ]],
             /* Does this range mix planes? The note under the card is shown only when it does,
                because on a single-machine install it would be a paragraph about a situation
@@ -231,8 +292,11 @@ final class Overview extends Controller
 
         $beaconed = is_array($f['beaconed'] ?? null) ? $f['beaconed'] : [];
         $humans   = is_array($f['humans'] ?? null) ? $f['humans'] : [];
+        $spanned  = is_array($f['spanned'] ?? null) ? $f['spanned'] : [];
+
         $population = (int) ($beaconed['count'] ?? 0);
         $humanCount = (int) ($humans['count'] ?? 0);
+        $spanCount  = (int) ($spanned['count'] ?? 0);
 
         $beaconOnly = is_array($f['beacon_only'] ?? null) ? $f['beacon_only'] : [];
 
@@ -242,16 +306,29 @@ final class Overview extends Controller
                 'population'       => $population,
                 'humans'           => $humanCount,
                 'without_beacon'   => max(0, $humanCount - $population),
-                'log_span_avg'     => self::num($beaconed, 'log_span_avg'),
-                'log_span_p50'     => self::num($beaconed, 'log_span_p50'),
+
+                /* The span's own denominator, and the two populations it deliberately leaves
+                   out, so the card can name both instead of quietly averaging them in. */
+                'spanned'          => $spanCount,
+                'single_request'   => max(0, $humanCount - $spanCount),
+                'span_floored'     => self::qcount($spanned, 'floored'),
+
+                'log_span_avg'     => self::num($spanned, 'log_span_avg'),
+                'log_span_p50'     => self::num($spanned, 'log_span_p50'),
                 'wall_avg'         => self::num($beaconed, 'wall_avg'),
                 'wall_p50'         => self::num($beaconed, 'wall_p50'),
                 'visible_avg'      => self::num($beaconed, 'visible_avg'),
                 'visible_p50'      => self::num($beaconed, 'visible_p50'),
                 'engaged_avg'      => self::num($beaconed, 'engaged_avg'),
                 'engaged_p50'      => self::num($beaconed, 'engaged_p50'),
-                'all_log_span_avg' => self::num($humans, 'log_span_avg'),
-                'all_log_span_p50' => self::num($humans, 'log_span_p50'),
+
+                /* The like-for-like figure the comparison sentence needs: the SAME sessions the
+                   three beacon clocks describe, seen the way a log-only tool would have seen
+                   them. Comparing the beacon's engaged time against a span taken over a
+                   different population would be the sleight of hand this card exists to expose,
+                   committed by the card itself. */
+                'all_log_span_avg' => self::num($beaconed, 'log_span_avg'),
+                'all_log_span_p50' => self::num($beaconed, 'log_span_p50'),
             ],
         ]);
     }
@@ -303,49 +380,89 @@ final class Overview extends Controller
     }
 
     /**
-     * Top requested paths for a caller-selected population.
+     * Top requested paths, counted in REQUESTS.
      *
-     * The toggle is an allowlist, not a filter string from the browser. `paths_ss` is
-     * capped at 50 values per session by the scorer (SPEC §4.2), so this counts sessions
-     * that touched a path rather than raw hits, and the caption says so.
+     * ------------------------------------------------------------------------------------
+     * WHY THIS MOVED TO THE HITS CORE
+     * ------------------------------------------------------------------------------------
+     * It used to facet `paths_ss` on the SESSIONS core, which counts "sessions that requested
+     * this path at least once". That number cannot rank anything. `paths_ss` is a set per
+     * session, so a visitor who read one page forty times contributes exactly what a visitor who
+     * glanced at it once does — and in a one-hour window with seven human sessions EVERY row
+     * read `1`. A table where every row carries the same number is not a top-N list, it is an
+     * alphabet of paths in arbitrary order.
      *
-     * EVERY ROW CARRIES ITS HOST WHERE IT HONESTLY CAN. A path with no site in front of it is
-     * not actionable and, on a machine serving several virtual hosts, does not even say which
-     * site it belongs to — so a `host_s` sub-facet is nested inside the path facet and each row
-     * comes back knowing whether it belongs to exactly one host (`host`) or to several
-     * (`hosts`). Nested rather than fetched afterwards: it costs no second round trip, and the
-     * sub-facet's domain is this query's, so filtering to one host resolves every row at once.
+     * The count an operator wants from a page list is how many times the page was FETCHED, and
+     * that number exists in exactly one place: the hits core, one document per request. So this
+     * is a terms facet on `path_s` there, counting requests, with `unique(session_id_s)` beside
+     * it so the session figure is not lost — it is a genuinely useful second column, it is just
+     * not the ranking key.
      *
-     * The caption carries `note`, because the path set on the session document deliberately
-     * excludes Loghound's own beacon script and collector (Sessionizer::accumulateSelf()), and
-     * a count that quietly omits something must say so.
+     * ------------------------------------------------------------------------------------
+     * WHAT THE TOGGLE BECAME, AND WHY IT IS NOT A POPULATION ANY MORE
+     * ------------------------------------------------------------------------------------
+     * The old toggle was humans / all / bots, and it cannot survive the move: a VERDICT is a
+     * conclusion the scorer reaches about a whole session once it has ended, it lives only on
+     * the sessions core, and the hits core has no field for it. There is no honest way to ask
+     * the request plane "which of these were humans".
+     *
+     * The dishonest ways were both considered and both refused. Filtering hits on
+     * `-ua_bot_b:true` and labelling it "Humans only" would put every evasive bot in the human
+     * column — the exact conflation SPEC §7 says makes other tools useless, committed under the
+     * word that names this product's core claim. Resolving the population into a list of session
+     * ids and filtering hits by it would be correct and unbounded: a ninety-day window is
+     * hundreds of thousands of ids in a query string.
+     *
+     * So the toggle now selects something the request plane answers EXACTLY: pageviews only, or
+     * every request. `pages` is the default because this card is called Top pages. The
+     * humans/bots split of a path is still one click away and still exact — open the row, and
+     * the dimension dialog breaks that path down by verdict on the sessions plane, where a
+     * verdict actually exists.
+     *
+     * ------------------------------------------------------------------------------------
+     * WHAT IS EXCLUDED, AND WHY EACH ONE
+     * ------------------------------------------------------------------------------------
+     * Sub-resources are gone from the index entirely now (`ingest.index_assets`), so the images
+     * and stylesheets that used to crowd this table are not filtered out here, they are simply
+     * not there. `beacon` IS still indexed, deliberately — it is the only evidence that a
+     * collector is reachable — so it is excluded here instead: Loghound's own `/collect.php`
+     * appearing in a list of a site's top pages is the product contradicting its own claim not
+     * to count itself, and the ownership test that was supposed to prevent it can only fire when
+     * the collector is reached at the hostname the panel is published at. `favicon` and `robots`
+     * are excluded on the same reasoning: nobody visited them, a browser and a crawler fetched
+     * them unprompted.
+     *
+     * A `host_s` sub-facet rides inside the path facet so every row knows which site it belongs
+     * to — one host and the panel can link the full URL, several and it says how many rather
+     * than guessing. Nested rather than fetched afterwards: no second round trip, and it
+     * inherits this query's filters.
+     *
+     * Filters the hits core cannot answer are reported rather than silently dropped, which
+     * matters more on this card than on most: a Verdict chip set elsewhere in the panel does not
+     * narrow this table, and a table that quietly ignored it would be a wrong answer under a
+     * chip that says otherwise.
      *
      * @return array<string,mixed>
      */
     private function topPages(): array
     {
-        $population = self::param('pop', ['humans', 'all', 'bots'], 'humans');
-        $fqs = $this->sessionFqs();
-        $label = 'All sessions';
-        if ($population === 'humans') {
-            $fqs[] = Query::POP_HUMAN;
-            $label = 'Humans only';
-        } elseif ($population === 'bots') {
-            $fqs[] = Query::POP_BOTLIKE;
-            $label = 'Bots and crawlers only';
+        $scope = self::param('pop', ['pages', 'all'], 'pages');
+
+        $fqs = $this->hitFqs();
+        $fqs[] = '-kind_s:(beacon OR favicon OR robots OR asset)';
+        $label = 'Every request';
+        if ($scope === 'pages') {
+            $fqs[] = Query::term('kind_s', 'html');
+            $label = 'Pageviews only';
         }
 
-        $f = $this->gw->facet('overview.toppages', $this->gw->sessionsCore(), [
+        $f = $this->gw->facet('overview.toppages', $this->gw->hitsCore(), [
             'q'  => '*:*',
             'fq' => $fqs,
         ], [
-            'paths' => [
-                'type'  => 'terms',
-                'field' => 'paths_ss',
-                'limit' => Security::clampInt($_GET['limit'] ?? null, 5, 50, 15),
-                'sort'  => 'count desc',
-                'facet' => SiteUrl::hostSubFacet(),
-            ],
+            'paths' => Paging::terms('path_s', Paging::start(), Paging::rows(), 'count desc', [
+                'facet' => SiteUrl::hostSubFacet() + ['sessions' => 'unique(session_id_s)'],
+            ]),
         ]);
 
         $rows = [];
@@ -353,18 +470,28 @@ final class Overview extends Controller
             $site = SiteUrl::resolve($bucket);
             $rows[] = [
                 'path'     => (string) ($bucket['val'] ?? ''),
-                'sessions' => (int) ($bucket['count'] ?? 0),
+                'requests' => (int) ($bucket['count'] ?? 0),
+                'sessions' => (int) (self::num($bucket, 'sessions') ?? 0),
                 'host'     => $site['host'],
                 'hosts'    => $site['hosts'],
             ];
         }
 
         return $this->envelope([
-            'population'       => $population,
+            'population'       => $scope,
             'population_label' => $label,
-            'note'             => 'Loghound’s own beacon and collector requests are not counted.',
+            'note'             => 'Sub-resources are not stored at all, and Loghound’s own collector, '
+                . 'favicons and robots.txt are excluded: nobody visited those.',
             'total'            => (int) ($f['count'] ?? 0),
+            'ignored'          => $this->ignoredHitFilters(),
             'rows'             => $rows,
+            'page'             => Paging::block(
+                Paging::start(),
+                Paging::rows(),
+                Paging::distinct($f, 'paths'),
+                'paths',
+                count($rows)
+            ),
         ]);
     }
 
@@ -394,12 +521,7 @@ final class Overview extends Controller
             'q'  => '*:*',
             'fq' => $this->sessionFqs(),
         ], [
-            'terms' => [
-                'type'  => 'terms',
-                'field' => 'search_terms_ss',
-                'limit' => Security::clampInt($_GET['limit'] ?? null, 5, 50, 15),
-                'sort'  => 'count desc',
-            ],
+            'terms'    => Paging::terms('search_terms_ss', Paging::start(), Paging::rows()),
             'searched' => ['type' => 'query', 'q' => 'search_terms_ss:*'],
         ]);
 
@@ -420,6 +542,13 @@ final class Overview extends Controller
             'total'    => (int) ($f['count'] ?? 0),
             'searched' => (int) ($searched['count'] ?? 0),
             'rows'     => $rows,
+            'page'     => Paging::block(
+                Paging::start(),
+                Paging::rows(),
+                Paging::distinct($f, 'terms'),
+                'search terms',
+                count($rows)
+            ),
         ]);
     }
 
@@ -472,10 +601,28 @@ final class Overview extends Controller
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
+        echo '<div id="ov-searches-pager"></div>';
+
         self::cardClose('ov-searches');
     }
 
-    /** The five headline counters. */
+    /**
+     * The five headline counters, each of which OPENS THE POPULATION BEHIND IT.
+     *
+     * WHAT THIS FIXES. These were five numbers and five captions, rendered as inert text. The
+     * single most natural gesture on a dashboard — press the big number to see what is in it —
+     * did nothing at all, and the only route to "show me an evasive bot" was to know that the
+     * Verdict dimension existed, find it in the filter rail and pick two of its five values.
+     *
+     * A tile is a `<button>` carrying `data-lh-open="pop"`, which is the same delegated mechanism
+     * every drillable row in the panel uses (assets/js/dialog.js): no inline handler, nothing to
+     * wire per page, and the population dialog opens with its visits already paged.
+     *
+     * `data-why` carries the sentence into the dialog, so the words the operator reads when they
+     * arrive are the same words that were on the tile they pressed — and they are written HERE,
+     * in PHP, beside the population they describe, rather than copied into a JavaScript table
+     * that would drift from this one.
+     */
     private function totalsCard(): void
     {
         self::cardOpen('ov-stats', '01', 'Who was here', 'All scored sessions in the selected range.');
@@ -483,17 +630,27 @@ final class Overview extends Controller
 
         echo '<div class="stats">';
         foreach ([
-            ['human',    'Human sessions',    'Scored human or likely human'],
-            ['evasive',  'Evasive bots',      'Automation that did not declare itself'],
-            ['declared', 'Declared crawlers', 'Identified themselves and verified'],
-            ['ai',       'AI crawlers',       'GPTBot, ClaudeBot, PerplexityBot'],
-            ['unknown',  'Unknown',           'Scored, but the evidence was inconclusive'],
-        ] as [$key, $label, $hint]) {
-            echo '<div class="stat" data-stat="' . Security::esc($key) . '">';
+            ['human',    'Human sessions',    'Scored human or likely human',
+                'Nothing in the headers, the behaviour or the browser looked like automation.'],
+            ['evasive',  'Evasive bots',      'Automation that did not declare itself',
+                'Scored as automation and did not say so: headless browsers, scripted clients, spoofed '
+                . 'User-Agents, rotating proxy fleets.'],
+            ['declared', 'Declared crawlers', 'Identified themselves and verified',
+                'Said what they were in the User-Agent and the claim held up.'],
+            ['ai',       'AI crawlers',       'GPTBot, ClaudeBot, PerplexityBot',
+                'Declared crawlers collecting for model training or assistant answers.'],
+            ['unknown',  'Unknown',           'Scored, but the evidence was inconclusive',
+                'The evidence did not reach a verdict either way. A finding, not a failure to measure.'],
+        ] as [$key, $label, $hint, $why]) {
+            echo '<button type="button" class="stat stat-open" data-stat="' . Security::esc($key) . '"'
+                . ' data-lh-open="pop" data-pop="' . Security::esc($key) . '"'
+                . ' data-why="' . Security::esc($why) . '"'
+                . ' aria-label="' . Security::esc('Open the visits behind ' . $label) . '">';
             echo '<span class="stat-label">' . Security::esc($label) . '</span>';
             echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
             echo '<span class="stat-hint">' . Security::esc($hint) . '</span>';
-            echo '</div>';
+            echo '<span class="stat-go" aria-hidden="true">&#8250;</span>';
+            echo '</button>';
         }
         echo '</div>';
 
@@ -556,9 +713,19 @@ final class Overview extends Controller
             . 'so on real traffic they descend: log span and wall clock are inflated by an open tab, visible time '
             . 'drops the background tab, and engaged time drops the visible-but-abandoned tab. A large wall clock '
             . 'with near-zero engagement means nobody was reading.</p>'
-            . '<p><strong>Log span is not one of the three.</strong> It comes from the access log, exists for every '
-            . 'session, and is structurally blind to the final pageview. The other three come from the beacon and '
-            . 'exist only for sessions where it ran — sessions without one are excluded, not counted as zero.</p>'
+            . '<p><strong>Log span is not one of the three.</strong> It comes from the access log and is '
+            . 'structurally blind to the final pageview: once the visitor stops requesting things the log goes '
+            . 'quiet. The other three come from the beacon and exist only for sessions where it ran — sessions '
+            . 'without one are excluded, not counted as zero.</p>'
+            . '<p><strong>A span needs two requests.</strong> It is the last request minus the first, so a '
+            . 'session that made a single request has a span of zero by construction and no measurement has '
+            . 'happened. Those are excluded and counted separately above rather than averaged in as zeroes — on '
+            . 'most sites they are the majority, and folding them in drags the median to nothing.</p>'
+            . '<p id="ov-timing-floor" hidden><strong>Some spans are shorter than this log can measure.</strong> '
+            . 'The stock Apache <code>%t</code> and nginx <code>$time_local</code> record whole seconds, so two '
+            . 'requests inside the same second are indistinguishable and the span reads as zero. Those sessions '
+            . 'are counted above as “under the clock’s resolution” rather than reported as a measured zero. '
+            . 'Logging a fraction — <code>%{msec}t</code>, or HAProxy’s format — makes them measurable.</p>'
             . '<p id="ov-timing-planes" hidden><strong>Some of this traffic has no access log behind it.</strong> '
             . 'Sessions from a host measured by the beacon alone have no log span at all, so they contribute to '
             . 'the three beacon clocks and to nothing else. The log-span figure therefore covers a smaller '
@@ -569,26 +736,37 @@ final class Overview extends Controller
         self::cardClose('ov-timing');
     }
 
-    /** Top pages, with the population toggle. */
+    /**
+     * Top pages, with the scope toggle.
+     *
+     * THE TOGGLE IS NOT A POPULATION ANY MORE and topPages() carries the full reasoning: this
+     * card counts REQUESTS, requests live on the hits core, and a verdict is a conclusion about
+     * a whole session that exists only on the sessions core. Offering "Humans only" over a plane
+     * that has no idea which sessions were human would have meant labelling `-ua_bot_b:true` as
+     * humans, which puts every evasive bot in the human column — the one conflation this product
+     * is built to refuse.
+     */
     private function pagesCard(): void
     {
-        $tools = '<div class="toggle" role="group" aria-label="Population">';
-        foreach ([['humans', 'Humans only'], ['all', 'All'], ['bots', 'Bots &amp; crawlers']] as [$value, $label]) {
+        $tools = '<div class="toggle" role="group" aria-label="What to count">';
+        foreach ([['pages', 'Pages'], ['all', 'Every request']] as [$value, $label]) {
             $tools .= '<button type="button" data-pop="' . Security::esc($value) . '"'
-                . ($value === 'humans' ? ' class="on" aria-pressed="true"' : ' aria-pressed="false"')
+                . ($value === 'pages' ? ' class="on" aria-pressed="true"' : ' aria-pressed="false"')
                 . '>' . $label . '</button>';
         }
         $tools .= '</div>';
         $tools .= $this->exportTool('pages');
 
-        self::cardOpen('ov-pages', '04', 'Top pages', 'Humans only.', $tools);
-        self::skeleton('ov-pages', 'rows', 0, 'Faceting requested paths');
+        self::cardOpen('ov-pages', '04', 'Top pages', '', $tools);
+        self::skeleton('ov-pages', 'rows', 0, 'Counting requests by path');
 
         echo '<div class="table-wrap"><table id="ov-pages-table"><thead><tr>'
             . '<th scope="col">Path</th>'
+            . '<th scope="col" class="num">Requests</th>'
             . '<th scope="col" class="num">Sessions</th>'
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
+        echo '<div id="ov-pages-pager"></div>';
 
         self::cardClose('ov-pages');
     }

@@ -1,6 +1,6 @@
 <?php
 /**
- * Loghound — what removing Loghound means, in one place.
+ * Loghound — what deleting everything Loghound holds means, in one place.
  *
  * THE BOUNDARY, STATED ONCE. Everything Loghound created goes: the two indexes on the
  * platform, the configuration, everything under `var/`, the systemd units and both timers,
@@ -11,8 +11,8 @@
  * WHAT IS NEVER TOUCHED, and this half matters as much as the other:
  *
  *   - THE OPERATOR'S ACCESS LOG FILES. They are the web server's, they existed before
- *     Loghound, and they are still written after it. Loghound has never written to one and an
- *     uninstall does not change that.
+ *     Loghound, and they are still written after it. Loghound has never written to one and
+ *     nothing here changes that.
  *   - THE `LogFormat` LINE the operator added to their own vhost on Loghound's instruction. It
  *     lives in a file Loghound does not own, so it stays, and the run says at the end that it
  *     is still there and is theirs to remove.
@@ -25,19 +25,26 @@
  *     `solr.install_id` AND the account listing says the account holds it.
  *
  * ---------------------------------------------------------------------------------------
- * TWO FRONT ENDS, ONE LIST OF STEPS
+ * TWO FRONT ENDS, ONE LIST OF STEPS, TWO SCOPES
  * ---------------------------------------------------------------------------------------
- * `install/install.sh --uninstall` does all of it; the panel does the part that does not need
- * root. STEPS below is the canonical order and the canonical wording, and both front ends use
- * it, so an operator watching a terminal and an operator watching the panel see the same run.
+ * STEPS below is the canonical order and the canonical wording, and both front ends use it, so
+ * an operator watching a terminal and an operator watching the panel see the same run.
  * tests/test_uninstall.php asserts the shell script's own `step` lines are exactly this list,
  * in this order, because two copies of a list is how two front ends stop agreeing.
  *
- * THE PANEL CANNOT DO THE SYSTEM HALF, AND WILL NOT PRETEND TO. There is no `exec`,
- * `shell_exec`, `proc_open` or SSH anywhere in `src/`, `bin/` or `public/`; that is a published
- * property of this product and it is worth more than the convenience of a button that stops a
- * systemd unit. So the panel performs PANEL_STEPS, reports every other step as needing a
- * shell, names the one command that does it, and the run ends able to state both halves.
+ * `install/install.sh --uninstall` — reached as `install/uninstall.sh` — does all of it and
+ * takes Loghound off the machine: units, vhost, pool, command links, service user, tree.
+ *
+ * THE PANEL DOES THE DATA HALF, AND IT IS THE WHOLE OF STARTING OVER. Starting the installation
+ * over means starting from zero: the two indexes are deleted from the platform and proven gone,
+ * the configuration goes with the Opensolr account in it, and `var/` is emptied. What is left
+ * standing is the machine installation itself — the units, the vhost, the pool, the tree — and
+ * that is deliberate, because the operator is about to walk back through setup on it. It is
+ * also unavoidable: there is no `exec`, `shell_exec`, `proc_open` or SSH anywhere in `src/`,
+ * `bin/` or `public/`, which is a published property of this product and is worth more than the
+ * convenience of a button that stops a systemd unit. So the panel performs PANEL_STEPS, reports
+ * every other step as left in place with the reason, names the command that would remove it,
+ * and the run ends able to state both halves.
  *
  * @package Loghound
  * @license MIT
@@ -78,13 +85,17 @@ final class Teardown
     ];
 
     /**
-     * The steps the panel performs itself.
+     * The steps the panel performs itself, which together are the whole of starting over.
      *
      * The three index steps, because they are authenticated HTTPS calls to the control plane
      * and need nothing but the API key. The local data, because those are files the panel owns
      * and writes every day. The report, because it is words — and because it is where a
      * panel-driven run removes the configuration, which it must do last: this application reads
      * that file on every request, so the run has to be able to finish first.
+     *
+     * Every step NOT on this list is part of the machine installation rather than of the data,
+     * and starting over leaves the machine installation standing on purpose — the operator is
+     * about to walk back through setup on it. shellOnlyReasons() says so per step.
      *
      * @var array<int,string>
      */
@@ -211,42 +222,65 @@ final class Teardown
     }
 
     /**
-     * Why a step the panel cannot do needs a shell, per step.
+     * Why a step the panel does not perform is left standing, per step.
      *
-     * Each sentence names the specific thing root is needed for, because "needs root" on its
-     * own tells an operator nothing about what is still on their machine.
+     * TWO REASONS AT ONCE, AND BOTH ARE SAID. Each of these is part of the machine
+     * installation, and starting over is about the data — the operator lands on the installer
+     * and needs the vhost, the pool and the tree to still be there to reach it. Each of them
+     * also needs root, which this panel does not have and will not pretend to. So every
+     * sentence names the specific thing that stays, says why it stays, and points at
+     * `install/uninstall.sh` for the operator who wants Loghound off the machine entirely.
      *
      * @return array<string,string>
      */
     public static function shellOnlyReasons(): array
     {
         return [
-            'services'  => 'Stopping and removing loghound-tail.service and both timers is a systemd '
-                . 'operation and needs root. Until it is done the reader keeps running with the '
-                . 'configuration it started with, and keeps trying to write to indexes that are '
-                . 'being deleted.',
-            'webserver' => 'Removing the vhost means writing in your web server\'s configuration '
-                . 'directory and reloading the server, which needs root — and it is only removed at '
-                . 'all if the file carries the GENERATED banner install.sh puts in the ones it wrote.',
-            'fpm'       => 'The dedicated PHP-FPM pool and its socket belong to the pool manager, and '
-                . 'retiring one means reloading php-fpm as root.',
-            'links'     => 'The command links live in /usr/local/bin, and any cron or logrotate '
-                . 'fragment lives in /etc. Both need root.',
-            'tree'      => 'The install tree is usually owned by root, and removing it is the one step '
-                . 'that takes the uninstaller away with it.',
-            'user'      => 'Removing the service user and its adm membership is userdel and gpasswd, '
-                . 'which need root, and it has to happen after everything it owns is gone.',
+            'services'  => 'Left running and still enabled at boot, because ingestion is meant to '
+                . 'resume once setup is finished — and because stopping or removing '
+                . 'loghound-tail.service and both timers is a systemd operation that needs root. '
+                . 'Until you stop it the reader keeps the configuration it started with, and keeps '
+                . 'trying to write to indexes that are being deleted: noisy, not harmful.',
+            'webserver' => 'Left in place. The vhost is what serves this panel and the installer you '
+                . 'are about to land on, so removing it here would take the machine away mid-run. '
+                . 'install/uninstall.sh removes it when you want Loghound gone entirely — as root, '
+                . 'and only when the file carries the GENERATED banner install.sh puts in the ones '
+                . 'it wrote.',
+            'fpm'       => 'Left in place. The dedicated PHP-FPM pool is the process this request is '
+                . 'running in, its socket belongs to the pool manager, and retiring one means '
+                . 'reloading php-fpm as root. install/uninstall.sh does it.',
+            'links'     => 'Left in place. The command links in /usr/local/bin, and any cron or '
+                . 'logrotate fragment in /etc, belong to the machine installation rather than to '
+                . 'this installation\'s data, and setup uses them. Both need root; '
+                . 'install/uninstall.sh removes them.',
+            'tree'      => 'Left in place. The install tree is the application itself, so setup needs '
+                . 'it. It is usually owned by root, and removing it is the one step that takes the '
+                . 'uninstaller away with it — which is install/uninstall.sh\'s job, not this one\'s.',
+            'user'      => 'Left in place. The service user owns this tree and runs the reader. '
+                . 'Removing it and its adm membership is userdel and gpasswd, which need root, and '
+                . 'it has to happen after everything it owns is gone; install/uninstall.sh does both '
+                . 'in that order.',
         ];
     }
 
     /**
      * What pressing the button costs, in specifics rather than a warning.
      *
-     * Nobody should press this and then discover what it meant. The first row is the one the
-     * confirmation exists for: an Opensolr index name is unique across the whole platform and
-     * is never released, the data in it is gone, and a backup taken in Opensolr beforehand is
-     * the only way to keep any of it — which is a separately billed feature and is therefore
-     * stated as one rather than implied to be free.
+     * NOBODY SHOULD PRESS THIS AND THEN DISCOVER WHAT IT MEANT, so every row names a real thing
+     * and says what becomes of it. There is no second, gentler button beside this one: starting
+     * the installation over means starting from zero, and a table that promised anything was
+     * "kept" would be describing an action this product no longer offers.
+     *
+     * The first row is the one the confirmation exists for: an Opensolr index name is unique
+     * across the whole platform and is never released, the data in it is gone, and a backup
+     * taken in Opensolr beforehand is the only way to keep any of it — which is a separately
+     * billed feature and is therefore stated as one rather than implied to be free.
+     *
+     * THE LAST FOUR ROWS ARE THE OTHER HALF OF HONESTY. Two of them are the boundary and do not
+     * move: the access log files are the web server's, and the `LogFormat` line lives in a file
+     * Loghound does not own. The other two say what starting over deliberately does NOT do —
+     * the beacon tag stays in the operator's templates, and the machine installation stays on
+     * the machine, because setup is about to run on it.
      *
      * @return array<int,array{what:string,happens:string}>
      */
@@ -258,7 +292,8 @@ final class Teardown
                 'happens' => 'Permanently deleted from your Opensolr account. Every hit and every '
                     . 'session Loghound has ever recorded goes with them. There is no undo, and '
                     . 'Opensolr index names are unique across the whole platform and are never '
-                    . 'released, so neither name can ever be created again — by you or by anyone.',
+                    . 'released, so neither name can ever be created again — by you or by anyone. '
+                    . 'Setup provisions a new pair under a new installation id.',
             ],
             [
                 'what'    => 'Keeping the data',
@@ -271,7 +306,18 @@ final class Teardown
                 'what'    => 'Nothing else on your Opensolr account',
                 'happens' => 'Untouched. Only the two names this installation created are deleted, '
                     . 'only after they are derived from solr.install_id and match what is stored, '
-                    . 'and only after the platform\'s own listing confirms your account holds them.',
+                    . 'and only after the platform\'s own listing confirms your account holds them. '
+                    . 'Nothing local is removed until the listing has been read again and says both '
+                    . 'names are gone.',
+            ],
+            [
+                'what'    => 'Your Opensolr account details',
+                'happens' => 'Deleted. The email, the API key and the region go with the '
+                    . 'configuration, and nothing about your plan\'s index allowance is remembered '
+                    . 'anywhere — it is read back from the platform whenever it is needed. Setup '
+                    . 'asks for the account from scratch. It is not kept so that setup can offer you '
+                    . 'the indexes that account already holds: the two this installation held are '
+                    . 'the two that were just deleted.',
             ],
             [
                 'what'    => 'The configuration',
@@ -282,34 +328,72 @@ final class Teardown
                     . 'treat the API key as exposed and rotate it at opensolr.com.',
             ],
             [
+                'what'    => 'The sign-in',
+                'happens' => 'Removed with it. The username, the password, two-factor and its '
+                    . 'recovery codes all go, and every browser that was staying signed in is signed '
+                    . 'out — including this one. You set a new username and password at the end of '
+                    . 'setup.',
+            ],
+            [
+                'what'    => 'The chosen log files',
+                'happens' => 'Forgotten, along with the index names, their connection details and '
+                    . 'this installation\'s id. Setup scans for the files again and asks you to '
+                    . 'confirm the format, the same as on a first install. The files themselves are '
+                    . 'not touched; see below.',
+            ],
+            [
+                'what'    => 'The beacon signing key and the address salt',
+                'happens' => 'Deleted too, and setup generates new ones. Two things follow, and both '
+                    . 'are one-off: every beacon token already in a visitor\'s browser stops '
+                    . 'validating, and until each browser is issued a fresh one the scorer reads the '
+                    . 'invalid token as evidence of a bot; and a hashed address cannot be matched '
+                    . 'across the change, which costs nothing here because the documents holding the '
+                    . 'old ones have just been deleted.',
+            ],
+            [
                 'what'    => 'Everything under var/',
                 'happens' => 'Deleted. The state database, the reader\'s position in every log file, '
                     . 'open sessions, the quota cache, the setup token, signed-in panel sessions, '
                     . 'remembered browsers, recovery code hashes, the rate-limit ledgers and the '
-                    . 'saved schema check.',
+                    . 'saved schema check. Each log is read from its END when ingestion starts '
+                    . 'again, so nothing already on disk is replayed into the new indexes.',
             ],
             [
                 'what'    => 'Your access log files',
                 'happens' => 'Untouched, as always. Loghound has never written to one, never '
-                    . 'truncated one and never rotated one, and removing Loghound does not change '
-                    . 'that. They are exactly as they were.',
+                    . 'truncated one and never rotated one, and starting over does not change that. '
+                    . 'They are exactly as they were, which is how setup finds them again.',
             ],
             [
                 'what'    => 'The LogFormat line you added to your own web server',
                 'happens' => 'Left alone. It lives in a file Loghound does not own, so this will not '
                     . 'reach into it. It is harmless — it only changes what your web server writes '
-                    . 'to its own logs — and it is yours to remove or keep.',
+                    . 'to its own logs — it is yours to remove or keep, and leaving it there is what '
+                    . 'makes the next setup a shorter job.',
             ],
             [
                 'what'    => 'The beacon tag on your website',
-                'happens' => 'Only you can remove it. Until you take the <script> element out of '
-                    . 'your templates, every page load asks a host that no longer answers.',
+                'happens' => 'Left where it is; only you can change your own templates. Nothing is '
+                    . 'collected from it between now and the end of setup, and afterwards it starts '
+                    . 'working again on its own — against the new signing key above, so the first '
+                    . 'visit from each browser mints a fresh token.',
             ],
             [
-                'what'    => 'The service, the timers, the vhost, the FPM pool and this install tree',
-                'happens' => 'They need root, so the panel cannot remove them and does not pretend '
-                    . 'to. The command that does is shown below, and it proves it wrote a file '
-                    . 'before it deletes it.',
+                'what'    => 'The service and the timers',
+                'happens' => 'Left running and still enabled at boot, because ingestion is meant to '
+                    . 'resume once setup is done — and because stopping them is a systemd operation '
+                    . 'that needs root. The reader keeps the configuration it started with, and a '
+                    . 'reload onto a half-finished one is refused and logged, so until you stop it '
+                    . 'it carries on trying to write to indexes that are being deleted. Nothing is '
+                    . 'corrupted by that; it fills your log with errors. The command is below.',
+            ],
+            [
+                'what'    => 'The vhost, the FPM pool, the command links, the service user and this '
+                    . 'install tree',
+                'happens' => 'All left in place. This starts the installation over; it does not take '
+                    . 'Loghound off the machine, and setup needs every one of them to run at all. '
+                    . 'install/uninstall.sh is what removes them, it needs root, and it proves it '
+                    . 'wrote a file before it deletes one.',
             ],
         ];
     }
@@ -317,8 +401,10 @@ final class Teardown
     /**
      * Everything a panel-driven run deliberately leaves behind, as the closing report.
      *
-     * An uninstaller that is silent about what it left is an uninstaller nobody can verify, so
-     * this is rendered whether or not the operator asks for it.
+     * A run that is silent about what it left is a run nobody can verify, so this is rendered
+     * whether or not the operator asks for it. Most of it is the machine installation, which
+     * stays standing on purpose — the next thing the operator sees is the installer running on
+     * exactly these pieces.
      *
      * @return array<int,string>
      */
@@ -329,26 +415,38 @@ final class Teardown
             if (self::isPanelStep($id)) {
                 continue;
             }
-            $out[] = $label . ' — ' . (self::shellOnlyReasons()[$id] ?? 'needs root.');
+            $out[] = $label . ' — ' . (self::shellOnlyReasons()[$id] ?? 'left in place; needs root.');
         }
 
         $out[] = 'Your access log files — never written to, never truncated, never rotated, and '
-            . 'exactly as they were.';
+            . 'exactly as they were. Setup reads them again from the end.';
         $out[] = 'The LogFormat line in your own web server configuration — still there, never '
-            . 'touched, and yours to remove or keep.';
-        $out[] = 'The beacon <script> tag in your site templates — only you can take it out.';
-        $out[] = 'Your Opensolr API key — rotate it at opensolr.com if this box is being '
-            . 'decommissioned, sold or handed to somebody else. Backups and snapshots of this '
-            . 'disk were never touched.';
+            . 'touched, and yours to remove or keep. Setup expects to find it, so leaving it is '
+            . 'the shorter road.';
+        $out[] = 'The beacon <script> tag in your site templates — only you can change those. '
+            . 'Nothing is collected from it until setup is finished, and then it works again '
+            . 'against a signing key that is new, so every visitor mints a fresh token.';
+        $out[] = 'Your Opensolr API key — the file that held it is gone, but an overwritten file '
+            . 'is not a destroyed one on a copy-on-write or snapshotted filesystem, or on an SSD. '
+            . 'Rotate it at opensolr.com if this box is shared, is being decommissioned, sold or '
+            . 'handed to somebody else. Backups and snapshots of this disk were never touched.';
         $out[] = 'Anything you added by hand — a supervisor unit, a firewall rule, a reverse proxy '
             . 'entry, a monitoring check, a backup job, an entry in your own logrotate '
-            . 'configuration. Run ' . self::shellCommand($root) . ' for the rest of what Loghound '
-            . 'itself created.';
+            . 'configuration. Run ' . self::shellCommand($root) . ' to take Loghound off this '
+            . 'machine altogether, rather than setting it up again.';
 
         return $out;
     }
 
-    /** The command that finishes the job, with this installation's real path. */
+    /**
+     * The command that takes Loghound off the machine, with this installation's real path.
+     *
+     * The counterpart to the panel, not a continuation of it. The panel deletes the data and
+     * hands the operator back to the installer; this removes the units, the vhost, the pool,
+     * the command links, the service user and the tree, and it deletes the indexes through the
+     * same install/opensolr-teardown.php the panel uses rather than an implementation of its
+     * own.
+     */
     public static function shellCommand(string $root): string
     {
         return 'sudo ' . rtrim($root, '/') . '/install/uninstall.sh';

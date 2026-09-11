@@ -228,10 +228,23 @@ would work for exactly one person.
 
 #### Starting over later
 
-Settings has a **Reinstall** card that clears the log sources, the index names and the sign-in
-and brings you back to these screens. Your indexes and everything in them are untouched — it is
-not an uninstall — and because you pressed it while signed in, that browser is carried straight
-into setup instead of being asked for the token file. Anyone else still has to read it.
+Settings has a **Start over** card, and it starts from zero. It deletes both Opensolr indexes
+and every document in them, proves they are gone by reading your account listing again, removes
+the configuration with your Opensolr email, API key and region in it, empties `var/`, and brings
+you back to these screens with nothing carried across — you provide all of it again, exactly as
+now. The only way to keep the data is an Opensolr backup taken **before** you press it, which is
+a separately billed feature.
+
+Two things it never touches: your access log files, which are your web server's, and the
+`LogFormat` line you added to your own vhost.
+
+It costs a typed `DELETE EVERYTHING` and a code from your authenticator where two-factor is on.
+Because you confirmed it while signed in, that browser is carried straight into setup instead of
+being asked for the token file. Anyone else still has to read it.
+
+`install/uninstall.sh` is the counterpart for taking Loghound off the machine entirely — the
+units, the vhost, the PHP-FPM pool, the command links, the service user and the install tree,
+which the card leaves standing because setup is about to run on them.
 
 #### When the plan has no room
 

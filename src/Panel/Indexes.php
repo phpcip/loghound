@@ -3,8 +3,7 @@
  * Loghound — Index analytics.
  *
  * What is actually happening to one Opensolr search index: how much it is being asked, how
- * long it takes to answer, how often it answers with nothing, what it answers with, and
- * which node did the answering.
+ * long it takes to answer, how often it answers with nothing, and what it answers with.
  *
  * Everything on this page is an aggregate. Not one card fetches a request document, because
  * a facet answers all of it and shipping a customer's query log through the panel to count
@@ -12,8 +11,8 @@
  * platform already holds this data, and a second copy inside Loghound would be waste.
  *
  * WHAT IS ON SCREEN. Four figures and a volume chart above the fold — the bar Opensolr's own
- * analytics dashboard sets — then the three things that dashboard does not have: the latency
- * distribution, the handler and status composition, and the split across cluster nodes.
+ * analytics dashboard sets — then the two things that dashboard does not have: the latency
+ * distribution, and the handler and status composition.
  * Everything answers under the filter rail, so the same page answers "what is this index
  * doing" and "what is this one caller doing to it" without a second view.
  *
@@ -42,17 +41,16 @@ final class Indexes extends OpensolrView
     private const QTIME_GAP = 10;
 
     /**
-     * The cards, in render order. Drives the jump bar and every card's number.
+     * The pages this view has, in render order. Drives the navigation and every card's number.
      *
      * @var array<int,array{0:string,1:string}>
      */
-    protected const SECTIONS = [
+    public const SECTIONS = [
         ['ix-headline', 'This index'],
         ['ix-filters', 'Slice'],
         ['ix-volume', 'Volume'],
         ['ix-qtime', 'Latency'],
         ['ix-handlers', 'Handlers'],
-        ['ix-nodes', 'Nodes'],
     ];
 
     /**
@@ -85,9 +83,9 @@ final class Indexes extends OpensolrView
     }
 
     /**
-     * The three facet tables on this view.
+     * The facet tables on this view.
      *
-     * All three are CLASSIC facets — `value => count` maps, because the platform's request-log
+     * They are CLASSIC facets — `value => count` maps, because the platform's request-log
      * endpoint offers classic faceting only and cannot nest — so each exports as two columns and
      * nothing is lost in the flattening.
      *
@@ -135,22 +133,6 @@ final class Indexes extends OpensolrView
                 'scope'    => $this->logExportScope(),
             ],
 
-            'nodes' => [
-                'label'    => 'Cluster nodes',
-                'action'   => 'nodes',
-                'shape'    => 'map',
-                'key'      => 'nodes',
-                'key_head' => 'Node',
-                'val_head' => 'Requests',
-                'unit'     => 'cluster nodes',
-                'ranked'   => 'ranked by request count',
-                'cap'      => 30,
-                'carry'    => ['core', 'outcome'],
-                'note'     => 'A cluster is one master and N read-only replicas, so an even split across '
-                    . 'the replicas is the healthy shape and a node MISSING from this file is a node that '
-                    . 'stopped taking traffic — an absence the file cannot show you directly.',
-                'scope'    => $this->logExportScope(),
-            ],
         ];
     }
 
@@ -168,7 +150,6 @@ final class Indexes extends OpensolrView
             'headline' => $this->headline(),
             'qtime'    => $this->qtime(),
             'handlers' => $this->handlers(),
-            'nodes'    => $this->nodes(),
             default    => ['error' => 'Unknown action'],
         };
     }
@@ -199,10 +180,56 @@ final class Indexes extends OpensolrView
         return $this->logEnvelope($res, [
             'zero'     => $zero,
             'zero_pct' => ($zero !== null && $total > 0) ? round(($zero / $total) * 100, 1) : null,
-            'qtime'    => $res['stats']['qtime'] ?? null,
-            'size'     => $res['stats']['size'] ?? null,
-            'hits'     => $res['stats']['hits'] ?? null,
+            'qtime'    => self::measured($res, 'qtime'),
+            'size'     => self::measured($res, 'size'),
+            'hits'     => self::measured($res, 'hits'),
         ]);
+    }
+
+    /**
+     * A stats block, but only when the platform actually recorded the field.
+     *
+     * ------------------------------------------------------------------------------------
+     * "MEAN RESPONSE 0 B" WAS SOLR'S ANSWER TO A QUESTION NOBODY COULD ANSWER
+     * ------------------------------------------------------------------------------------
+     * Solr's stats component, asked for a field that no document in the result set carries,
+     * does not decline. It answers `count: 0` with `min` and `max` null and `mean` and `sum` as
+     * 0.0 — the arithmetic identity, which is the correct thing for a summation and the wrong
+     * thing to print. The panel read `mean` and ignored `count`, so "the platform recorded no
+     * response size for any of these requests" was rendered as the measurement `0 B`, across
+     * four requests that had all returned HTTP 200 and had obviously carried a body.
+     *
+     * That is a fabricated metric — the one thing SPEC §1 forbids outright — and the evidence
+     * that it was fabricated was sitting in the same response.
+     *
+     * THE PLATFORM REALLY DOES NOT RECORD IT, for the traffic this card usually shows. Opensolr
+     * builds its analytics documents from two sources: an Apache access log, which has the
+     * client address and the response size and is where `ip`, `http_status` and `size` come
+     * from; and Solr's own `solr.log`, which has the query, the hit count and the handler but
+     * has never seen a socket, so it has no address and no byte count to give. The access-log
+     * parser explicitly skips any path containing `select`. So a search index whose traffic is
+     * `/select` — which is every search index — produces documents with no `size` at all. Where
+     * an address is written anyway it is the placeholder `0.0.0.0`, which the platform's own
+     * code treats as "not recorded" everywhere it reads it back.
+     *
+     * Nothing Loghound can do makes the number exist. What it can do is say so instead of
+     * inventing one: `count: 0` yields null here, the front end renders an em-dash, and the card
+     * carries the sentence explaining which requests carry a size and which do not.
+     *
+     * @param array<string,mixed> $res A response envelope from OpensolrLog.
+     * @return array<string,mixed>|null
+     */
+    private static function measured(array $res, string $field): ?array
+    {
+        $stat = $res['stats'][$field] ?? null;
+        if (!is_array($stat)) {
+            return null;
+        }
+        if ((int) ($stat['count'] ?? 0) === 0) {
+            return null;
+        }
+
+        return $stat;
     }
 
     /**
@@ -231,7 +258,7 @@ final class Indexes extends OpensolrView
             'over'    => $range['after'] ?? null,
             'gap'     => self::QTIME_GAP,
             'ceiling' => self::QTIME_CEILING,
-            'stats'   => $res['stats']['qtime'] ?? null,
+            'stats'   => self::measured($res, 'qtime'),
         ]);
     }
 
@@ -255,31 +282,6 @@ final class Indexes extends OpensolrView
         ]);
     }
 
-    /**
-     * Which node in the cluster answered, and how large the answers were.
-     *
-     * A cluster is one master and N read-only replicas, so an even split across the
-     * replicas is the healthy shape and a node missing from this table is a node that
-     * stopped taking traffic.
-     *
-     * @return array<string,mixed>
-     */
-    private function nodes(): array
-    {
-        $res = $this->fetch([
-            'fq'           => $this->logFqs(),
-            'rows'         => 0,
-            'facet_fields' => ['param_hostname'],
-            'facet_limit'  => 30,
-            'stats_fields' => ['size'],
-        ]);
-
-        return $this->logEnvelope($res, [
-            'nodes' => (array) ($res['facet_fields']['param_hostname'] ?? []),
-            'size'  => $res['stats']['size'] ?? null,
-        ]);
-    }
-
     public function body(): void
     {
         if (!$this->configured()) {
@@ -292,7 +294,6 @@ final class Indexes extends OpensolrView
         $this->volumeCard('ix-volume');
         $this->qtimeCard();
         $this->handlersCard();
-        $this->nodesCard();
     }
 
     /** Volume, latency and zero-result share, with the index picker. */
@@ -308,6 +309,17 @@ final class Indexes extends OpensolrView
             ['qmax',     'Slowest',       'The single worst QTime in this range'],
             ['size',     'Mean response', 'How much data each answer carried back'],
         ]);
+
+        /* THE CARD SAYS WHAT THE PLATFORM DOES AND DOES NOT RECORD. `size` is read off an Apache
+           access log, and Opensolr's parser for that log skips any path containing `select` — so
+           for a search index, which is almost all `/select`, the field is simply not on the
+           document and the figure above is an em-dash rather than a fabricated zero. An operator
+           who is not told that reads the dash as a Loghound failure and goes looking for a bug
+           in the panel. */
+        echo '<p class="note">Mean response is read from the platform\'s access-log records, which '
+            . 'Opensolr keeps for handlers other than <code>/select</code>. A search index whose traffic '
+            . 'is all <code>/select</code> has no response size recorded at all, and the figure is shown '
+            . 'as an em-dash rather than as a zero.</p>';
 
         self::cardClose('ix-headline');
     }
@@ -367,29 +379,5 @@ final class Indexes extends OpensolrView
         echo '</div>';
 
         self::cardClose('ix-handlers');
-    }
-
-    /** Which cluster node answered. */
-    private function nodesCard(): void
-    {
-        self::cardOpen(
-            'ix-nodes',
-            $this->cardNumber('ix-nodes'),
-            'Which node answered',
-            'All logged requests for this index under the current filters, grouped by the cluster node '
-            . 'that served them.',
-            $this->exportTool('nodes')
-        );
-        self::skeleton('ix-nodes', 'rows', 0, 'Faceting cluster nodes');
-
-        echo '<div class="chart" id="ix-nodes-chart" style="height:220px"></div>';
-        echo '<div class="table-wrap"><table id="ix-nodes-table"><thead><tr>'
-            . '<th scope="col">Node</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
-            . '</tr></thead><tbody></tbody></table></div>';
-        echo '<p class="pop" id="ix-nodes-note"></p>';
-
-        self::cardClose('ix-nodes');
     }
 }

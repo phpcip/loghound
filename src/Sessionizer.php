@@ -539,6 +539,28 @@ final class Sessionizer
                 'st3'        => 0,
                 'st4'        => 0,
                 'st5'        => 0,
+
+                /* THE TWO REFUSAL FACTS THE STATUS CLASSES CANNOT EXPRESS, both aggregate-only
+                   and neither one a document field — exactly like `own_hits` and `own_assets`,
+                   and for the same reason: they are inputs to a scoring rule rather than facts
+                   about the visit that the sessions schema has a home for.
+
+                   `soft_refusals` counts 401, 407 and 429 apart from the rest of the 4xx class.
+                   They are not the same kind of evidence. A 401 is an unauthenticated request to
+                   something that needs a login, which is a person about to sign in at least as
+                   often as it is a scanner; a 407 is the same statement from a proxy; and a 429
+                   is the OPERATOR'S OWN rate limiter firing, which describes the traffic volume
+                   rather than the client. A session refused only in those three ways has not
+                   been shown to be anything.
+
+                   `first_status` is the status of the session's FIRST counted request, and it is
+                   what separates the two shapes that a refusal ratio alone conflates: a session
+                   that opens with a refusal and never recovers is the probe pattern, while a
+                   session that reads twenty pages and then collects a 404 is a person who found
+                   a dead link. Null until a hit carries a status at all. */
+                'soft_refusals' => 0,
+                'first_status'  => null,
+
                 'got_304'    => false,
                 'html_200'   => false,
                 'entry_path' => null,
@@ -693,6 +715,10 @@ final class Sessionizer
 
         $agg['bytes'] += max(0, (int) ($hit['bytes_l'] ?? 0));
 
+        if ($status > 0 && ($agg['first_status'] ?? null) === null) {
+            $agg['first_status'] = $status;
+        }
+
         if ($status >= 200 && $status < 300) {
             $agg['st2']++;
         } elseif ($status >= 300 && $status < 400) {
@@ -702,11 +728,14 @@ final class Sessionizer
             }
         } elseif ($status >= 400 && $status < 500) {
             $agg['st4']++;
+            if ($status === 401 || $status === 407 || $status === 429) {
+                $agg['soft_refusals'] = (int) ($agg['soft_refusals'] ?? 0) + 1;
+            }
         } elseif ($status >= 500) {
             $agg['st5']++;
         }
 
-        if ($path !== '') {
+        if ($path !== '' && self::isVisitedPath($kind)) {
             if (isset($agg['paths'][$path])) {
                 $agg['paths'][$path]++;
             } elseif (count($agg['paths']) < self::MAX_TRACKED_PATHS
@@ -759,6 +788,37 @@ final class Sessionizer
         }
 
         return $agg;
+    }
+
+    /**
+     * Request kinds that are NOT a place anybody went, and are therefore not in the path set.
+     *
+     * `paths_ss` is what the panel's Top pages table and every "top paths" breakdown are built
+     * from, and it used to collect the path of EVERY hit whatever it was. So the list a person
+     * reads under the heading "Top pages" contained `/img/solr6.PNG`, an `animated-overlay.gif`
+     * from a jQuery UI theme, and — on any installation whose panel is served from a hostname
+     * the access log does not name — Loghound's own `/collect.php`, which the product states
+     * plainly that it does not count. A stylesheet is not a page, a favicon is not a page, and
+     * an analytics beacon is a sub-resource the page fired, not a second visit.
+     *
+     * THREE KINDS OUT, AND THE REST STAY IN. `asset` and `favicon` are what the renderer went
+     * back for; `beacon` is instrumentation, anybody's, which is the half of the `/collect.php`
+     * defect that ownership could not fix — Parser::isOwnRequest() requires the request to have
+     * been made to the hostname this panel is published at, and correctly so, because deleting a
+     * measured site's own `/collect.php` from its owner's analytics would be the worse bug. What
+     * is left is `html`, `api`, `robots` and `other`: every one of those is a thing a client
+     * asked this site for on purpose, and a crawler's `/robots.txt` or an integration's
+     * `/api/v1/search` belongs in a list of what the site was asked for.
+     *
+     * THIS CHANGES WHAT `uniq_paths_i` MEANS and the change is an improvement: it is now the
+     * count of distinct RESOURCES a session went after rather than a number dominated by however
+     * many images the theme happens to reference. Nothing scores on it — no rule in Score\Rules
+     * reads it — and asset_ratio_f, sub_resources and the no_assets rule are untouched, because
+     * those are counted from `kind_s` in the branch above and never from the path set.
+     */
+    private static function isVisitedPath(string $kind): bool
+    {
+        return $kind !== 'asset' && $kind !== 'favicon' && $kind !== 'beacon';
     }
 
     /**
@@ -877,6 +937,14 @@ final class Sessionizer
             'st5'          => (int) ($agg['st5'] ?? 0),
             'got_304'      => (bool) ($agg['got_304'] ?? false),
             'html_200'     => (bool) ($agg['html_200'] ?? false),
+
+            /* Carried to the scorer and no further. bin/loghound-score puts neither on a session
+               document: they are inputs to Score\Rules::ruleNeverServed() and
+               ruleMostlyRefused(), not facts the sessions schema has a field for. */
+            'soft_refusals' => (int) ($agg['soft_refusals'] ?? 0),
+            'first_status' => isset($agg['first_status']) && is_numeric($agg['first_status'])
+                ? (int) $agg['first_status']
+                : null,
 
             'entry_path'   => $agg['entry_path'] ?? null,
             'exit_path'    => $agg['exit_path'] ?? null,

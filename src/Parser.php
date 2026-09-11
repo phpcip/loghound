@@ -38,9 +38,23 @@ final class Parser
     /** Longest path/referer/UA we will store. Beyond this it is an attack, not a request. */
     private const MAX_TEXT = 2048;
 
-    /** File extension => `asset_kind_s`. Anything here also forces `kind_s` = asset. */
+    /**
+     * File extension => `asset_kind_s`. Anything here also forces `kind_s` = asset.
+     *
+     * This table is now load-bearing twice over. It has always decided what counts as a
+     * sub-resource for `asset_ratio_f` and the `no_assets` rule; since `ingest.index_assets`
+     * it also decides what is never written to the index at all (bin/loghound-tail,
+     * Pipeline::indexes). Adding an extension here therefore removes those requests from
+     * every hits-plane facet as well as adding them to the ratio — both are correct for a
+     * sub-resource, but it is the reason an entry has to genuinely be one.
+     *
+     * `map` is a source map: emitted beside a bundle, fetched by devtools, and never a page.
+     * It used to fall through to `other`, which meant it counted against the asset ratio it
+     * should have counted toward and appeared in Top pages.
+     */
     private const ASSET_KINDS = [
         'js' => 'js', 'mjs' => 'js', 'cjs' => 'js',
+        'map' => 'map',
         'css' => 'css',
         'png' => 'img', 'jpg' => 'img', 'jpeg' => 'img', 'gif' => 'img', 'webp' => 'img',
         'svg' => 'img', 'avif' => 'img', 'bmp' => 'img', 'tiff' => 'img', 'tif' => 'img',

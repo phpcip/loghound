@@ -77,6 +77,38 @@ final class Query
     public const POP_BEACON = 'beacon_b:true';
 
     /**
+     * Sessions that made more than one request — the only ones a LOG SPAN can describe.
+     *
+     * A span is the last request minus the first, so a session with exactly one request has a
+     * span of zero BY CONSTRUCTION and no measurement has taken place. Measured on a real index:
+     * of 4,132 sessions, 3,205 were a single request. Averaging those in gives a median of zero,
+     * which is arithmetically correct and completely useless — and it is what the Overview's
+     * timing card was reporting as "how long they actually stayed".
+     *
+     * So any span statistic is taken over THIS population and the single-request count is
+     * printed beside it rather than folded into it. The same discipline the beacon clocks
+     * already keep: a session with no beacon is excluded from them and named, not counted as a
+     * zero.
+     */
+    public const POP_MULTI_REQUEST = 'hits_i:[2 TO *]';
+
+    /**
+     * Sessions whose span came out at zero DESPITE having more than one request.
+     *
+     * Not a measurement of zero — a resolution floor. The span is derived from the timestamps in
+     * the access log, and the stock Apache `%t` and nginx `$time_local` record whole seconds, so
+     * two requests inside the same second are indistinguishable and the difference is 0. On the
+     * same index as above, 376 of the 926 multi-request sessions were in this state.
+     *
+     * It is offered as its own number so the card can say "shorter than this log's clock can
+     * measure" instead of printing `0 ms` as though it had measured it. A format that logs a
+     * fraction — HAProxy, `%{msec}t`, `%{usec}t`, nginx's `$msec`, any ISO-8601 with a decimal —
+     * makes this number collapse toward nothing, which is also how an operator discovers that
+     * widening their LogFormat would buy them something.
+     */
+    public const POP_SPAN_FLOORED = 'log_span_ms_l:0';
+
+    /**
      * Requests (or sessions) that matched at least one named attack pattern.
      *
      * A method rather than a constant because the vocabulary lives in Score\Attacks and a
@@ -166,6 +198,46 @@ final class Query
     }
 
     /**
+     * Which of the five populations a given VERDICT rolls up into.
+     *
+     * ------------------------------------------------------------------------------------
+     * ONE DEFINITION, READ BY BOTH PAGES
+     * ------------------------------------------------------------------------------------
+     * The panel speaks two vocabularies about the same sessions and always will, because they
+     * answer different questions. The Overview groups by POPULATION — Humans, Unknown, Declared
+     * crawlers, AI crawlers, Evasive bots — which is "what KIND of thing was this". The session
+     * explorer's Verdict dimension lists the five stored verdicts — human, likely_human,
+     * unknown, likely_bot, bot — which is "how confident are we". Both are legitimate and
+     * neither can replace the other: the populations fold two verdicts into Humans and split two
+     * across three bot classes.
+     *
+     * What is NOT legitimate is the reader having no way to tell that they are the same
+     * sessions. Overview said Humans 7; the facet beside it said Human 4 and Likely human 1; and
+     * nothing on either screen said those were the same number seen two ways. So this map
+     * exists, it is the ONLY statement of the relationship, and Panel\Vocabulary reads it when
+     * it explains a verdict — which means the facet row for `likely_human` now says which
+     * headline counter it is inside, and the two can only drift if this table is edited.
+     *
+     * `bot` and `likely_bot` map to null DELIBERATELY rather than to a fourth name. Their
+     * population is not decided by the verdict at all — it is decided by `bot_class_s` and
+     * `ai_crawler_b`, which is why POP_DECLARED, POP_AI and POP_EVASIVE all carry a class
+     * clause. Answering with a single name here would be a guess dressed as a fact, and callers
+     * are expected to handle the null by naming all three.
+     *
+     * @return array<string,string|null> verdict => population key, or null when the class decides
+     */
+    public static function populationOfVerdict(): array
+    {
+        return [
+            'human'        => 'human',
+            'likely_human' => 'human',
+            'unknown'      => 'unknown',
+            'likely_bot'   => null,
+            'bot'          => null,
+        ];
+    }
+
+    /**
      * Human-readable labels for the population keys, used in legends and in the
      * "population covered" caption every chart carries.
      *
@@ -191,17 +263,29 @@ final class Query
      * by Solr against its own clock; there is no timezone skew between PHP and Solr to
      * get wrong. `secs` drives the bucket-size choice and the sparkline geometry.
      *
-     * @return array<string,array{label:string,start:string,secs:int,gap:string,fmt:string}>
+     * `short` is what the duration control prints. It is declared rather than derived from the
+     * key, because "All time" is not a duration and upper-casing its key would produce "ALL".
+     *
+     * ALL TIME IS UNBOUNDED, AND ONLY THE FILTER KNOWS IT. `unbounded` makes rangeFq() emit no
+     * date clause at all, so every total, table and facet under it covers the whole index — which
+     * is what the operator asked for. `start` and `gap` stay valid Solr date math because a
+     * RANGE FACET cannot have an open start: a time series needs a finite axis, so the chart on
+     * such a page covers the last year in weekly buckets while the figures beside it cover
+     * everything. Both are honest; they are answering different questions.
+     *
+     * @return array<string,array{label:string,short:string,start:string,secs:int,gap:string,fmt:string,unbounded?:bool}>
      */
     public static function ranges(): array
     {
         return [
-            '1h'  => ['label' => 'Last hour',    'start' => 'NOW-1HOUR/MINUTE',  'secs' => 3600,    'gap' => '+2MINUTE', 'fmt' => 'time'],
-            '6h'  => ['label' => 'Last 6 hours', 'start' => 'NOW-6HOUR/MINUTE',  'secs' => 21600,   'gap' => '+15MINUTE','fmt' => 'time'],
-            '24h' => ['label' => 'Last 24 hours','start' => 'NOW-24HOUR/HOUR',   'secs' => 86400,   'gap' => '+1HOUR',   'fmt' => 'hour'],
-            '7d'  => ['label' => 'Last 7 days',  'start' => 'NOW-7DAY/HOUR',     'secs' => 604800,  'gap' => '+3HOUR',   'fmt' => 'hour'],
-            '30d' => ['label' => 'Last 30 days', 'start' => 'NOW-30DAY/DAY',     'secs' => 2592000, 'gap' => '+1DAY',    'fmt' => 'day'],
-            '90d' => ['label' => 'Last 90 days', 'start' => 'NOW-90DAY/DAY',     'secs' => 7776000, 'gap' => '+1DAY',    'fmt' => 'day'],
+            '1h'  => ['label' => 'Last hour',    'short' => '1H',  'start' => 'NOW-1HOUR/MINUTE',  'secs' => 3600,    'gap' => '+2MINUTE', 'fmt' => 'time'],
+            '3h'  => ['label' => 'Last 3 hours', 'short' => '3H',  'start' => 'NOW-3HOUR/MINUTE',  'secs' => 10800,   'gap' => '+5MINUTE', 'fmt' => 'time'],
+            '6h'  => ['label' => 'Last 6 hours', 'short' => '6H',  'start' => 'NOW-6HOUR/MINUTE',  'secs' => 21600,   'gap' => '+15MINUTE','fmt' => 'time'],
+            '24h' => ['label' => 'Last 24 hours','short' => '24H', 'start' => 'NOW-24HOUR/HOUR',   'secs' => 86400,   'gap' => '+1HOUR',   'fmt' => 'hour'],
+            '7d'  => ['label' => 'Last 7 days',  'short' => '7D',  'start' => 'NOW-7DAY/HOUR',     'secs' => 604800,  'gap' => '+3HOUR',   'fmt' => 'hour'],
+            '30d' => ['label' => 'Last 30 days', 'short' => '30D', 'start' => 'NOW-30DAY/DAY',     'secs' => 2592000, 'gap' => '+1DAY',    'fmt' => 'day'],
+            '90d' => ['label' => 'Last 90 days', 'short' => '90D', 'start' => 'NOW-90DAY/DAY',     'secs' => 7776000, 'gap' => '+1DAY',    'fmt' => 'day'],
+            'all' => ['label' => 'All time',     'short' => 'All time', 'start' => 'NOW-1YEAR/DAY', 'secs' => 31536000, 'gap' => '+7DAY',  'fmt' => 'day', 'unbounded' => true],
         ];
     }
 
@@ -224,6 +308,13 @@ final class Query
     /**
      * Build the `fq` clause that bounds a query to the selected range.
      *
+     * AN UNBOUNDED RANGE PRODUCES `*:*`, not a wide window. "All time" means no date filter at
+     * all, and the shape of this method's contract — every caller splices the result into an
+     * `fq` array literal — makes a match-everything clause the honest spelling of "no clause":
+     * it costs nothing, it cannot be forgotten at a call site, and `field:[* TO *]` would have
+     * been wrong in a way that is hard to see, because it drops every document that has no
+     * value for the field.
+     *
      * @param string $field `ts_start` on the sessions core, `ts` on hits.
      */
     public static function rangeFq(string $field, array $range): string
@@ -231,7 +322,126 @@ final class Query
         if (!Security::isSafeFieldName($field)) {
             throw new \InvalidArgumentException('Unsafe range field');
         }
-        return $field . ':[' . $range['start'] . ' TO NOW]';
+        if (!empty($range['unbounded'])) {
+            return '*:*';
+        }
+        return $field . ':[' . $range['start'] . ' TO ' . self::rangeEnd($range) . ']';
+    }
+
+    /**
+     * The upper bound of a range, rounded to the same unit its lower bound is rounded to.
+     *
+     * ------------------------------------------------------------------------------------
+     * THE DEFECT THIS FIXES: TWO PAGES THAT CANNOT AGREE BY CONSTRUCTION
+     * ------------------------------------------------------------------------------------
+     * The upper bound used to be a bare `NOW`, which Solr re-evaluates on every request, to the
+     * millisecond. The lower bound is rounded — `NOW-1HOUR/MINUTE` — so the window's start moved
+     * once a minute while its end moved continuously. Two cards on one screen therefore covered
+     * two different windows, and two PAGES opened a minute apart covered windows that differed
+     * by a whole minute of traffic at both ends.
+     *
+     * That is how the Overview and the session explorer came to report different numbers for
+     * what the operator was told was the same range: Overview counted 7 humans and 14 unknown,
+     * the Sessions verdict facet counted 5 and 19. Neither was wrong. They were answers to two
+     * questions that differed by however long the reader took to click.
+     *
+     * Rounding the end to the SAME unit as the start makes the window a fixed interval for the
+     * whole of that unit, so every query issued in the same minute — or hour, or day — is
+     * literally the same question, and two pages can only disagree if the data changed inside
+     * the window they both name. It also makes the clause a cache key Solr can actually reuse:
+     * a bare `NOW` produces a distinct filter string per request and never hits the filter
+     * cache, which is why a dashboard of a dozen cards was a dozen full scans.
+     *
+     * IT ROUNDS UP, NOT DOWN. `NOW/MINUTE` would truncate, and truncating discards the newest
+     * traffic — up to a minute on the short ranges and up to a DAY on the 30- and 90-day ones,
+     * where the most recent day is usually what somebody is looking at. `/MINUTE+1MINUTE` is the
+     * end of the current unit rather than the start of it, so nothing that has been indexed is
+     * outside the window. The bound is in the near future and matches no document that does not
+     * exist yet, which costs nothing.
+     *
+     * The unit is derived from the lower bound's own rounding rather than declared a second
+     * time, so a range added to the table cannot acquire a mismatched pair.
+     *
+     * @param array<string,mixed> $range A range definition from ranges().
+     */
+    public static function rangeEnd(array $range): string
+    {
+        $start = (string) ($range['start'] ?? '');
+        $slash = strrpos($start, '/');
+        if ($slash === false) {
+            return 'NOW';
+        }
+        $unit = substr($start, $slash + 1);
+        if (preg_match('/^[A-Z]+$/D', $unit) !== 1) {
+            return 'NOW';
+        }
+
+        return 'NOW/' . $unit . '+1' . $unit;
+    }
+
+    /**
+     * The lower bound a DATE-RANGE filter on the Opensolr request-log plane should carry.
+     *
+     * That plane cannot take a `*:*` clause the way rangeFq() emits one — its filters are built
+     * by \Loghound\OpensolrLog, which composes `date:[from TO to]` and validates each bound — so
+     * "no date filter" is expressed there as an open lower bound instead. `*` is inside the bound
+     * pattern OpensolrLog::assertBound() accepts, so this stays inside the plane's own contract
+     * rather than routing around it.
+     */
+    public static function filterStart(array $range): string
+    {
+        return empty($range['unbounded']) ? (string) $range['start'] : '*';
+    }
+
+    /**
+     * The time window immediately before the selected one, of the same length.
+     *
+     * WHAT "TRENDING" NEEDS THAT "TOP" DOES NOT. A top-N list ranks by how much traffic something
+     * had; a trending list ranks by how much MORE it had than usual, which is meaningless without
+     * saying what "usual" is. The baseline chosen here is the equivalent window immediately before
+     * the selected one — the previous seven days for a seven-day view, the previous hour for an
+     * hourly one — because it is the only baseline a reader can reconstruct from what the page
+     * already tells them, and because it holds the day of the week and the time of day roughly
+     * constant, which a fixed baseline like "the last 30 days" does not.
+     *
+     * IT IS NOT LIKE FOR LIKE AT THE EDGE, and the cards say so. The selected window runs up to
+     * NOW and its start is rounded down (`NOW-24HOUR/HOUR`), so it is up to one bucket longer than
+     * the baseline AND its final bucket is still filling. A page can therefore appear to be down
+     * purely because the current period has not finished. Every card built on this states it.
+     *
+     * Built entirely from the range table's own date-math strings and its integer length, so no
+     * part of it can originate in a request.
+     *
+     * @param string $field `ts_start` on the sessions core, `ts` on hits.
+     * @param array<string,mixed> $range A resolved range from self::range().
+     */
+    public static function previousRangeFq(string $field, array $range): string
+    {
+        if (!Security::isSafeFieldName($field)) {
+            throw new \InvalidArgumentException('Unsafe range field');
+        }
+        $secs = max(60, (int) $range['secs']);
+
+        return $field . ':[' . $range['start'] . '-' . $secs . 'SECOND TO ' . $range['start'] . '}';
+    }
+
+    /**
+     * Both windows at once: the selected range and the baseline before it.
+     *
+     * Used as the `fq` of a trending query, whose two halves are then separated by query
+     * sub-facets. One request rather than two, and the two halves cannot end up scoped by
+     * different filters because there is only one scope.
+     *
+     * @param array<string,mixed> $range
+     */
+    public static function spanningRangeFq(string $field, array $range): string
+    {
+        if (!Security::isSafeFieldName($field)) {
+            throw new \InvalidArgumentException('Unsafe range field');
+        }
+        $secs = max(60, (int) $range['secs']);
+
+        return $field . ':[' . $range['start'] . '-' . $secs . 'SECOND TO NOW]';
     }
 
     /**
@@ -295,6 +505,13 @@ final class Query
             'device_s'      => 'Device',
             'ua_bot_cat_s'  => 'Declared bot category',
             'referer_type_s' => 'Referrer type',
+
+            /* THE SITE THAT SENT THEM, which was on both cores and on neither allowlist. The
+               referrer TYPE answers "was this organic or paid"; the HOST answers "which of the
+               forty sites linking to us is actually sending people", which is the question the
+               analytics section is for and which could not be asked at all. Present on both
+               schemas, so it needs no exclusion on either plane. */
+            'referer_host_s' => 'Referring site',
             'bot_reasons_ss' => 'Signal fired',
             'as_org_s'      => 'AS organisation',
             'netname_s'     => 'Netname',
@@ -309,6 +526,15 @@ final class Query
             'region_s'         => 'Region',
             'asn_i'            => 'ASN',
             'paths_ss'         => 'Path',
+
+            /* WHERE A VISIT STARTED AND WHERE IT ENDED, which are different questions from "which
+               paths did it touch" and were not askable at all. `paths_ss` is the union over a
+               visit, so filtering by it answers "visits that saw /pricing at some point"; the
+               analytics section needs "visits that ARRIVED on /pricing", which is what a landing
+               page is. Both are SESSION-ONLY: a hit has a `path_s` and no notion of being the
+               first or last of anything, so both are excluded from the hits plane below. */
+            'entry_path_s'     => 'Landing page',
+            'exit_path_s'      => 'Exit page',
             'signed_in_b'      => 'Signed in',
             'planes_s'         => 'Planes',
             'search_terms_ss'  => 'Search term',
@@ -441,8 +667,8 @@ final class Query
      *                  view is for. Attacks takes the status pivot, where it is the whole point.
      *   Sessions       The dimension dialog already breaks any value down along every other
      *                  dimension, on demand, for the value the operator actually clicked.
-     *   The four
-     *   Opensolr views The platform's endpoint offers classic faceting only and cannot nest at all
+     *   Index
+     *   analytics      The platform's endpoint offers classic faceting only and cannot nest at all
      *                  (\Loghound\OpensolrLog, "what reaches the platform").
      *
      * @return array<string,array{0:string,1:string,2:string}>
@@ -451,14 +677,11 @@ final class Query
     {
         return [
             'overview' => ['country_s', 'bot_verdict_s',
-                'Which countries send humans and which send automation — the same total, split two ways, '
-                . 'so a country that is 90% bot traffic is visible next to one that is not.'],
+                'Which countries send humans and which send automation.'],
             'bots' => ['bot_class_s', 'as_type_s',
-                'Where each kind of bot comes from: a declared crawler on hosting address space is '
-                . 'ordinary, a headless browser on consumer broadband is not.'],
+                'Where each kind of bot comes from.'],
             'networks' => ['as_type_s', 'bot_verdict_s',
-                'Whether a network type is carrying people or automation — the question behind '
-                . '"should I rate-limit this address space".'],
+                'Whether a network type is carrying people or automation.'],
 
             /* THE ONE CROSS-TAB THIS PRODUCT EXISTS TO PRINT. Every other tool in this category
                lists the scary-looking requests and stops. What an operator needs is that list
@@ -467,9 +690,7 @@ final class Query
                incident. Both cells are openable, so "show me the ones that got a 200" is one
                click from the grid. */
             'attacks' => ['hit_flags_ss', 'status_class_s',
-                'What the server actually ANSWERED each kind of probe with. This is the question '
-                . 'the page exists for: the same pattern answered 404 and answered 200 are a '
-                . 'non-event and an incident, and only this grid puts them side by side.'],
+                'What the server answered each kind of probe with.'],
         ];
     }
 
@@ -496,6 +717,8 @@ final class Query
             'bot_class_s',
             'bot_reasons_ss',
             'paths_ss',
+            'entry_path_s',
+            'exit_path_s',
             'signed_in_b',
             'planes_s',
         ];

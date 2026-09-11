@@ -22,8 +22,9 @@ import {
     api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, pct, setPop, tbody, when
 } from '../core.js';
 import { lines, stackedBars, tokens } from '../charts.js';
-import { dimRow, dimValue, drillRow, openButton, valueText, valueWords } from '../identity.js';
+import { countryNode, dimRow, dimValue, drillRow, openButton, valueText, valueWords } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
+import { pagedCard } from '../cardtable.js';
 
 /**
  * The colour of a status class, used by both charts so they cannot disagree.
@@ -237,53 +238,87 @@ function stackedBarsFor(rows, t) {
 /**
  * Fill the answered-requests table.
  *
- * THE ONLY TABLE ON THIS PAGE MADE OF DOCUMENTS, and every cell in it is attacker-chosen text.
- * The path and the query string go in through el(), which sets textContent, so a path
- * containing markup is a path containing markup and never becomes an element. The row opens
- * the session that made the request, which is the drill-through that makes a URL actionable.
+ * FIVE COLUMNS, THE SAME FIVE AS EVERY OTHER TABLE OF EVENTS IN THE PANEL: date, address,
+ * country, page, verdict. The method and the byte count are gone from the table — both belong to
+ * the one request and both are in the visit the row opens — and the two columns that carry this
+ * page's entire argument are MERGED rather than dropped. What the server answered and which
+ * pattern matched are one judgement about one request, which is exactly what a verdict is here,
+ * so they share the fifth column: the status class in words on the first line, the pattern
+ * underneath it.
+ *
+ * EVERY CELL IN IT IS ATTACKER-CHOSEN TEXT. The path and the query string go in through el(),
+ * which sets textContent, so a path containing markup is a path containing markup and never
+ * becomes an element.
  */
 function renderRequests(data) {
+    setPop('atk-requests', num(data.page && data.page.total !== null ? data.page.total : data.total) +
+        ' matched requests the server answered with a 2xx or a 3xx. A 2xx means a body came back, not ' +
+        'that it was the body asked for.' + ignoredFilterNote(data));
+
     if (!data.requests.length) {
         tbody(byId('atk-requests-table'), []);
-        noDataYet('atk-requests-empty', 'answered matched requests');
-        return;
+        return false;
     }
     hideEmpty('atk-requests-empty');
 
     tbody(byId('atk-requests-table'), data.requests.map((row) => ({
         attrs: row.session ? drillRow('session', { id: row.session }) : {},
         cells: [
-            { text: when(row.ts, true), sort: row.ts || '' },
-            { text: row.method || '—', mono: true, sort: row.method || '' },
-            { node: requestCell(row), clip: true, title: requestText(row), sort: row.path || '' },
+            { text: when(row.ts, true), mono: true, nowrap: true, sort: row.ts || '' },
             {
-                text: row.status === null ? '—' : String(row.status),
-                num: true,
-                sort: row.status === null ? -1 : row.status,
-                title: statusHint(row.status)
+                node: row.ip
+                    ? dimValue('ip_s', row.ip, { mono: true })
+                    : el('span', { class: 'muted', text: '\u2014' }),
+                class: 'mono clip',
+                title: row.ip || 'Address not recorded',
+                sort: row.ip || ''
             },
-            { text: row.bytes === null ? '—' : num(row.bytes), num: true, sort: row.bytes === null ? -1 : row.bytes },
-            { text: row.patterns || '—', clip: true, title: row.patterns || '', sort: row.patterns || '' },
-            /* The explicit opener every other drillable table ends in. An em dash where there
-               is no session to open, so the column reads as "this row has nothing behind it"
-               rather than as a control that does nothing. */
-            row.session
-                ? { node: openButton('session', { id: row.session }, 'Open this visit'),
-                    attrs: { class: 'rowopen-cell' } }
-                : { text: '—', attrs: { class: 'rowopen-cell' } }
+            {
+                node: row.country
+                    ? countryNode(row.country)
+                    : el('span', { class: 'muted', text: '\u2014' }),
+                class: 'clip',
+                title: [row.city, row.country].filter(Boolean).join(', ') || 'Not geolocated',
+                sort: [row.country, row.city].filter(Boolean).join(' ')
+            },
+            { node: requestCell(row), clip: true, title: requestText(row), sort: row.path || '' },
+            { node: verdictCell(row), class: 'visit-verdict', sort: row.status === null ? -1 : row.status }
         ]
     })));
 
-    if (data.truncated) {
-        setPop('atk-requests', 'The ' + num(data.requests.length) + ' most recent of ' + num(data.total) +
-            ' matched requests the server answered with a 2xx or a 3xx. Narrow the range or add a filter ' +
-            'to see the rest; the CSV carries the same limit and says so.' + ignoredFilterNote(data));
-    } else {
-        setPop('atk-requests', 'All ' + num(data.total) + ' matched requests in range that the server ' +
-            'answered with a 2xx or a 3xx. A 2xx means a body came back; it does not mean the body was ' +
-            'what was asked for. Fetch the URL yourself before concluding anything.' +
-            ignoredFilterNote(data));
-    }
+    return true;
+}
+
+/**
+ * What the server answered, and what it answered it to.
+ *
+ * The status class leads because it is the thing that decides whether the row matters at all,
+ * and it is rendered in the vocabulary's own words rather than as a bare number — "2xx Answered"
+ * is a sentence a reader acts on and "200" is a code they have to know. The exact code rides in
+ * the description. The pattern is the second line, because "which probe was this" is the question
+ * a reader asks only once they have seen that it got through.
+ *
+ * The row's opener sits at the end of this cell rather than in a sixth column, exactly as it does
+ * in every other five-column table here: a link inside a cell wins the click over the row, so the
+ * row needs one surface that unambiguously means "open the visit behind this".
+ */
+function verdictCell(row) {
+    const klass = row.status === null ? '' : String(Math.floor(row.status / 100)) + 'xx';
+
+    return el('div', { class: 'client' }, [
+        el('div', { class: 'clip-line' }, [
+            klass === ''
+                ? el('span', { class: 'muted', text: 'no status logged' })
+                : dimValue('status_class_s', klass, {
+                    title: String(row.status) + ' \u2014 ' + statusHint(row.status)
+                }),
+            row.session ? openButton('session', { id: row.session }, 'Open this visit') : null
+        ]),
+        el('div', {
+            class: 'sub clip-line',
+            title: row.patterns || ''
+        }, [el('span', { text: row.patterns || 'no pattern named' })])
+    ]);
 }
 
 /**
@@ -310,8 +345,10 @@ function requestCell(row) {
         lower.push(el('span', { text: row.host }));
     }
     return el('div', { class: 'client' }, [
-        el('div', { class: 'clip-line' }, [el('span', { class: 'mono', text: row.path || '/' })]),
-        el('div', { class: 'sub clip-line' }, lower.length ? lower : [el('span', { text: '—' })])
+        el('div', { class: 'clip-line' }, [
+            el('span', { class: 'mono', text: (row.method ? row.method + ' ' : '') + (row.path || '/') })
+        ]),
+        el('div', { class: 'sub clip-line' }, lower.length ? lower : [el('span', { text: '\u2014' })])
     ]);
 }
 
@@ -494,8 +531,12 @@ export default function init() {
         });
     }
 
-    loadCard('atk-requests', 'Reading the answered requests', async () => {
-        renderRequests(await api('attacks', 'requests'));
+    pagedCard({
+        id: 'atk-requests',
+        label: 'Reading the answered requests',
+        empty: 'answered matched requests',
+        fetch: (start) => api('attacks', 'requests', { start: start }),
+        render: renderRequests
     });
     loadCard('atk-who', 'Faceting addresses and networks', async () => {
         renderWho(await api('attacks', 'who'));

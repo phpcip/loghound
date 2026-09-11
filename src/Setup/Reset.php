@@ -2,12 +2,16 @@
 /**
  * Loghound — putting an installation back to the state the installer expects.
  *
- * WHAT REINSTALL IS, AND WHAT IT IS NOT. It returns this MACHINE to the beginning of setup:
+ * WHAT THIS RESET IS, AND WHAT IT IS NOT. It returns this MACHINE to the beginning of setup:
  * the panel account, the log sources and the index names go, and the operator walks the three
  * screens again. It is not an uninstall. It does not delete an Opensolr index, it does not
- * touch a document, and it does not remove a single line from a log file. `install/uninstall.sh`
- * is the thing that removes data, it proves ownership before it deletes an index, and pointing
- * at it is the honest answer for an operator who wants the data gone as well.
+ * touch a document, and it does not remove a single line from a log file.
+ *
+ * IT IS THE TERMINAL'S RESET, AND THE TERMINAL'S ONLY. `bin/loghound-setup --reset` is the one
+ * caller. The PANEL no longer offers a reset that keeps anything: starting the installation
+ * over there means starting from zero — the indexes are deleted from the platform and proven
+ * gone, the Opensolr account goes with the configuration, and `var/` is emptied. Anyone reading
+ * this class for what the button does is reading the wrong file; see Setup\Teardown.
  *
  * WHAT SURVIVES ON PURPOSE, because each one costs something to throw away:
  *
@@ -165,9 +169,11 @@ final class Reset
                 'what'    => 'Your Opensolr indexes, and everything in them',
                 'happens' => 'Untouched. Not a document is deleted, and the two indexes stay on your '
                     . 'account exactly as they are. Setup will offer them back to you as a pair you '
-                    . 'can rejoin, so a reinstall can land on the same history it started with. To '
-                    . 'delete the data as well, run install/uninstall.sh, which proves the account '
-                    . 'owns an index before it removes it.',
+                    . 'can rejoin, so this can land on the same history it started with. To delete '
+                    . 'them as well, use Settings → Start over in the panel: it proves your account '
+                    . 'owns each index, deletes it, and reads the account listing again to prove it '
+                    . 'is gone. install/uninstall.sh does the same and takes Loghound off the '
+                    . 'machine with it.',
             ],
             [
                 'what'    => 'Your access log files',

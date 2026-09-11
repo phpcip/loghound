@@ -32,14 +32,23 @@ use Loghound\Security;
 
 final class Sessions extends Controller
 {
-    /** Page size ceiling for the session list. */
-    private const MAX_ROWS = 100;
 
-    /** Hard cap on hits returned for one session's timeline. */
-    private const MAX_TIMELINE = 300;
+    /**
+     * ONE SECTION, DELIBERATELY, WHICH IS WHY THIS IS EMPTY.
+     *
+     * Every other view in the panel has been split so that each of its sections is its own page.
+     * The session explorer is not three sections that happen to be on one page: the search box,
+     * the facet rail and the results table are one instrument, and separating the rail from the
+     * table it filters would be the same mistake as putting a dial on a different wall from the
+     * gauge. Fewer than two entries means Layout renders the whole body and the navigation gives
+     * this view no sub-list, which is exactly right.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    public const SECTIONS = [];
 
-    /** Recent sessions listed inside a dimension's detail dialog. */
-    private const DIMENSION_VISITORS = 12;
+    /** Hard cap on hits returned for one page of a session's request trail. */
+    private const MAX_TIMELINE = 100;
 
     /** Values shown per nested breakdown inside a dimension's detail dialog. */
     private const DIMENSION_BUCKETS = 8;
@@ -122,7 +131,8 @@ final class Sessions extends Controller
     }
 
     /** Dimensions rendered in a monospace list, because the value is an identifier. */
-    private const MONO_FIELDS = ['netname_s', 'fp_hash_s', 'host_s', 'sec_ch_ua_s', 'tls_proto_s', 'paths_ss'];
+    private const MONO_FIELDS = ['netname_s', 'fp_hash_s', 'host_s', 'sec_ch_ua_s', 'tls_proto_s',
+        'paths_ss', 'entry_path_s', 'exit_path_s'];
 
     /**
      * The words the sort selector shows, keyed by the token Query::sorts() accepts.
@@ -341,9 +351,12 @@ final class Sessions extends Controller
     {
         return match ($action) {
             'list'       => $this->list(),
+            'bounce'     => $this->bounce(),
             'facets'     => $this->facets(),
             'detail'     => $this->detail(),
+            'trail'      => $this->trail(),
             'dimension'  => $this->dimension(),
+            'visitors'   => $this->visitors(),
             'dimensions' => $this->dimensions(),
             'values'     => $this->values(),
             default      => ['error' => 'Unknown action'],
@@ -362,7 +375,7 @@ final class Sessions extends Controller
      */
     private function list(): array
     {
-        return $this->listPage(self::start(), self::rows(self::MAX_ROWS, 25));
+        return $this->listPage(Paging::start(), Paging::rows());
     }
 
     /**
@@ -377,9 +390,15 @@ final class Sessions extends Controller
      * Both arguments are clamped here rather than trusted: the export passes its own page size
      * and a computed offset, and this method is the boundary that decides what Solr is asked for.
      *
+     * `$full` decides how much of each document is shaped. The TABLE needs five columns and the
+     * identity behind them, because that is all five columns can show; the CSV needs every field
+     * the schema holds, because a file is where somebody continues working. Shaping the wide
+     * version for the table would ship sixty fields a page to render five of them, and shaping
+     * the narrow one for the file would silently empty sixty declared columns.
+     *
      * @return array<string,mixed>
      */
-    private function listPage(int $start, int $rows): array
+    private function listPage(int $start, int $rows, bool $full = false): array
     {
         $text = self::text('q', 200);
         $sortKey = self::param('sort', array_keys(Query::sorts()), 'recent');
@@ -394,6 +413,8 @@ final class Sessions extends Controller
             'fl'    => Query::sessionFl(),
         ]);
 
+        $docs = array_map([$this, $full ? 'shapeSession' : 'shapeVisitor'], $res['docs']);
+
         return $this->envelope([
             'q'        => $text,
             'sort'     => $sortKey,
@@ -401,7 +422,8 @@ final class Sessions extends Controller
             'rows'     => $rows,
             'start'    => $start,
             'numFound' => $res['numFound'],
-            'docs'     => array_map([$this, 'shapeSession'], $res['docs']),
+            'docs'     => $docs,
+            'page'     => Paging::block($start, $rows, (int) $res['numFound'], 'visits', count($docs)),
             'active'   => $this->filters,
         ]);
     }
@@ -413,13 +435,34 @@ final class Sessions extends Controller
      */
     private function exportSessionPage(int $start, int $rows): array
     {
-        $payload = $this->listPage($start, $rows);
+        $payload = $this->listPage($start, $rows, true);
 
         return [
             'rows'    => (array) ($payload['docs'] ?? []),
             'total'   => (int) ($payload['numFound'] ?? 0),
             'payload' => $payload,
         ];
+    }
+
+    /**
+     * The bounce rate for whatever is on screen.
+     *
+     * SETTLED SESSIONS ONLY. A session that is still open has a page count that is still moving,
+     * so a visitor who is on their first page right now would be counted as a one-page visit —
+     * which would make the rate a measurement of how recently people arrived. Panel\Bounce owns
+     * the definition and the threshold; this owns the scope, which is the same range, host and
+     * filters as every other number on the page.
+     *
+     * @return array<string,mixed>
+     */
+    private function bounce(): array
+    {
+        $f = $this->gw->facet('sessions.bounce', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $this->settledSessionFqs(),
+        ], Bounce::facets());
+
+        return $this->envelope(['bounce' => Bounce::read($f)]);
     }
 
     /**
@@ -657,9 +700,15 @@ final class Sessions extends Controller
      * Everything Loghound knows about one dimension value.
      *
      * The detail dialog behind every row that names a network, a country, a browser, a verdict
-     * or a path. Four things, in the order an operator reads them: how much traffic this value
+     * or a path. Three things, in the order an operator reads them: how much traffic this value
      * accounts for and what kind it was; how the value breaks down along the OTHER dimensions;
-     * and a sample of the actual recent visitors, each of which opens their own session.
+     * and then the visits themselves, which arrive from `visitors` a page at a time.
+     *
+     * THE VISITS ARE NO LONGER A SAMPLE. This used to return twelve session documents alongside
+     * the aggregates and the dialog printed "the most recent 12 of 1,890" — a number the reader
+     * can see and cannot reach. The list is a paged table now, so this request carries only the
+     * first page's worth and every later page is one bounded read of twenty rows rather than a
+     * refetch of the whole dialog.
      *
      * `field` is a key into dimensionFields() — the browser sends a name, never a query
      * fragment — and `value` is bound as a quoted Solr term by termFor(). The scope carries the
@@ -681,12 +730,10 @@ final class Sessions extends Controller
             return $this->envelope(['error' => 'That row carries no value to open.']);
         }
 
-        $solrField = Query::sessionFilterAliases()[$field] ?? $field;
-        $clause = self::termFor($solrField, $value);
-        if ($clause === null) {
+        $scope = $this->dimensionScope($field, $value);
+        if ($scope === null) {
             return $this->envelope(['error' => 'That value is not in the form this dimension holds.']);
         }
-        $scope = array_merge($this->sessionFqs(), [$clause]);
 
         $definitions = [
             'uniq_ips'  => 'unique(ip_s)',
@@ -747,13 +794,7 @@ final class Sessions extends Controller
             }
         }
 
-        $recent = $this->gw->select('sessions.dimension.recent', $this->gw->sessionsCore(), [
-            'q'    => '*:*',
-            'fq'   => $scope,
-            'sort' => 'ts_start desc',
-            'rows' => self::DIMENSION_VISITORS,
-            'fl'   => Query::sessionFl(),
-        ]);
+        $recent = $this->visitorPage('sessions.dimension.recent', $scope, 0, Paging::PAGE);
 
         return $this->envelope([
             'field'      => $field,
@@ -779,10 +820,116 @@ final class Sessions extends Controller
             'mix'        => $mix,
             'labels'     => Query::populationLabels(),
             'breakdowns' => $breakdowns,
-            'visitors'   => array_map([$this, 'shapeVisitor'], $recent['docs']),
+            'visitors'   => $recent['rows'],
+            'page'       => $recent['page'],
             'requests'   => $field === 'paths_ss' ? $this->pathRequests($value) : null,
             'active'     => $this->filters,
         ]);
+    }
+
+    /**
+     * The `fq` list that scopes a query to one dimension value, or null when it cannot be one.
+     *
+     * Split out of dimension() because `visitors` has to build the identical scope for its own
+     * paged read, and two copies of "how a dimension becomes a filter" is two places for an
+     * alias or a numeric field to be handled one way here and another way there — which would
+     * make page two of a dialog describe a different population from page one.
+     *
+     * @return array<int,string>|null
+     */
+    private function dimensionScope(string $field, string $value): ?array
+    {
+        $solrField = Query::sessionFilterAliases()[$field] ?? $field;
+        $clause = self::termFor($solrField, $value);
+        if ($clause === null) {
+            return null;
+        }
+
+        return array_merge($this->sessionFqs(), [$clause]);
+    }
+
+    /**
+     * One page of visits behind a dimension value or behind a population.
+     *
+     * THE ONE ENDPOINT EVERY VISIT LIST IN A DIALOG PAGES THROUGH. A dimension dialog asks for
+     * `field` and `value`; the Overview's population tiles ask for `pop`. Both end in the same
+     * bounded read — twenty documents, an explicit field list, an exact `numFound` — so a dialog
+     * listing 1,890 visits costs exactly as much per page as one listing nine, and no caller can
+     * ask for the whole set at once.
+     *
+     * `pop` is a KEY into Query::populations(), so the filter that reaches Solr is one of five
+     * constants in this repository and never anything a request composed.
+     *
+     * @return array<string,mixed>
+     */
+    private function visitors(): array
+    {
+        $scope = $this->sessionFqs();
+        $subject = '';
+
+        $pop = self::param('pop', array_keys(Query::populations()), '');
+        if ($pop !== '') {
+            $scope[] = Query::populations()[$pop];
+            $subject = Query::populationLabels()[$pop] ?? $pop;
+        }
+
+        $fields = self::dimensionFields();
+        $field = self::param('field', array_keys($fields), '');
+        if ($field !== '') {
+            $value = self::text('value', 256);
+            if ($value === '') {
+                return $this->envelope(['error' => 'That row carries no value to open.']);
+            }
+            $scoped = $this->dimensionScope($field, $value);
+            if ($scoped === null) {
+                return $this->envelope(['error' => 'That value is not in the form this dimension holds.']);
+            }
+            $scope = $pop === '' ? $scoped : array_merge($scoped, [Query::populations()[$pop]]);
+            $subject = ($fields[$field] ?? $field) . ': ' . $value;
+        }
+
+        if ($pop === '' && $field === '') {
+            return $this->envelope(['error' => 'Nothing was named to list the visits of.']);
+        }
+
+        $page = $this->visitorPage('sessions.visitors', $scope, Paging::start(), Paging::rows());
+
+        return $this->envelope([
+            'subject'  => $subject,
+            'pop'      => $pop,
+            'field'    => $field,
+            'visitors' => $page['rows'],
+            'page'     => $page['page'],
+            'active'   => $this->filters,
+        ]);
+    }
+
+    /**
+     * Read one page of session documents under a scope and shape them as visits.
+     *
+     * @param array<int,string> $scope
+     * @return array{rows:array<int,array<string,mixed>>,page:array<string,mixed>}
+     */
+    private function visitorPage(string $tag, array $scope, int $start, int $rows): array
+    {
+        $start = Security::clampInt($start, 0, Security::MAX_START, 0);
+        $rows = Security::clampInt($rows, 1, Paging::MAX_PAGE, Paging::PAGE);
+
+        $res = $this->gw->select($tag, $this->gw->sessionsCore(), [
+            'q'     => '*:*',
+            'fq'    => $scope,
+            'sort'  => 'ts_start desc',
+            'rows'  => $rows,
+            'start' => $start,
+            'fl'    => Query::sessionFl(),
+        ]);
+
+        $out = array_map([$this, 'shapeVisitor'], $res['docs']);
+
+        return [
+            'rows' => $out,
+            'page' => Paging::block($start, $rows, (int) $res['numFound'], 'visits', count($out)),
+        ];
     }
 
     /**
@@ -876,16 +1023,20 @@ final class Sessions extends Controller
     }
 
     /**
-     * A visitor row: who they are at a glance, and nothing more.
+     * A visit row: exactly what the five columns render, and nothing more.
      *
-     * Deliberately narrower than shapeSession(). This is the Clicky-style recent-visitors list
-     * — flag, network, client, time, page — and shipping sixty fields per row for a twelve-row
-     * sample inside a dialog would be wasteful. The whole record is one click further on.
+     * THE SHAPE IS THE TABLE'S CONTRACT. Every visit list in the panel shows date, address,
+     * country, page and verdict, so those five plus the id that opens the record are what a row
+     * carries. It used to carry twenty-four fields — the network, the parsed client, the
+     * declared identity, two of the four clocks — because the table used to have ten columns;
+     * shipping them now would be shipping a screenful of data per page to render a fifth of it.
      *
-     * `host` is the one addition that is not about who the visitor is. The row shows an entry
-     * path, and a path with no site in front of it is not a URL and cannot be opened; the field
-     * was already in sessionFl() and simply never mapped through, so the panel had the host and
-     * could not use it.
+     * `city` and `region` ride along even though neither is a column: both go into the country
+     * cell's title, which is where "Chicago, Illinois" belongs when the column itself has room
+     * only for the country's name.
+     *
+     * `host` is not about the visitor either. The page cell shows a path, and a path with no
+     * site in front of it is not a URL and cannot be opened.
      *
      * @param array<string,mixed> $d
      * @return array<string,mixed>
@@ -893,51 +1044,39 @@ final class Sessions extends Controller
     private function shapeVisitor(array $d): array
     {
         $str = static fn (string $k) => isset($d[$k]) && is_scalar($d[$k]) ? (string) $d[$k] : null;
-        $int = static fn (string $k) => isset($d[$k]) && is_numeric($d[$k]) ? (int) $d[$k] : null;
 
         return [
-            'id'          => (string) ($d['id'] ?? ''),
-            'ts_start'    => $str('ts_start'),
-            'ip'          => $str('ip_s'),
-            'country'     => $str('country_s'),
-            'city'        => $str('city_s'),
-            'as_org'      => $str('as_org_s'),
-            'as_type'     => $str('as_type_s'),
-            'netname'     => $str('netname_s'),
-            'asn'         => $int('asn_i'),
-            'browser'     => $str('browser_s'),
-            'browser_ver' => $int('browser_ver_i'),
-            'os'          => $str('os_s'),
-            'device'      => $str('device_s'),
-            'ua_bot_name' => $str('ua_bot_name_s'),
-            'ua_bot_cat'  => $str('ua_bot_cat_s'),
-            'ai_crawler'  => array_key_exists('ai_crawler_b', $d) ? (bool) $d['ai_crawler_b'] : null,
-            'host'        => $str('host_s'),
-            'entry'       => $str('entry_path_s'),
-            'hits'        => $int('hits_i'),
-            'verdict'     => $str('bot_verdict_s'),
-            'ident'       => $str('ident_s'),
-            'signed_in'   => array_key_exists('signed_in_b', $d) ? (bool) $d['signed_in_b'] : null,
-            'beacon'      => array_key_exists('beacon_b', $d) ? (bool) $d['beacon_b'] : null,
-            'engaged_ms'  => $int('engaged_ms_l'),
-            'log_span_ms' => $int('log_span_ms_l'),
+            'id'       => (string) ($d['id'] ?? ''),
+            'ts_start' => $str('ts_start'),
+            'ip'       => $str('ip_s'),
+            'country'  => $str('country_s'),
+            'region'   => $str('region_s'),
+            'city'     => $str('city_s'),
+            'host'     => $str('host_s'),
+            'entry'    => $str('entry_path_s'),
+            'verdict'  => $str('bot_verdict_s'),
         ];
     }
 
     /**
-     * One session, with its hit timeline and the beacon overlay.
+     * One session, with the first page of its request trail and the beacon overlay.
      *
-     * Each hit carries its own `host`. It was in Query::hitFl() all along and was never mapped
-     * through, so the trail rendered a column of bare paths that could not be opened — and a
-     * session can legitimately cross virtual hosts, so the session's own host is the fallback
-     * for a hit that has none rather than the answer for all of them.
+     * THE TRAIL IS PAGED, and that is what replaces "Trail truncated — this session made more
+     * requests than the panel fetches at once". A scraper's session can run to thousands of
+     * requests; fetching two hundred of them and admitting the rest exist is the same defect as
+     * "the most recent 12 of 1,890", and the reader's next question — what did it ask for at the
+     * end — was exactly the part that was cut off.
+     *
+     * Each hit carries its own `host`, because a session can legitimately cross virtual hosts, so
+     * the session's own host is the fallback for a hit that has none rather than the answer for
+     * all of them.
      *
      * @return array<string,mixed>
      */
     private function detail(): array
     {
-        $id = self::text('id', 128);
-        if (!preg_match('/^[A-Za-z0-9_-]{8,128}$/D', $id)) {
+        $id = self::sessionId();
+        if ($id === '') {
             return $this->envelope(['error' => 'Not a session id.']);
         }
 
@@ -951,15 +1090,58 @@ final class Sessions extends Controller
         if ($sess['docs'] === []) {
             return $this->envelope(['error' => 'That session is not in the index (it may have aged past retention).']);
         }
-        $doc = $this->shapeSession($sess['docs'][0]);
 
-        $limit = Security::clampInt($_GET['limit'] ?? null, 10, self::MAX_TIMELINE, 200);
+        $trail = $this->trailPage($id, 0, Paging::PAGE);
+
+        return $this->envelope([
+            'session'  => $this->shapeSession($sess['docs'][0]),
+            'timeline' => $trail['rows'],
+            'page'     => $trail['page'],
+            'reasons'  => Bots::reasonCatalogue(),
+        ]);
+    }
+
+    /**
+     * One page of a session's request trail.
+     *
+     * Its own action so turning a page of the trail costs one bounded read of the hits core
+     * rather than refetching the session document, its rule catalogue and every aggregate in
+     * the dialog around it.
+     *
+     * @return array<string,mixed>
+     */
+    private function trail(): array
+    {
+        $id = self::sessionId();
+        if ($id === '') {
+            return $this->envelope(['error' => 'Not a session id.']);
+        }
+
+        $page = $this->trailPage($id, Paging::start(), Paging::rows());
+
+        return $this->envelope([
+            'timeline' => $page['rows'],
+            'page'     => $page['page'],
+        ]);
+    }
+
+    /**
+     * Read one page of hits for a session, in request order.
+     *
+     * @return array{rows:array<int,array<string,mixed>>,page:array<string,mixed>}
+     */
+    private function trailPage(string $id, int $start, int $rows): array
+    {
+        $start = Security::clampInt($start, 0, Security::MAX_START, 0);
+        $rows = Security::clampInt($rows, 1, self::MAX_TIMELINE, Paging::PAGE);
+
         $hits = $this->gw->select('sessions.hits', $this->gw->hitsCore(), [
-            'q'    => '*:*',
-            'fq'   => [Query::term('session_id_s', $id)],
-            'sort' => 'ts asc',
-            'rows' => $limit,
-            'fl'   => Query::hitFl(),
+            'q'     => '*:*',
+            'fq'    => [Query::term('session_id_s', $id)],
+            'sort'  => 'ts asc',
+            'rows'  => $rows,
+            'start' => $start,
+            'fl'    => Query::hitFl(),
         ]);
 
         $timeline = [];
@@ -984,12 +1166,24 @@ final class Sessions extends Controller
             ];
         }
 
-        return $this->envelope([
-            'session'   => $doc,
-            'timeline'  => $timeline,
-            'truncated' => count($timeline) >= $limit,
-            'reasons'   => Bots::reasonCatalogue(),
-        ]);
+        return [
+            'rows' => $timeline,
+            'page' => Paging::block($start, $rows, (int) $hits['numFound'], 'requests', count($timeline)),
+        ];
+    }
+
+    /**
+     * The session id a request named, or an empty string when it is not one.
+     *
+     * Shape-checked rather than trusted, and checked in ONE place because two actions read it:
+     * a value that is not a session id must never reach Query::term(), whose escaping is correct
+     * but whose job is not to decide what an identifier looks like.
+     */
+    private static function sessionId(): string
+    {
+        $id = self::text('id', 128);
+
+        return preg_match('/^[A-Za-z0-9_-]{8,128}$/D', $id) === 1 ? $id : '';
     }
 
     /**
@@ -1105,11 +1299,36 @@ final class Sessions extends Controller
     public function body(): void
     {
         $this->searchCard();
+        self::bounceCard('se-bounce', '02');
 
         echo '<div class="explorer">';
         $this->facetsCard();
         $this->resultsCard();
         echo '</div>';
+    }
+
+    /**
+     * The bounce-rate card, in the shape every page that shows the metric renders it.
+     *
+     * Static and shared rather than written out twice, because the Engagement view prints the
+     * identical card and two copies of a metric's markup is two places for the threshold, the
+     * denominators or the definition to be stated differently. The numbers behind it come from
+     * Panel\Bounce, which is the one definition; this is the one presentation of it.
+     *
+     * IT IS ON THE SESSION EXPLORER because that is the page an operator is on when the question
+     * "did any of these people actually read anything" occurs to them, and because a rate that
+     * lives on only one page is a rate most people never see. It carries the same range, the same
+     * virtual host and the same filters as the table underneath it, like every other number here.
+     */
+    public static function bounceCard(string $id, string $num): void
+    {
+        self::cardOpen($id, $num, 'Bounce rate', Bounce::definition());
+        self::skeleton($id, 'stats', 0, 'Measuring engagement on single-page visits');
+
+        echo '<div class="stats" id="' . Security::esc($id) . '-stats"></div>';
+        echo '<div id="' . Security::esc($id) . '-detail"></div>';
+
+        self::cardClose($id);
     }
 
     /**
@@ -1124,8 +1343,7 @@ final class Sessions extends Controller
             'se-search',
             '01',
             'Search',
-            'Free text is matched with edismax across path, User-Agent, AS organisation, netname, reverse DNS, '
-            . 'city and country. It is sent to Solr as a bound parameter, never as query syntax.'
+            'Matched across path, User-Agent, AS organisation, netname, reverse DNS, city and country.'
         );
 
         echo '<form class="searchbar" method="get" action="" id="se-form">';
@@ -1168,9 +1386,9 @@ final class Sessions extends Controller
         echo '<aside class="facets" aria-label="Filter the dashboard">';
         self::cardOpen(
             'se-facets',
-            '02',
+            '03',
             'Filter by',
-            'Press a value to scope every view to it. Press it again to remove it.'
+            ''
         );
         self::skeleton('se-facets', 'rows', 0, 'Counting facet values');
         echo '<div id="se-facet-list"></div>';
@@ -1179,9 +1397,27 @@ final class Sessions extends Controller
     }
 
     /**
-     * The recent-visitors table.
+     * The visit table.
      *
-     * SEVEN COLUMNS, AND THE COUNT IS THE POINT. It carried ten, and ten columns do not fit:
+     * FIVE COLUMNS, AND THE COUNT IS THE CONTRACT: date, address, country, page, verdict. The
+     * same five everywhere a list of visits appears in this product — here, in the dimension
+     * dialog, in the fingerprint and virtual-host dialogs, and in the population dialogs the
+     * Overview tiles open. The markup below is the server-side twin of assets/js/visits.js's
+     * `visitTableHead()`, and the widths are that file's `WIDTHS`; the two have to stay in step
+     * or a header cell sits over the wrong column.
+     *
+     * THE DATE AND THE PAGE ARE WHY. With seven columns the date cell resolved to about 110px
+     * and rendered "09/11/2026 …" with the time cut off, which is the column failing at the one
+     * job it has, and the page cell rendered "/openso…", which names nothing. The network, the
+     * client, the request count and the score are on the session document and in the dialog the
+     * row opens, where each of them has room for the sentence that says what it means.
+     *
+     * THERE IS NO SIXTH COLUMN FOR THE OPENER. A link inside a cell wins the click over the row,
+     * so a drillable row needs an unambiguous "open this" control; it goes at the right-hand end
+     * of the verdict cell rather than in a column of its own, because the five-column rule is
+     * about what the reader has to read and a chevron is a control.
+     *
+     * The historical note this replaces: it carried ten columns, and ten columns do not fit —
      * measured at a 1440px window the table resolved to 900px — its own minimum, inside an
      * 836px wrapper — and the `<colgroup>` was over-constrained, 737px of fixed `ch` widths
      * plus two percentage columns asking for another 35%. The browser resolves that by
@@ -1216,28 +1452,24 @@ final class Sessions extends Controller
            written by the front end once the result count is known, so it stays empty here. */
         self::cardOpen(
             'se-results',
-            '03',
+            '04',
             'Recent visitors',
             '',
             '<span class="job-meta" id="se-count"></span>' . $this->exportTool('sessions')
         );
         self::skeleton('se-results', 'rows', 0, 'Searching sessions');
 
-        echo '<div class="table-wrap"><table id="se-table" class="table-fixed"><colgroup>'
-            . '<col style="width:11%"><col style="width:14%"><col style="width:18%">'
-            . '<col style="width:16%"><col style="width:13%"><col style="width:9%">'
-            . '<col style="width:14%"><col style="width:5%">'
+        echo '<div class="table-wrap"><table id="se-table" class="table-fixed visits"><colgroup>'
+            . '<col style="width:17%"><col style="width:15%"><col style="width:14%">'
+            . '<col style="width:39%"><col style="width:15%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Started</th>'
-            . '<th scope="col">Where</th>'
-            . '<th scope="col">Visitor</th>'
-            . '<th scope="col">Network</th>'
-            . '<th scope="col">Client</th>'
-            . '<th scope="col" class="num">Reqs</th>'
-            . '<th scope="col">Verdict</th>'
-            . '<th scope="col" class="rowopen-cell"><span class="sr-only">Open</span></th>'
+            . '<th scope="col">Date</th>'
+            . '<th scope="col">IP</th>'
+            . '<th scope="col">Country</th>'
+            . '<th scope="col">Page</th>'
+            . '<th scope="col" class="visit-verdict">Verdict</th>'
             . '</tr></thead><tbody></tbody></table></div>';
-        echo '<div class="pager" id="se-pager"></div>';
+        echo '<div id="se-pager"></div>';
 
         self::cardClose('se-results');
         echo '</div>';

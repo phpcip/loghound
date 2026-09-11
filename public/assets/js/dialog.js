@@ -99,7 +99,19 @@ function ensureDialog() {
 
     const title = el('h2', { id: 'lh-dialog-title' });
     const sub = el('p', { class: 'muted', id: 'lh-dialog-sub' });
-    const close = el('button', { type: 'button', class: 'ghost small', id: 'lh-dialog-close', text: 'Close' });
+    /* A CROSS AT THE TOP RIGHT, not the word "Close". The dialogs the top bar opens carry their
+       own Close at the bottom, beside Apply, which is where a decision is made; a second control
+       spelled the same way in the corner reads as a second, different thing. The corner control
+       is the universal dismiss, so it is the universal mark for one — and the accessible name is
+       still the word, because a cross announces nothing. */
+    const close = el('button', {
+        type: 'button',
+        class: 'lh-dialog-x',
+        id: 'lh-dialog-close',
+        'aria-label': 'Close',
+        title: 'Close',
+        text: '×'
+    });
     const body = el('div', { class: 'lh-dialog-body', id: 'lh-dialog-body', tabindex: '-1' });
 
     const panel = el('div', {

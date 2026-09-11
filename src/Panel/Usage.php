@@ -37,9 +37,21 @@ namespace Loghound\Panel;
 
 use Loghound\Quota;
 use Loghound\Security;
+use Loghound\Setup\Storage;
 
 final class Usage extends Controller
 {
+
+    /**
+     * The pages this view has, in render order.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    public const SECTIONS = [
+        ['usage-bw', 'Bandwidth'],
+        ['usage-window', 'History held'],
+        ['usage-limits', 'Retention limits'],
+    ];
     /** Built lazily so a view that only renders markup never constructs a client. */
     private ?Quota $quota = null;
 
@@ -155,10 +167,56 @@ final class Usage extends Controller
     public function api(string $action): array
     {
         return match ($action) {
-            'meter' => $this->meter(),
-            'plan'  => $this->plan(),
-            default => ['error' => 'Unknown action'],
+            'meter'   => $this->meter(),
+            'plan'    => $this->plan(),
+            'account' => $this->account(),
+            default   => ['error' => 'Unknown action'],
         };
+    }
+
+    /**
+     * Everything the account is using, against everything the plan allows.
+     *
+     * WHAT THIS IS FOR. The top bar used to carry a bandwidth strip: one number, on every page,
+     * for the one quota that cannot be reclaimed by deleting anything. It said nothing about the
+     * other two — how many indexes of the allowance are in use, and how much disk each index
+     * holds against its own quota — and those are exactly as capable of stopping an installation
+     * dead. The strip is replaced by a control that opens this: the whole account, in one place,
+     * instead of one figure in everybody's way.
+     *
+     * TWO CALLS AND NEITHER IS FREE, which is why this is behind a press rather than on every
+     * page. The per-index figures come from the quota cache, which is shared with the meter; the
+     * index allowance is a control-plane call scoped to one index the account owns.
+     *
+     * AN ALLOWANCE THAT CANNOT BE READ IS NULL, NEVER ZERO. A platform that does not publish
+     * these fields, an account that cannot be asked, a key that was refused: all of them mean
+     * unknown, and rendering unknown as "0 of 0 indexes" would tell an operator their plan is
+     * full when it is not.
+     *
+     * @return array<string,mixed>
+     */
+    private function account(): array
+    {
+        if ($this->gw->isDemo()) {
+            return $this->demo();
+        }
+
+        $plan = $this->plan();
+        $summary = Storage::account($this->cfg);
+        $capacity = (array) ($summary['capacity'] ?? []);
+
+        return array_merge($plan, [
+            'account' => [
+                'ok'      => (bool) ($summary['ok'] ?? false),
+                'error'   => (string) ($summary['error'] ?? ''),
+                'limit'   => $capacity['limit'] ?? null,
+                'used'    => $capacity['counted'] ?? null,
+                'room'    => $capacity['room'] ?? null,
+                'held'    => (int) ($summary['total'] ?? 0),
+            ],
+            'resets_at' => Quota::nextReset(),
+            'resets_in' => Quota::secondsToReset(),
+        ]);
     }
 
     /**
@@ -495,7 +553,7 @@ final class Usage extends Controller
             echo '<p><strong>Disk does not look after itself on this installation.</strong> Deleting for size '
                 . 'is switched off, so nothing trims the index as it fills and it can reach its plan quota. '
                 . 'An index at its quota is blocked by Opensolr &mdash; every request is answered 403, reads '
-                . 'included. Turn it back on under <a href="?v=settings#set-privacy-card">Settings</a>, or keep '
+                . 'included. Turn it back on under <a href="?v=settings&s=privacy">Settings</a>, or keep '
                 . 'the index inside the plan some other way.</p>';
         }
         echo '<p class="faint">The projected window is an estimate from observed growth and is described as '

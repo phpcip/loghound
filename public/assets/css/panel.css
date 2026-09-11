@@ -244,14 +244,36 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
     clip-path: polygon(0 0, 100% 0, 100% 55%, 55% 55%, 55% 100%, 0 100%);
 }
 
-.side ul { list-style: none; margin: 0; padding: 0; flex: 1; }
-.side li a {
+/* ---------------------------------------------------------------------------
+   THE NAVIGATION, TWO LEVELS DEEP.
+
+   Every section a view declares is its own page, so the navigation is a view and its pages
+   underneath it. A parent is a LINK — to its first page, which is what a reader arriving at a
+   view wants — and it carries a twist control that opens its list without navigating. A view
+   with fewer than two sections (the session explorer) has no list and is an ordinary link.
+
+   EVERY VIEW'S LIST IS IN THE DOCUMENT, not only the current view's, and that is what makes the
+   collapsed icon rail work: with the labels hidden a mark is the whole of the navigation, and
+   `Attacks → Patterns` has to be reachable without first landing on `Attacks → Answered`. A
+   shut list is `hidden`, so it is out of the tab order and out of the accessibility tree until
+   it is opened — a navigation that announces eighty links, seventy of which cannot be seen, is
+   worse than one that announces eleven.
+   --------------------------------------------------------------------------- */
+
+.side ul { list-style: none; margin: 0; padding: 0; }
+.side > ul { flex: 1; }
+
+.navrow { display: flex; align-items: stretch; }
+
+.side .navlink {
     /* 40px, measured. 9px of padding on a 15px/1.55 line came out at 38px — two pixels under
-       the floor, on the twelve links that are the panel's primary navigation and the control a
-       reader uses most. Flex rather than more padding, so the icon rail's centred variant and
-       the drawer's two-line hint both keep working from the same box. */
+       the floor, on the links that are the panel's primary navigation and the control a reader
+       uses most. Flex rather than more padding, so the icon rail's centred variant and the
+       drawer's two-line hint both keep working from the same box. */
     display: flex;
     align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
     min-height: 40px;
     padding: 6px 24px;
     color: var(--muted);
@@ -259,8 +281,53 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
     font-size: 15px;
     border-left: 2px solid transparent;
 }
-.side li a:hover { background: var(--band); color: var(--ink); text-decoration: none; }
-.side li a.on { background: none; color: var(--ink); font-weight: 700; border-left-color: var(--accent); }
+.side .navlink:hover { background: var(--band); color: var(--ink); text-decoration: none; }
+.side .navlink.on { background: none; color: var(--ink); font-weight: 700; border-left-color: var(--accent); }
+.navgroup.is-current > .navrow > .navlink { color: var(--ink); font-weight: 700; border-left-color: var(--accent); }
+
+/* The twist. A chevron drawn from two borders rather than a glyph, because the panel ships no
+   icon font and will not start for one control. It rotates a quarter turn when its list is
+   open, which is the one affordance that says which way pressing it goes. */
+.navtwist {
+    flex: none;
+    width: 34px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-left: 0;
+    color: var(--faint);
+    cursor: pointer;
+}
+.navtwist:hover { background: var(--band); color: var(--ink); }
+.navtwist-mark {
+    display: block;
+    width: 6px;
+    height: 6px;
+    margin: 0 auto;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 0.12s ease;
+}
+.navtwist[aria-expanded="true"] .navtwist-mark { transform: rotate(45deg); }
+
+.navsub { padding: 2px 0 6px; }
+.side .navsub-link {
+    display: flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 4px 24px 4px 46px;
+    font-size: 14px;
+    color: var(--muted);
+    border-left: 2px solid transparent;
+}
+.side .navsub-link:hover { background: var(--band); color: var(--ink); text-decoration: none; }
+.side .navsub-link.on {
+    color: var(--accent-ink);
+    font-weight: 700;
+    border-left-color: var(--accent);
+    background: none;
+}
 
 .theme-toggle {
     margin: 20px 24px 0;
@@ -287,49 +354,6 @@ main {
 .head { margin-bottom: 34px; }
 .head h1 { margin-bottom: 12px; }
 .head .sub { font-size: 17px; line-height: 1.5; color: var(--muted); max-width: 720px; margin: 0; }
-
-.head-tools {
-    display: flex; flex-wrap: wrap; gap: 16px;
-    align-items: center; justify-content: space-between;
-    margin-top: 24px; padding-top: 16px;
-    border-top: 1px solid var(--hairline);
-}
-
-/*
- * The readout slot: status the page reports, not controls the reader presses.
- *
- * The bandwidth strip used to be injected into .head-tools beside the range links, which put a
- * quota warning inside a group of inputs and made it read as one more thing to press. It has
- * its own row now, below the toolbar, and it collapses to nothing until something fills it —
- * an empty div with no margin, so a page with no readout is laid out exactly as before.
- */
-.head-readout:empty { display: none; }
-.head-readout { margin-top: 12px; }
-
-/*
- * The range picker.
- *
- * MEASURED: "1H" was a 24px-wide target, "7D" 25px and "6H" 26px, at every width including a
- * phone — full height, but a quarter of the 44px the rest of the panel is held to across. A
- * minimum width and symmetric padding fix it without changing how the row reads, because the
- * gap absorbs most of the added box.
- */
-.ranges { display: flex; flex-wrap: wrap; gap: 8px; }
-.ranges a {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    min-height: 40px;
-    padding: 0 10px 4px;
-    font: 600 14px/1 var(--font-ui);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--faint);
-    border-bottom: 2px solid transparent;
-}
-.ranges a:hover { background: none; color: var(--ink); text-decoration: none; }
-.ranges a.on { background: none; color: var(--ink); border-bottom-color: var(--accent); }
 
 /* Notices. Error is an accent left rule; anything affirmative is an ink one. */
 
@@ -420,7 +444,21 @@ main {
 .faint  { color: var(--faint); }
 .caveat { color: var(--muted); border-left: 2px solid var(--hairline); padding-left: 14px; }
 
-.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 44px; }
+/*
+ * A TWO-UP GRID DOES NOT STRETCH ITS SHORTER HALF.
+ *
+ * Grid items stretch to the row's height by default, and the two halves of this grid are CARDS
+ * that can be folded independently. A collapsed card next to an expanded one therefore grew to
+ * its sibling's height — measured at roughly seven hundred pixels of blank white under a
+ * one-line heading, which reads as a card that failed to load rather than as one the reader
+ * shut. `align-items: start` makes each half exactly as tall as its own content.
+ */
+.grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 44px;
+    align-items: start;
+}
 
 .panel {
     background: var(--page);
@@ -1078,7 +1116,7 @@ tr.members > td { padding: 0; background: var(--band); }
 .active-filters a span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .active-filters a:hover { background: var(--accent); color: var(--on-accent); text-decoration: none; }
 
-.pager { display: flex; gap: 18px; align-items: center; margin-top: 18px; font-size: 14px; color: var(--faint); font-family: var(--font-mono); }
+
 
 /*
  * A drillable row.
@@ -1181,6 +1219,77 @@ fieldset { border: 0; border-top: 1px solid var(--hairline); padding: 18px 0 0; 
 legend { padding: 0; font: 700 14px/1 var(--font-ui); text-transform: uppercase; letter-spacing: 0.12em; }
 label.radio, label.check { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; font-size: 15px; }
 label.radio input, label.check input { margin-top: 4px; flex: none; accent-color: var(--accent); }
+
+/* ---------------------------------------------------------------------------
+   THE OPTION LIST — a choice from a list, where the whole option is the control.
+
+   WHAT IT REPLACES. A pair of Opensolr indexes is ONE choice, and it was rendered as a radio dot
+   beside the first index name, the second name on a line below it with no control at all, and a
+   bordered pill floating mid-line beside that. It read as broken markup rather than as one
+   selectable thing, and the only place it could be pressed was a twelve-pixel dot. The sign-in
+   method and the IP privacy mode were the same shape with the same problem.
+
+   THE RULE THIS MAKES STRUCTURAL: whatever an operator can choose, they can press anywhere on.
+   The <label> wraps the input, so the row IS the hit area at every width with no minimum-size
+   rule needed anywhere.
+
+   THE INPUT STAYS A REAL RADIO and is merely taken out of the layout. That keeps arrow-key
+   navigation inside the group, the `required` check, and the form's own semantics — none of
+   which a div with `role="radio"` would have got right — while the SELECTED state is carried by
+   the row, in the accent, where the reader is already looking. `:has()` is what lets the row
+   style itself from its own input; `:focus-within` is the keyboard's version of the same thing
+   and is not optional, because with the dot gone the ring is the only thing saying where focus
+   is.
+   --------------------------------------------------------------------------- */
+
+.optlist { display: flex; flex-direction: column; gap: 8px; margin: 0 0 18px; }
+
+.opt {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    background: var(--page);
+    border: 1px solid var(--hairline);
+    border-left: 2px solid var(--hairline);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 15px;
+}
+.opt:hover { border-color: var(--ink); border-left-color: var(--ink); }
+.opt:has(input:checked) {
+    background: var(--band);
+    border-color: var(--accent);
+    border-left-color: var(--accent);
+}
+.opt:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The dot is off screen, not `display: none`: a hidden form control is still submitted and
+   still focusable by its label, which is the whole mechanism. Same clip rectangle `.sr-only`
+   uses at the top of this file. */
+.opt input {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.opt-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
+.opt-title { font-weight: 700; color: var(--ink); }
+.opt:has(input:checked) .opt-title { color: var(--accent-ink); }
+.opt-meta {
+    font-size: 14px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+/* The state belongs at the end of the row, not in the middle of the name. */
+.opt-state {
+    flex: none;
+    align-self: center;
+    font: 600 14px/1.3 var(--font-ui);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent-ink);
+}
 .thresholds { display: flex; flex-wrap: wrap; gap: 20px; font-size: 15px; }
 .thresholds label { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
 .confirm-form { margin-top: 18px; }
@@ -1278,9 +1387,18 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
         border-bottom: 1px solid var(--hairline);
     }
     .brand { padding: 0 12px 0 0; }
-    .side ul { display: flex; flex-wrap: wrap; gap: 4px 20px; flex: 1 1 100%; }
-    .side li a { border-left: 0; border-bottom: 2px solid transparent; padding: 6px 0; }
-    .side li a.on { border-left: 0; border-bottom-color: var(--accent); }
+    .side > ul { display: flex; flex-wrap: wrap; gap: 4px 20px; flex: 1 1 100%; }
+    .side .navlink { border-left: 0; border-bottom: 2px solid transparent; padding: 6px 0; }
+    .side .navlink.on,
+    .navgroup.is-current > .navrow > .navlink { border-left: 0; border-bottom-color: var(--accent); }
+
+    /* IN THE DRAWER THE SUB-LIST IS AN INDENTED LIST, not a flyout. The rail's flyout is a
+       desk-width answer to a 60px column; a drawer has the width and the room, and a phone
+       has no hover to open one with. */
+    .navgroup { flex: 1 1 100%; }
+    .navsub { padding-left: 0; }
+    .side .navsub-link { padding: 4px 0 4px 18px; border-left: 2px solid var(--hairline); }
+    .side .navsub-link.on { border-left-color: var(--accent); }
     .theme-toggle { margin: 0; }
     main { margin-left: 0; padding: 32px 20px 64px; }
     .explorer { grid-template-columns: minmax(0, 1fr); gap: 32px; }
@@ -1316,7 +1434,7 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
 }
 
 @media print {
-    .side, .ranges, .toggle, .theme-toggle, button, .progress, .loading { display: none !important; }
+    .side, .topbar, .toggle, .theme-toggle, button, .progress, .loading { display: none !important; }
     main { margin: 0; padding: 0; }
     .card { break-inside: avoid; }
 }
@@ -1577,52 +1695,16 @@ td .shape { white-space: nowrap; }
    does.
    --------------------------------------------------------------------------- */
 
-/* The strip in the page header. A quiet line of type until the level says
-   otherwise; the accent appears only at the point action is worth taking. */
-
-.bwstrip {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    font-size: 14px;
-    color: var(--faint);
-}
-.bwstrip-label {
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    font-weight: 600;
-    font-size: 14px;
-}
-.bwstrip .meter { width: 92px; }
-.bwstrip-detail { color: var(--muted); }
-.bwstrip-say { color: var(--accent-ink); font-weight: 600; }
-.bwstrip-link {
-    color: var(--muted);
-    border-bottom: 1px solid var(--hairline);
-    text-decoration: none;
-}
-.bwstrip-link:hover { background: none; color: var(--ink); border-bottom-color: var(--ink); text-decoration: none; }
-
-.bwstrip-warn .bwstrip-label,
-.bwstrip-critical .bwstrip-label,
-.bwstrip-blocked .bwstrip-label { color: var(--accent-ink); }
-
-.bwstrip-blocked {
-    border-left: 2px solid var(--accent);
-    padding-left: 12px;
-}
-
 /* The bar fill is a neutral grey while everything is fine, and takes the accent
-   only in a state the operator is meant to act on. Scoped to these two
-   components rather than to .meter-fill globally: other views use the same bar
-   for proportions that are not warnings, and they are not this file's to
-   restyle. */
+   only in a state the operator is meant to act on. Scoped to the two components
+   that report a quota rather than to .meter-fill globally: other views use the
+   same bar for proportions that are not warnings, and they are not this file's
+   to restyle. */
 
-.bwstrip .meter-fill,
-.meterrow .meter-fill { background: var(--c-declared); }
-.bwstrip .meter-fill-loud,
-.meterrow .meter-fill-loud { background: var(--accent); }
+.meterrow .meter-fill,
+.res-row .meter-fill { background: var(--c-declared); }
+.meterrow .meter-fill-loud,
+.res-row .meter-fill-loud { background: var(--accent); }
 
 /* One meter per index on the Plan usage view. */
 
@@ -1699,33 +1781,6 @@ td .shape { white-space: nowrap; }
 /* ---------------------------------------------------------------------------
    The vhost dimension.
    --------------------------------------------------------------------------- */
-
-/* The host selector, in the page header next to the range picker. Rendered by
-   the front end and only when there is more than one host to choose between,
-   so single-site installs never see it. */
-
-.hostpick { display: flex; align-items: center; gap: 8px; font-size: 14px; }
-.hostpick label {
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    font-weight: 600;
-    font-size: 14px;
-    color: var(--faint);
-}
-.hostpick select {
-    font: inherit;
-    color: var(--ink);
-    background: var(--page);
-    border: 1px solid var(--field-border);
-    border-radius: var(--radius);
-    padding: 4px 8px;
-    max-width: 260px;
-}
-
-@media (max-width: 900px) {
-    .bwstrip .meter { width: 64px; }
-    .hostpick select { max-width: 180px; }
-}
 
 /* The mount a stepped scan renders its progress into, inside the card it belongs to.
    Empty until a job starts and emptied again when one finishes, so a card that has
@@ -1871,118 +1926,176 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 .incident-error { margin: 0 0 10px; color: var(--bad); font-weight: 600; }
 
 /*
- * The section nav — the pinned bar of jump links every view builds from its own cards.
+ * THE TOP BAR — the one pinned row that says what this page is scoped to.
  *
- * WHERE IT IS. First child of <main>, a SIBLING of `.view`. It cannot be inside `.view`:
- * that is `display: flex; flex-direction: column`, and a sticky element inside a flex
- * container is sticky within its own flex item box — a box exactly as tall as the bar — so
- * it has no travel and scrolls away as soon as the reader passes a few cards. Rendered as a
- * sibling, its containing block is <main>, which is the whole document, and it holds to the
- * last card. It sits above the H1, the one place the "nothing above the H1" rule is set
- * aside on purpose: this is chrome of the same kind as the left sidebar.
+ * WHAT IT REPLACED. Two sticky bars used to live here: a section nav listing the cards of a very
+ * long page, and under it a page toolbar that assets/js/responsive.js assembled at runtime by
+ * MOVING whatever furniture it found — range links, host selector, filter chips, a bandwidth
+ * readout — and condensed on scroll. Every section is its own page now, so the jump bar has
+ * nothing left to jump to; and the toolbar produced four different layouts across four pages,
+ * one of which clipped its own last control off the right edge. One bar, rendered by the server
+ * from what the view declares it honours, is the whole of it.
  *
- * ONE ROW, ALWAYS. `flex-wrap: nowrap` plus `overflow-x: auto`. Eleven entries at full
- * heading length do not fit on a line at any realistic width, and a bar that costs two rows
- * of every screen is worse than the scrolling it was added to fix — so the labels are short
- * by contract (the second element of each view's SECTIONS entry) and the row scrolls
- * sideways when it has to. The scrollbar is suppressed so the bar's HEIGHT is the same on
- * every platform: scroll-margin-top is derived from that height, and a scrollbar that
- * appears on one machine and not another would move every jump target.
- * assets/js/sectionnav.js keeps the active entry scrolled into view, which is what makes a
- * scrolling row usable at eleven entries on a narrow window.
+ * WHERE IT IS. First child of <main>, a SIBLING of `.view`. It cannot be inside `.view`: that is
+ * `display: flex; flex-direction: column`, and at desk width with facets it is a GRID — a sticky
+ * element inside either is sticky within its own item box, a box exactly as tall as itself, so it
+ * has no travel at all and scrolls away. As a sibling its containing block is <main>, which is
+ * the whole document. It is also why it cannot overlap the facet column: that column is inside
+ * `.view`, which begins below this bar.
  *
- * THE JUMP OFFSET. `--set-nav-h` is measured from the rendered bar by that module and
- * written onto the root element, because the height depends on the font the browser actually
- * resolved. The value below is the fallback for the first paint and for scripting off.
+ * IT SITS ABOVE THE H1, which is the one place the editorial system's "nothing above the H1" rule
+ * is set aside, deliberately: this is page chrome in the same class as the left sidebar, not an
+ * eyebrow or a badge on the article.
  *
- * The horizontal negative margins mirror <main>'s own padding at each breakpoint so the bar
- * is full-bleed and nothing scrolls past it in the gutters; --nav-pull does the same for
- * main's padding-top, so the bar starts flush with the top of the page rather than 40px down.
+ * STICKY ALWAYS, AND ONE SHAPE. No condensed state. The bar that condensed had to be designed and
+ * measured twice — and the first attempt at it got TALLER when it condensed, because the controls
+ * wrapped — while the thing condensing was meant to buy back vertical room. Four controls on one
+ * row do not need it.
+ *
+ * THE OFFSET A PAGE IS SCROLLED TO. `--topbar-h` is the bar's own height, used by the facet
+ * column's `top` and by every card's `scroll-margin-top`. `--lh-topbar-h` is a different number
+ * and is the PHONE's fixed navigation bar, published by responsive.js and absent at desk width;
+ * both appear in the same expressions because on a phone this bar hangs below that one.
+ *
+ * The horizontal negative margins mirror <main>'s own padding at each breakpoint so the bar is
+ * full-bleed and nothing scrolls past it in the gutters; --nav-pull does the same for main's
+ * padding-top, so the bar starts flush with the top of the page rather than 40px down.
  */
 
-:root { --set-nav-h: 50px; }
+:root { --topbar-h: 56px; }
 
-.set-nav {
+.topbar {
     --nav-gutter: 32px;
     --nav-pull: 40px;
 
     position: sticky;
-    top: 0;
+    top: var(--lh-topbar-h, 0px);
     z-index: 30;
     margin: calc(var(--nav-pull) * -1) calc(var(--nav-gutter) * -1) 28px;
     padding: 10px var(--nav-gutter);
     background: var(--page);
     border-bottom: 1px solid var(--hairline);
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
 }
-.set-nav::-webkit-scrollbar { display: none; }
 
-.set-nav ul {
+/* ONE ROW THAT WRAPS RATHER THAN CLIPS. The bar it replaces sliced "Clear all Every…" off the
+   right edge of the session explorer, because the row was assembled from parts none of which
+   knew how much room the others had taken. Four declared controls fit on one row at every width
+   this panel is built for; if a future one does not, it wraps to a second row and stays
+   readable, which is the failure mode to have. */
+.topbar-in {
     display: flex;
-    flex-wrap: nowrap;
-    gap: 0 6px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 18px;
+    min-height: 36px;
 }
-.set-nav li { flex: 0 0 auto; }
 
-.set-nav a {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 7px;
-    padding: 5px 10px;
-    border: 1px solid transparent;
-    border-radius: var(--radius);
-    font-size: 14px;
-    line-height: 1.2;
-    color: var(--muted);
-    text-decoration: none;
+.tb-scope {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 18px;
+    margin: 0;
+}
+
+/* A labelled control. The label is beside the control rather than above it, because this bar is
+   a row and a stacked label would double its height for every field in it. */
+.tb-field { display: inline-flex; align-items: center; gap: 8px; }
+.tb-field label {
+    margin: 0;
+    font: 600 13px/1 var(--font-ui);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
     white-space: nowrap;
 }
-.set-nav a:hover,
-.set-nav a:focus-visible { border-color: var(--hairline); color: var(--ink); background: var(--band); }
 
-/* Active is the one accent and a rule under the entry, never a filled pill. */
-.set-nav a.on {
+/* The applied-filters control. It is drawn only when something IS applied — see
+   Panel\Layout::topBar() — so it can afford to be the loudest thing in the bar: the one fact an
+   operator must not miss is that the numbers in front of them are narrowed. */
+.tb-filters {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 0 12px;
+    font: 600 14px/1 var(--font-ui);
     color: var(--accent-ink);
-    border-color: transparent;
-    border-bottom-color: var(--accent);
-    background: none;
+    background: var(--band);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    cursor: pointer;
 }
-.set-nav-num { font-family: var(--font-mono); font-size: 14px; color: var(--faint); }
+.tb-filters:hover { background: var(--band); border-color: var(--accent-ink); }
+
+.tb-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    font: 700 13px/1 var(--font-mono);
+    color: var(--on-accent);
+    background: var(--accent);
+    border-radius: 2px;
+}
+
+/* The Opensolr resources control: an icon, because it opens a dialog rather than changing the
+   page, and because a fifth set of words in this row would drown the four that scope it. Its
+   name is on `aria-label` and in `title`, so it is never unnamed. */
+.tb-res {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.tb-res:hover { color: var(--ink); border-color: var(--ink); background: transparent; }
+.tb-res svg { display: block; }
+
+/* THE SUBMIT BUTTON IS THE NO-SCRIPT MECHANISM AND NOTHING ELSE. With script running, changing a
+   select submits the form, so a button that repeats it is a second way to do one thing. It is
+   taken out of the layout rather than hidden with `visibility`, so it costs no width. */
+.tb-go {
+    min-height: 36px;
+    padding: 0 14px;
+    font: 600 14px/1 var(--font-ui);
+    cursor: pointer;
+}
+:root.lh-js .tb-go { display: none; }
+
+.topbar .job-meta { margin-left: auto; }
 
 /* ---------------------------------------------------------------------------
-   THE SECTION BAR'S TOOLTIP — the collapsed rail's, laid under instead of beside.
+   THE PANEL'S OWN TOOLTIP, for the controls whose text the layout had to cut.
 
-   WHY IT IS HERE AT ALL. The bar is one row that never wraps, so its labels are
-   short by contract, and for a view that has not declared its own sections the
-   label is a heading CUT to 22 characters by Layout::cardsIn(). "01 Declared
-   versus evasi…" is the first half of a label with no way to reach the other
-   half: the bar sets no `title`, and `title` is the bubble this work replaces.
+   WHY IT EXISTS. `.facet-val` truncates with an ellipsis, and a path, an AS organisation or a
+   User-Agent is routinely longer than the column — so the reader could see that something had
+   been cut and had no way at all to read it. The native `title` on the anchor does not help: it
+   says why the DIMENSION exists, which leaves the bubble explaining the category while the value
+   stays unreadable. The two icon-only controls — the card head's refresh mark and the row opener
+   that ends a drillable row — share the rule for the mirror-image reason: their text is a hint
+   for a glyph with no words.
 
-   IT NEVER REPEATS WHAT IS ON SCREEN. The content is `data-full`, the
-   untruncated label, and the box only exists on an entry responsive.js has
-   MEASURED as short of it — either the rendered text differs from `data-full`
-   or the label overflows its own box. An entry that fits carries no
+   IT NEVER REPEATS WHAT IS ON SCREEN. The content is `data-full`, and the box exists only on an
+   element assets/js/responsive.js has MEASURED as short of it. An element that fits carries no
    `data-lh-tip` and has no ::after at all.
 
-   POSITION. `fixed`, because `.set-nav` is `overflow-x: auto` and would clip an
-   absolutely positioned box at the row's edge — and because the bar is
-   `position: sticky`, which is a scroll container's problem all over again.
-   Both coordinates are published by responsive.js: unlike the rail, which is
-   pinned to the left edge at a known width, this bar scrolls sideways, so
-   neither axis can be derived from a fixed edge. The horizontal one is clamped
-   against --lh-sectiontip-w so an entry at the end of the row cannot open a box
-   that runs off the window.
+   POSITION. `fixed`, because these controls sit inside containers that scroll — a card's table
+   scrolls sideways, the facet column scrolls vertically — and an absolutely positioned box would
+   be clipped at the edge that matters. Both coordinates are published by responsive.js at the
+   moment the control is reached; the horizontal one is clamped against --lh-sectiontip-w so a
+   control at the right-hand edge cannot open a box that runs off the window.
 
-   Everything else is the rail's: out of flow so nothing shifts, no pointer
-   events so it cannot flicker under the cursor, hover gated on there being a
-   hover so a tap on a touch screen activates the entry rather than revealing a
-   label, and `:focus-visible` unconditional because the bar is tab-navigable.
+   Out of flow so nothing shifts, no pointer events so it cannot flicker under the cursor, hover
+   gated on there being a hover so a tap on a touch screen activates the control rather than
+   revealing a label, and `:focus-visible` unconditional because all of them are tab-navigable.
    --------------------------------------------------------------------------- */
 
 /* --lh-navtip-x and --lh-navtip-y ARE DECLARED EMPTY ON PURPOSE, and the empty
@@ -2001,31 +2114,9 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
     --lh-navtip-y: ;
 }
 
-/* The two icon-only controls that live in the page share this rule rather than
-   owning one each: the card head's refresh mark and the row opener that ends a
-   drillable row. Same component, same job — a fixed box under the control, out
-   of flow, `data-full` for its content, coordinates published by responsive.js.
-   The one difference is that they always carry the marker, because their text
-   is a hint for a glyph with no words rather than a label the layout cut.
-
-   A FACET VALUE JOINS THEM, and it is the case the component was worth
-   building for. `.facet-val` in the panel and `.fchip-val` on an applied filter
-   both truncate with an ellipsis, and until now there was no way to read the
-   rest: the `title` on the anchor is the vocabulary's sentence about the
-   DIMENSION, so the bubble explained the category while the value stayed
-   unreadable. The marker goes on the ancestor anchor — `.facet-opt` is the
-   whole row, `.fchip` is the whole chip — because the span that carries the
-   ellipsis cannot take focus and the component is keyboard-reachable
-   unconditionally; assets/js/responsive.js measures the span and marks the
-   anchor. An anchor whose value fits carries no marker and has no box at all.
-
-   `.set-nav a[data-lh-tip]::after` stays last in the list so the rule keeps the
-   name the suite looks it up by. */
 .card-refresh[data-lh-tip]::after,
 .rowopen[data-lh-tip]::after,
-.facet-opt[data-lh-tip]::after,
-.fchip[data-lh-tip]::after,
-.set-nav a[data-lh-tip]::after {
+.facet-opt[data-lh-tip]::after {
     content: attr(data-full);
     position: fixed;
     z-index: 40;
@@ -2048,22 +2139,15 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 
 .card-refresh[data-lh-tip]:focus-visible::after,
 .rowopen[data-lh-tip]:focus-visible::after,
-.facet-opt[data-lh-tip]:focus-visible::after,
-.fchip[data-lh-tip]:focus-visible::after,
-.set-nav a[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+.facet-opt[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
 
 @media (hover: hover) and (pointer: fine) {
     .card-refresh[data-lh-tip]:hover::after,
     .rowopen[data-lh-tip]:hover::after,
-    .facet-opt[data-lh-tip]:hover::after,
-    .fchip[data-lh-tip]:hover::after,
-    .set-nav a[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
+    .facet-opt[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
 }
-.set-nav a:hover .set-nav-num,
-.set-nav a:focus-visible .set-nav-num,
-.set-nav a.on .set-nav-num { background: none; color: var(--accent-ink); }
 
-/* Every card is a jump target, so every card clears the bar.
+/* A card still clears the bar.
 
    Deliberately NOT scoped as `.view .card`. A view whose markup leaves one <div> unbalanced
    makes the parser close `.view` early, and every card after that point becomes a SIBLING of
@@ -2071,145 +2155,20 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
    and every jump landed its heading underneath the bar. The offset is a property of being a
    card, not of where the parser thinks the card ended up. */
 
-/*
- * THE PAGE TOOLBAR — the second pinned bar, under the section nav.
- *
- * WHAT IS IN IT. Everything that scopes the page rather than a card: the range picker, the host
- * selector, Clear cache, the applied-filter chips with the control that opens the dimension
- * groups, and the bandwidth readout. assets/js/responsive.js moves them here from the page
- * head, once, rather than drawing a second copy of each — see setUpPageTools() for why a second
- * copy of a control is a second thing to keep in step.
- *
- * WHY IT IS A SIBLING OF `.view`, AND WHY THAT ANSWERS THE FACET COLUMN. Same trap as
- * `.set-nav`: sticky inside `.view` is sticky within one flex item or one grid area, and has no
- * travel. As a sibling its containing block is <main>. It is also why it cannot overlap the
- * facet column — the column lives inside `.view`, which starts below this bar.
- *
- * TWO STICKY BARS IS A LOT, SO THIS ONE CONDENSES. At rest it is a comfortable row. Stuck, it
- * halves its padding, drops the readout to the same line and reveals `.pt-scope` — the one line
- * saying what the numbers below are currently scoped to, which is the thing a reader four
- * sections down actually needs and the thing the controls stop saying once they are tight.
- *
- * THE JUMP OFFSET IS NOW BOTH BARS. `--set-nav-h` is measured; `--page-tools-h` is the
- * condensed height of this one, which is the height it has whenever a jump lands — a jump
- * always scrolls, and this bar is always stuck by the time the target arrives. Cards clear the
- * sum, so a heading can no longer land underneath.
- */
+.card { scroll-margin-top: calc(var(--lh-topbar-h, 0px) + var(--topbar-h) + 20px); }
 
-:root { --page-tools-h: 44px; }
-
-.page-tools {
-    --nav-gutter: 32px;
-
-    position: sticky;
-
-    /* UNDER THE SECTION NAV, WHEREVER THE SECTION NAV ACTUALLY IS. `var(--set-nav-h)` alone
-       assumes that bar is pinned to the top of the window, and on a phone it is not: a fixed
-       navigation bar sits above it and mobile.css pins the section nav below that instead.
-       Measured at 375, this bar landed 60px too high and covered the bar it is supposed to
-       hang from. `--lh-topbar-h` is 0px on a desk screen and removed entirely by
-       responsive.js there, so the same expression is correct at both widths. */
-    top: calc(var(--lh-topbar-h, 0px) + var(--set-nav-h));
-    z-index: 29;
-
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-
-    margin: 0 calc(var(--nav-gutter) * -1) 28px;
-    padding: 12px var(--nav-gutter);
-    background: var(--page);
-    border-bottom: 1px solid var(--hairline);
-}
-
-/* The head's own rule and top margin belong to a block that ended above; inside the bar the
-   bar's own border is the rule, and a second one would draw two lines 12px apart. */
-.page-tools .head-tools { margin-top: 0; padding-top: 0; border-top: 0; }
-.page-tools .head-readout { margin-top: 0; }
-.page-tools .filterbar { gap: 10px; }
-
-/* At rest the scope line is what the controls already say, so it says nothing. */
-.pt-scope { display: none; }
-
-/* CONDENSED IS ONE ROW, AND IT HAS TO BE MEASURED TO BE BELIEVED.
-
-   The first version of this simply tightened the padding and revealed the scope line, and the
-   bar got TALLER: 106px at rest became 116px stuck at 1440, and 225px became 235px at 375,
-   where `.head-tools` wraps to four rows. A "condensed" state that costs more than the resting
-   one is not condensed, and two bars eating a third of a phone screen is exactly what this was
-   warned against.
-
-   So stuck is a single row that never wraps and scrolls sideways when it must — the same shape
-   `.set-nav` above it already proves at eleven entries on a narrow window, and for the same
-   reason: a bar that costs a second row of every screen is worse than the scrolling it saves.
-   Nothing is taken away, so every control is still reachable four sections down; they simply
-   queue instead of stacking.
-
-   THE SCOPE LINE COMES FIRST because it is the one thing that stops being said once the
-   controls are tight, and the one thing a reader deep in the page actually needs: which range,
-   which host, how many filters. It is a readout, not a control — see describeScope(). */
-
-.page-tools.is-stuck {
-    flex-direction: row;
-    flex-wrap: nowrap;
-    align-items: center;
-    gap: 16px;
-    padding-top: 6px;
-    padding-bottom: 6px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
-}
-.page-tools.is-stuck::-webkit-scrollbar { display: none; }
-
-.page-tools.is-stuck > * { flex: 0 0 auto; }
-.page-tools.is-stuck .head-tools,
-.page-tools.is-stuck .filterbar,
-.page-tools.is-stuck .filterbar-active {
-    flex-wrap: nowrap;
-    gap: 12px;
-    margin: 0;
-    padding: 0;
-    border: 0;
-}
-.page-tools.is-stuck .filterbar { flex-direction: row; align-items: center; }
-.page-tools.is-stuck .filterbar-active { background: none; }
-
-.page-tools.is-stuck .pt-scope {
-    order: -1;
-    display: block;
-    white-space: nowrap;
-    font: 600 14px/1.3 var(--font-ui);
-    color: var(--faint);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-}
-
-/* Every card is a jump target, so every card clears the bar.
-
-   Deliberately NOT scoped as `.view .card`. A view whose markup leaves one <div> unbalanced
-   makes the parser close `.view` early, and every card after that point becomes a SIBLING of
-   it — measured on the Settings page, where the descendant form of this rule matched nothing
-   and every jump landed its heading underneath the bar. The offset is a property of being a
-   card, not of where the parser thinks the card ended up. */
-
-.card { scroll-margin-top: calc(var(--set-nav-h) + var(--page-tools-h) + 20px); }
-
-/* These two mirror <main>'s own padding at the same two breakpoints (1000px, 620px). */
+/* These mirror <main>'s own padding at the same two breakpoints (1000px, 620px). */
 
 @media (max-width: 1000px) {
-    .set-nav { --nav-gutter: 20px; --nav-pull: 32px; }
-    .page-tools { --nav-gutter: 20px; }
+    .topbar { --nav-gutter: 20px; --nav-pull: 32px; }
 }
 
 @media (max-width: 620px) {
-    .page-tools { --nav-gutter: 16px; margin-bottom: 22px; }
-    .set-nav { --nav-gutter: 16px; --nav-pull: 28px; margin-bottom: 22px; }
+    .topbar { --nav-gutter: 16px; --nav-pull: 28px; margin-bottom: 22px; }
 }
 
 @media print {
-    .set-nav { display: none; }
+    .topbar { display: none; }
 }
 
 /* The Opensolr filter rail (OpensolrView::filterCard).
@@ -2223,8 +2182,7 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 
 .lf-active:empty,
 .lf-outcomes:empty,
-.lf-rail:empty,
-.filterbar-active:empty { display: none; }
+.lf-rail:empty { display: none; }
 
 .lf-active { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .lf-active a {
@@ -2343,8 +2301,8 @@ tr.lf-pick a:hover { background: none; color: var(--accent-ink); text-decoration
    VISITOR DETAIL — flags, the value-as-filter control, the filter bar and the dialog.
 
    Appended as one block rather than woven into the rules above, because two other agents
-   are in this file at the same time. Everything here is prefixed (.dim, .flag, .filterbar,
-   .fchip, .fgroup, .fpanel, .lh-dialog, .ident-strip, .table-fixed) and overrides nothing
+   are in this file at the same time. Everything here is prefixed (.dim, .flag, .fgroup,
+   .fpanel, .lh-dialog, .ident-strip, .table-fixed) and overrides nothing
    that was already written.
 
    Editorial system throughout: flat, 2px corners, one accent, no gradients, no shadows,
@@ -2402,55 +2360,22 @@ a.dim:focus-visible { background: none; color: var(--accent-ink); border-bottom-
 .flag { margin-right: 6px; font-size: 16px; line-height: 1; }
 .geo { display: inline-flex; align-items: baseline; gap: 0; min-width: 0; }
 
-/* --- The filter bar ------------------------------------------------------------------
-
-   First child of .view on every page. The active row is drawn from the URL with no request
-   at all, so it is on screen before any card has a number in it: a filtered number that
-   does not say it is filtered is a wrong number. */
-
-.filterbar { display: flex; flex-direction: column; gap: 12px; }
-.filterbar-active {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-    padding: 12px 14px;
-    background: var(--band);
-    border-left: 2px solid var(--accent);
-}
-.filterbar-label {
-    font: 600 14px/1.4 var(--font-ui);
-    text-transform: uppercase; letter-spacing: 0.1em; color: var(--faint);
-}
-.filterbar-note { flex-basis: 100%; font-size: 14px; color: var(--faint); line-height: 1.45; }
-.filterbar-clear { font-size: 14px; font-weight: 600; }
-.filterbar-tools { display: flex; gap: 10px; }
-
-.fchip {
-    display: inline-flex; align-items: baseline; gap: 6px;
-    padding: 3px 9px;
-    border: 1px solid var(--field-border);
-    border-radius: var(--radius);
-    background: var(--page);
-    font-size: 14px; color: var(--ink); text-decoration: none;
-}
-.fchip:hover, .fchip:focus-visible { background: var(--page); border-color: var(--accent); color: var(--accent-ink); }
-.fchip-dim { color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; font-size: 14px; }
-/* `white-space: nowrap` is what makes the ellipsis real. Without it a value with
-   a space in it wrapped inside a box that clips at 30ch, so the reader got a
-   line and a half of a value with no mark saying anything had been cut — and
-   the overflow measurement responsive.js takes to decide whether to offer the
-   full text would have been measuring the wrong axis. */
-.fchip-val {
-    font-family: var(--font-mono);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    max-width: 30ch;
-}
-.fchip-x { color: var(--faint); font-weight: 700; }
-
 /* Dimension lists: the distribution, and every value in it a filter. */
+/* THE PANEL IS A BLOCK; ITS GROUPS ARE THE GRID. The disclosure that opens and closes the
+   dimension lists lives in the panel's own head — it governs this column and is read next to
+   what it governs — so the panel cannot itself be the grid any more. The grid moved one level
+   in, onto `.fpanel-groups`, which is also the element that folds.
+
+   `.fpanel` is still a grid inside the detail dialog, where its children ARE the groups. */
 .fpanel {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px;
     padding: 18px 0 4px;
     border-top: 1px solid var(--hairline);
 }
+.lh-dialog-body .fpanel {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px;
+}
+.fpanel-head { margin-bottom: 12px; }
+.fpanel-groups { display: block; }
 .fgroup h3, .fgroup h4 {
     margin: 0 0 8px;
     font: 600 14px/1.4 var(--font-ui);
@@ -2536,7 +2461,6 @@ html.lh-dialog-open { overflow: hidden; }
     .lh-dialog .timeline .t-method,
     .lh-dialog .timeline .t-bytes,
     .lh-dialog .timeline .t-dur { display: none; }
-    .filterbar-active { padding: 10px 12px; }
 }
 
 /* =====================================================================================
@@ -2675,7 +2599,8 @@ table .sub,
  * inside it, across the full width.
  */
 
-.fpanel > .facet-groups { grid-column: 1 / -1; }
+.fpanel > .facet-groups,
+.fpanel-groups > .facet-groups { grid-column: 1 / -1; }
 .fpanel .facet-groups {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 0 32px;
@@ -2927,13 +2852,13 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     }
     .lh-railbtn[aria-pressed="true"] .lh-railbtn-mark { transform: rotate(45deg); }
 
-    .lh-rail .side li a {
+    .lh-rail .side .navlink {
         display: flex;
         align-items: center;
         gap: 12px;
         white-space: nowrap;
     }
-    .lh-rail .side li a .vicon { flex: none; }
+    .lh-rail .side .navlink .vicon { flex: none; }
 
     /* Collapsed: marks only, centred, and the current view is the one in the
        accent with a rule beside it — the same two devices the expanded list
@@ -2943,9 +2868,70 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     :root.lh-rail-collapsed .brand { padding: 0 0 20px; justify-content: center; }
     :root.lh-rail-collapsed .brand-name { display: none; }
     :root.lh-rail-collapsed .lh-railbtn { justify-content: center; padding: 6px 0; }
-    :root.lh-rail-collapsed .side li a { justify-content: center; padding: 11px 0; }
-    :root.lh-rail-collapsed .side li a .lh-navhint { display: none; }
-    :root.lh-rail-collapsed .side li a.on { background: var(--band); color: var(--accent-ink); }
+    :root.lh-rail-collapsed .side .navlink { justify-content: center; padding: 11px 0; }
+    :root.lh-rail-collapsed .side .navlink .lh-navhint { display: none; }
+    :root.lh-rail-collapsed .side .navlink.on,
+    :root.lh-rail-collapsed .navgroup.is-current > .navrow > .navlink {
+        background: var(--band);
+        color: var(--accent-ink);
+    }
+
+    /* ---------------------------------------------------------------------
+       THE COLLAPSED RAIL'S FLYOUT — how a sub-page is reached from a 60px column.
+
+       The twist has nowhere to go when the rail is 60px wide, so it is taken away and the
+       sub-list becomes a panel beside the mark instead, on hover and on `:focus-within`.
+       `:focus-within` is the load-bearing half: every sub-link is a real anchor already in the
+       document, so tabbing into the group opens the panel and tabbing out of it closes it, with
+       nothing scripted and nothing to go wrong.
+
+       `fixed`, for the reason the rail's own tooltip is: `.side` is `overflow-y: auto`, and an
+       element scrollable on one axis clips the other, so an absolutely positioned panel would be
+       cut off at exactly the 60px edge it has to cross. `--lh-navtip-y` is the centre of the mark
+       the pointer or the keyboard has reached, published by responsive.js; with the property
+       absent `top` is invalid at computed-value time and falls back to the static position,
+       which is beside the mark too.
+
+       A SHUT LIST IS STILL `hidden`, and `[hidden]` is `display: none !important` at the top of
+       this file — so the flyout has to REMOVE that, which is what `display: block !important`
+       here does. It is one of two places in this stylesheet that carries `!important` and it is
+       carrying it against the reset rather than against another author's rule. */
+
+    :root.lh-rail-collapsed .navtwist { display: none; }
+
+    :root.lh-rail-collapsed .navsub {
+        position: fixed;
+        z-index: 41;
+        left: calc(var(--side-w) + 10px);
+        top: var(--lh-navtip-y);
+        width: 230px;
+        max-height: 60vh;
+        overflow-y: auto;
+        padding: 6px 0;
+        background: var(--page);
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius);
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+    }
+    :root.lh-rail-collapsed .side .navsub-link { padding: 6px 14px; }
+
+    :root.lh-rail-collapsed .navgroup:focus-within .navsub {
+        display: block !important;
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+        :root.lh-rail-collapsed .navgroup:hover .navsub {
+            display: block !important;
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+        }
+    }
     :root.lh-rail-collapsed .theme-toggle {
         display: flex;
         align-items: center;
@@ -3007,7 +2993,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
        flicker.
        --------------------------------------------------------------------- */
 
-    :root.lh-rail-collapsed .side li a .navlabel,
+    :root.lh-rail-collapsed .side .navlink .navlabel,
     :root.lh-rail-collapsed .lh-railbtn .lh-railbtn-label,
     :root.lh-rail-collapsed .theme-toggle .lh-themelabel {
         position: fixed;
@@ -3040,7 +3026,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     /* Keyboard first and unconditionally: the rail is tab-navigable, and a
        coarse-pointer device with a keyboard attached still gets this. */
 
-    :root.lh-rail-collapsed .side li a:focus-visible .navlabel,
+    :root.lh-rail-collapsed .side .navlink:focus-visible .navlabel,
     :root.lh-rail-collapsed .lh-railbtn:focus-visible .lh-railbtn-label,
     :root.lh-rail-collapsed .theme-toggle:focus-visible .lh-themelabel {
         opacity: 1;
@@ -3054,7 +3040,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
        just stops the ghost. */
 
     @media (hover: hover) and (pointer: fine) {
-        :root.lh-rail-collapsed .side li a:hover .navlabel,
+        :root.lh-rail-collapsed .side .navlink:hover .navlabel,
         :root.lh-rail-collapsed .lh-railbtn:hover .lh-railbtn-label,
         :root.lh-rail-collapsed .theme-toggle:hover .lh-themelabel {
             opacity: 1;
@@ -3096,8 +3082,8 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         grid-column: 1;
         grid-row: 1 / 200;
         position: sticky;
-        top: calc(var(--set-nav-h) + var(--page-tools-h) + 12px);
-        max-height: calc(100vh - var(--set-nav-h) - var(--page-tools-h) - 32px);
+        top: calc(var(--lh-topbar-h, 0px) + var(--topbar-h) + 12px);
+        max-height: calc(100vh - var(--lh-topbar-h, 0px) - var(--topbar-h) - 32px);
         overflow-y: auto;
         overscroll-behavior: contain;
         border-right: 1px solid var(--hairline);
@@ -3110,11 +3096,6 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         grid-template-columns: minmax(0, 1fr);
     }
 
-    /* One chip per line in a bar that has to share its row, and the value inside
-       it may shrink: a flex item refuses to go below its content by default,
-       which is how one fingerprint hash pushes the whole toolbar wide. */
-    .page-tools .fchip { max-width: 100%; }
-    .page-tools .fchip-val { min-width: 0; }
 }
 
 /* Each of the two collapse controls belongs to exactly one layout. The rail exists because a
@@ -3340,29 +3321,6 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
 
 .facet-li-absent { margin-top: 6px; border-top: 1px solid var(--hairline); padding-top: 6px; }
 .facet-li-absent .facet-val { font-style: italic; }
-
-/* --- The active-filter chip for an exclusion ------------------------------------------
-
-   Same shape as every other chip so removing it is the same gesture, and the same dashed
-   accent rule the excluded facet row uses so the two are recognisably one idea. The word
-   "not" is carried on the chip itself: a bar that drew "hosting" and "not hosting" the
-   same way would make every number under it unreadable. */
-
-.fchip.is-excluded {
-    border-color: var(--accent);
-    border-style: dashed;
-    background: var(--page);
-    color: var(--accent-ink);
-}
-.fchip.is-excluded:hover,
-.fchip.is-excluded:focus-visible { background: var(--band); color: var(--accent-ink); }
-.fchip.is-excluded .fchip-val { text-decoration: line-through; text-decoration-thickness: 1px; }
-.fchip-not {
-    font: 700 14px/1.3 var(--font-ui);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--accent-ink);
-}
 
 /* --- The value browser, inside the shared dialog shell ---------------------------------
 
@@ -3976,36 +3934,469 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 .lh-sections .view { gap: 30px; }
 .lh-sections .card:not(.is-shut) { margin-bottom: 18px; }
 
-/* Expand all, in the one piece of chrome every multi-section page already has. Ghost-weight,
-   because it is a way out of a state rather than the thing to press first. */
-.lh-expandall {
-    flex: none;
-    margin-left: auto;
-    padding: 5px 12px;
-    font: 600 14px/1.2 var(--font-ui);
-    color: var(--muted);
-    background: var(--page);
-    border: 1px solid var(--hairline);
-    border-radius: var(--radius);
-    cursor: pointer;
-    white-space: nowrap;
-}
-.lh-expandall:hover { background: var(--band); color: var(--ink); border-color: var(--ink); }
-.lh-expandall:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-/* The bar is a flex row of links; the control sits at its end and must not be scrolled away
-   with them, so the row keeps its scroll and the button is pinned after it. */
-.set-nav { display: flex; align-items: center; gap: 12px; }
-.set-nav ul { flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.set-nav ul::-webkit-scrollbar { display: none; }
-
-@media (pointer: coarse), (max-width: 900px) {
-    .lh-expandall { min-height: var(--lh-tap); }
-}
-
 /* On paper there is nothing to press, so there is nothing folded either. */
 @media print {
     .lh-sections .card.is-shut > .card-region { display: block; }
-    .card-toggle::after,
-    .lh-expandall { display: none; }
+    .card-toggle::after { display: none; }
 }
+
+
+/* ---------------------------------------------------------------------------
+   THE SMART SELECT — every dropdown in the panel, searchable.
+
+   A native <select> is fine at six options and useless at sixty, and the panel has both: eight
+   durations, one virtual host per site on the machine, one entry per index on the account, and
+   the whole IANA timezone database. assets/js/smartselect.js draws this beside the real select,
+   which stays in the document as the value store — see that file for why the enhancement is
+   free everywhere it is applied.
+
+   `.ss-native` is off screen and NOT `display: none`: a hidden form control is still submitted,
+   which is exactly what the top bar's GET form needs, and taking it out of the layout without
+   taking it out of the form is the whole trick. The clip rectangle is the same one `.sr-only`
+   uses at the top of this file.
+
+   Nothing here is a pill and nothing is a shadow: the control is a field with a rule around it
+   and one accent, like every other input in the panel.
+   --------------------------------------------------------------------------- */
+
+.ss { position: relative; display: inline-flex; }
+
+.ss-native {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.ss-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 120px;
+    max-width: 280px;
+    min-height: 36px;
+    padding: 0 10px;
+    font: 500 15px/1 var(--font-ui);
+    color: var(--ink);
+    background: var(--page);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    text-align: left;
+}
+.ss-button:hover { border-color: var(--ink); background: var(--page); }
+.ss-button[aria-expanded="true"] { border-color: var(--accent); }
+
+.ss-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The caret, drawn from two borders. No icon font, no image, no third-party asset — which is
+   what lets the panel keep a CSP with no outside origin and still work air-gapped. */
+.ss-caret {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin-top: -3px;
+    border-right: 1.5px solid var(--faint);
+    border-bottom: 1.5px solid var(--faint);
+    transform: rotate(45deg);
+}
+
+/* The popup. `position: absolute` against `.ss`, which is the control's own box, so it opens
+   under the control wherever the control happens to be — including inside the sticky top bar,
+   whose z-index it has to clear. */
+.ss-pop {
+    position: absolute;
+    z-index: 42;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 100%;
+    max-width: 340px;
+    padding: 8px;
+    background: var(--page);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+}
+
+.ss-search {
+    width: 100%;
+    min-height: 34px;
+    margin-bottom: 6px;
+    padding: 0 8px;
+    font: 500 15px/1 var(--font-ui);
+    color: var(--ink);
+    background: var(--page);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius);
+}
+
+.ss-list {
+    max-height: 280px;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    list-style: none;
+}
+
+.ss-opt {
+    padding: 7px 8px;
+    font-size: 14px;
+    color: var(--ink);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ss-opt:hover { background: var(--band); }
+.ss-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ss-opt.is-on { color: var(--accent-ink); font-weight: 700; border-left-color: var(--accent); }
+
+.ss-none { margin: 6px 2px 2px; font-size: 14px; }
+
+/* ---------------------------------------------------------------------------
+   THE DIALOG'S CORNER CONTROL, and the two dialogs the top bar opens.
+
+   The cross is the universal dismiss, and the dialogs the top bar opens carry their own Close
+   at the bottom beside Apply — where a decision is made. Two controls both spelled "Close",
+   one in the corner and one in the footer, would read as two different things.
+   --------------------------------------------------------------------------- */
+
+.lh-dialog-x {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    font: 400 22px/1 var(--font-ui);
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.lh-dialog-x:hover { color: var(--ink); background: var(--band); border-color: var(--hairline); }
+
+/* --- Applied filters ------------------------------------------------------------------
+
+   One dimension per block, its values under it, each removable. Removing is STAGED: it changes
+   the list on screen and nothing else until Apply, because an operator taking three filters off
+   should not reload three times and lose the dialog after the first. */
+
+.af-plane {
+    margin: 20px 0 10px;
+    font: 600 14px/1.4 var(--font-ui);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+}
+.af-plane:first-child { margin-top: 0; }
+
+.af-dim { padding: 12px 0; border-top: 1px solid var(--hairline); }
+.af-dim-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.af-dim-name { font-weight: 700; color: var(--ink); }
+.af-dim-op {
+    font: 600 14px/1.3 var(--font-ui);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent-ink);
+}
+
+.af-values { margin: 0; padding: 0; list-style: none; }
+.af-value {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+}
+.af-value-text {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.af-drop {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    font: 400 18px/1 var(--font-ui);
+    color: var(--faint);
+    background: transparent;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+.af-drop:hover { color: var(--accent-ink); border-color: var(--accent); background: transparent; }
+
+/* The footer of both dialogs. Apply first because it is the reason the dialog was opened;
+   Close beside it because a dialog with only one way out is a dialog somebody gets stuck in. */
+.af-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+    padding-top: 16px;
+    border-top: 1px solid var(--hairline);
+}
+
+/* --- Opensolr resources ---------------------------------------------------------------
+
+   The whole account against the whole plan: indexes held against the allowance, then bandwidth,
+   disk and the span held for each index. It replaces a bandwidth strip that carried one of those
+   three numbers on every page and never mentioned the other two. */
+
+.res-block { padding: 16px 0; border-top: 1px solid var(--hairline); }
+.res-block:first-child { border-top: 0; padding-top: 0; }
+.res-block h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; }
+.res-role {
+    font: 600 14px/1.3 var(--font-ui);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--faint);
+}
+
+.res-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) 120px auto;
+    align-items: center;
+    gap: 6px 14px;
+    padding: 6px 0;
+}
+.res-label { font-size: 14px; color: var(--muted); }
+.res-figure { font-size: 14px; white-space: nowrap; }
+.res-note { grid-column: 1 / -1; font-size: 14px; color: var(--faint); }
+
+.res-span { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.res-blocked {
+    margin: 10px 0 0;
+    padding-left: 12px;
+    border-left: 2px solid var(--accent);
+    color: var(--accent-ink);
+    font-size: 14px;
+}
+
+@media (max-width: 620px) {
+    .res-row { grid-template-columns: minmax(0, 1fr); }
+    .ss-button { max-width: none; width: 100%; }
+    .ss-pop { max-width: none; right: 0; }
+}
+
+
+/* -------------------------------------------------------------------------------------------
+ * PAGINATION
+ *
+ * Every table in the product ends in one of these. Flat, hairline-ruled, monospace figures, and
+ * no pill anywhere: it is furniture in the same class as the card head, not a control bar.
+ * ---------------------------------------------------------------------------------------- */
+
+.pager {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    align-items: center;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--hairline);
+    font-size: 14px;
+    color: var(--faint);
+    font-family: var(--font-mono);
+}
+.pager-count { color: var(--muted); }
+.pager-steps { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.pager-pos { color: var(--ink); }
+
+.pager-btn {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--hairline);
+    border-radius: 0;
+    padding: 2px 0;
+    font: inherit;
+    color: var(--accent-ink);
+    cursor: pointer;
+    text-decoration: none;
+}
+.pager-btn:hover { color: var(--ink); border-bottom-color: var(--accent); background: transparent; }
+.pager-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.pager-jump { display: flex; gap: 10px; align-items: center; }
+.pager-jump-label { display: flex; gap: 8px; align-items: center; }
+.pager-jump-input { width: 5.5em; padding: 2px 6px; font: inherit; }
+
+/* The slot a dialog's or a card's pager is rendered into, so an empty one takes no room. */
+.pager-mount:empty { display: none; }
+
+/* -------------------------------------------------------------------------------------------
+ * THE VISIT TABLE
+ *
+ * Five columns everywhere: date, address, country, page, verdict. The date is one line and must
+ * never be the column that truncates — it is the one thing a reader compares down the column —
+ * so it never wraps and the widths are cut so it does not have to.
+ * ---------------------------------------------------------------------------------------- */
+
+table.visits td.visit-when { white-space: nowrap; }
+
+/* The verdict cell carries the row's opener at its right-hand end rather than in a sixth
+   column: the five-column rule is about what has to be READ, and a chevron is a control. */
+table.visits td.visit-verdict,
+table.visits th.visit-verdict { text-align: left; }
+table.visits td.visit-verdict > .rowopen { float: right; margin-left: 8px; }
+table.visits td.visit-verdict > .client .clip-line > .rowopen { float: right; margin-left: 8px; }
+
+.visit-block > .table-wrap { margin-top: 8px; }
+
+/* -------------------------------------------------------------------------------------------
+ * THE OVERVIEW POPULATION TILES, WHICH ARE NOW CONTROLS
+ *
+ * A tile is a <button> and has to lose every default a button carries — the background, the
+ * radius, the centred text — while keeping the hairline column rule that makes the stat row a
+ * row rather than five boxes.
+ * ---------------------------------------------------------------------------------------- */
+
+button.stat {
+    appearance: none;
+    background: transparent;
+    border-radius: 0;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    position: relative;
+    width: 100%;
+}
+button.stat:hover { background: var(--band); color: inherit; }
+button.stat:hover .stat-value { color: var(--accent-ink); }
+button.stat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.stat-go {
+    position: absolute;
+    top: 18px;
+    right: 14px;
+    font-family: var(--font-mono);
+    font-size: 16px;
+    color: var(--hairline);
+}
+button.stat:hover .stat-go { color: var(--accent); }
+
+/* -------------------------------------------------------------------------------------------
+ * THE HOUR-OF-WEEK HEATMAP
+ *
+ * A CSS grid rather than a chart: it needs no layout measurement, so it survives being rendered
+ * inside a folded section; it needs no second palette, because it shades the single accent by
+ * opacity; and every cell is a real focusable element with its own description, which a canvas
+ * cannot offer at all.
+ *
+ * SIX STATES AND ONE OF THEM IS AN ABSENCE. `heat-none` is an hour the selected window never
+ * covered, and it is drawn as a hairline outline with no fill — no observation is not the same
+ * fact as no traffic, and shading it as the coldest step would say it was.
+ * ---------------------------------------------------------------------------------------- */
+
+.heat {
+    display: grid;
+    grid-template-columns: 44px repeat(24, minmax(0, 1fr));
+    gap: 2px;
+    margin: 4px 0 16px;
+    min-width: 560px;
+}
+.heat-corner { display: block; }
+.heat-hour {
+    font: 400 14px/1 var(--font-mono);
+    color: var(--faint);
+    text-align: left;
+    padding-bottom: 4px;
+    overflow: hidden;
+}
+.heat-day {
+    font: 400 14px/1 var(--font-mono);
+    color: var(--faint);
+    align-self: center;
+    white-space: nowrap;
+}
+.heat-cell {
+    display: block;
+    aspect-ratio: 1 / 1;
+    min-height: 14px;
+    background: var(--accent);
+    border-radius: var(--radius);
+}
+.heat-cell:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+.heat-none { background: transparent; box-shadow: inset 0 0 0 1px var(--hairline); }
+.heat-0 { opacity: 0.06; }
+.heat-1 { opacity: 0.20; }
+.heat-2 { opacity: 0.36; }
+.heat-3 { opacity: 0.54; }
+.heat-4 { opacity: 0.76; }
+.heat-5 { opacity: 1; }
+
+.heat-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    align-items: center;
+    font-size: 14px;
+}
+.heat-key { display: inline-flex; gap: 2px; align-items: center; }
+.heat-key > span {
+    width: 16px;
+    height: 16px;
+    display: block;
+    background: var(--accent);
+    border-radius: var(--radius);
+}
+.heat-key-none { background: transparent !important; box-shadow: inset 0 0 0 1px var(--hairline); }
+.heat-key-1 { opacity: 0.20; }
+.heat-key-2 { opacity: 0.36; }
+.heat-key-3 { opacity: 0.54; }
+.heat-key-4 { opacity: 0.76; }
+.heat-key-5 { opacity: 1; }
+
+/* The grid has a minimum width, so a narrow window scrolls it rather than crushing the cells. */
+#an-heat-grid { overflow-x: auto; }
+
+/* -------------------------------------------------------------------------------------------
+ * SMALL PARTS
+ * ---------------------------------------------------------------------------------------- */
+
+/*
+ * The raw User-Agent, demoted from a first-class field to a disclosure.
+ *
+ * A hundred and forty characters of packaging whose content the parser has already turned into
+ * three readable facts above it. It stays available and stops taking the top of the dialog.
+ */
+.raw-ua { margin: 10px 0 0; font-size: 14px; }
+.raw-ua > summary { cursor: pointer; color: var(--accent-ink); }
+.raw-ua > summary:hover { color: var(--ink); }
+.raw-ua > p { margin: 8px 0 0; color: var(--muted); }
+
+/*
+ * A LEGEND, for a table that marks some of its rows.
+ *
+ * The fingerprint table draws an orange rule on the left edge of a proxy-fleet row. A mark with
+ * no name reads as a rendering fault — which is exactly how it read — so the swatch and the
+ * sentence sit under the table it belongs to.
+ */
+.legend {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin-top: 14px;
+    font-size: 14px;
+    color: var(--muted);
+    max-width: 96ch;
+}
+.legend-fleet {
+    flex: none;
+    display: block;
+    width: 3px;
+    height: 1.4em;
+    background: var(--accent);
+}
+
+/* A movement, coloured only where it is worth colouring: the accent is spent on growth. */
+.trend-up { color: var(--accent-ink); }
+.trend-down { color: var(--faint); }

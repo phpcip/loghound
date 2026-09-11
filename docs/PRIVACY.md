@@ -247,7 +247,7 @@ terms and data-protection position are the reference for what happens to it ther
 
 **With all four enrichers off, no visitor IP address leaves the machine for anywhere but your
 own indexes.** Loghound still works: it loses geo, ASN, netname and rDNS, which costs you the
-Networks view and **three** of the seventeen rules — `tz_mismatch` (needs the geo-derived
+Networks view and **three** of the scoring rules — `tz_mismatch` (needs the geo-derived
 timezone), `hosting_asn_browser_ua` (needs the network type) and `rdns_claim_failed` (needs a
 real reverse-DNS answer to fail). Everything else on the behavioural and execution planes is
 unaffected.

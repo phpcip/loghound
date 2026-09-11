@@ -406,11 +406,15 @@ exit(0);
 /**
  * Put this installation back to the beginning of setup, then carry on into it.
  *
- * THE SHELL HALF OF THE PANEL'S REINSTALL BUTTON, and deliberately the same work: both call
- * Setup\Reset::perform() and both print Setup\Reset::consequences(), so an operator who reads
- * one and acts on the other is not surprised. What differs is only the proof of who is asking —
- * the panel wants a signed-in session and a current second factor, and a terminal on the machine
- * is already the stronger of the two.
+ * THE NARROW RESET, AND THE ONLY CALLER OF Setup\Reset. It clears this machine's setup state —
+ * the log sources, the index names, the sign-in — and deletes nothing: not an index, not a
+ * document, not a line of a log file. Setup\Reset::consequences() is printed in full below so an
+ * operator reads that before deciding, rather than after.
+ *
+ * IT IS NOT WHAT THE PANEL'S BUTTON DOES ANY MORE. Settings → Start over means starting from
+ * zero: it deletes both indexes from the platform, proves them gone, removes the configuration
+ * with the Opensolr account in it, and empties var/. Anyone who wants that from a terminal wants
+ * install/uninstall.sh, which does the same and takes Loghound off the machine with it.
  *
  * It asks, even non-interactively, where "asks" means the confirmation defaults to NO. An
  * unattended run that trips over this flag must not wipe a working installation because nobody
@@ -475,11 +479,12 @@ Options
                         this installation stores, and the two CSP directives — then stop
   --base-url=URL        the address --beacon-doc builds its snippet from, when the
                         configuration has no base_url yet
-  --reset               start the installation over: forget the log sources, the index names
-                        and the sign-in, then run setup. Your Opensolr indexes and everything
-                        in them are NOT touched, and neither are your log files. This is the
-                        same thing the panel's Reinstall button does. To remove Loghound
-                        entirely instead, use install/uninstall.sh.
+  --reset               run setup again on this machine: forget the log sources, the index
+                        names and the sign-in. Your Opensolr indexes and everything in them are
+                        NOT touched, and neither are your log files. This is NARROWER than the
+                        panel's Start over button, which deletes both indexes, the Opensolr
+                        account details and everything under var/. To delete the data, or to
+                        remove Loghound from this machine entirely, use install/uninstall.sh.
   --non-interactive     answer every prompt from the environment or the offered default
   --interactive         prompt even when stdin does not look like a terminal
   --config=PATH         write somewhere other than config/loghound.php

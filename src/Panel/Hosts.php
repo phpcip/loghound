@@ -40,6 +40,21 @@ use Loghound\Setup\Steps;
 
 final class Hosts extends Controller
 {
+
+    /**
+     * The pages this view has, in render order.
+     *
+     * The "no virtual host is being recorded" explainer is not one of them. It is emitted
+     * outside cardOpen() — hidden markup the front end reveals when the facet comes back empty —
+     * so it is page-level output and travels with whichever page the reader is on, which is the
+     * only behaviour that makes sense for a message about the whole view.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    public const SECTIONS = [
+        ['hosts-table', 'Traffic by host'],
+        ['hosts-share', 'Automation share'],
+    ];
     /** Hosts compared in the table. Beyond this the page stops being readable. */
     private const MAX_HOSTS = 50;
 

@@ -137,8 +137,8 @@ remains, routing anything unrecognised into a type that indexes and stores nothi
 | `status_class_s` | string | ✓ | ✓ | | `2xx\|3xx\|4xx\|5xx`. The question an **operator** asks, as a term: was it answered, redirected, refused, or did it break. A range filter on `status_i` cannot be a facet; this can, in four buckets. Written by the same branch that writes `status_i`, so absent means "not recorded" on both and never `1xx`. | ~0.5 B. |
 | `bytes_l` | plong | | ✓ | | Summed and percentiled, never filtered alone, so DV-only — no BKD tree. | ~2 B. |
 | `dur_us_l` | plong | ✓ | ✓ | | From `%D`. **ABSENT when `%D` is not logged** — never zero, because a zero would drag every latency percentile toward the floor. | ~2 B when present, 0 when absent. **Indexed** since the Attacks release: Panel\Performance sends `dur_us_l:[* TO *]` as a facet sub-query on every page load, and a docValues-only field answers that with an uninverted full scan. |
-| `kind_s` | string | ✓ | ✓ | | `html\|asset\|api\|beacon\|robots\|favicon\|other`. Drives the page count and `asset_ratio_f`, both of which feed scoring. | ~1 B. |
-| `asset_kind_s` | string | ✓ | ✓ | | `js\|css\|img\|font\|media`. Only set when `kind_s=asset`. | ~1 B. |
+| `kind_s` | string | ✓ | ✓ | | `html\|asset\|api\|beacon\|robots\|favicon\|other`. Drives the page count and `asset_ratio_f`, both of which feed scoring. **`asset` and `favicon` documents are not written to the index at all** unless `ingest.index_assets` is on: they are still parsed, enriched, attack-matched and counted into their session, so every session figure sees the complete traffic — only the per-request document is refused. See `ingest.index_assets` in the config. | ~1 B. |
+| `asset_kind_s` | string | ✓ | ✓ | | `js\|css\|img\|font\|media\|map`. Only set when `kind_s=asset`. | ~1 B. |
 
 ### Client
 

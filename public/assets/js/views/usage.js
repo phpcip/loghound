@@ -1,15 +1,13 @@
 /*
- * Loghound — Plan usage, and the bandwidth strip that appears on every page.
+ * Loghound — Plan usage.
  *
- * Two exports, and the second one is the important one.
- *
- * `initBandwidthStrip()` runs on EVERY view. Bandwidth is the only quota that cannot be
- * reclaimed by deleting anything: it accrues with use and resets on the 1st, and going over
- * it blocks the index completely — Opensolr answers 403 to every request, reads as well as
- * writes — until the plan is upgraded or the month rolls over. The warning therefore has to
- * arrive well before the limit, because after the limit the panel that would have shown it
- * is dark. So the indicator lives in the page header rather than on one card, it refreshes
- * on its own without a reload, and it carries the upgrade link with it.
+ * WHERE THE ALWAYS-VISIBLE WARNING WENT. There used to be a bandwidth strip in the page header
+ * of every view, polling on its own. Bandwidth is the only quota that cannot be reclaimed by
+ * deleting anything — it accrues with use, resets on the 1st, and going over it blocks the index
+ * completely, Opensolr answering 403 to reads as well as writes — so it genuinely does deserve
+ * to be reachable from anywhere. It is: the top bar carries an Opensolr resources control on
+ * every page, and behind it is the whole account rather than the one figure the strip had room
+ * for, including the two quotas the strip never mentioned. See assets/js/topbar.js.
  *
  * Disk gets none of that treatment, deliberately. The rolling trim deletes the oldest data
  * before each write, so the index does not reach its disk quota and the blackout never
@@ -26,28 +24,7 @@
 
 import { api, byId, dayOnly, dec, el, fill, loadCard, num, setPop } from '../core.js';
 
-/**
- * How often the strip re-reads the meter, in milliseconds.
- *
- * WHY THIS NUMBER, since the dashboard's own queries are part of what it measures. Each
- * refresh is one request to this panel, which answers from a cache on disk and only reaches
- * the Opensolr control plane once every `quota.refresh_sec` seconds (five minutes by
- * default) — and that call goes to the control plane, not to the index, so it costs the
- * index nothing at all. Polling faster than the cache refreshes would produce identical
- * numbers at real cost; polling much slower would let an operator sit in front of a stale
- * meter for an hour while the month's allowance ran out. Ninety seconds is comfortably
- * inside the cache window, so on a small plan an auto-refreshing dashboard left open all day
- * adds a handful of local requests per hour and no index traffic.
- *
- * The server sends its own `refresh_sec` and the strip takes whichever is longer, so raising
- * the cache interval automatically slows the polling to match.
- */
-/** Ceiling for the backoff after a failed read: slow enough not to hammer, soon enough to notice. */
-const STRIP_MAX_BACKOFF_MS = 300000;
-
-const STRIP_POLL_MS = 90000;
-
-/** Levels that make the strip loud. Below these it stays a quiet line of type. */
+/** Levels a figure is drawn loud at. Below these it stays a quiet line of type. */
 const LOUD = ['warn', 'critical', 'blocked'];
 
 /**
@@ -103,112 +80,6 @@ function bar(percent, level) {
             style: 'width:' + width + '%'
         })
     ]);
-}
-
-/* -------------------------------------------------------------------------
- * The always-visible strip
- * ---------------------------------------------------------------------- */
-
-/**
- * Insert (or update) the bandwidth strip in the page header.
- *
- * Built by JavaScript rather than rendered by PHP for the reason every other number in this
- * panel is: the figure behind it comes from an external API, and no page render in Loghound
- * is allowed to block on one. The element is created on first success, so a panel with no
- * Opensolr account, or one whose route is not wired up, simply never grows a strip rather
- * than showing an empty box for ever.
- */
-function paintStrip(data) {
-    const slot = byId('lh-readout');
-    const worst = data && data.worst;
-    if (!slot || !worst || worst.ratio === null || worst.ratio === undefined) {
-        return;
-    }
-
-    let strip = byId('lh-bw');
-    if (!strip) {
-        strip = el('div', { class: 'bwstrip', id: 'lh-bw' });
-        slot.appendChild(strip);
-    }
-
-    const level = String(worst.level || 'unknown');
-    strip.className = 'bwstrip bwstrip-' + level;
-    strip.setAttribute('role', LOUD.includes(level) ? 'alert' : 'status');
-
-    const detail = mb(worst.used_mb) + ' of ' + mb(worst.limit_mb) +
-        ' · ' + dec(worst.percent, 1) + '%';
-
-    fill(strip, [
-        el('span', { class: 'bwstrip-label', text: 'Bandwidth' }),
-        bar(worst.percent, level),
-        el('span', { class: 'bwstrip-detail mono', text: detail }),
-        LOUD.includes(level)
-            ? el('span', { class: 'bwstrip-say', text: worst.headline })
-            : null,
-        el('a', { class: 'bwstrip-link', href: '?v=usage', text: 'Plan usage' }),
-        LOUD.includes(level)
-            ? el('a', {
-                class: 'bwstrip-link',
-                href: worst.upgrade_url,
-                rel: 'noopener noreferrer',
-                target: '_blank',
-                text: 'Upgrade'
-            })
-            : null
-    ]);
-
-    strip.title = worst.consequence || '';
-}
-
-/**
- * Start the strip and keep it current.
- *
- * Failure is silent by design. This is page furniture on every view, and a panel whose
- * Opensolr credentials are absent, whose route has not been wired up, or whose control
- * plane is briefly unreachable must not grow an error banner on every page for it. The
- * information the operator needs in that case is on the Plan usage view, which says so in
- * words.
- */
-export function initBandwidthStrip() {
-    let timer = null;
-
-    /* A FAILED READ RETRIES; IT DOES NOT STOP FOR EVER. The catch used to null the timer and
-       nothing ever set it again, so one failed poll retired the strip permanently — and this is
-       the one quota that cannot be reclaimed by deleting anything: past it the panel itself is
-       answered 403. A backed-off retry keeps it coming back without hammering a box that is
-       already in trouble. */
-    let backoff = STRIP_POLL_MS;
-
-    const tick = async () => {
-        try {
-            const data = await api('usage', 'meter');
-            paintStrip(data);
-            backoff = STRIP_POLL_MS;
-            const wanted = Math.max(STRIP_POLL_MS, (Number(data.refresh_sec) || 0) * 1000);
-            timer = window.setTimeout(tick, wanted);
-        } catch (err) {
-            backoff = Math.min(backoff * 2, STRIP_MAX_BACKOFF_MS);
-            timer = window.setTimeout(tick, backoff);
-        }
-    };
-
-    tick();
-
-    /* A tab hidden for an hour comes back to a stale meter, and the poll it was waiting on may
-       have been throttled to nothing by the browser. The old guard was `timer === null`, which
-       after a SUCCESSFUL tick is never true — so the one case it was written for, a tab
-       returning to stale numbers, was the one case it did not cover. Cancel whatever is pending
-       and read now. */
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'visible') {
-            return;
-        }
-        if (timer !== null) {
-            window.clearTimeout(timer);
-            timer = null;
-        }
-        tick();
-    });
 }
 
 /* -------------------------------------------------------------------------

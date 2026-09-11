@@ -201,6 +201,43 @@ final class Vocabulary
     ];
 
     /**
+     * The one value of the Opensolr request log's caller address that is not an address.
+     *
+     * ------------------------------------------------------------------------------------
+     * A DEAD FACET, TOLD HONESTLY
+     * ------------------------------------------------------------------------------------
+     * `ip` on the request-log plane is offered as the "Caller" dimension, and on a search index
+     * every row of it reads `0.0.0.0`. That is not Loghound failing to read the field: it is the
+     * platform's own placeholder, and the platform's own code treats it as one everywhere it
+     * reads the field back. It arises because Opensolr assembles those documents from two
+     * sources — an Apache access log, which has a client address, and Solr's `solr.log`, which
+     * has never seen a socket — and the access-log parser skips any path containing `select`. A
+     * search index is almost entirely `/select`, so its analytics documents come from the source
+     * that has no address to give.
+     *
+     * Printing `0.0.0.0` as though it were a caller is the same class of defect as printing a
+     * mean of zero for a field nobody recorded: it looks like a measurement. So the value is
+     * spoken as what it is. The slug stays `0.0.0.0` — it is still the stored value, it is still
+     * what a filter carries, and an operator who wants only the requests the platform could not
+     * attribute can still select it.
+     *
+     * ONE ENTRY, NOT A MAP OF ADDRESSES. Every other value of this dimension is a real address
+     * and needs no translation, which is exactly the rule this file opens with: a half-populated
+     * map over real-world values would give some rows a label and some not.
+     *
+     * @var array<string,array{label:string,why:string}>
+     */
+    private const CALLERS = [
+        '0.0.0.0' => [
+            'label' => 'Not recorded',
+            'why'   => 'Opensolr did not record a caller address for these requests. It keeps one for the '
+                . 'handlers it reads out of an access log; for /select traffic the analytics document is '
+                . 'built from Solr\'s own log, which never saw the connection, and this placeholder is '
+                . 'written instead. It is not a client at this address.',
+        ],
+    ];
+
+    /**
      * Every dimension that has a vocabulary at all.
      *
      * Checked before a lookup so a caller can ask "does this field need translating" without
@@ -219,6 +256,7 @@ final class Vocabulary
             'planes_s',
             'status_class_s',
             'hit_flags_ss',
+            'ip',
         ], true);
     }
 
@@ -264,6 +302,7 @@ final class Vocabulary
             'signed_in_b'    => self::SIGNED_IN,
             'planes_s'       => self::PLANES,
             'status_class_s' => self::STATUS_CLASSES,
+            'ip'             => self::CALLERS,
             default          => [],
         };
 
@@ -271,7 +310,40 @@ final class Vocabulary
         if ($entry === null) {
             return ['label' => $value, 'why' => '', 'severity' => ''];
         }
-        return ['label' => $entry['label'], 'why' => $entry['why'], 'severity' => ''];
+
+        $why = $entry['why'];
+        if ($field === 'bot_verdict_s') {
+            $why .= ' ' . self::populationNote($value);
+        }
+
+        return ['label' => $entry['label'], 'why' => $why, 'severity' => ''];
+    }
+
+    /**
+     * Which Overview counter a verdict is counted under.
+     *
+     * THE TWO PAGES SPEAK ONE VOCABULARY NOW. Overview groups sessions into five POPULATIONS —
+     * what kind of thing was this — and the session explorer's Verdict dimension lists the five
+     * stored VERDICTS — how confident are we. Both are right and neither replaces the other, but
+     * nothing on either screen used to say they described the same sessions, so "Humans 7" next
+     * to "Human 4, Likely human 1" read as a contradiction rather than as one number seen twice.
+     *
+     * The mapping is READ from \Loghound\Panel\Query and not restated here, for the same reason
+     * the signal wording is read from Score\Rules: a second copy is a second place to disagree,
+     * and the one the operator sees would be this one. A verdict whose population depends on the
+     * bot class answers with all three names rather than picking one.
+     */
+    private static function populationNote(string $verdict): string
+    {
+        $labels = Query::populationLabels();
+        $key = Query::populationOfVerdict()[$verdict] ?? null;
+
+        if ($key !== null) {
+            return 'Counted under "' . ($labels[$key] ?? $key) . '" on the Overview.';
+        }
+
+        return 'Counted on the Overview under "' . $labels['declared'] . '", "' . $labels['ai']
+            . '" or "' . $labels['evasive'] . '", depending on the bot class.';
     }
 
     /** Just the label, for a caller that has no room for a sentence. */
@@ -292,10 +364,15 @@ final class Vocabulary
      * authority for nothing but the drawing and falls back to a generic shape for a value it
      * does not recognise.
      *
-     * Small: six closed vocabularies and twenty reason codes — the seventeen weighted rules plus
-     * `provisional_session`, `beacon_only_session` and `no_bot_signals`, which are worth no
-     * points and are emitted anyway so a verdict can explain itself. A few kilobytes, on a page
-     * that is behind authentication and never cached.
+     * Small: six closed vocabularies and the reason codes — every weighted rule plus
+     * `provisional_session`, `beacon_only_session`, `no_testable_evidence` and `no_bot_signals`,
+     * which are worth no points and are emitted anyway so a verdict can explain itself. A few
+     * kilobytes, on a page that is behind authentication and never cached.
+     *
+     * The count is deliberately not written down here. It was ("twenty reason codes … the
+     * seventeen weighted rules"), and a number in a docblock beside a list that is read from
+     * \Loghound\Score\Rules is a second copy of the same fact that goes stale the moment a rule
+     * is added — which is exactly what happened.
      *
      * @return array<string,array<string,array{label:string,why:string}>>
      */

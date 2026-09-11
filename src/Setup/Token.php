@@ -64,7 +64,7 @@ final class Token
     public const FILENAME = 'install-token';
 
     /**
-     * How long a reinstall grant stands, in seconds.
+     * How long a setup grant stands, in seconds.
      *
      * Half an hour: long enough to walk through three screens without being hurried, short
      * enough that a browser left open on a shared machine does not stay a way in. It is also
@@ -72,19 +72,20 @@ final class Token
      */
     private const GRANT_TTL = 1800;
 
-    /** Session key holding a reinstall grant. */
+    /** Session key holding a setup grant. */
     private const GRANT_KEY = 'lh_setup_grant';
 
     /**
      * Record that THIS browser has already proved what the token exists to prove.
      *
-     * THE TRAP THIS EXISTS TO CLOSE. Pressing Reinstall in the panel resets the configuration,
-     * which makes Installer::isNeeded() true again — and the installer then asks for the token
-     * in var/install-token, which needs shell access to read. An operator who administers this
-     * box entirely through the browser would have destroyed their panel and been locked out of
-     * the installer in the same click, with no way back that does not involve SSH.
+     * THE TRAP THIS EXISTS TO CLOSE. Starting the installation over from the panel removes the
+     * configuration, which makes Installer::isNeeded() true again — and the installer then asks
+     * for the token in var/install-token, which needs shell access to read. An operator who
+     * administers this box entirely through the browser would have destroyed their panel and
+     * been locked out of the installer in the same click, with no way back that does not
+     * involve SSH.
      *
-     * The resolution is not to weaken the token. It is that pressing the button in an
+     * The resolution is not to weaken the token. It is that confirming that action in an
      * AUTHENTICATED session is itself a stronger proof than reading a file: it required the
      * panel password, and a second factor where one is configured. So that proof is carried
      * forward, to that browser's session and nowhere else.
@@ -100,7 +101,7 @@ final class Token
     }
 
     /**
-     * Spend a reinstall grant, if this session holds one that is still good.
+     * Spend a setup grant, if this session holds one that is still good.
      *
      * ONE-TIME AND SHORT-LIVED. It is removed whether or not it was still valid, so an expired
      * one cannot sit in a session being re-tested, and a valid one converts into the installer's

@@ -347,6 +347,23 @@ final class Signals
      * apart and excludes from every other number here; it exists so no_assets can tell "fetched
      * nothing" from "fetched only our own beacon script", and nothing else reads it.
      *
+     * What the server ANSWERED. The four status-class counters are carried because two rules ask
+     * what came back rather than what was asked for, and because the product's own position on
+     * hostile traffic (Score\Attacks) is that the answer outranks the request: a traversal
+     * attempt refused 404 is background radiation and the same attempt answered 200 is an
+     * incident. They were in the aggregate and on the document all along and simply never
+     * reached the ruleset.
+     *
+     * The attack plane. `attack_codes` is the union of the named patterns this session's
+     * requests matched, exactly as Sessionizer folded them up and as `hit_flags_ss` publishes
+     * them; `attack_decisive` is the subset Score\Attacks::DECISIVE says is worth a verdict with
+     * no corroboration. Both are lists and never a boolean, because a rule that wants to know
+     * WHICH pattern fired must not have to re-derive it, and because the count of distinct
+     * patterns is itself evidence. An empty list is a fact here — the detector ran and nothing
+     * matched — while a session assembled before the detector existed carries no `atk_flags` at
+     * all and reads as empty too; that is why neither rule below treats an empty list as
+     * exoneration, only a non-empty one as evidence.
+     *
      * Fingerprint cluster. NULL when the scorer could not reach Solr. A rule reading null
      * must not treat it as 1: "we could not check" is not "this fingerprint is unique".
      *
@@ -410,6 +427,25 @@ final class Signals
         $s['html_200']     = (bool) ($session['html_200'] ?? false);
         $s['got_304']      = (bool) ($session['got_304'] ?? false);
         $s['repeat_assets'] = (int) ($session['repeat_assets'] ?? 0);
+
+        $s['st2'] = (int) ($session['st2'] ?? 0);
+        $s['st3'] = (int) ($session['st3'] ?? 0);
+        $s['st4'] = (int) ($session['st4'] ?? 0);
+        $s['st5'] = (int) ($session['st5'] ?? 0);
+        $s['refused'] = $s['st4'] + $s['st5'];
+        $s['soft_refusals'] = (int) ($session['soft_refusals'] ?? 0);
+        $s['first_status'] = isset($session['first_status']) && is_numeric($session['first_status'])
+            ? (int) $session['first_status']
+            : null;
+
+        $s['attack_codes'] = array_values(array_filter(
+            array_map('strval', (array) ($session['atk_flags'] ?? [])),
+            static fn (string $code): bool => $code !== ''
+        ));
+        $s['attack_decisive'] = array_values(array_filter(
+            $s['attack_codes'],
+            [Attacks::class, 'isDecisive']
+        ));
 
         $gaps = array_map('intval', (array) ($session['gaps'] ?? []));
         $s['gap_count']     = count($gaps);
@@ -480,6 +516,39 @@ final class Signals
     }
 
     /**
+     * The browser families that ALWAYS send Sec-CH-UA, as Enrich\Ua names them.
+     *
+     * The exemption in secChMismatch() is "this browser does not send the header, so its absence
+     * proves nothing", and it was a hand-written list of five that tested a PROXY for the thing
+     * it meant — being Chromium-based — and therefore missed members of the family that Ua can
+     * actually report. `Chromium` and `HeadlessChrome` are the two that matter: both report a
+     * real Chrome major version, both send the header, and both were silently excused. A
+     * headless Chrome being exempt from a header-consistency rule is the exemption working
+     * against the one population it exists to catch.
+     *
+     * Vivaldi, Yandex Browser and UC Browser are here for completeness of the family and change
+     * nothing on their own: each reports its OWN product version rather than the Chrome major,
+     * so the `< 89` gate below returns null for them anyway. Listing them is honest about what
+     * the set IS, rather than leaving the set defined by an accident of version numbering.
+     *
+     * Anything not on this list is unknown territory and yields null, never a mismatch.
+     *
+     * @var array<int,string>
+     */
+    private const CHROMIUM_FAMILIES = [
+        'chrome',
+        'chromium',
+        'headlesschrome',
+        'edge',
+        'opera',
+        'brave',
+        'samsung internet',
+        'vivaldi',
+        'yandex browser',
+        'uc browser',
+    ];
+
+    /**
      * Sec-CH-UA versus the User-Agent's own browser claim.
      *
      * Returns:
@@ -519,7 +588,7 @@ final class Signals
         $browser = strtolower((string) ($s['browser'] ?? ''));
         $ver     = (int) ($s['browser_ver'] ?? 0);
 
-        if (!in_array($browser, ['chrome', 'edge', 'opera', 'brave', 'samsung internet'], true)) {
+        if (!in_array($browser, self::CHROMIUM_FAMILIES, true)) {
             return null;
         }
         if ($ver > 0 && $ver < 89) {

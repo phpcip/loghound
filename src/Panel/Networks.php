@@ -30,6 +30,21 @@ use Loghound\Security;
 
 final class Networks extends Controller
 {
+
+    /**
+     * The pages this view has, in render order.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    public const SECTIONS = [
+        ['net-stats', 'Totals'],
+        ['net-asns', 'Autonomous systems'],
+        ['net-types', 'Network types'],
+        ['net-map', 'Where they answered from'],
+        ['net-netnames', 'Netblocks'],
+        ['net-countries', 'Countries'],
+        ['net-pivot', 'Type by verdict'],
+    ];
     /**
      * Which page-toolbar controls this view honours.
      *

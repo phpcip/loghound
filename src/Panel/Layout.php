@@ -2,8 +2,8 @@
 /**
  * Loghound — the panel's HTML chrome.
  *
- * One place that emits <head>, the navigation, the range picker, the banners and the
- * script tags, so that a view file contains nothing but its own content.
+ * One place that emits <head>, the two-level navigation, the sticky top bar, the banners and
+ * the script tags, so that a view file contains nothing but its own content.
  *
  * Two constraints shape this file:
  *
@@ -16,9 +16,19 @@
  *    dynamic values here are config strings the operator typed themselves, and they still
  *    go through Security::esc().
  *
- * It also owns the sticky section nav, because that bar has to be a sibling of `.view`
- * rather than a child of it — see sectionNav() for the flex/sticky reason — and because the
- * numbering it derives is then the one source every card's number comes from.
+ * ---------------------------------------------------------------------------------
+ * A SECTION IS A PAGE
+ * ---------------------------------------------------------------------------------
+ * There used to be a jump bar pinned above every view, listing that view's cards, and each
+ * card was a stop on one very long page. It is gone. Every section a view declares is now its
+ * own page with its own URL — `?v=attacks&s=patterns` — reached from the left navigation,
+ * which is two levels deep as a result. A page carries one section and nothing else, so the
+ * question "which of these eleven numbers am I looking at" stops being a scrolling problem.
+ *
+ * The view files did not have to be rewritten for it: Controller::renderOnlySection() gates
+ * the one pair of methods every card in the product is built from, so body() still emits the
+ * whole view and this class keeps the card the URL names. See Controller for why output
+ * OUTSIDE a card is kept rather than dropped.
  *
  * @package Loghound
  * @license MIT
@@ -37,14 +47,69 @@ use Loghound\Setup\Steps;
 final class Layout
 {
     /**
-     * The navigation, in the order SPEC §10 lists the views.
+     * The route table. Keys are the only values `?v=` may take.
      *
-     * @return array<int,array{slug:string,label:string,hint:string}>
+     * HERE RATHER THAN IN THE FRONT CONTROLLER, because the navigation needs it too: a
+     * two-level navigation has to ask every view class what sections it has, and a second copy
+     * of the slug-to-class map is a second place for a deleted view to survive. There is no
+     * dynamic class resolution from the URL anywhere — a route is a key in this map, and an
+     * unknown key is the default view rather than an attempt to load a class named after
+     * user input.
+     *
+     * @return array<string,class-string<Controller>>
+     */
+    public static function routes(): array
+    {
+        return [
+            'overview'     => Overview::class,
+            'live'         => Live::class,
+            'sources'      => Sources::class,
+            'pages'        => Pages::class,
+            'searches'     => Searches::class,
+            'engagement'   => Engagement::class,
+            'rhythm'       => Rhythm::class,
+            'bots'         => Bots::class,
+            'attacks'      => Attacks::class,
+            'fingerprints' => Fingerprints::class,
+            'networks'     => Networks::class,
+            'sessions'     => Sessions::class,
+            'performance'  => Performance::class,
+            'hosts'        => Hosts::class,
+            'indexes'      => Indexes::class,
+            'usage'        => Usage::class,
+            'settings'     => Settings::class,
+        ];
+    }
+
+    /** The view a request with no `v=`, or an unknown one, lands on. */
+    public const DEFAULT_VIEW = 'overview';
+
+    /**
+     * The navigation, in the order SPEC §10 lists the views, with each view's own pages.
+     *
+     * TWO LEVELS, AND THE PARENT IS A LINK. A parent that is only a group would make the view
+     * name unpressable — twelve headings you can read and not go to — and a parent that is a
+     * page of its own would need a thirteenth page per view with nothing on it. So a parent
+     * goes to its FIRST section, which is the page a reader arriving at that view wants, and it
+     * carries a twist control that opens its list without navigating. The current view's list
+     * is open on arrival; the others are a press away.
+     *
+     * A view with fewer than two sections — the session explorer is the only one — has no
+     * sub-list at all and is an ordinary link, because splitting a single section into a
+     * sub-item would be a second name for the same page.
+     *
+     * @return array<int,array{slug:string,label:string,hint:string,sections:array<int,array{slug:string,label:string,id:string}>}>
      */
     public static function nav(): array
     {
-        return [
+        $views = [
             ['slug' => 'overview',     'label' => 'Overview',     'hint' => 'Who came, and how long they really stayed'],
+            ['slug' => 'live',         'label' => 'Live',         'hint' => 'The access log as it is written'],
+            ['slug' => 'sources',      'label' => 'Where they came from', 'hint' => 'What kind of thing sent each visit, and which site actually did'],
+            ['slug' => 'pages',        'label' => 'Pages',        'hint' => 'Where people arrive, where the log last saw them, and what is moving'],
+            ['slug' => 'searches',     'label' => 'Site search',   'hint' => 'What visitors typed into your own search box'],
+            ['slug' => 'engagement',   'label' => 'Engagement',    'hint' => 'Bounce measured on what people did, not on how many pages loaded'],
+            ['slug' => 'rhythm',       'label' => 'When they come','hint' => 'Hour of day against day of week'],
             ['slug' => 'bots',         'label' => 'Bot forensics','hint' => 'Why each verdict was reached'],
             ['slug' => 'attacks',      'label' => 'Attacks',      'hint' => 'What was attempted, and what the server answered'],
             ['slug' => 'fingerprints', 'label' => 'Fingerprints', 'hint' => 'One header signature, many IPs'],
@@ -52,12 +117,51 @@ final class Layout
             ['slug' => 'sessions',     'label' => 'Sessions',     'hint' => 'Search and drill into one visit'],
             ['slug' => 'performance',  'label' => 'Performance',  'hint' => 'Latency percentiles and status codes'],
             ['slug' => 'hosts',        'label' => 'Virtual hosts','hint' => 'Every site on this machine, side by side'],
-            ['slug' => 'indexes',      'label' => 'Index analytics', 'hint' => 'What your Opensolr search indexes are being asked'],
-            ['slug' => 'queries',      'label' => 'Query analysis',  'hint' => 'Query shapes, and which of them find nothing'],
-            ['slug' => 'callers',      'label' => 'Who is querying', 'hint' => 'Search clients, cross-referenced with web traffic'],
+            ['slug' => 'indexes',      'label' => 'Solr',         'hint' => 'What your Opensolr search indexes are being asked'],
             ['slug' => 'usage',        'label' => 'Storage & bandwidth', 'hint' => 'How much history your plan holds, and what is left'],
             ['slug' => 'settings',     'label' => 'Settings',     'hint' => 'Log sources, privacy, scoring, beacon'],
         ];
+
+        $routes = self::routes();
+        $out = [];
+        foreach ($views as $view) {
+            $class = $routes[$view['slug']] ?? null;
+            $view['sections'] = $class === null ? [] : self::sectionsOf($class);
+            $out[] = $view;
+        }
+        return $out;
+    }
+
+    /**
+     * One view class's sections, shaped for the navigation.
+     *
+     * Read from the class constant rather than from an instance, so building the navigation
+     * costs no constructor and no request parsing — and certainly no render of eleven view
+     * bodies, which is what deriving the list from the markup would have cost on every page.
+     *
+     * @param class-string<Controller> $class
+     * @return array<int,array{slug:string,label:string,id:string}>
+     */
+    private static function sectionsOf(string $class): array
+    {
+        $sections = $class::sectionList();
+        if (count($sections) < 2) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($sections as $entry) {
+            $id = (string) ($entry[0] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            $out[] = [
+                'slug'  => Controller::sectionSlug($id),
+                'label' => (string) ($entry[1] ?? $id),
+                'id'    => $id,
+            ];
+        }
+        return $out;
     }
 
     /**
@@ -69,6 +173,7 @@ final class Layout
     {
         $siteName = (string) $cfg->get('site_name', 'Loghound');
         $slug = $view->slug();
+        $section = (string) ($boot['section'] ?? '');
 
         $v = static fn (string $rel): string => Assets::url($rel);
 
@@ -78,7 +183,7 @@ final class Layout
         echo '<meta charset="utf-8">' . "\n";
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\n";
         echo '<meta name="robots" content="noindex, nofollow">' . "\n";
-        echo '<title>' . Security::esc($view->title() . ' — ' . $siteName) . '</title>' . "\n";
+        echo '<title>' . Security::esc(self::pageTitle($view, $section, $siteName)) . '</title>' . "\n";
         echo '<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">' . "\n";
         echo '<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">' . "\n";
         echo '<link rel="stylesheet" href="' . Security::esc($v('assets/css/panel.css')) . '">' . "\n";
@@ -89,160 +194,113 @@ final class Layout
         echo '<script src="' . Security::esc($v('assets/js/theme.js')) . '"></script>' . "\n";
         echo Assets::importMapTag() . "\n";
         echo '</head>' . "\n";
-        echo '<body data-view="' . Security::esc($slug) . '">' . "\n";
+        echo '<body data-view="' . Security::esc($slug) . '" data-section="' . Security::esc($section) . '">' . "\n";
 
         echo '<script type="application/json" id="lh-boot">' . Security::escJs($boot) . '</script>' . "\n";
 
         self::skipLink();
-        self::sidebar($siteName, $slug, (string) $cfg->get('auth.mode', 'none') === 'session');
-
-        /* The body is rendered into a buffer BEFORE anything after it is emitted, because the
-           jump bar has to appear above the page head and is built out of the cards the body
-           produced. A view that declares sections() names them itself; one that does not gets
-           a bar derived from the cards it actually rendered, so every page in the panel has
-           one rather than only the four that have been converted. Buffering costs nothing:
-           body() emits static markup and fetches no data. */
-        ob_start();
-        $view->body();
-        $body = (string) ob_get_clean();
+        self::sidebar($siteName, $slug, $section, (string) $cfg->get('auth.mode', 'none') === 'session');
 
         echo '<main id="main">' . "\n";
-        self::sectionNav($view, $body);
-        self::header($view, $boot);
+        self::topBar($view, $boot, $slug, $section);
+        self::header($view);
         self::banners($gw, $cfg);
 
         echo '<div class="view">' . "\n";
-        echo $body;
+        echo self::sectionBody($view, $section);
         echo "</div>\n";
 
         self::footer($gw);
         echo "</main>\n";
 
         echo '<script src="' . Security::esc($v('assets/vendor/echarts.min.js')) . '" defer></script>' . "\n";
-        echo '<script type="module" src="' . Security::esc($v('assets/js/sectionnav.js')) . '"></script>' . "\n";
         echo '<script type="module" src="' . Security::esc($v('assets/js/app.js')) . '"></script>' . "\n";
         echo '<script type="module" src="' . Security::esc($v('assets/js/responsive.js')) . '"></script>' . "\n";
         echo "</body>\n</html>\n";
     }
 
     /**
-     * The sticky jump bar, built from the view's own card list.
+     * The document title: the page first, then the view, then the installation.
      *
-     * WHERE IT IS AND WHY IT HAS TO BE THERE. First child of <main>, a SIBLING of `.view`
-     * rather than a child of it. `.view` is `display: flex; flex-direction: column`, and a
-     * `position: sticky` element inside a flex container is sticky within its own flex item
-     * box — a box exactly as tall as the bar itself, so it has no travel and scrolls away
-     * with the rest of the page. Rendered here its containing block is <main>, which is the
-     * whole document, and it pins for the entire scroll including the last card.
-     *
-     * It sits ABOVE the H1, which is the one place the editorial system's "nothing above the
-     * H1" rule is set aside, deliberately: this is page chrome in the same class as the left
-     * sidebar, not an eyebrow or a badge on the article.
-     *
-     * ONE ROW, ALWAYS. The list scrolls horizontally and never wraps — eleven entries at
-     * full heading length do not fit on one line at any realistic width, and a bar that
-     * costs two rows of every screen is worse than the scrolling it was added to fix. The
-     * labels in the list are therefore short by contract, and assets/js/sectionnav.js keeps
-     * the active entry scrolled into view so a narrow window still says where the reader is.
-     *
-     * Plain anchors: the bar works with scripting off, and every entry is a real link that
-     * can be opened in a new tab or sent to somebody. Marking the active entry as the reader
-     * scrolls needs script, and is the only part that does.
-     *
-     * A view that declares sections() names its own entries and gets its card numbers from the
-     * same list. A view that does not gets a bar derived from the cards it just rendered, so
-     * EVERY page has one — several of them are six cards long and had the same unbroken-scroll
-     * problem Settings had. Declaring the list is still better: it gives short labels written
-     * for a one-row bar, and it takes the card numbering out of the call sites.
-     *
-     * @param string $body The view's already-rendered markup, for the derived case.
+     * The section comes first because it is what distinguishes one browser tab from the six
+     * other tabs of the same view, and a bookmark bar shows the beginning of a title and not
+     * the end.
      */
-    private static function sectionNav(Controller $view, string $body): void
+    private static function pageTitle(Controller $view, string $section, string $siteName): string
     {
-        $sections = $view instanceof Sections ? $view->sections() : self::cardsIn($body);
-        if (count($sections) < 2) {
-            return;
-        }
+        $label = self::sectionLabel($view, $section);
+        return ($label === '' ? '' : $label . ' — ') . $view->title() . ' — ' . $siteName;
+    }
 
-        echo '<nav class="set-nav" id="lh-section-nav" aria-label="Sections on this page">';
-        echo '<ul>';
-        foreach ($sections as $i => $entry) {
-            $id = (string) ($entry[0] ?? '');
-            $label = (string) ($entry[1] ?? $id);
-            if ($id === '') {
-                continue;
+    /** The declared label of one section of one view, or '' when it has none. */
+    private static function sectionLabel(Controller $view, string $section): string
+    {
+        if ($section === '') {
+            return '';
+        }
+        foreach ($view->sections() as $entry) {
+            if ((string) ($entry[0] ?? '') === $section) {
+                return (string) ($entry[1] ?? '');
             }
-            /* THE UNTRUNCATED HEADING TRAVELS WITH THE ENTRY, WHEN THERE IS ONE TO TRAVEL.
-               The bar cuts a derived label to 22 characters, so "Declared versus evasive, by
-               week" reaches the reader as "Declared versus evasi…" and the rest of it existed
-               nowhere on the page — not in the markup, not in a title. The stylesheet shows it
-               on hover and on focus from this attribute, and assets/js/responsive.js uses the
-               same value as the anchor's accessible name.
-
-               Emitted only when it differs from what is rendered: an entry that fits needs no
-               tooltip, and one that repeats a fully visible label is noise. A view that
-               declares sections() chooses labels written for this bar, returns three elements,
-               and correctly gets nothing. */
-            $full = (string) ($entry[3] ?? '');
-
-            echo '<li><a href="#' . Security::esc($id) . '-card" data-sect="' . Security::esc($id) . '"'
-                . ($full !== '' && $full !== $label ? ' data-full="' . Security::esc($full) . '"' : '')
-                . '>'
-                . '<span class="set-nav-num">' . Security::esc(self::pad($i)) . '</span>'
-                . '<span class="set-nav-label">' . Security::esc($label) . '</span></a></li>';
         }
-        echo '</ul>';
-        echo "</nav>\n";
+        return '';
     }
 
     /**
-     * The cards a view rendered, read back out of its own markup.
+     * The view's markup, reduced to the one section this page is.
      *
-     * The fallback for a view that has not declared sections() yet. It matches exactly what
-     * Controller::cardOpen() emits — an id, a number and a heading — so it cannot pick up
-     * anything else on the page, and it skips a card with no id (the "not connected to
-     * Opensolr" explainer is one).
+     * TWO RENDERS, AND THE SECOND ONE IS THE CHEAP PART. body() emits static markup and fetches
+     * nothing — every number on every card arrives later over fetch() — so running it twice
+     * costs string concatenation and no I/O at all. The first pass is what proves the gate found
+     * something; without it, a view that took an early return before reaching the wanted card
+     * would render an empty page rather than the state it was trying to explain.
      *
-     * The heading captured here has ALREADY been through Security::esc() inside cardOpen(),
-     * so it is decoded before it goes back out through esc() at the sink. Escaping an escaped
-     * string is how `&amp;` becomes `&amp;amp;` on screen, and re-escaping at the sink rather
-     * than trusting the capture is what keeps the rule "escape where you output" intact.
-     *
-     * Headings are written for a card, not for a one-row bar, so they are trimmed to a length
-     * the bar can carry. A view that wants a label chosen rather than cut declares sections().
-     *
-     * @return array<int,array{0:string,1:string,2:string,3:string}>
+     * THE FALLBACK IS THE WHOLE BODY, deliberately. The one view that returns early is Index
+     * analytics with no Opensolr credentials configured, and what it returns is a card
+     * explaining exactly that — which is the page the operator needs, whichever section they
+     * asked for.
      */
-    private static function cardsIn(string $body): array
+    private static function sectionBody(Controller $view, string $section): string
     {
-        $pattern = '#<section class="card" id="([A-Za-z0-9_-]+)-card"[^>]*>'
-            . '<div class="card-head"><h2>'
-            . '<span class="card-num">[^<]*</span>'
-            . '<span>([^<]*)</span>#';
+        ob_start();
+        $view->body();
+        $whole = (string) ob_get_clean();
 
-        if (!preg_match_all($pattern, $body, $matches, PREG_SET_ORDER)) {
-            return [];
+        if ($section === '') {
+            return $whole;
         }
 
-        $out = [];
-        foreach ($matches as $match) {
-            $full = html_entity_decode($match[2], ENT_QUOTES, 'UTF-8');
-            $label = $full;
-            if (mb_strlen($label) > 22) {
-                $label = rtrim(mb_substr($label, 0, 21)) . '…';
-            }
-            $out[] = [$match[1], $label, '', $full];
+        /* THE BUFFER LEVEL IS RECORDED AND UNWOUND TO, not popped once. The gate opens a buffer
+           per card and closes it at cardClose()/cardEnd(); a view that ever opened a card and
+           returned without closing it would leave one behind, and a single ob_get_clean() would
+           then discard the card's buffer and hand back the wrong string while the page's own
+           buffer stayed open. Unwinding to the level this method started at cannot do that
+           whatever a view does. */
+        $depth = ob_get_level();
+        Controller::renderOnlySection($section);
+        ob_start();
+        $view->body();
+        $one = '';
+        while (ob_get_level() > $depth) {
+            $one = (string) ob_get_clean() . $one;
         }
-        return $out;
+        $hit = Controller::sectionWasRendered();
+        Controller::renderOnlySection(null);
+
+        return $hit ? $one : $whole;
     }
 
     /**
      * The number a card carries, derived from its position in the view's own list.
      *
-     * Called at the `cardOpen()` site instead of a literal, so inserting a card renumbers
-     * everything below it and the jump bar cannot disagree with the cards. An id that is not
+     * Called at the `cardOpen()` site instead of a literal, so inserting a section renumbers
+     * everything below it and the navigation cannot disagree with the cards. An id that is not
      * in the list gets no number rather than a wrong one: a card the view forgot to declare
      * is a bug to see, not a figure to invent.
+     *
+     * It still matters now that a section is a page: the number is the page's position in its
+     * view, which is what tells a reader they are on the third of eight rather than on a card
+     * that happens to be third on screen.
      *
      * @param array<int,array<int,string>> $sections The view's section list.
      */
@@ -250,16 +308,10 @@ final class Layout
     {
         foreach ($sections as $i => $entry) {
             if ((string) ($entry[0] ?? '') === $id) {
-                return self::pad($i);
+                return sprintf('%02d', $i + 1);
             }
         }
         return '';
-    }
-
-    /** Zero-padded section number from a zero-based index. */
-    private static function pad(int $index): string
-    {
-        return sprintf('%02d', $index + 1);
     }
 
     /** Keyboard users land here first; the nav is long and skipping it matters. */
@@ -276,29 +328,72 @@ final class Layout
      * except its mark, could not hide the words and rendered twelve clipped fragments down a
      * 60px column. One span is the whole fix.
      *
+     * EVERY VIEW'S SUB-LIST IS IN THE DOCUMENT, not only the current view's, and that is what
+     * makes the collapsed icon rail work: with the labels hidden, a mark is the whole of the
+     * navigation, and a reader has to be able to reach `Attacks → Patterns` without first
+     * landing on `Attacks → Answered`. The lists are real links either way, so the rail's
+     * flyout is a stylesheet rule over markup that is already there, keyboard reachable with
+     * nothing scripted, and present with scripting off.
+     *
      * The sign-out control is a real form with a CSRF token rather than a link, because
      * ending a session changes state: a GET route would let any page on the internet sign
      * the operator out with an <img> tag. It appears only in session mode — HTTP Basic has
      * no sign-out to offer, and a button that did nothing would be worse than none.
      */
-    private static function sidebar(string $siteName, string $active, bool $sessionAuth = false): void
+    private static function sidebar(string $siteName, string $active, string $section, bool $sessionAuth = false): void
     {
         echo '<nav class="side" aria-label="Views">' . "\n";
         echo '<div class="brand"><span class="brand-mark" aria-hidden="true"></span>'
             . '<span class="brand-name">' . Security::esc($siteName) . '</span></div>' . "\n";
         echo '<ul>';
-        /* THE NAVIGATION CARRIES THE DASHBOARD'S STATE. These were bare `?v=<slug>` links, so
-           every move between views threw away the time range and every filter in force. The
-           filter bar exists precisely because a filtered number that does not say it is
-           filtered is a wrong number on every page — and the navigation was quietly clearing
-           the filters it was there to announce. urlWith() re-validates every key it carries. */
+
         foreach (self::nav() as $item) {
-            $is = $item['slug'] === $active;
-            echo '<li><a href="' . Security::esc(self::urlWith(['v' => $item['slug']])) . '"'
-                . ($is ? ' class="on" aria-current="page"' : '')
+            $current = $item['slug'] === $active;
+            $sections = $item['sections'];
+            $first = $sections === [] ? null : $sections[0];
+
+            /* THE NAVIGATION CARRIES THE DASHBOARD'S STATE. These were bare `?v=<slug>` links,
+               so every move between views threw away the time range and every filter in force.
+               urlWith() re-validates every key it carries, and the section is named explicitly
+               rather than carried, because a section belongs to one view and carrying `s`
+               across a navigation would ask Attacks for a page of Settings. */
+            $href = self::urlWith($first === null
+                ? ['v' => $item['slug']]
+                : ['v' => $item['slug'], 's' => $first['slug']]);
+
+            $listId = 'lh-nav-' . $item['slug'];
+
+            echo '<li class="navgroup' . ($current ? ' is-current' : '') . '">';
+            echo '<span class="navrow">';
+            echo '<a class="navlink' . ($current ? ' on' : '') . '"'
+                . ' href="' . Security::esc($href) . '"'
+                . ($current && $sections === [] ? ' aria-current="page"' : '')
                 . ' title="' . Security::esc($item['hint']) . '">'
-                . '<span class="navlabel">' . Security::esc($item['label']) . '</span></a></li>';
+                . '<span class="navlabel">' . Security::esc($item['label']) . '</span></a>';
+
+            if ($sections !== []) {
+                echo '<button type="button" class="navtwist" aria-expanded="' . ($current ? 'true' : 'false') . '"'
+                    . ' aria-controls="' . Security::esc($listId) . '"'
+                    . ' aria-label="Sections of ' . Security::esc($item['label']) . '">'
+                    . '<span class="navtwist-mark" aria-hidden="true"></span></button>';
+            }
+            echo '</span>';
+
+            if ($sections !== []) {
+                echo '<ul class="navsub" id="' . Security::esc($listId) . '"' . ($current ? '' : ' hidden') . '>';
+                foreach ($sections as $entry) {
+                    $on = $current && $entry['id'] === $section;
+                    echo '<li><a class="navsub-link' . ($on ? ' on' : '') . '"'
+                        . ' href="' . Security::esc(self::urlWith(['v' => $item['slug'], 's' => $entry['slug']])) . '"'
+                        . ($on ? ' aria-current="page"' : '') . '>'
+                        . '<span class="navsub-label">' . Security::esc($entry['label']) . '</span></a></li>';
+                }
+                echo '</ul>';
+            }
+
+            echo '</li>';
         }
+
         echo "</ul>\n";
         echo '<button type="button" id="theme-toggle" class="theme-toggle" aria-live="polite">Theme: auto</button>' . "\n";
 
@@ -313,6 +408,243 @@ final class Layout
         }
 
         echo "</nav>\n";
+    }
+
+    /* ---------------------------------------------------------------------------------
+     * The top bar
+     * ------------------------------------------------------------------------------ */
+
+    /**
+     * The controls that scope the page, in one bar that is pinned for the whole scroll.
+     *
+     * ---------------------------------------------------------------------------------
+     * WHAT THIS REPLACES, AND WHY IT IS ONE BAR
+     * ---------------------------------------------------------------------------------
+     * There were four different filter-bar layouts across four pages, assembled at runtime by a
+     * front-end pass that MOVED whatever furniture it found — the range links, the host
+     * selector, the applied-filter chips, a bandwidth readout — into a strip that condensed on
+     * scroll. Four layouts is four things to get right, and on the session explorer the bar
+     * clipped: "Clear all" and the sentence after it were sliced off the right edge, because the
+     * row was assembled from parts none of which knew how much room the others had taken.
+     *
+     * This is one bar, rendered server-side, from what the view DECLARES it honours
+     * (Controller::toolbar()). A control that is not declared is not drawn, which is the rule
+     * that already governed the range picker and now governs all of them: a control that answers
+     * a press by doing nothing is worse than no control.
+     *
+     * ---------------------------------------------------------------------------------
+     * IT IS A FORM, AND IT IS STICKY ALWAYS
+     * ---------------------------------------------------------------------------------
+     * A GET form, so the duration and the hostname work with scripting switched off: change and
+     * submit. assets/js/topbar.js submits it on change, which is the only thing script adds. The
+     * page's other state travels as hidden fields, re-validated on the way out by urlWith()'s
+     * own allowlists, so submitting the bar cannot lose a filter or a section.
+     *
+     * Sticky always rather than sticky-once-scrolled: a bar that changes shape when the page
+     * moves is a second design to maintain, and the scope of the numbers being read is wanted
+     * at the top of the page as much as at the bottom.
+     *
+     * @param array<string,mixed> $boot
+     */
+    private static function topBar(Controller $view, array $boot, string $slug, string $section): void
+    {
+        $range = $view->honours(Controller::SCOPE_RANGE);
+        $host = $view->honours(Controller::SCOPE_HOST);
+        $filters = $view->honours(Controller::SCOPE_FACETS) || $view instanceof OpensolrView;
+        $applied = self::appliedCount($boot);
+
+        echo '<div class="topbar" id="lh-topbar">' . "\n";
+        echo '<div class="topbar-in">';
+
+        if ($filters) {
+            /* SHOWN ONLY WHEN SOMETHING IS APPLIED. A permanent "0 filters" button is furniture
+               that reports nothing; what an operator needs is to notice, from anywhere on the
+               page, that the numbers in front of them are narrowed. The badge is the count and
+               the dialog is where they are listed and removed. */
+            echo '<button type="button" class="tb-filters" id="lh-tb-filters"'
+                . ($applied === 0 ? ' hidden' : '')
+                . ' aria-haspopup="dialog">'
+                . '<span class="tb-filters-label">Applied filters</span>'
+                . '<span class="tb-badge" id="lh-tb-badge">' . Security::esc((string) $applied) . '</span>'
+                . '</button>';
+        }
+
+        /* THE FORM EXISTS ONLY WHERE IT HAS A CONTROL IN IT. On Settings and Storage & bandwidth
+           nothing is scoped by anything, so there is no duration and no hostname — and an empty
+           form with a submit button in it would be a control that answers a press by doing
+           nothing, which is the one thing Controller::toolbar() exists to prevent. */
+        if ($range || $host) {
+            echo '<form class="tb-scope" method="get" action="" id="lh-scope-form">';
+            self::hiddenState(['v' => $slug, 's' => Controller::sectionSlug($section)], $range, $host);
+
+            if ($range) {
+                $current = Query::range(isset($_GET['range']) && is_string($_GET['range']) ? $_GET['range'] : null);
+                echo '<span class="tb-field">';
+                echo '<label for="lh-range">Duration</label>';
+                echo '<select id="lh-range" name="range" data-smart="Duration">';
+                foreach (Query::ranges() as $key => $def) {
+                    echo '<option value="' . Security::esc($key) . '"'
+                        . ($key === $current['key'] ? ' selected' : '') . '>'
+                        . Security::esc((string) $def['short']) . '</option>';
+                }
+                echo '</select></span>';
+            }
+
+            if ($host) {
+                /* THE LIST ARRIVES LATER, THE CHOICE IS HERE NOW. Populating this server-side
+                   would make every page render wait on a Solr facet, which is the one thing this
+                   panel does not do. The selected value is rendered so the form round-trips
+                   correctly and so the current scope is on screen before any fetch lands;
+                   assets/js/topbar.js fills in the rest of the hosts when the facet answers. */
+                $chosen = self::chosenHost();
+                echo '<span class="tb-field" id="lh-hostfield">';
+                echo '<label for="lh-host">Hostname</label>';
+                echo '<select id="lh-host" name="f[host_s][]" data-smart="Hostname">';
+                echo '<option value=""' . ($chosen === '' ? ' selected' : '') . '>All hosts</option>';
+                if ($chosen !== '') {
+                    echo '<option value="' . Security::esc($chosen) . '" selected>'
+                        . Security::esc($chosen) . '</option>';
+                }
+                echo '</select></span>';
+
+                /* AN EMPTY HOST HAS TO BE ABLE TO MEAN "ALL HOSTS", AND A SILENT URL MEANS
+                   "WHATEVER I HAD". Panel\Scope restores a remembered host into a request that
+                   says nothing about one, so choosing "All hosts" — which submits an empty value
+                   the facet reader drops — would otherwise be undone on the next page load by the
+                   host that was just cleared. `fx` is how the URL states an empty filter set out
+                   loud; assets/js/topbar.js sets it on submit when nothing is selected. */
+                echo '<input type="hidden" name="fx" id="lh-scope-fx" value="" disabled>';
+            }
+
+            /* THE ONLY CONTROL HERE THAT SUBMITS ITSELF. With script running, changing a select
+               submits the form and this is never needed, so the stylesheet takes it off screen
+               the moment `lh-js` lands on the root element. With script off it is the whole
+               mechanism. */
+            echo '<button type="submit" class="tb-go">Apply</button>';
+            echo '</form>';
+        }
+
+        echo '<button type="button" class="tb-res" id="lh-tb-resources" aria-haspopup="dialog"'
+            . ' title="Opensolr resources: what this account is using against what the plan allows"'
+            . ' aria-label="Opensolr resources">'
+            . self::resourceMark()
+            . '</button>';
+
+        echo '<span class="job-meta" id="lh-page-status"></span>';
+        echo '</div>';
+        echo "</div>\n";
+    }
+
+    /**
+     * The mark on the resources control: a stack, drawn on the same grid as assets/js/icons.js.
+     *
+     * Inline SVG rather than an icon font or an image, for the reason every other mark in the
+     * panel is: the CSP allows no outside origin, and the panel ships no binary asset it could
+     * point at instead.
+     */
+    private static function resourceMark(): string
+    {
+        return '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"'
+            . ' stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"'
+            . ' aria-hidden="true" focusable="false">'
+            . '<path d="M8 2.6c3 0 5.2.8 5.2 1.8S11 6.2 8 6.2 2.8 5.4 2.8 4.4 5 2.6 8 2.6Z"></path>'
+            . '<path d="M2.8 4.4v7.2c0 1 2.2 1.8 5.2 1.8s5.2-.8 5.2-1.8V4.4"></path>'
+            . '<path d="M2.8 8c0 1 2.2 1.8 5.2 1.8S13.2 9 13.2 8"></path>'
+            . '</svg>';
+    }
+
+    /**
+     * How many filter VALUES are applied on this page, over both filter planes.
+     *
+     * Counted from the payload the server already computed for the front end rather than from
+     * the query string, so the badge and the dialog behind it can never disagree about what is
+     * in force — they are reading the same object.
+     *
+     * @param array<string,mixed> $boot
+     */
+    private static function appliedCount(array $boot): int
+    {
+        $count = 0;
+        foreach (['filters', 'log_filters'] as $key) {
+            $active = (array) (((array) ($boot[$key] ?? []))['active'] ?? []);
+            foreach ($active as $values) {
+                $count += is_array($values) ? count($values) : 1;
+            }
+        }
+        return $count;
+    }
+
+    /** The virtual host currently selected, or '' for all of them. */
+    private static function chosenHost(): string
+    {
+        $values = Facets::all($_GET)->values(Query::HOST_FIELD);
+        return $values === [] ? '' : (string) $values[0];
+    }
+
+    /**
+     * The page's state as hidden fields, so submitting the bar changes one thing and keeps the rest.
+     *
+     * A GET form REPLACES the query string; it does not merge with it. Without these, choosing a
+     * duration would drop the section, every filter, the chosen index and the outcome slice —
+     * silently answering a different question under the same controls, which is the defect the
+     * filter bar exists to prevent.
+     *
+     * The fields the bar's own controls own are excluded, or the browser would submit two values
+     * for them. `f[host_s][]` is excluded only when the host selector is actually drawn; on a
+     * view that does not draw one the filter still has to travel, because it is in force on the
+     * pages that do.
+     *
+     * @param array<string,string> $fixed Parameters the form always carries as they are.
+     */
+    private static function hiddenState(array $fixed, bool $ownsRange, bool $ownsHost): void
+    {
+        $skip = [];
+        if ($ownsRange) {
+            $skip[] = 'range';
+        }
+
+        $params = self::stateParams($ownsHost ? [Query::HOST_FIELD] : []);
+        foreach ($skip as $key) {
+            unset($params[$key]);
+        }
+        foreach ($fixed as $key => $value) {
+            if ($value !== '') {
+                $params[$key] = $value;
+            }
+        }
+
+        foreach (self::flatten($params) as $name => $value) {
+            echo '<input type="hidden" name="' . Security::esc($name) . '"'
+                . ' value="' . Security::esc($value) . '">';
+        }
+    }
+
+    /**
+     * A nested parameter array flattened into the `name=value` pairs a form submits.
+     *
+     * `f[host_s][0]` rather than `f[host_s][]`, because a hidden field has to name its index for
+     * the browser to send more than one of them in a stable order, and PHP reads both spellings
+     * into the same array.
+     *
+     * @param array<string,mixed> $params
+     * @return array<string,string>
+     */
+    private static function flatten(array $params, string $prefix = ''): array
+    {
+        $out = [];
+        foreach ($params as $key => $value) {
+            $name = $prefix === '' ? (string) $key : $prefix . '[' . $key . ']';
+            if (is_array($value)) {
+                foreach (self::flatten($value, $name) as $k => $v) {
+                    $out[$k] = $v;
+                }
+                continue;
+            }
+            if (is_string($value) || is_int($value)) {
+                $out[$name] = (string) $value;
+            }
+        }
+        return $out;
     }
 
     /**
@@ -353,7 +685,7 @@ final class Layout
         echo '<div class="banner banner-bad" id="lh-conn" role="alert" hidden>'
             . '<strong>A service this panel depends on is not answering.</strong> '
             . '<span id="lh-conn-detail"></span> '
-            . 'Run the connection check under <a href="' . Security::esc(self::urlWith(['v' => 'settings'])) . '">Settings</a>, or set '
+            . 'Run the connection check under <a href="' . Security::esc(self::settingsUrl('check')) . '">Settings</a>, or set '
             . '<code>LOGHOUND_DEMO=1</code> to explore the panel with sample data.'
             . '</div>' . "\n";
 
@@ -371,7 +703,7 @@ final class Layout
             echo '<div class="banner banner-warn" role="alert"><strong>'
                 . Security::esc(Pairs::pendingHeadline()) . '</strong> '
                 . Security::esc(Pairs::pendingDetail($cfg))
-                . ' <a href="' . Security::esc(self::urlWith(['v' => 'settings'])) . '#set-solr">'
+                . ' <a href="' . Security::esc(self::settingsUrl('solr')) . '">'
                 . 'Choose them</a></div>' . "\n";
         }
 
@@ -393,7 +725,7 @@ final class Layout
 
                 echo '<div class="banner banner-warn" role="alert"><strong>'
                     . Security::esc($headline) . '</strong> ' . Security::esc($detail)
-                    . ' <a href="' . Security::esc(self::urlWith(['v' => 'settings'])) . '#set-finish-card">What to do</a></div>' . "\n";
+                    . ' <a href="' . Security::esc(self::settingsUrl('finish')) . '">What to do</a></div>' . "\n";
             }
         }
 
@@ -401,127 +733,56 @@ final class Layout
         if ($errors !== []) {
             echo '<div class="banner banner-warn" role="alert"><strong>Configuration needs attention:</strong> '
                 . Security::esc(implode(' · ', array_slice($errors, 0, 3)))
-                . ' <a href="' . Security::esc(self::urlWith(['v' => 'settings'])) . '">Open settings</a></div>' . "\n";
+                . ' <a href="' . Security::esc(self::settingsUrl('')) . '">Open settings</a></div>' . "\n";
         }
     }
 
     /**
-     * The page head: H1, lead, then a hairline rule carrying the range picker.
+     * A link to one page of Settings.
      *
-     * Nothing sits above the H1 — no kicker, no badge, no breadcrumb. That is rule 5 of
-     * the editorial system and it is not negotiable per page.
+     * These used to be fragments — `?v=settings#set-solr` — which worked only because every
+     * section of Settings was on one page. They are separate pages now, so the section is a
+     * parameter; the fragment form would have landed the reader on the first Settings page with
+     * an anchor that is not in the document.
      */
-    private static function header(Controller $view, array $boot = []): void
+    public static function settingsUrl(string $section): string
+    {
+        return self::urlWith($section === ''
+            ? ['v' => 'settings']
+            : ['v' => 'settings', 's' => $section]);
+    }
+
+    /**
+     * The page head: H1 and lead. The controls are in the bar above it.
+     *
+     * Nothing sits above the H1 in the content column — no kicker, no badge, no breadcrumb.
+     * That is rule 5 of the editorial system and it is not negotiable per page. The top bar is
+     * page chrome in the same class as the left sidebar, not an eyebrow on the article.
+     */
+    private static function header(Controller $view): void
     {
         echo '<header class="head">' . "\n";
         echo '<h1>' . Security::esc($view->title()) . '</h1>';
         echo '<p class="sub">' . Security::esc($view->subtitle()) . '</p>';
-
-        $current = Query::range(isset($_GET['range']) && is_string($_GET['range']) ? $_GET['range'] : null);
-        $slug = $view->slug();
-
-        echo '<div class="head-tools">';
-
-        /* THE PICKER IS RENDERED ONLY WHERE IT DOES SOMETHING. See Controller::toolbar() for
-           why this is asked of the view rather than special-cased: on Settings and on Storage
-           & bandwidth the six links changed nothing at all, and a control that answers a press
-           by doing nothing is worse than no control.
-
-           The CHOICE still travels — urlWith() carries `range` through every navigation — so a
-           reader who picks 7D, opens Settings and comes back is still on 7D even though the
-           page in between had nowhere to show it. */
-        if ($view->honours(Controller::SCOPE_RANGE)) {
-            echo '<div class="ranges" role="group" aria-label="Time range">';
-            foreach (Query::ranges() as $key => $def) {
-                $on = $key === $current['key'];
-                $qs = self::urlWith(['v' => $slug, 'range' => $key]);
-                echo '<a href="' . Security::esc($qs) . '"' . ($on ? ' class="on" aria-current="true"' : '') . '>'
-                    . Security::esc(strtoupper($key)) . '</a>';
-            }
-            echo '</div>';
-        }
-
-        self::clearCache($view, $boot, $slug);
-
-        echo '<span class="job-meta" id="lh-page-status"></span>';
-        echo "</div>\n";
-
-        /* The bandwidth strip is a READOUT, not a control, and it used to be injected into the
-           row above beside the range links — which put a status line in a group of controls and
-           made it look like one more thing to press. It keeps its own slot here, outside the
-           toolbar, so it can stay on every view (it is the one quota that cannot be reclaimed,
-           and once exceeded the panel itself answers 403) without pretending to be an input. */
-        echo '<div class="head-readout" id="lh-readout"></div>' . "\n";
         echo "</header>\n";
     }
 
     /**
-     * The Clear cache control, and the one line that follows a press.
-     *
-     * WHY IT IS IN THE PAGE HEAD AND NOT IN SETTINGS. It undoes something the reader is looking
-     * at: the numbers on this page may have been computed up to the cache duration ago, and the
-     * question "is this current?" is asked where the number is, not two pages away. The stamp
-     * each card carries answers the question; this answers the follow-up.
-     *
-     * IT IS A FORM, NOT A LINK. Clearing state is a POST with a CSRF token, for the ordinary
-     * reason — a GET route would let any page on the internet empty an operator's cache with an
-     * <img> tag. The front controller answers it with a redirect, so a refresh cannot clear
-     * twice and the outcome arrives as a validated query parameter rather than a rendered POST.
-     *
-     * WHERE IT DOES NOT APPEAR. Only on a view that actually reads cached Solr answers, by the
-     * same declaration that governs the other three controls — see Controller::SCOPE_CACHE.
-     * Index analytics and Query analysis read the Opensolr request log, which is not cached, so
-     * a button there would discard nothing and say it had. And on no view at all when the cache
-     * is switched off or is not reachable, which is what `enabled` reports: an installation with
-     * nothing to clear is not offered a control that would do nothing.
-     *
-     * @param array<string,mixed> $boot
-     */
-    private static function clearCache(Controller $view, array $boot, string $slug): void
-    {
-        $cache = (array) ($boot['cache'] ?? []);
-        if (empty($cache['enabled']) || !$view->honours(Controller::SCOPE_CACHE)) {
-            return;
-        }
-
-        $cleared = $cache['cleared'] ?? null;
-
-        echo '<form method="post" action="' . Security::esc(self::urlWith(['v' => $slug])) . '" class="cacheclear">';
-        echo '<input type="hidden" name="csrf" value="' . Security::esc(Security::csrfToken()) . '">';
-        echo '<button type="submit" name="clear_cache" value="1" class="ghost small">Clear cache</button>';
-
-        if ($cleared !== null) {
-            $n = (int) $cleared;
-            $said = $n < 0
-                ? 'Nothing was cleared — the cache did not answer.'
-                : ($n === 1 ? '1 cached answer discarded.' : number_format($n) . ' cached answers discarded.');
-            echo '<span class="job-meta" role="status">' . Security::esc($said) . '</span>';
-        }
-
-        echo "</form>\n";
-    }
-
-    /**
-     * Build a panel URL preserving the current filters.
-     *
-     * Only keys we recognise are carried over: the query string is rebuilt from scratch
-     * rather than string-patched, so nothing unexpected survives a navigation.
+     * The parameters that describe the current scope, for a link or for a form.
      *
      * Four namespaces travel, and each is re-validated here rather than trusted because it
      * arrived in a URL the panel itself produced:
      *
-     *  - `f[…]`  the sessions/hits sidebar filters, against Query::filterFields();
+     *  - `f[…]`  the sessions/hits filters, against Query::filterFields();
      *  - `lf[…]` the Opensolr request-log filters, against OpensolrView::logFilterFields();
      *  - `outcome` the request-log outcome slice, against its own small allowlist;
-     *  - `core`  the selected Opensolr index, shape-checked as an index name.
+     *  - `core`  the selected Opensolr index, shape-checked as an index name;
+     *  - `range` the time window, against the range table.
      *
-     * The last three were missing, which meant changing the time range on any of the three
-     * Opensolr views silently dropped the index and every filter the reader had set and
-     * quietly answered a different question under the same chips.
-     *
-     * @param array<string,string> $overrides
+     * @param array<int,string> $dropFields Filter fields to leave out, because the caller owns them.
+     * @return array<string,mixed>
      */
-    public static function urlWith(array $overrides): string
+    private static function stateParams(array $dropFields = []): array
     {
         $params = [];
 
@@ -534,6 +795,9 @@ final class Layout
                 if (!is_string($field) || !isset($allowed[$field]) || !Security::isSafeFieldName($field)) {
                     continue;
                 }
+                if (in_array($field, $dropFields, true)) {
+                    continue;
+                }
 
                 /* THE OPERATOR TRAVELS WITH THE VALUES, AND IT DID NOT. `f[field][op]=none` lives
                    in the same array as the values (Panel\Facets, "the URL is the state"), and
@@ -543,7 +807,7 @@ final class Layout
                    silently inverted filter, which is the worst shape a wrong number can take. */
                 $clean = [];
                 foreach ((array) $values as $k => $value) {
-                    if (!is_string($value)) {
+                    if (!is_string($value) || $value === '') {
                         continue;
                     }
                     if ($k === 'op') {
@@ -572,23 +836,29 @@ final class Layout
             $params['core'] = $core;
         }
 
-        /* THE RANGE TRAVELS TOO, AND IT DID NOT. Every other piece of dashboard state was
-           carried across a navigation and the time window was not, so an operator who chose
-           7D and moved to another view silently landed back on the 24h default — and the
-           page said 24H while they believed they were still on 7D, which is the same class
-           of wrong number as a filter that inverts itself.
-
-           It matters more now that a view which is not scoped by time does not render the
-           picker at all: without this, going to such a view and coming back would discard
-           the choice, because the URL that took them there had nowhere to keep it.
-
-           Validated against the table rather than passed through, like every other key here:
-           an unknown token is dropped, and Query::range() would default it anyway. */
         $range = $_GET['range'] ?? null;
         if (is_string($range) && isset(Query::ranges()[$range])) {
             $params['range'] = $range;
         }
 
+        return $params;
+    }
+
+    /**
+     * Build a panel URL preserving the current scope.
+     *
+     * Only keys we recognise are carried over: the query string is rebuilt from scratch
+     * rather than string-patched, so nothing unexpected survives a navigation.
+     *
+     * `s` is NOT carried automatically. A section belongs to one view, so carrying it across a
+     * navigation would ask the next view for a page it does not have; every caller that means to
+     * stay on a section names it.
+     *
+     * @param array<string,string> $overrides
+     */
+    public static function urlWith(array $overrides): string
+    {
+        $params = self::stateParams();
         foreach ($overrides as $k => $v) {
             $params[$k] = $v;
         }

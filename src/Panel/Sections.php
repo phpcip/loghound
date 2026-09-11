@@ -31,15 +31,14 @@ namespace Loghound\Panel;
 interface Sections
 {
     /**
-     * The cards this view renders, in the order it renders them.
+     * The sections this view renders, in the order it renders them.
      *
-     * Each entry is `[card id, short nav label]` and may carry further elements the view
-     * uses for its own dispatch; Layout reads only the first two. The card id is the base
-     * id handed to Controller::cardOpen(), NOT the `-card` suffixed element id.
+     * Each entry is `[card id, short nav label]` and may carry further elements the view uses
+     * for its own dispatch; nothing outside the view reads past the second. The card id is the
+     * base id handed to Controller::cardOpen(), NOT the `-card` suffixed element id.
      *
-     * The label is the one shown in the jump bar, so it is deliberately shorter than the
-     * card's heading: the bar is one row that never wraps, and eleven full headings do not
-     * fit on one at any realistic width.
+     * The label is the one shown in the navigation, so it is deliberately shorter than the
+     * card's heading: it sits in a column beside the view's own name.
      *
      * @return array<int,array<int,string>>
      */

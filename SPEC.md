@@ -642,7 +642,7 @@ Thresholds: `>=80 bot`, `60–79 likely_bot`, `40–59 unknown`, `20–39 likely
 
 **Scoring a session that has not ended (`provisional_b`, §4.2).**
 
-Five of the seventeen rules fire on the ABSENCE of something a session may still go on to do,
+Several of the rules fire on the ABSENCE of something a session may still go on to do,
 and every one of them would accuse a live human visitor:
 
 | Deferred code | What its absence means while the session is open |
@@ -778,34 +778,66 @@ code in `src/Setup/`:
 | Which log files | Log sources card | Rescan, confirm, remove, and add a path by hand. `allowed_log_roots` is still never widened from a web form. |
 | Panel username and password | Sign-in card | Current password required; revokes every persistent-login token. |
 | How much data is kept | Maintenance card | Both rules — see §9.3. |
-| Start over | Reinstall card | §9.2a. |
+| Start over, from zero | Start over card | §9.2a. Deletes both indexes from the platform, the configuration with the Opensolr account in it, and everything under `var/`. There is no version of it that keeps anything. |
 
 Every one of those is CSRF-checked, behind an authenticated session, and — for the three that
-hand over control of the installation (credentials, password, reinstall) — behind a current
+hand over control of the installation (credentials, password, starting over) — behind a current
 second factor when one is configured. The reasoning is the same in all three: a stolen session
 must not be enough to take the installation over, and the API key in particular can redirect
 every future visitor record into an account the attacker owns.
 
-### 9.2a Reinstall
+### 9.2a Start over
 
-`Installer::isNeeded()` stays structural and unchanged. Reinstall is a supported way of making
-it true again: it clears the log sources, the index names and the sign-in, deletes the runtime
-state (`var/state.db` and the detection and status files), and leaves everything that holds data
-alone — the indexes, the documents, the log files. The Opensolr account, the beacon signing key
-and the address salt are kept deliberately; rotating the beacon key would invalidate every token
-already in a visitor's browser, which the scorer reads as evidence of a bot.
+**Starting over means starting from zero, and there is exactly one control for it.** The panel
+used to carry two — a reinstall that kept the indexes, the Opensolr account and the API key, and
+an uninstall that deleted them — and the operator was asked to work out which word he meant. That
+distinction is gone. `Installer::isNeeded()` stays structural and unchanged; starting over is a
+supported way of making it true again, and it is destructive:
 
-**The lockout it must not cause.** A reset makes the installer demand `var/install-token`, which
-needs shell access. Pressing the button in an authenticated session is a stronger proof than
-reading that file, so `Setup\Token::grant()` carries it to that session — one-shot, thirty
-minutes, session-only. Nothing is relaxed for a visitor who did not press it.
+* both Opensolr indexes are **deleted from the platform**, through
+  `Install\OpensolrTeardown::deleteAll()`, and then **proved gone** by reading the account
+  listing again with `verifyAbsent()`. Ownership is established first by the five gates in
+  `install/opensolr-teardown.php`; a check that could not be performed is a failed check, and
+  nothing local is removed until every name is proven absent;
+* `config/loghound.php` is deleted, taking the Opensolr email, API key and region, the core
+  names, the connection details, `solr.install_id`, the sign-in, two-factor, the beacon signing
+  key and the address salt with it. Nothing about the plan's index allowance is persisted
+  anywhere, so there is nothing to clear;
+* every persistent-login token is revoked and everything under `var/` is deleted;
+* the operator lands on the installer and supplies all of it again, exactly as on a first
+  install.
+
+**The two things it never touches** are the operator's access log files, which are the web
+server's, and the `LogFormat` line the operator added to their own vhost. Both are stated in the
+card's consequence table and again in its closing report.
+
+**The machine installation is left standing on purpose.** The units, the timers, the vhost, the
+PHP-FPM pool, the command links, the service user and the install tree are what setup is about to
+run on, and the panel could not touch them anyway — there is no `exec`, `shell_exec`, `proc_open`
+or SSH anywhere in `src/`, `bin/` or `public/`. `install/uninstall.sh` is the counterpart for
+taking Loghound off the machine entirely, and it deletes the indexes through the same
+`install/opensolr-teardown.php` rather than an implementation of its own.
+
+**It costs a typed `DELETE EVERYTHING` and a current second factor**, and the confirmation is
+separate from the work: confirming arms a one-time, fifteen-minute grant in the session, and
+`job_start` spends it. The work itself is a stepped job, so the operator watches each step and a
+reload reattaches instead of starting a second run.
+
+**The lockout it must not cause.** Removing the configuration makes the installer demand
+`var/install-token`, which needs shell access. Confirming in an authenticated session is a
+stronger proof than reading that file, so `Setup\Token::grant()` carries it to that session —
+one-shot, thirty minutes, session-only, issued both before and after the wipe. Nothing is
+relaxed for a visitor who did not confirm.
 
 **The daemons are safe across the window by construction.** `bin/loghound-tail` reads its
 configuration at startup and on SIGHUP, and refuses a reload whose configuration fails
-`Config::validate()`. A reset configuration fails validation, so a running tailer cannot pick up
-the half-reset state at all: it keeps writing to the pair it started with.
+`Config::validate()`. It keeps writing to the pair it started with, which is being deleted
+underneath it — noisy in the log, harmful to nothing — until the operator stops it with the
+command the card prints.
 
-`bin/loghound-setup --reset` is the same work from a shell, printing the same consequence list.
+`bin/loghound-setup --reset` is the terminal's own, narrower reset: it clears this machine's
+setup state and deletes nothing, and `Setup\Reset::consequences()` says so row by row and points
+at the panel for an operator who wants the data gone as well.
 
 ### 9.3 How much data is kept — two rules, and the word "retention" is not one of them
 

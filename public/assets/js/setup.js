@@ -24,6 +24,7 @@
  */
 
 import { initCopyButtons } from './copy.js';
+import { initSmartSelects } from './smartselect.js';
 
 /**
  * Read the server's boot payload.
@@ -355,6 +356,14 @@ function init() {
     });
     wireFormatSelect();
     initCopyButtons();
+
+    /* THE SAME DROPDOWN THE PANEL HAS. The installer's region menu is as long as the account's
+       region list and its log-format menu is not short either, and the operator meeting them has
+       never seen this product before — which is the worst moment to hand somebody a native
+       select and a scroll bar. Wired after wireFormatSelect(), so that module's own `change`
+       listener is already attached: a smart select writes the value into the real element and
+       dispatches a bubbling `change`, so everything listening keeps working. */
+    initSmartSelects();
 }
 
 if (document.readyState === 'loading') {

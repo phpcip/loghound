@@ -75,11 +75,11 @@ use Loghound\Security;
 final class Attacks extends Controller implements Sections
 {
     /**
-     * The cards, in render order. Drives the jump bar and every card's number.
+     * The pages this view has, in render order. Drives the navigation and every card's number.
      *
      * @var array<int,array{0:string,1:string}>
      */
-    private const CARDS = [
+    public const SECTIONS = [
         ['atk-answered', 'Answered'],
         ['atk-patterns', 'Patterns'],
         ['atk-requests', 'Requests'],
@@ -145,14 +145,6 @@ final class Attacks extends Controller implements Sections
     }
 
     /**
-     * @return array<int,array<int,string>>
-     */
-    public function sections(): array
-    {
-        return array_map(static fn (array $c): array => [$c[0], $c[1]], self::CARDS);
-    }
-
-    /**
      * The card number for one card id, from the single ordered list above.
      *
      * Delegated to Layout so the jump bar and the number printed on the card come from the same
@@ -162,7 +154,7 @@ final class Attacks extends Controller implements Sections
      */
     private function cardNumber(string $id): string
     {
-        return Layout::cardNum($this->sections(), $id);
+        return Layout::cardNum(self::SECTIONS, $id);
     }
 
     /** The hits-plane `fq` list every card on this view starts from. */
@@ -339,6 +331,8 @@ final class Attacks extends Controller implements Sections
                     ['Bytes returned', 'bytes', 'number'],
                     ['Patterns matched', 'patterns', 'text'],
                     ['Address', 'ip', 'id'],
+                    ['Country', 'country', 'id'],
+                    ['City', 'city', 'text'],
                     ['Session', 'session', 'id'],
                 ],
             ],
@@ -444,7 +438,7 @@ final class Attacks extends Controller implements Sections
     /**
      * CARD 02 and the cross-tab. What is being tried, GROUPED BY PATTERN.
      *
-     * Grouped by pattern and never by exact string, and that is the same lesson Panel\Queries
+     * Grouped by pattern and never by exact string, and that is the same lesson the query-shape grouping
      * learned about Solr queries: every probe is unique — a different path, a different payload,
      * a different encoding — so a table of exact strings is a list of one-hit wonders and the
      * shape underneath it never surfaces. `hit_flags_ss` IS the shape, computed at ingest, which
@@ -557,16 +551,18 @@ final class Attacks extends Controller implements Sections
      */
     private function requests(): array
     {
-        $rows = self::rows(self::MAX_REQUESTS, 50);
+        $start = Paging::start();
+        $rows = Security::clampInt($_GET['rows'] ?? null, 1, self::MAX_REQUESTS, Paging::PAGE);
 
         $fqs = $this->attackFqs();
         $fqs[] = self::FQ_ANSWERED;
 
         $res = $this->gw->select('atk.requests', $this->gw->hitsCore(), [
-            'q'    => '*:*',
-            'fq'   => $fqs,
-            'sort' => 'ts desc',
-            'rows' => $rows,
+            'q'     => '*:*',
+            'fq'    => $fqs,
+            'sort'  => 'ts desc',
+            'rows'  => $rows,
+            'start' => $start,
             /* THE TWO FIELDS THIS CARD ACTUALLY READS, which Query::hitFl() does not carry.
                The mapper below reads `session_id_s` and `ip_s` off every document and the
                query never asked Solr for either, so both came back null on every row of every
@@ -577,7 +573,7 @@ final class Attacks extends Controller implements Sections
                Both are docValues, so they return in `fl` despite stored="false". Added here
                rather than to hitFl() because the other caller is a timeline already scoped to
                one session, where a session id on every row is dead weight. */
-            'fl'   => Query::hitFl() . ',session_id_s,ip_s',
+            'fl'   => Query::hitFl() . ',session_id_s,ip_s,country_s,city_s',
         ]);
 
         $out = [];
@@ -600,6 +596,8 @@ final class Attacks extends Controller implements Sections
                 'codes'    => $codes,
                 'patterns' => implode('; ', $labels),
                 'ip'       => isset($doc['ip_s']) ? (string) $doc['ip_s'] : null,
+                'country'  => isset($doc['country_s']) ? (string) $doc['country_s'] : null,
+                'city'     => isset($doc['city_s']) ? (string) $doc['city_s'] : null,
                 'session'  => isset($doc['session_id_s']) ? (string) $doc['session_id_s'] : null,
             ];
         }
@@ -607,8 +605,8 @@ final class Attacks extends Controller implements Sections
         return $this->envelope([
             'requests'  => $out,
             'total'     => (int) $res['numFound'],
-            'truncated' => count($out) < (int) $res['numFound'],
             'limit'     => $rows,
+            'page'      => Paging::block($start, $rows, (int) $res['numFound'], 'requests', count($out)),
         ]);
     }
 
@@ -979,19 +977,23 @@ final class Attacks extends Controller implements Sections
            drillable table in the panel ends in one explicit control with an accessible name,
            and a row that does something on click with no visible affordance is a control
            nobody finds. Widths re-cut so the colgroup still sums to 100. */
-        echo '<div class="table-wrap"><table id="atk-requests-table" class="table-fixed"><colgroup>'
-            . '<col style="width:15%"><col style="width:8%"><col style="width:37%">'
-            . '<col style="width:9%"><col style="width:9%"><col style="width:17%">'
-            . '<col style="width:5%">'
+        /* THE SAME FIVE COLUMNS EVERY OTHER TABLE OF EVENTS IN THIS PANEL SHOWS: date, address,
+           country, page, verdict. The method and the byte count left — both are on the row's own
+           request and both are in the visit the row opens — and the two columns that carry this
+           page's entire argument were MERGED rather than dropped: what the server answered and
+           which pattern matched are one judgement about one request, which is what a verdict is
+           here, and they share the fifth column. */
+        echo '<div class="table-wrap"><table id="atk-requests-table" class="table-fixed visits"><colgroup>'
+            . '<col style="width:17%"><col style="width:15%"><col style="width:14%">'
+            . '<col style="width:33%"><col style="width:21%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">When</th>'
-            . '<th scope="col">Method</th>'
-            . '<th scope="col">Request</th>'
-            . '<th scope="col" class="num">Status</th>'
-            . '<th scope="col" class="num">Bytes</th>'
-            . '<th scope="col">Pattern</th>'
-            . '<th scope="col" class="rowopen-cell"><span class="sr-only">Open</span></th>'
+            . '<th scope="col">Date</th>'
+            . '<th scope="col">IP</th>'
+            . '<th scope="col">Country</th>'
+            . '<th scope="col">Page</th>'
+            . '<th scope="col" class="visit-verdict">Verdict</th>'
             . '</tr></thead><tbody></tbody></table></div>';
+        echo '<div id="atk-requests-pager"></div>';
 
         self::cardClose('atk-requests');
     }

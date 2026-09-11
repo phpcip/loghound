@@ -13,7 +13,8 @@ import {
     api, byId, cardChart, dur, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, pct, setPop,
     showEmpty, tbody
 } from '../core.js';
-import { barsH, stackedTraffic, tokens } from '../charts.js';
+import { barsH, dispose, stackedTraffic, tokens } from '../charts.js';
+import { pagedCard } from '../cardtable.js';
 import { dimRow } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
 import { pathCell } from '../url.js';
@@ -69,18 +70,50 @@ function renderTiming(data) {
         setField(scope, key + '_avg', dur(avg));
     }
 
-    setPop('ov-timing', t.population
-        ? 'All four numbers cover the same ' + num(t.population) + ' human sessions that produced beacon data — ' +
-          pct(t.population, t.humans) + ' of the ' + num(t.humans) + ' human sessions in this range. The other ' +
-          num(t.without_beacon) + ' had no beacon and are excluded entirely; they are not counted as zero.'
-        : 'No human session in this range produced beacon data, so wall, visible and engaged time are unknown. ' +
-          'They are shown as em-dashes rather than zeroes.');
+    /* EACH MEASURE NAMES ITS OWN DENOMINATOR. The caption used to claim all four covered one
+       population, which was true and was the reason the card was usually empty: on a range where
+       no human session happened to have a beacon, the LOG SPAN — a number that exists for every
+       log-backed session — was reported as an em-dash too. The span and the three beacon clocks
+       describe different populations because they are measured by different things, and saying
+       which is more honest than forcing them onto one. */
+    const lines = [];
+
+    if (t.spanned) {
+        lines.push('Log span covers the ' + num(t.spanned) + ' completed human session' +
+            (t.spanned === 1 ? '' : 's') + ' that made more than one request.');
+        if (t.single_request) {
+            lines.push('A further ' + num(t.single_request) + ' made exactly one, so they have no span to ' +
+                'measure and are excluded rather than averaged in as zero.');
+        }
+        if (t.span_floored) {
+            lines.push(num(t.span_floored) + ' of them (' + pct(t.span_floored, t.spanned) +
+                ') came out shorter than this log\'s clock can measure.');
+        }
+    } else {
+        lines.push('No completed human session in this range made more than one request, so there is no ' +
+            'span to measure.');
+    }
+
+    lines.push(t.population
+        ? 'Wall, visible and engaged time cover the ' + num(t.population) + ' of those human sessions that ' +
+          'produced beacon data (' + pct(t.population, t.humans) + ' of ' + num(t.humans) + '); the other ' +
+          num(t.without_beacon) + ' had no beacon and are excluded entirely, not counted as zero.'
+        : 'No human session in this range produced beacon data, so wall, visible and engaged time are ' +
+          'unknown. They are shown as em-dashes rather than zeroes.');
+
+    setPop('ov-timing', lines.join(' '));
 
     /* The mixed-planes caveat is revealed only when the range actually holds sessions with no
        transport plane. On a single-machine install it describes nothing. */
     const planes = byId('ov-timing-planes');
     if (planes) {
         planes.hidden = !t.beacon_only;
+    }
+    /* Likewise the clock-resolution paragraph: it explains a zero that is a floor rather than a
+       measurement, and on a log that records a fraction there are none to explain. */
+    const floor = byId('ov-timing-floor');
+    if (floor) {
+        floor.hidden = !t.span_floored;
     }
 
     renderTimingComparison(t);
@@ -114,22 +147,44 @@ function renderTimingComparison(t) {
 }
 
 /**
- * Draw the four medians as one horizontal comparison, with the accent on the honest
- * number and nothing else.
+ * Draw the medians as one horizontal comparison, with the accent on the honest number.
+ *
+ * A MEASURE THAT HAS NO VALUE IS NOT A BAR OF ZERO. Every row used to be coerced with
+ * `|| 0`, so a card where nothing had been measured drew four empty bars against an axis
+ * that read "0 ms 0 ms 0 ms 1 ms 1 ms 1 ms" — six ticks of a domain that does not exist,
+ * which is a chart of nothing dressed as a chart of something. Rows with no value are
+ * dropped, and when that leaves nothing at all the chart is replaced by the empty state,
+ * which says so in words.
  */
 function renderTimingBars(t) {
     const th = tokens();
-    barsH('ov-timing-chart', [
-        { label: 'Log span', value: t.log_span_p50 || 0, key: 'log_span' },
-        { label: 'Wall clock', value: t.wall_p50 || 0, key: 'wall' },
-        { label: 'Visible', value: t.visible_p50 || 0, key: 'visible' },
-        { label: 'Engaged', value: t.engaged_p50 || 0, key: 'engaged' }
-    ].map((row) => ({
+    const rows = [
+        { label: 'Log span', value: t.log_span_p50, key: 'log_span' },
+        { label: 'Wall clock', value: t.wall_p50, key: 'wall' },
+        { label: 'Visible', value: t.visible_p50, key: 'visible' },
+        { label: 'Engaged', value: t.engaged_p50, key: 'engaged' }
+    ].filter((row) => row.value !== null && row.value !== undefined);
+
+    const node = byId('ov-timing-chart');
+    if (!rows.length) {
+        dispose('ov-timing-chart');
+        if (node) {
+            node.hidden = true;
+        }
+        noDataYet('ov-timing-empty', 'measured durations');
+        return;
+    }
+    if (node) {
+        node.hidden = false;
+    }
+    hideEmpty('ov-timing-empty');
+
+    barsH('ov-timing-chart', rows.map((row) => ({
         label: row.label,
         value: row.value,
         color: row.key === 'engaged' ? th.accent : th.pop.declared,
         extra: 'median'
-    })), { labelWidth: 100, format: dur });
+    })), { format: dur });
 }
 
 /**
@@ -147,47 +202,73 @@ function renderSeries(data) {
 }
 
 /**
- * Load the top-pages table for one population.
+ * Load the top-pages table.
  *
- * The caption carries the server's `note` as well, because the path set on a session document
- * deliberately excludes Loghound's own beacon script and collector (Sessionizer::accumulateSelf),
- * and a count that quietly omits something has to say so.
+ * Counted in REQUESTS now, from the hits plane — see Panel\Overview::topPages() for why the
+ * session count could not rank anything and why the toggle stopped being a population. The
+ * distinct sessions behind each path come along as a second column, which is the number the
+ * card used to rank by and is still worth reading beside the first.
+ *
+ * The caption carries the server's `note`, because the count quietly omits sub-resources and
+ * instrumentation and anything that omits something has to say so, and `ignored`, because a
+ * Verdict filter set elsewhere in the panel cannot narrow a hits-plane card and a table that
+ * silently dropped it would be a wrong answer under a chip claiming otherwise.
  */
-function loadPages(population) {
-    return loadCard('ov-pages', 'Faceting requested paths', async () => {
-        const data = await api('overview', 'toppages', { pop: population });
+function renderPages(data) {
+    const ignored = (data.ignored || []).length
+        ? ' These filters name session-level conclusions the request plane does not carry and do not ' +
+          'narrow this table: ' + data.ignored.join(', ') + '.'
+        : '';
 
-        setPop('ov-pages', data.population_label + ' · ' + num(data.total) + ' sessions in range. Counted as ' +
-            'sessions that requested the path at least once, not as raw request count.' +
-            (data.note ? ' ' + data.note : ''));
+    setPop('ov-pages', data.population_label + ' \u00b7 ' + num(data.total) + ' requests in range, ranked by ' +
+        'how many times each path was fetched.' + (data.note ? ' ' + data.note : '') + ignored);
 
-        if (!data.rows.length) {
-            tbody(byId('ov-pages-table'), []);
-            noDataYet('ov-pages-empty', 'page requests');
-            return;
-        }
-        hideEmpty('ov-pages-empty');
+    if (!data.rows.length) {
+        tbody(byId('ov-pages-table'), []);
+        return false;
+    }
+    hideEmpty('ov-pages-empty');
 
-        const top = data.rows[0].sessions || 1;
-        tbody(byId('ov-pages-table'), data.rows.map((row) => ({
-            attrs: dimRow('paths_ss', row.path),
-            cells: [
-                {
-                    node: pathCell(row.path, { host: row.host, hosts: row.hosts }),
-                    class: 'clip urlcell',
-                    title: row.path,
-                    sort: row.path
-                },
-                { text: num(row.sessions), num: true, sort: row.sessions },
-                {
-                    node: el('span', { class: 'bar' }, [
-                        el('span', { style: 'width:' + Math.round((row.sessions / top) * 100) + '%' })
-                    ]),
-                    sort: row.sessions
-                }
-            ]
-        })));
-    });
+    tbody(byId('ov-pages-table'), data.rows.map((row) => ({
+        attrs: dimRow('paths_ss', row.path),
+        cells: [
+            {
+                node: pathCell(row.path, { host: row.host, hosts: row.hosts }),
+                class: 'clip urlcell',
+                title: row.path,
+                sort: row.path
+            },
+            { text: num(row.requests), num: true, sort: row.requests },
+            { text: num(row.sessions), num: true, sort: row.sessions },
+            shareCell(row.requests, data.total)
+        ]
+    })));
+
+    return true;
+}
+
+/**
+ * A share bar, as a fraction of the TOTAL rather than of the biggest row.
+ *
+ * THE DEFECT THIS FIXES. Every share bar in the panel divided by `rows[0]`, the largest value
+ * in the list — so the top row was always exactly full width and every other row was measured
+ * against it. In a top-N list of a long tail that is close to meaningless: the top three paths
+ * of a busy site can be 4%, 3% and 3% of its traffic and were drawn as 100%, 75% and 75%, which
+ * reads as "these three are the site". A share is a share OF something, and the something is
+ * the total the card already knows.
+ *
+ * A zero total yields a zero-width bar rather than a division by zero, and the title carries
+ * the figure in words so the bar is never the only way to read it.
+ */
+function shareCell(value, total) {
+    const share = total > 0 ? (value / total) * 100 : 0;
+
+    return {
+        node: el('span', { class: 'bar', title: pct(value, total) + ' of all of them' }, [
+            el('span', { style: 'width:' + Math.max(share > 0 ? 1 : 0, Math.round(share)) + '%' })
+        ]),
+        sort: value
+    };
 }
 
 /**
@@ -198,68 +279,67 @@ function loadPages(population) {
  * range. Rendering the generic one for both would send somebody hunting for a bug in their own
  * search page when the feature had simply never been switched on.
  */
-function loadSearches() {
-    return loadCard('ov-searches', 'Faceting search terms', async () => {
-        const data = await api('overview', 'searches');
+function renderSearches(data) {
+    if (!data.configured.length) {
+        setPop('ov-searches', 'Not collecting any search terms.');
+        tbody(byId('ov-searches-table'), []);
+        showEmpty('ov-searches-empty', 'Search terms are not being collected', [
+            'Loghound reads a search term out of the URL, and only from the query parameters you '
+                + 'have named. None are named on this installation, so nothing is collected and '
+                + 'nothing can appear here.',
+            el('p', {}, [
+                'Name the parameter your search box uses \u2014 ',
+                el('code', { text: 'q' }),
+                ', ',
+                el('code', { text: 's' }),
+                ' or whatever your site puts in the address \u2014 under ',
+                el('a', { href: '?v=settings&s=beacon', text: 'Settings, in the beacon section' }),
+                '. Terms start appearing here from the next visit onwards; nothing is recovered '
+                + 'retrospectively.'
+            ])
+        ]);
+        return 'own';
+    }
 
-        /* THE FEATURE IS NOT CONFIGURED, which is a different fact from "no search terms in
-           this range" and needs its own sentence rather than a whole explanation crammed into
-           noDataYet()'s NOUN slot. It rendered, verbatim: "No search terms — name the query
-           parameters your search box uses in beacon.query_params (Settings → Beacon) and they
-           start appearing here in this time range" — and leaked a config key into a heading.
-           The setting is named where it can be marked as one, and the link goes to the page
-           that changes it rather than telling the reader where to look for it. */
-        if (!data.configured.length) {
-            setPop('ov-searches', 'Not collecting any search terms.');
-            tbody(byId('ov-searches-table'), []);
-            showEmpty('ov-searches-empty', 'Search terms are not being collected', [
-                'Loghound reads a search term out of the URL, and only from the query parameters you '
-                    + 'have named. None are named on this installation, so nothing is collected and '
-                    + 'nothing can appear here.',
-                el('p', {}, [
-                    'Name the parameter your search box uses — ',
-                    el('code', { text: 'q' }),
-                    ', ',
-                    el('code', { text: 's' }),
-                    ' or whatever your site puts in the address — under ',
-                    el('a', { href: '?v=settings#set-beacon-card', text: 'Settings, in the beacon section' }),
-                    '. Terms start appearing here from the next visit onwards; nothing is recovered '
-                    + 'retrospectively.'
-                ])
-            ]);
-            return;
-        }
+    setPop('ov-searches', num(data.searched) + ' of ' + num(data.total) + ' sessions in range ran a ' +
+        'search. Counted as sessions that searched for a term at least once, not as the number of ' +
+        'searches: a visitor who ran the same search six times counts once.');
 
-        setPop('ov-searches', num(data.searched) + ' of ' + num(data.total) + ' sessions in range ran a ' +
-            'search. Counted as sessions that searched for a term at least once, not as the number of ' +
-            'searches: a visitor who ran the same search six times counts once.');
+    if (!data.rows.length) {
+        tbody(byId('ov-searches-table'), []);
+        return false;
+    }
+    hideEmpty('ov-searches-empty');
 
-        if (!data.rows.length) {
-            tbody(byId('ov-searches-table'), []);
-            noDataYet('ov-searches-empty', 'search terms');
-            return;
-        }
-        hideEmpty('ov-searches-empty');
+    /* Share of the sessions that actually SEARCHED, not of the largest row and not of every
+       session in range. `data.searched` is the denominator the count belongs to: a term used by
+       half the people who searched is 50%, whatever proportion of visitors search at all. See
+       shareCell() for why dividing by the top row was wrong on every table that did it. */
+    tbody(byId('ov-searches-table'), data.rows.map((row) => ({
+        attrs: dimRow('search_terms_ss', row.term),
+        cells: [
+            { text: row.term, clip: true, sort: row.term },
+            { text: num(row.sessions), num: true, sort: row.sessions },
+            shareCell(row.sessions, data.searched)
+        ]
+    })));
 
-        const top = data.rows[0].sessions || 1;
-        tbody(byId('ov-searches-table'), data.rows.map((row) => ({
-            attrs: dimRow('search_terms_ss', row.term),
-            cells: [
-                { text: row.term, clip: true, sort: row.term },
-                { text: num(row.sessions), num: true, sort: row.sessions },
-                {
-                    node: el('span', { class: 'bar' }, [
-                        el('span', { style: 'width:' + Math.round((row.sessions / top) * 100) + '%' })
-                    ]),
-                    sort: row.sessions
-                }
-            ]
-        })));
-    });
+    return true;
 }
 
+/** Which of the two things the top-pages table is counting. */
+let scope = 'pages';
+
 /**
- * Wire the humans/all/bots toggle.
+ * The top-pages loader, assigned once the card is wired.
+ *
+ * Held here because the toggle has to restart the table AT ITS FIRST PAGE: a change of scope
+ * changes the population, and the offset the reader was at named a row in a different one.
+ */
+let loadPages = () => {};
+
+/**
+ * Wire the pages/every-request toggle.
  */
 function initPageToggle() {
     const group = document.querySelector('[data-card="ov-pages"] .toggle');
@@ -274,7 +354,8 @@ function initPageToggle() {
             }
             button.classList.add('on');
             button.setAttribute('aria-pressed', 'true');
-            loadPages(button.dataset.pop);
+            scope = button.dataset.pop;
+            loadPages(0);
         });
     }
 }
@@ -306,6 +387,19 @@ export default function init() {
     loadCard('ov-series', 'Bucketing sessions by hour', async () => {
         renderSeries(await api('overview', 'series'));
     });
-    loadPages('humans');
-    loadSearches();
+    loadPages = pagedCard({
+        id: 'ov-pages',
+        label: 'Counting requests by path',
+        empty: 'page requests',
+        fetch: (start) => api('overview', 'toppages', { pop: scope, start: start }),
+        render: renderPages
+    });
+
+    pagedCard({
+        id: 'ov-searches',
+        label: 'Faceting search terms',
+        empty: 'search terms',
+        fetch: (start) => api('overview', 'searches', { start: start }),
+        render: renderSearches
+    });
 }

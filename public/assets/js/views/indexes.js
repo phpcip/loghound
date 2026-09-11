@@ -1,8 +1,8 @@
 /*
  * Loghound — Index analytics view.
  *
- * Five independent cards, five independent requests, five independent failures. Changing
- * the index reloads all five, and each still settles on its own.
+ * One page per section, one request each, one failure each. Changing the index reloads
+ * whichever of them is on screen, and each still settles on its own.
  *
  * Every number states its population. The QTime percentiles are read off a bucketed
  * histogram and are rendered with a "≤" for exactly that reason: the platform's request-log
@@ -263,58 +263,6 @@ function renderHandlers(data) {
 }
 
 /**
- * Fill the cluster-node card: the split as bars, then the exact table.
- */
-function renderNodes(data) {
-    if (handleState('ix-nodes-empty', data, 'requests')) {
-        tbody(byId('ix-nodes-table'), []);
-        return;
-    }
-
-    const names = Object.keys(data.nodes);
-    const total = names.reduce((sum, key) => sum + data.nodes[key], 0);
-
-    if (chartOrEmpty('ix-nodes-chart', 'ix-nodes-empty', names.length, 'No node recorded', [
-        'The platform returned no cluster hostname for these requests, so there is nothing to split ' +
-            'them across.'
-    ])) {
-        tbody(byId('ix-nodes-table'), []);
-        return;
-    }
-
-    barsH('ix-nodes-chart', names.map((name) => ({
-        label: name,
-        value: data.nodes[name],
-        extra: pct(data.nodes[name], total) + ' of the requests listed'
-    })));
-
-    tbody(byId('ix-nodes-table'), names.map((name) => ({
-        attrs: { class: 'lf-pick' },
-        cells: [
-            Object.assign(pickCell('param_hostname', name, data.active), { mono: true, clip: true }),
-            { text: num(data.nodes[name]), num: true, sort: data.nodes[name] },
-            { node: shareBar(data.nodes[name], total) }
-        ]
-    })));
-
-    const note = byId('ix-nodes-note');
-    if (note) {
-        const size = data.size || {};
-        note.textContent = names.length <= 1
-            ? 'One node answered every request. A single-node index has no read replicas to spread ' +
-              'load across, which is expected on a small plan and worth knowing on a large one.'
-            : names.length + ' nodes answered. An even split is the healthy shape for a cluster of ' +
-              'read replicas; a node missing from this list is a node that stopped taking traffic. ' +
-              (size.sum === null || size.sum === undefined
-                  ? ''
-                  : 'Together they returned ' + bytes(size.sum * 1024) + ' in this range.');
-    }
-
-    setPop('ix-nodes', num(data.requests) + ' requests in this range, grouped by the node that served them. ' +
-        num(total) + ' of them (' + pct(total, data.requests) + ') fall into the nodes listed.');
-}
-
-/**
  * Load every card for the current index.
  */
 function refresh() {
@@ -351,13 +299,6 @@ function refresh() {
         renderHandlers(chosen === null
             ? { state: 'no_index', requests: 0 }
             : await api('indexes', 'handlers', { core: chosen }));
-    });
-
-    loadCard('ix-nodes', 'Faceting cluster nodes', async () => {
-        const chosen = await resolveCore('indexes', 'ix-core', refresh);
-        renderNodes(chosen === null
-            ? { state: 'no_index', requests: 0 }
-            : await api('indexes', 'nodes', { core: chosen }));
     });
 }
 

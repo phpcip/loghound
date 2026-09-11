@@ -22,15 +22,36 @@ import {
 import { sparkline, tokens } from '../charts.js';
 import { clientNode, countryNode, dimValue, verdictChip } from '../identity.js';
 import { markSortable } from '../sorttable.js';
+import { renderPager } from '../pager.js';
 
 /** Rows currently expanded, so a re-sort can leave them open. */
 const expanded = new Set();
 
-/** Split a hash into a bold identifiable head and a faint tail. */
-function hashNode(hash) {
-    return el('span', { class: 'fp-hash', title: hash }, [
-        el('span', { class: 'fp-head', text: shortHash(hash, 12) }),
-        el('span', { class: 'fp-tail', text: String(hash).slice(12, 20) })
+/**
+ * The signature column: a short tag, and the finding the row is actually about.
+ *
+ * IT USED TO BE TWENTY CHARACTERS OF HASH and nothing else. A hash is a database key, not
+ * something a person reads, and on the one page in the product whose subject genuinely IS the
+ * hash it still should not be the widest column — what a reader needs from this cell is "is this
+ * the fleet or not", with just enough of the identifier to tell two rows apart and to quote in a
+ * message. Eight characters does that; the whole value is in the cell's own description and the
+ * row opens a dialog that never shows it at all.
+ *
+ * The chip is not decoration. The orange rule on a fleet row is drawn on the cell's left edge and
+ * a rule alone is a mark with no name — the legend under the table says what it means, and this
+ * says it on the row.
+ */
+function signatureNode(row) {
+    return el('span', { class: 'fp-hash' }, [
+        el('span', { class: 'fp-head', text: shortHash(row.fp, 8) }),
+        row.fleet
+            ? el('span', {
+                class: 'chip chip-accent',
+                text: 'fleet',
+                title: 'Five or more distinct addresses wear this one client signature, on no mobile '
+                    + 'carrier and with nothing self-declared. That is the shape a rotating proxy pool makes.'
+            })
+            : null
     ]);
 }
 
@@ -84,7 +105,11 @@ function clusterRow(row, sparkBuckets) {
     });
     tr.appendChild(el('td', {}, [button]));
 
-    tr.appendChild(el('td', { class: 'mono', 'data-sort': row.fp }, [hashNode(row.fp)]));
+    tr.appendChild(el('td', {
+        class: 'mono',
+        'data-sort': row.fp,
+        title: 'Client signature ' + row.fp
+    }, [signatureNode(row)]));
 
     tr.appendChild(el('td', {
         class: 'num',
@@ -173,8 +198,8 @@ async function toggle(tr, row) {
     const inner = holder.querySelector('.members-inner');
 
     try {
-        const data = await api('fingerprints', 'members', { fp: row.fp });
-        renderMembers(inner, data);
+        const data = await api('fingerprints', 'members', { fp: row.fp, start: 0 });
+        renderMembers(inner, data, row.fp);
     } catch (err) {
         /* A RETRY IN PLACE. The expander is left reading "−", so pressing it again COLLAPSES
            the row rather than retrying it — the reader has to collapse and re-expand, and the
@@ -183,8 +208,8 @@ async function toggle(tr, row) {
         again.addEventListener('click', () => {
             again.disabled = true;
             inner.replaceChildren(el('p', { class: 'muted', text: 'Loading addresses\u2026' }));
-            api('fingerprints', 'members', { fp: row.fp })
-                .then((data) => renderMembers(inner, data))
+            api('fingerprints', 'members', { fp: row.fp, start: 0 })
+                .then((data) => renderMembers(inner, data, row.fp))
                 .catch((e) => inner.replaceChildren(
                     el('p', { class: 'muted', text: 'Could not load addresses: ' + e.message }),
                     el('div', { class: 'card-error-actions' }, [again])
@@ -197,94 +222,110 @@ async function toggle(tr, row) {
     }
 }
 
-/** Render the member-IP table for one cluster. */
-function renderMembers(inner, data) {
+/**
+ * Render the member-address table for one cluster.
+ *
+ * FIVE COLUMNS, AND TWO OF THEM WENT TO THE DIALOG. It carried ten: address, netblock, ASN,
+ * organisation, netname, type, where, sessions, score and last seen. The netblock, the ASN number
+ * and the RIR netname are the three an operator quotes and none of them is something a reader
+ * takes in while scanning — and every one of them is in the dialog each row opens, where the
+ * address gets a sentence saying whose address space it sits in rather than three identifiers in
+ * three columns. What is left is what a person reads down a column: who, where, whose network,
+ * how much, and when.
+ *
+ * IT IS PAGED. A rotating-proxy cluster is the case this table exists for and is exactly the one
+ * that runs to hundreds of addresses; fetching a hundred of them and calling it the list was the
+ * same defect as "the most recent 12 of 1,890".
+ *
+ * @param {HTMLElement} inner
+ * @param {Object} data
+ * @param {string} fp  The fingerprint, used only to fetch further pages. Never rendered.
+ */
+function renderMembers(inner, data, fp) {
     if (!data.rows.length) {
         inner.replaceChildren(el('p', { class: 'muted', text: 'No addresses returned for this fingerprint.' }));
         return;
     }
 
     const summary = el('p', { class: 'muted' }, [
-        num(data.rows.length) + ' address' + (data.rows.length === 1 ? '' : 'es') +
-        ' across ' + num(data.uniq_asns) + ' autonomous system' + (data.uniq_asns === 1 ? '' : 's') +
+        num(data.page && data.page.total !== null ? data.page.total : data.rows.length) +
+        ' addresses across ' + num(data.uniq_asns) + ' autonomous system' + (data.uniq_asns === 1 ? '' : 's') +
         ', ' + num(data.uniq_nets) + ' netblock' + (data.uniq_nets === 1 ? '' : 's') +
         ' and ' + num(data.uniq_countries) + ' countr' + (data.uniq_countries === 1 ? 'y' : 'ies') +
-        ', sharing one header fingerprint.' +
-        (data.truncated ? ' Truncated to the busiest addresses.' : '')
+        ', all sharing one client signature. Each row opens everything known about that address, ' +
+        'including the netblock and the network it belongs to.'
     ]);
 
     const table = el('table', { class: 'tight table-fixed' }, [
-        /* ONE UNIT, AND THEY SUM TO 100 — see the same fix in detail.js. This one was 110ch
-           of fixed columns with a width-less <col> for Organisation inside a 680px table, and
-           every column in it measured 0px wide. */
-        el('colgroup', {}, [
-            el('col', { style: 'width:14%' }), el('col', { style: 'width:13%' }),
-            el('col', { style: 'width:7%' }), el('col', { style: 'width:16%' }),
-            el('col', { style: 'width:13%' }), el('col', { style: 'width:8%' }),
-            el('col', { style: 'width:10%' }), el('col', { style: 'width:6%' }),
-            el('col', { style: 'width:5%' }), el('col', { style: 'width:8%' })
-        ]),
+        el('colgroup', {}, ['22%', '20%', '28%', '10%', '20%'].map((w) => el('col', { style: 'width:' + w }))),
         el('thead', {}, [
             el('tr', {}, [
                 el('th', { scope: 'col', text: 'Address' }),
-                el('th', { scope: 'col', text: 'Netblock' }),
-                el('th', { scope: 'col', text: 'ASN' }),
-                el('th', { scope: 'col', text: 'Organisation' }),
-                el('th', { scope: 'col', text: 'Netname' }),
-                el('th', { scope: 'col', text: 'Type' }),
-                el('th', { scope: 'col', text: 'Where' }),
-                el('th', { scope: 'col', class: 'num', text: 'Sess.' }),
-                el('th', { scope: 'col', class: 'num', text: 'Score' }),
+                el('th', { scope: 'col', text: 'Country' }),
+                el('th', { scope: 'col', text: 'Network' }),
+                el('th', { scope: 'col', class: 'num', text: 'Visits' }),
                 el('th', { scope: 'col', text: 'Last seen' })
             ])
         ])
     ]);
 
     const body = el('tbody');
-    for (const m of data.rows) {
-        body.appendChild(el('tr', {
-            class: 'row-link',
-            tabindex: '0',
-                title: 'Open everything known about this address',
-            dataset: { lhOpen: 'dim', field: 'ip_s', value: m.ip }
-        }, [
-            el('td', { class: 'mono nowrap', 'data-sort': m.ip || '' }, [dimValue('ip_s', m.ip, { mono: true })]),
-            el('td', { class: 'mono clip', title: m.net || '', text: m.net || '—', 'data-sort': m.net || '' }),
-            el('td', { class: 'mono num', text: m.asn ? 'AS' + m.asn : '—', 'data-sort': m.asn || '' }),
-            el('td', { class: 'clip', title: m.org || 'Organisation not resolved', 'data-sort': m.org || '' }, [
-                m.org ? dimValue('as_org_s', m.org) : el('span', { class: 'muted', text: '—' })
-            ]),
-            el('td', { class: 'mono clip', title: m.netname || '', 'data-sort': m.netname || '' }, [
-                m.netname ? dimValue('netname_s', m.netname, { mono: true }) : el('span', { class: 'muted', text: '—' })
-            ]),
-            el('td', { 'data-sort': m.as_type || '' }, [
-                m.as_type
-                    ? dimValue('as_type_s', m.as_type)
-                    : el('span', { class: 'chip', text: 'unknown' })
-            ]),
-            el('td', {
-                class: 'clip',
-                title: [m.city, m.country].filter(Boolean).join(', ') || 'Not geolocated',
-                'data-sort': [m.country, m.city].filter(Boolean).join(' ')
-            }, [
-                m.country ? countryNode(m.country, { short: true }) : el('span', { class: 'muted', text: '—' }),
-                m.city ? el('span', { class: 'sub', text: m.city }) : null
-            ]),
-            el('td', { class: 'num', text: num(m.sessions), 'data-sort': String(m.sessions) }),
-            el('td', {
-                class: 'num',
-                text: m.score === null ? '—' : dec(m.score, 0),
-                'data-sort': m.score === null ? '' : String(m.score)
-            }),
-            el('td', { class: 'mono nowrap', text: when(m.last), 'data-sort': m.last || '' })
-        ]));
-    }
     table.appendChild(body);
 
+    const paint = (rows) => {
+        body.replaceChildren();
+        for (const m of rows) {
+            body.appendChild(el('tr', {
+                class: 'row-link',
+                tabindex: '0',
+                title: 'Open everything known about this address',
+                dataset: { lhOpen: 'dim', field: 'ip_s', value: m.ip }
+            }, [
+                el('td', { class: 'mono nowrap', 'data-sort': m.ip || '' }, [dimValue('ip_s', m.ip, { mono: true })]),
+                el('td', {
+                    class: 'clip',
+                    title: [m.city, m.country].filter(Boolean).join(', ') || 'Not geolocated',
+                    'data-sort': [m.country, m.city].filter(Boolean).join(' ')
+                }, [
+                    m.country ? countryNode(m.country) : el('span', { class: 'muted', text: '\u2014' })
+                ]),
+                el('td', { class: 'clip', title: m.org || 'Network not resolved', 'data-sort': m.org || '' }, [
+                    m.org ? dimValue('as_org_s', m.org) : el('span', { class: 'muted', text: '\u2014' }),
+                    m.as_type ? el('div', { class: 'sub' }, [dimValue('as_type_s', m.as_type)]) : null
+                ]),
+                el('td', { class: 'num', text: num(m.sessions), 'data-sort': String(m.sessions) }),
+                el('td', { class: 'mono nowrap', text: when(m.last), 'data-sort': m.last || '' })
+            ]));
+        }
+    };
+
+    const mount = el('div', { class: 'pager-mount' });
+    const show = (state) => {
+        renderPager(mount, state, async (start) => {
+            mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page\u2026' }));
+            try {
+                const next = await api('fingerprints', 'members', { fp: fp, start: start, rows: state.rows });
+                paint(next.rows);
+                show(next.page);
+            } catch (e) {
+                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                again.addEventListener('click', () => show(state));
+                mount.replaceChildren(
+                    el('p', { class: 'muted', text: 'That page could not be loaded: ' + e.message }),
+                    el('div', { class: 'card-error-actions' }, [again])
+                );
+            }
+        });
+    };
+
+    paint(data.rows);
+    show(data.page);
+
     inner.replaceChildren(
-        el('h4', { text: 'Addresses sharing this fingerprint' }),
+        el('h4', { text: 'Addresses sharing this client signature' }),
         summary,
         el('div', { class: 'table-wrap' }, [table]),
+        mount,
         data.ua ? el('p', { class: 'muted mono wrap', text: data.ua }) : null
     );
     markSortable(inner);

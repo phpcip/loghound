@@ -213,13 +213,14 @@ final class Installer
      * The unlock lives in the session and nowhere else: there is no cookie, header or
      * query parameter that carries it, so it cannot be replayed from a link.
      *
-     * A SESSION THAT PRESSED REINSTALL IN THE SIGNED-IN PANEL is accepted too, and that is not a
-     * weakening of the token. It has already proved more than the token asks for — it held the
-     * panel password, and a second factor where one is configured — and carrying that forward is
-     * what stops the button from locking a browser-only operator out of both the panel and the
-     * installer in one click. It is checked AFTER the ordinary unlock, spent once, and belongs
-     * to that session alone; a visitor who did not press the button still has to read
-     * var/install-token. See Setup\Token::grant().
+     * A SESSION THAT CONFIRMED START OVER IN THE SIGNED-IN PANEL is accepted too, and that is
+     * not a weakening of the token. It has already proved more than the token asks for — it held
+     * the panel password, and a second factor where one is configured — and carrying that
+     * forward is what stops that action from locking a browser-only operator out of both the
+     * panel and the installer in one click, on a machine whose configuration it has just
+     * deleted. It is checked AFTER the ordinary unlock, spent once, and belongs to that session
+     * alone; a visitor who did not confirm it still has to read var/install-token. See
+     * Setup\Token::grant().
      */
     private function unlocked(): bool
     {
@@ -228,7 +229,7 @@ final class Installer
         $at = (int) ($_SESSION['lh_setup_unlocked'] ?? 0);
 
         /* THE UNLOCK HAS ITS OWN CLOCK, AND IT DID NOT. It used to be the bare boolean `true`,
-           so a thirty-minute reinstall grant became an unlock that lived as long as the PHP
+           so a thirty-minute setup grant became an unlock that lived as long as the PHP
            session — a window bounded by session.gc_maxlifetime rather than by anything this
            file decided. Storing the instant instead makes the bound explicit and makes an old
            session's unlock expire the way the grant that produced it was always meant to. A

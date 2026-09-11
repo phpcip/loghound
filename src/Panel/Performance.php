@@ -31,6 +31,18 @@ use Loghound\Setup\Steps;
 
 final class Performance extends Controller
 {
+
+    /**
+     * The pages this view has, in render order.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    public const SECTIONS = [
+        ['pf-headline', 'What to measure'],
+        ['pf-time', 'Latency over time'],
+        ['pf-paths', 'Slowest paths'],
+        ['pf-status', 'Status codes'],
+    ];
     /**
      * Which page-toolbar controls this view honours.
      *

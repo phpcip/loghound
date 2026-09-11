@@ -691,15 +691,30 @@ still counts against your plan.
 
 ### Starting over
 
-`bin/loghound-setup --reset`, or the **Reinstall** card at the bottom of Settings, clears the log
-sources, the index names and the sign-in and walks you back through setup. It is not an
-uninstall: your indexes, every document in them and your log files are untouched, and the
-Opensolr account is kept so setup can offer the pair you were already using. `install/uninstall.sh`
-is the thing that removes data.
+There are two different things here, and the difference is whether your data survives.
 
-From the panel it does not lock you out: pressing the button in a signed-in session is a stronger
-proof than the token file, so that proof is carried to that browser for half an hour, once.
-Anyone else reaching the installer still has to read `var/install-token` over a shell.
+**`bin/loghound-setup --reset` is the narrow one.** It clears the log sources, the index names
+and the sign-in and walks you back through setup. It is not an uninstall: your indexes, every
+document in them and your log files are untouched, and the Opensolr account is kept so setup can
+offer the pair you were already using.
+
+**The Start over card at the bottom of Settings deletes everything.** Both Opensolr indexes and
+every document in them go from your account, and the card proves it by reading the account
+listing again afterwards; the configuration goes with your Opensolr email, API key and region in
+it; every persistent-login token is revoked and everything under `var/` is deleted. You land on
+the installer and provide all of it again, exactly as on a first install. The only way to keep
+the data is an Opensolr backup taken **before** you press it, which is a separately billed
+feature. It costs a typed `DELETE EVERYTHING` and a current second factor where two-factor is on.
+
+Your access log files and the `LogFormat` line in your own vhost are untouched by both.
+
+From the panel it does not lock you out: confirming in a signed-in session is a stronger proof
+than the token file, so that proof is carried to that browser for half an hour, once. Anyone else
+reaching the installer still has to read `var/install-token` over a shell.
+
+`install/uninstall.sh` removes Loghound from the machine as well — the units, the vhost, the
+PHP-FPM pool, the command links, the service user and the install tree — and deletes the indexes
+through the same code the panel uses.
 
 ### Your plan has to have room, and that is checked first
 

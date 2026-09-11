@@ -128,34 +128,70 @@ export function dispose(id) {
 }
 
 /**
- * Place a tooltip clear of the mark that triggered it.
+ * Place a tooltip beside the mark that triggered it, flipping at the edges.
  *
- * THE DEFECT THIS FIXES. ECharts anchors a tooltip to the cursor, and on a horizontal bar
- * chart the cursor is ON the bar: the box covered the bar the reader was pointing at and the
- * two either side of it, so hovering to read a value hid the value. The same is true of any
- * thick mark — a stacked band, a histogram column, a donut arc.
+ * THE DEFECT THIS FIXES, and it is the second attempt at it. The first version put the box in
+ * the opposite half of the whole chart — whichever vertical half the cursor was not in, and
+ * whichever horizontal half it was not in. That does keep the box off the hovered mark, and it
+ * does so by throwing the box as far away as the canvas allows, which produced exactly the
+ * behaviour that was reported: a tooltip for a Top pages row rendering two rows away and on top
+ * of other rows' text; the sessions-over-time tooltip pinned in the top-left corner, over the
+ * legend it was obscuring, however far right the hovered point was; and the score-distribution
+ * tooltip landing on the x-axis and a neighbouring bar. A tooltip that is nowhere near what it
+ * describes is not a fixed tooltip, it is a different defect — the reader has to work out which
+ * mark it belongs to, and on a dense chart there is no way to.
  *
- * The rule is the opposite corner, decided per axis: the box goes into whichever vertical
- * half the cursor is NOT in, and whichever horizontal half it is not in. So on a horizontal
- * bar chart it is never on the hovered row, and on a vertical one it is never on the hovered
- * column. It flips once as the cursor crosses the middle rather than following it around,
- * which is steadier to read than a box that chases the pointer.
+ * A tooltip belongs NEXT TO the cursor. So the box is offered the position just to the right of
+ * the pointer and vertically centred on it, and each axis flips only when that position would
+ * not fit:
  *
- * A tooltip taller than half the chart cannot be kept off the hovered row vertically, so it
- * falls back to being pinned as far from the cursor as the canvas allows. Everything is
- * clamped inside the view, which is also why `confine` is set alongside it.
+ *   * horizontally, to the LEFT of the cursor when the box would otherwise overflow the right
+ *     edge — which is what "flipping at the edge" means and what the histogram's tooltip was
+ *     not doing;
+ *   * vertically, clamped into the view rather than flipped, because a box centred on the
+ *     cursor already covers neither the row above nor the row below on any chart whose marks
+ *     are thinner than the box, and clamping is steadier to read than a jump.
+ *
+ * The gap is what keeps it off the mark itself. Everything ends up inside the canvas, which is
+ * also why `confine` stays set alongside this: it is the backstop for a box larger than the
+ * view, where no placement can satisfy both rules.
  */
-function awayFromCursor(point, params, dom, rect, size) {
-    const pad = 10;
+function besideCursor(point, params, dom, rect, size) {
+    const gap = 14;
+    const pad = 4;
     const [w, h] = size.contentSize;
     const [width, height] = size.viewSize;
 
-    const clamp = (v, max) => Math.max(pad, Math.min(v, Math.max(pad, max - pad)));
+    let left = point[0] + gap;
+    if (left + w > width - pad) {
+        left = point[0] - w - gap;
+    }
+    left = Math.max(pad, Math.min(left, Math.max(pad, width - w - pad)));
 
-    const top = point[1] > height / 2 ? pad : height - h - pad;
-    const left = point[0] > width / 2 ? pad : width - w - pad;
+    let top = point[1] - h / 2;
+    top = Math.max(pad, Math.min(top, Math.max(pad, height - h - pad)));
 
-    return [clamp(left, width - w), clamp(top, height - h)];
+    return [left, top];
+}
+
+/**
+ * The band drawn behind the hovered category, for a `shadow` axis pointer.
+ *
+ * THE DEFECT THIS FIXES. Every chart that used a shadow pointer passed `color: t.band` and
+ * nothing else, and `--band` is an OPAQUE near-white in the light theme (#fbfaf8). ECharts
+ * draws the axis pointer in a layer above the series, so the band was painted OVER the bar it
+ * was highlighting: hovering a bucket to read its value made the bar vanish, and the tooltip
+ * then reported a figure for something no longer on screen. Observed with a thirteen-session
+ * bar going completely invisible while its own tooltip said 13.
+ *
+ * A highlight belongs behind what it highlights. There is no way to put this layer behind the
+ * series, so the band is made translucent instead: enough to read as a band, not enough to
+ * change the bar under it. One helper rather than four call sites, because a highlight that
+ * erases its subject is wrong on every chart and a per-chart fix is one the next chart does not
+ * get.
+ */
+function shadowPointer(t) {
+    return { type: 'shadow', shadowStyle: { color: t.band, opacity: 0.35 } };
 }
 
 /**
@@ -195,7 +231,7 @@ function withDefaults(option, t) {
             borderWidth: 1,
             padding: [8, 10],
             confine: true,
-            position: awayFromCursor,
+            position: besideCursor,
             textStyle: { color: t.text, fontFamily: t.ui, fontSize: 14 },
             extraCssText: 'box-shadow:none;border-radius:2px;'
         },
@@ -386,6 +422,19 @@ export function timeAxis(t, times) {
 export function valueAxis(t, formatter) {
     return {
         type: 'value',
+
+        /* AN AXIS OF WHOLE NUMBERS, ALWAYS. Every value axis in this panel measures a count, a
+           duration in milliseconds or a size in bytes, and not one of them has a meaningful
+           fractional tick. Without this, a domain of 0 to 1 — which is what an all-zero or
+           near-zero dataset produces — is split into 0, 0.2, 0.4, 0.6, 0.8, 1 and then run
+           through the duration formatter, which rounds each to the nearest millisecond and
+           prints "0 ms 0 ms 0 ms 1 ms 1 ms 1 ms": six ticks, four of them duplicates, on a scale
+           with nothing on it. `minInterval` makes the smallest possible step 1, so a degenerate
+           domain gets two honest ticks instead of six meaningless ones. The card above is still
+           responsible for not drawing a chart of nothing at all; this is what stops the AXIS
+           from inventing detail the data does not have. */
+        minInterval: 1,
+
         axisLine: { show: false },
         axisTick: { show: false },
         splitLine: { lineStyle: { color: t.grid, type: 'dashed' } },
@@ -440,14 +489,30 @@ export function stackedTraffic(id, data, order) {
         },
         xAxis: timeAxis(t, data.times),
         yAxis: valueAxis(t),
+        /* THE LEGEND AND THE BANDS HAVE TO BE THE SAME COLOUR, AND THEY WERE NOT.
+           ECharts takes a legend swatch from the series' `itemStyle.color` (falling back to its
+           own default palette), and takes an area from `areaStyle.color`. This series set the
+           area and the line and never `itemStyle`, so the five legend entries were painted from
+           ECharts' stock palette — blue, green, red — while the five bands underneath were
+           painted from the population tokens. The legend declared five colours the chart did not
+           use, which is why no band could be identified as humans: the key was not a key.
+
+           `itemStyle` fixes the swatch. The second half of the same defect was the FILL: at 0.62
+           opacity over the page, three tokens that are already close in tone — #d9d4cc, #b9b3a9,
+           #8a8279 — land within a few percent of each other and of the page, so even a correct
+           legend would have pointed at bands nobody can tell apart. The fill is now the token
+           exactly, at full opacity, so the band IS the swatch; and a hairline in the page colour
+           separates one band from the next, which is the editorial system's own device for
+           splitting two adjacent areas without inventing a sixth colour. */
         series: order.map((key) => ({
             name: data.labels[key] || key,
             type: 'line',
             stack: 'sessions',
             smooth: false,
             symbol: 'none',
-            lineStyle: { width: 1, color: t.pop[key] },
-            areaStyle: { color: t.pop[key], opacity: 0.62 },
+            itemStyle: { color: t.pop[key] },
+            lineStyle: { width: 1, color: t.card },
+            areaStyle: { color: t.pop[key], opacity: 1 },
             emphasis: { focus: 'series' },
             data: data.series[key] || []
         }))
@@ -477,7 +542,7 @@ export function barsH(id, rows, opts) {
         grid: barGrid(room, 74, 6),
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'shadow', shadowStyle: { color: t.band } },
+            axisPointer: shadowPointer(t),
             formatter: (params) => {
                 const p = params[0];
                 const row = rows[rows.length - 1 - p.dataIndex];
@@ -525,7 +590,7 @@ export function barsHStacked(id, rows) {
         grid: barGrid(room, 60, 30),
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'shadow', shadowStyle: { color: t.band } },
+            axisPointer: shadowPointer(t),
             /* The axis label may have been truncated to fit its column; the tooltip carries
                the value in full, which is where the reader goes when the row is cut. */
             formatter: (params) => {
@@ -682,7 +747,7 @@ export function histogram(id, rows, colorFor, opts) {
         grid: { top: 12, bottom: 4 },
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'shadow', shadowStyle: { color: t.band } },
+            axisPointer: shadowPointer(t),
             formatter: (params) => {
                 const p = params[0];
                 return tip`${prefix}${p.name}<br><strong>${num(p.value)}</strong> ${noun}`;
@@ -878,7 +943,7 @@ export function stackedBars(id, times, series) {
     draw(id, (t) => ({
         legend: { data: series.map((s) => s.name) },
         grid: { top: 34 },
-        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: t.band } } },
+        tooltip: { trigger: 'axis', axisPointer: shadowPointer(t) },
         xAxis: Object.assign(timeAxis(t, times), { boundaryGap: true }),
         yAxis: valueAxis(t),
         series: series.map((s) => ({

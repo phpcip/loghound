@@ -267,10 +267,8 @@ textarea {
     .toggle button,
     button[data-pop] { min-width: var(--lh-tap); }
 
-    /* The two "undo the filter" links. Both were plain text with no padding at all — 18.2px
-       and 21.7px — and the second is the only control that clears every filter at once. */
-    .facet-clear,
-    .filterbar-clear {
+    /* The "undo the filter" link, plain text with no padding at all at 18.2px. */
+    .facet-clear {
         display: inline-flex;
         align-items: center;
         min-height: var(--lh-tap);
@@ -282,38 +280,22 @@ textarea {
        sheet that applies the operator's selection. */
     .fb-apply { min-height: var(--lh-tap); }
 
-    /* The jump bar. Its own 44px rule lives in the max-width:900px section, so a coarse-pointer
-       tablet above that width got 28.8px links. Every other touch rule in this file is on the
-       pointer query; this one was not. */
-    .set-nav a { min-height: var(--lh-tap); }
+    /* The controls the touch floor never reached, all measured on a coarse pointer at 1280:
+       the theme cycle at 40x34, the filter-panel button at 31, and the card heading that folds
+       its own section at 35. Every one of them is a real control an operator presses, and none
+       was on a rule that saw a stylus or a touchscreen above the phone breakpoint.
 
-    /* The last of the controls the touch floor never reached, all measured on a coarse pointer
-       at 1280: the theme cycle at 40x34, the virtual-host selector at 29px, the expand-all and
-       filter-panel buttons at 29 and 31, and the card heading that folds its own section at 35.
-       Every one of them is a real control an operator presses, and none was on a rule that saw
-       a stylus or a touchscreen above the phone breakpoint. */
+       The top bar's own controls are on this list too. Every one of them is now a real button
+       or a smart select rather than a text link on a rule, so the floor is a `min-height` on
+       the control itself rather than a shape change. */
     .theme-toggle,
-    .hostpick select,
-    #lh-host,
-    .lh-expandall,
+    .tb-filters,
+    .tb-res,
+    .tb-go,
+    .ss-button,
+    .navtwist,
     #lh-facets-toggle,
     .card-toggle { min-height: var(--lh-tap); }
-
-    /* The time range picker: the most-used control in the panel and, at 29x20, the
-       smallest. It keeps its shape — type on a rule, not a button — and gains height. */
-
-    .ranges { gap: 4px 18px; }
-    .ranges a {
-        display: inline-flex;
-        align-items: center;
-        min-height: var(--lh-tap);
-        padding: 0 2px 4px;
-    }
-
-    /* The host picker and the section nav live in the same header strip. */
-
-    .hostpick select,
-    #lh-host { min-height: var(--lh-tap); }
 
     /* Facet values, in all three places the panel shows them: the explorer rail, the
        Opensolr filter rail, and the identity panel. The whole row is the target. */
@@ -339,7 +321,6 @@ textarea {
 
     /* Chips that remove a filter. Small type, large target, unchanged appearance. */
 
-    .fchip,
     .lf-active a,
     .lf-outcomes a,
     .active-filters a {
@@ -416,12 +397,11 @@ textarea {
     }
     th.sortable > .sort-btn { min-height: var(--lh-tap); }
 
-    /* Pager links, the installer's step rail, and the two links inside the bandwidth
-       strip — all measured between 18px and 20px tall. */
+    /* Pager links, the installer's step rail and the upgrade link on Plan usage — all
+       measured between 18px and 20px tall. */
 
     .pager a,
     .setup-rail li a,
-    .bwstrip-link,
     #usage-upgrade {
         display: inline-flex;
         align-items: center;
@@ -469,46 +449,31 @@ textarea {
     .lh-nav-js main { padding-top: calc(var(--lh-topbar-h) + 20px); }
 
     /*
-     * The sticky section nav starts below the navigation bar rather than under it, and the
-     * card jump offset accounts for both. panel.css derives that offset from --set-nav-h
-     * alone, which was correct when the bar above it scrolled away.
+     * TWO BARS DEEP ON A PHONE, not three. The fixed navigation bar, and the top bar pinned
+     * under it — the jump bar that used to sit between them is gone, because every section is
+     * its own page now and there is nothing left to jump to. `panel.css` already derives the
+     * card offset from both terms; this is the phone's own value for the outer one.
      */
 
-    .lh-nav-js .set-nav { top: var(--lh-topbar-h); }
+    .lh-nav-js .topbar { top: var(--lh-topbar-h); }
 
-    /* THREE BARS DEEP ON A PHONE, so the jump offset is the sum of all three. The fixed
-       navigation bar, the section nav pinned under it, and the page toolbar pinned under
-       that — `--page-tools-h` is its CONDENSED height, measured by responsive.js while it is
-       stuck, which is the state it is in whenever a jump lands. Leaving it out put every
-       heading behind the toolbar on arrival, which is the same defect the `--set-nav-h` term
-       was added to fix one bar earlier. */
-    .lh-nav-js .card {
-        scroll-margin-top: calc(var(--set-nav-h) + var(--lh-topbar-h) + var(--page-tools-h) + 16px);
-    }
+    /* The top bar's negative gutters mirror main's padding, which has a safe-area term in it,
+       so they have to as well or the bar stops being full bleed. */
 
-    /* The section nav's negative gutters mirror main's padding, which now has a safe-area
-       term in it, so they have to as well or the bar stops being full bleed. */
-
-    .set-nav {
+    .topbar {
         margin-left: calc(max(16px, env(safe-area-inset-left)) * -1);
         margin-right: calc(max(16px, env(safe-area-inset-right)) * -1);
         padding-left: max(16px, env(safe-area-inset-left));
         padding-right: max(16px, env(safe-area-inset-right));
     }
 
-    /*
-     * One scrolling row of jump links, sized for a thumb and snapped so a flick lands on an
-     * entry rather than between two. The row already scrolled; what it lacked was height —
-     * 29px — and any indication that it scrolls, which the snap and the momentum give it.
-     */
+    /* On one column the bar's controls stack rather than queue, and the labels go above them:
+       "Duration" beside an eight-option select is most of a 375px row on its own. */
 
-    .set-nav { scroll-snap-type: x proximity; scroll-padding-left: 16px; }
-    .set-nav a {
-        min-height: var(--lh-tap);
-        align-items: center;
-        padding: 0 12px;
-        scroll-snap-align: start;
-    }
+    .topbar-in { gap: 10px 12px; }
+    .tb-scope { width: 100%; }
+    .tb-field { flex: 1 1 160px; }
+    .tb-field .ss { flex: 1 1 auto; min-width: 0; }
 
     /*
      * The page head. The H1 clamp already scales; the lead was still set at 19px against a

@@ -36,7 +36,7 @@ const UNINSTALL = 'destructive_uninstall';
  * leaving the old cards up under a green "finished" panel is not.
  */
 const RELOAD_AFTER = {
-    source_rescan: '?v=settings&ok=sources_rescanned#set-sources'
+    source_rescan: '?v=settings&s=sources&ok=sources_rescanned'
 };
 
 /**
@@ -363,6 +363,50 @@ function initSubmitGuards() {
 }
 
 /**
+ * Fill the Opensolr region menu with what this account may actually use.
+ *
+ * THE MENU IS AN AFFORDANCE, NEVER THE VALIDATION. The region field used to be free text,
+ * checked only when the form was submitted — so an operator had to know the platform's own
+ * spelling and found out they did not by being refused. The list belongs to the account and
+ * costs a control-plane call, so it is asked for AFTER the page has rendered: the markup carries
+ * the stored value, this adds the rest, and the save path still refuses a region the account
+ * cannot use exactly as it did before.
+ *
+ * A FAILURE LEAVES THE FIELD USABLE. With no credentials, no network or a refused key there is
+ * no list; `data-free` on the select means assets/js/smartselect.js keeps a typed value, so the
+ * operator is back to the free-text field they had. The reason is printed under it, because a
+ * menu that silently has one option in it looks like a plan with one region.
+ */
+function loadRegions() {
+    const select = byId('opensolr_region');
+    if (!select) {
+        return;
+    }
+
+    api('settings', 'regions').then((data) => {
+        const known = new Set(Array.prototype.map.call(select.options, (option) => option.value));
+        for (const region of (data.regions || [])) {
+            if (!known.has(region)) {
+                select.appendChild(el('option', { value: region, text: region }));
+            }
+        }
+        const note = byId('opensolr_region_note');
+        if (note && data.note) {
+            note.appendChild(el('span', { class: 'faint', text: ' ' + data.note }));
+        }
+    }).catch((err) => {
+        const note = byId('opensolr_region_note');
+        if (note) {
+            note.appendChild(el('span', {
+                class: 'faint',
+                text: ' The list of regions could not be read (' + String(err && err.message ? err.message : err)
+                    + '), so type one.'
+            }));
+        }
+    });
+}
+
+/**
  * Entry point.
  */
 export default function init() {
@@ -372,4 +416,5 @@ export default function init() {
     reattachRunningJobs();
     initUninstall();
     loadBeaconStatus();
+    loadRegions();
 }

@@ -453,7 +453,7 @@ final class TwoFactor
      *
      *   IT WAS OFTEN NEVER SAVED AT ALL. Panel\Settings::requireSecondFactor() validates the
      *   factor FIRST and its callers then return on their own validation errors without ever
-     *   persisting — type the wrong confirmation word into the reinstall form, or submit a
+     *   persisting — type the wrong confirmation word into the start-over form, or submit a
      *   password the policy refuses, and the recovery code you just spent is still live.
      *   Reusable indefinitely, with the panel reporting one fewer than there really is.
      *

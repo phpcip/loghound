@@ -201,6 +201,12 @@ $counters = [
     'solr_errors'    => 0,
     'enrich_skipped' => 0,
     'badlines_kept'  => 0,
+
+    /* Sub-resource requests that were counted into their session and then not indexed, per
+       Pipeline::indexes(). Reported rather than silent: a number that differs from `lines`
+       minus `docs_indexed` by an unexplained amount is how an operator discovers that ingestion
+       is dropping something they did not ask it to drop. */
+    'assets_dropped' => 0,
 ];
 
 /** Rolling window of (timestamp, lines) samples used to compute a lines/sec rate. */
@@ -351,6 +357,19 @@ do {
                     if ($badSampler->record($src, $offset, $line)) {
                         $counters['badlines_kept']++;
                     }
+                    return;
+                }
+
+                /* SESSIONISED, THEN DROPPED. The document has already been through
+                   Pipeline::process(), so the session it belongs to has counted it: its bytes,
+                   its status class, its contribution to `assets`, `sub_resources`,
+                   `asset_ratio_f`, the repeated-URI set behind `no_304_on_repeat` and the
+                   inter-request gaps. Only the INDEXING is refused. Dropping the line earlier
+                   would have been the obvious implementation and would have silently disarmed
+                   `no_assets` — a rule that accuses a client of fetching no sub-resources cannot
+                   be fed by a pipeline that threw the sub-resources away. */
+                if (!$pipeline->indexes($doc)) {
+                    $counters['assets_dropped']++;
                     return;
                 }
 
@@ -776,6 +795,7 @@ function writeStatus(
         'totals'         => [
             'lines'          => $counters['lines'],
             'docs_indexed'   => $counters['docs_indexed'],
+            'assets_dropped' => $counters['assets_dropped'],
             'parse_errors'   => $counters['parse_errors'],
             'badlines_kept'  => $counters['badlines_kept'],
             'batches'        => $counters['batches'],
@@ -840,9 +860,10 @@ function printStatus(string $file, bool $human): int
         (int) ($doc['pending_docs'] ?? 0)
     ));
     fwrite(STDOUT, sprintf(
-        "  lines %d   indexed %d   parse errors %d   solr errors %d\n",
+        "  lines %d   indexed %d   sub-resources not stored %d   parse errors %d   solr errors %d\n",
         (int) ($t['lines'] ?? 0),
         (int) ($t['docs_indexed'] ?? 0),
+        (int) ($t['assets_dropped'] ?? 0),
         (int) ($t['parse_errors'] ?? 0),
         (int) ($t['solr_errors'] ?? 0)
     ));
@@ -1168,12 +1189,21 @@ final class Pipeline
     /** Whether the Ua enricher class is present (Parser normally applies it already). */
     private bool $haveUa = false;
 
+    /**
+     * Write a document for a sub-resource request at all?
+     *
+     * Off by default, which is a deliberate change of default rather than a new option nobody
+     * will find. See indexes() for the whole argument.
+     */
+    private bool $indexAssets = false;
+
     public function __construct(Config $cfg, bool $dryRun, bool $verbose, ?object $state = null)
     {
         $this->cfg      = $cfg;
         $this->dryRun   = $dryRun;
         $this->verbose  = $verbose;
         $this->hitsCore = (string) $cfg->get('solr.hits_core', 'loghound_hits');
+        $this->indexAssets = (bool) $cfg->get('ingest.index_assets', false);
 
         $this->initParser();
         $this->initEnrichers($state);
@@ -1394,6 +1424,64 @@ final class Pipeline
      * @param array<string,mixed> $meta Source descriptor: src, format, host.
      * @return array<string,mixed>|null
      */
+    /**
+     * Does this document belong in the `hits` index at all?
+     *
+     * ------------------------------------------------------------------------------------
+     * IMAGES, STYLESHEETS, SCRIPTS AND FONTS ARE NOT STORED
+     * ------------------------------------------------------------------------------------
+     * `/img/solr6.PNG` and a jQuery UI `animated-overlay.gif` were appearing in a list headed
+     * "Top pages". That is the visible half. The invisible half is the cost: on an ordinary
+     * site sub-resources are the large majority of all log lines, so the index was mostly
+     * pictures — paid for in disk, in the quota Loghound has to keep itself inside, and in
+     * every facet's term dictionary — to answer questions nobody asks about a font file.
+     *
+     * "THE REST" MEANS EVERY SUB-RESOURCE, which is `kind_s` of `asset` or `favicon`. Parser's
+     * own table decides what that covers and it is the right place for it to be decided:
+     * images, css, js, fonts, media, and source maps. A favicon is included because it is
+     * fetched by the browser unprompted and is a sub-resource by every definition that matters
+     * here. Deliberately NOT included: `api`, `robots`, `other` and `html`, all of which are
+     * things a client asked this site for on purpose, and `beacon`, which is kept for the
+     * reason Sessionizer::accumulateSelf() spells out — "is my beacon reaching the collector?"
+     * is the first question every new installation has, and it becomes unanswerable the moment
+     * those lines are thrown away.
+     *
+     * ------------------------------------------------------------------------------------
+     * WHAT THIS MUST NOT BREAK, AND DOES NOT
+     * ------------------------------------------------------------------------------------
+     * The asset ratio is an INPUT TO THE SCORING RULES: a session that fetched no sub-resources
+     * is the `no_assets` signal, and it is also one of the four ways a session proves it ran a
+     * renderer at all (Score\Rules::hadTestableEvidence). Dropping these lines at PARSE time
+     * would therefore have turned every visitor into a client that fetched nothing — inventing
+     * a bot signal out of a storage decision, which is the worst class of defect this codebase
+     * recognises.
+     *
+     * So the drop happens at the INDEX boundary and nowhere earlier. The caller runs the whole
+     * pipeline first — parse, enrich, attack-match, sessionise — and consults this afterwards.
+     * Every session counter is computed from the complete traffic; only the document is
+     * refused. The one number that legitimately changes is what a hits-core path facet can see,
+     * and that is the change being asked for.
+     *
+     * ------------------------------------------------------------------------------------
+     * IT IS A SETTING, AND THE DEFAULT IS OFF
+     * ------------------------------------------------------------------------------------
+     * `ingest.index_assets`. An operator debugging a CDN, or one who genuinely wants per-image
+     * latency on the Performance view, turns it on and pays for it knowingly. Nothing else in
+     * the panel reads the flag: a card that would have shown assets simply has none, which is
+     * the honest outcome, rather than a card that claims to be complete and is not.
+     *
+     * @param array<string,mixed> $doc A document as process() returned it.
+     */
+    public function indexes(array $doc): bool
+    {
+        if ($this->indexAssets) {
+            return true;
+        }
+        $kind = (string) ($doc['kind_s'] ?? '');
+
+        return $kind !== 'asset' && $kind !== 'favicon';
+    }
+
     public function process(string $line, int $offset, string $src, array $meta): ?array
     {
         $fmt = $this->format((string) ($meta['format'] ?? 'apache_combined'));
@@ -1450,10 +1538,30 @@ final class Pipeline
 
         if ($this->sessionizer !== null) {
             try {
-                if (!isset($hit['_ts_unix']) && isset($hit['ts'])) {
-                    $t = strtotime((string) $hit['ts']);
-                    if ($t !== false) {
-                        $hit['_ts_unix'] = $t;
+                /* MILLISECONDS, NOT strtotime(). This handed the sessionizer `_ts_unix`, which is
+                   WHOLE SECONDS, and Sessionizer::hitMillis() prefers that key over the exact
+                   conversion — so on the real ingest path every instant was truncated to the
+                   second before it ever reached a session. `ts` carries milliseconds (Parser
+                   formats it `.v`), and several supported formats really do log them: HAProxy's
+                   `10/Sep/2026:09:57:08.123`, Apache's %{msec}t and %{usec}t, nginx's $msec, and
+                   any ISO-8601 with a fraction.
+
+                   The damage was not cosmetic. log_span_ms_l became a multiple of 1000 on every
+                   session on every installation, so a visit of 400 ms measured 0 and read as
+                   "they were here for no time at all"; and the inter-request GAPS feeding
+                   Signals::isPeriodic() were quantised to whole seconds, which is the difference
+                   between a burst of sub-second sub-resource fetches and a one-second schedule —
+                   the exact distinction that rule's median-gap floor exists to make.
+
+                   Parser::epochMs() is the conversion that keeps the fraction, and it is already
+                   the fallback hitMillis() uses when no override is present. Setting `_ts_ms`
+                   rather than removing the line keeps this stage explicit about the instant it
+                   is handing over; `_ts_unix` stays supported for a replay tool that has only a
+                   Unix time to give. */
+                if (!isset($hit['_ts_ms'], $hit['_ts_unix']) && isset($hit['ts'])) {
+                    $ms = \Loghound\Parser::epochMs((string) $hit['ts']);
+                    if ($ms > 0) {
+                        $hit['_ts_ms'] = $ms;
                     }
                 }
 

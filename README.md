@@ -66,57 +66,9 @@ there is no subsequent request to measure against.
 
 ## The three-plane model
 
-```
-                      ┌───────────────────────────────────────────┐
-   your visitors ────►│  Apache / nginx / Caddy                   │
-                      └──────┬─────────────────────┬──────────────┘
-                             │                     │
-                    access log lines        HTML with <script src="b.js">
-                             │                     │
-      PLANE 1 + 2 ───────────▼──────────           ▼────────── PLANE 3
-      ┌────────────────────────────────┐   ┌──────────────────────────┐
-      │ loghound-tail (systemd daemon) │   │ public/collect.php       │
-      │                                │   │  HMAC-token checked      │
-      │  tail  ─ rotation-safe         │   │  rate limited per IP     │
-      │  parse ─ compiled LogFormat    │   │  timing sanity checked   │
-      │  enrich─ geo / ASN / rDNS / UA │   │  writes SQLite only      │
-      │  session ─ ip_net + ua_hash    │   └───────────┬──────────────┘
-      │  batch ─ softCommit only       │               │
-      └───────────────┬────────────────┘               │
-                      │                                │
-                      ▼                                ▼
-             ┌──────────────────┐            ┌──────────────────────┐
-             │ Solr core `hits` │            │ var/state.db         │
-             │ one doc per line │            │ offsets, sessions,   │
-             └────────┬─────────┘            │ beacon staging,      │
-                      │                      │ enrichment caches    │
-                      │      ┌───────────────┴──────┐
-                      │      │                      │
-                      ▼      ▼                      │
-             ┌──────────────────────────────────────▼───────┐
-             │ loghound-score  (systemd timer, every 60s)   │
-             │                                              │
-             │  close idle sessions                         │
-             │  merge beacon timings                        │
-             │  fp_ips_24h ─ ONE facet per hour bucket      │
-             │  Score/Rules ─ weights ─► verdict + reasons  │
-             └────────────────────┬─────────────────────────┘
-                                  ▼
-                    ┌─────────────────────────────┐
-                    │ Solr core `sessions`        │
-                    │ one doc per session         │
-                    │ this is what the panel reads│
-                    └─────────────┬───────────────┘
-                                  ▼
-                    ┌─────────────────────────────┐
-                    │ public/index.php ─ the panel│
-                    │ auth-gated, CSP-locked,     │
-                    │ ECharts self-hosted         │
-                    └─────────────────────────────┘
-
-             loghound-retention (systemd timer, daily)
-                    delete-by-query past privacy.retention_days
-```
+<p align="center">
+  <img src="docs/img/three-planes.png" alt="The three-plane model: access log lines feed the tail daemon while the page loads b.js and the beacon posts to the collector; the scorer reads both and writes one document per session, which is what the panel reads." width="900">
+</p>
 
 **The verdict matrix** is the core idea:
 
@@ -392,10 +344,12 @@ beacon is independent of whatever other analytics you run.
   and the API key from **Account** in the control panel, and provisions both indexes itself.
 
   Everything settled during installation can be changed afterwards in **Settings**, without
-  reinstalling: the Opensolr account and API key, which pair of indexes this installation uses,
+  starting over: the Opensolr account and API key, which pair of indexes this installation uses,
   which log files are read, the panel username and password, and how much data is kept. There is
-  also a **Reinstall** button that walks you back through setup without deleting a single
-  document.
+  also a **Start over** button, and it means it: it deletes both indexes from your Opensolr
+  account, proves they are gone, removes the configuration with your account details in it,
+  empties `var/`, and hands you back to the installer with nothing carried across. The only way
+  to keep the data is an Opensolr backup taken beforehand, which is a separately billed feature.
 
   **Two indexes, however many sites.** A plan also limits how many indexes an account may
   hold, so setup counts what the account has *before* it creates anything and, when there is

@@ -6,10 +6,9 @@
  * a web log, whether it is a bot, what network it sits on and which fingerprint cluster it
  * belongs to. Opensolr already knows, for every request that reached a customer's search
  * index, what was asked, how long it took and how many results came back. Each half is
- * useful; the two together answer questions neither can answer alone, and those questions
- * — how much of my search capacity is serving scrapers, and who is querying my index
- * without ever visiting my site — are the reason this belongs inside Loghound rather than
- * in a separate tool.
+ * useful; the two together answer a question neither can answer alone — how much of my search
+ * capacity is being spent on traffic I have already classified — which is the reason this
+ * belongs inside Loghound rather than in a separate tool.
  *
  * THE ARCHITECTURAL RULE, WHICH IS NOT OPEN FOR REDESIGN. Loghound never touches a Solr
  * server for any of this. No agent, no log file, no SSH, no log4j2 parsing. Everything on
@@ -30,8 +29,8 @@
  *     what this section is for and where the credentials go. Loghound is completely useful
  *     without Opensolr and must never imply otherwise.
  *
- * WHAT THE READER CAN SLICE BY, AND WHY IT IS NOT MORE. Every card on every one of these
- * views answers under a filter set read from the query string — see logFilterFields() for
+ * WHAT THE READER CAN SLICE BY, AND WHY IT IS NOT MORE. Every card on every page of this
+ * view answers under a filter set read from the query string — see logFilterFields() for
  * the four dimensions the platform's request log can honestly be faceted on, and for the
  * ones it cannot. The sidebar filters the rest of the panel uses (`f[…]`, verdict, country,
  * fingerprint) name fields that exist only on Loghound's own cores, so they are reported as
@@ -53,7 +52,7 @@ use Loghound\Opensolr;
 use Loghound\OpensolrLog;
 use Loghound\Security;
 
-abstract class OpensolrView extends Controller implements JobHost, Sections
+abstract class OpensolrView extends Controller implements Sections
 {
     /** Terms asked for when faceting client addresses. Bounded; the tail is a long one. */
     protected const IP_FACET_LIMIT = 60;
@@ -61,8 +60,8 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
     /** Terms per field in the filter rail. Short on purpose: it is a rail, not a report. */
     protected const FILTER_FACET_LIMIT = 15;
 
-    /** Cards this view renders, in order. Overridden by every concrete view. */
-    protected const SECTIONS = [];
+    /** Pages this view renders, in order. Overridden by every concrete view. */
+    public const SECTIONS = [];
 
     /**
      * The fields of the platform's request log this section may filter on, with labels.
@@ -80,12 +79,12 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      *  - `ip` — the caller. High cardinality, so the rail shows the busiest and says so.
      *
      * WHAT CANNOT BE FACETED, AND IS THEREFORE NOT OFFERED. `q` and `full_request` are
-     * effectively unique per request — that is the entire reason Query analysis groups by
-     * SHAPE instead — so a terms facet on them lists one-hit wonders. `hits` and `qtime` are
+     * effectively unique per request, so a terms facet on them lists one-hit wonders. `hits` and
+     * `qtime` are
      * numeric and are offered as the outcome slice below rather than as terms. And there is
      * no bot/human dimension on this plane at all: the platform records who called, never
-     * what they are. That verdict exists only in Loghound's own sessions index, which is why
-     * it is reached by correlation on the "Who is querying" view and is not a filter here.
+     * what they are. That verdict exists only in Loghound's own sessions index, so it is not a
+     * filter here.
      *
      * @return array<string,string>
      */
@@ -337,6 +336,21 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
     }
 
     /**
+     * The request-log filter state, for the top bar's applied-filters dialog.
+     *
+     * The same payload shape Panel\Facets hands the sessions plane, from the layer that owns the
+     * `lf[…]` namespace. It is exposed because the bar is ONE control over both planes: a filter
+     * set on the request log narrows every figure on this page, and a bar that could not show it
+     * would leave the operator with a narrowed number that does not say it is narrowed.
+     *
+     * @return array<string,mixed>
+     */
+    public function logFilterPayload(): array
+    {
+        return $this->logFacets()->payload();
+    }
+
+    /**
      * The facet layer an export's preamble describes on this plane.
      *
      * THE REQUEST-LOG LAYER, not the sessions one, and the override is load-bearing rather than
@@ -435,7 +449,7 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
      */
     protected function logFqs(): array
     {
-        return self::logFqsFor((string) $this->range['start'], $this->logFacets()->selection(), $this->outcome());
+        return self::logFqsFor(Query::filterStart($this->range), $this->logFacets()->selection(), $this->outcome());
     }
 
     /**
@@ -489,7 +503,7 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
     protected function logFqsExcept(string $field): array
     {
         $fqs = array_merge(
-            [OpensolrLog::dateFq((string) $this->range['start'])],
+            [OpensolrLog::dateFq(Query::filterStart($this->range))],
             $this->logFacets()->fqs(null, $field)
         );
 
@@ -517,122 +531,6 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
     }
 
     /**
-     * Pack the active filters into one short string a job parameter can hold.
-     *
-     * The job store takes flat scalars of at most 256 bytes each (Jobs::normaliseParams),
-     * which is deliberate — a job parameter is part of a job's identity and is persisted —
-     * so the filter set is encoded as `field=v1,v2;field=v3` with every value percent-encoded.
-     * Percent-encoding is what makes the two separators unambiguous: a handler path or a query
-     * value containing a comma or a semicolon cannot split the string it is travelling in.
-     *
-     * It is truncated on a VALUE boundary at the budget, never mid-value, and decodeLogFilters()
-     * revalidates every field and value anyway. Callers report the applied set so a truncated
-     * filter is visible rather than silent.
-     */
-    protected function encodeLogFilters(): string
-    {
-        return self::packLogFilters($this->logFacets()->selection());
-    }
-
-    /**
-     * Encode a validated selection into the packed form, from either side of the round trip.
-     *
-     * ONE ENCODER, because there were two and they disagreed. The second one lived in
-     * Queries::postedFilters(), was written against the older shape of a selection — a flat
-     * list of values — and was never updated when the operator moved inside it. It therefore
-     * handed `rawurlencode()` an array and threw a TypeError, which the front controller turns
-     * into a blank 500: every scan started or polled on the query-analysis view while any log
-     * filter was active died there. Had it survived the call it would have dropped the
-     * operator, silently turning a "None of" filter into an "Any of" — the exact substitution
-     * the packed form carries the operator to prevent.
-     *
-     * Truncation is on a VALUE boundary at the budget, never mid-value, so what comes back out
-     * of decodeLogFilters() is always a filter set somebody could have asked for.
-     *
-     * @param array<string,array{values:array<int,string>,op:string}> $selection
-     */
-    protected static function packLogFilters(array $selection, int $budget = 240): string
-    {
-        $out = '';
-
-        foreach ($selection as $field => $spec) {
-            if (!is_string($field) || !is_array($spec)) {
-                continue;
-            }
-            $values = array_values(array_filter((array) ($spec['values'] ?? []), 'is_string'));
-            if ($values === []) {
-                continue;
-            }
-
-            $op = (string) ($spec['op'] ?? Facets::OP_ANY);
-            if (!in_array($op, Facets::OPERATORS, true)) {
-                $op = Facets::OP_ANY;
-            }
-
-            $part = ($out === '' ? '' : ';') . $field . '=' . $op . ':'
-                . implode(',', array_map('rawurlencode', $values));
-            if (strlen($out) + strlen($part) > $budget) {
-                continue;
-            }
-            $out .= $part;
-        }
-
-        return $out;
-    }
-
-    /**
-     * Unpack a stored filter string, re-validating every part of it.
-     *
-     * The context is persisted between polls, so treating it as trusted would mean trusting a
-     * store a future bug could write anything into. A field that is not in logFilterFields()
-     * is dropped, control characters are stripped, and both the value length and the number of
-     * values are capped exactly as they are on the way in from a query string.
-     *
-     * @return array<string,array{values:array<int,string>,op:string}>
-     */
-    protected static function decodeLogFilters(string $encoded): array
-    {
-        if ($encoded === '') {
-            return [];
-        }
-        $allowed = self::logFilterFields();
-
-        $out = [];
-        foreach (explode(';', $encoded) as $part) {
-            $split = explode('=', $part, 2);
-            if (count($split) !== 2) {
-                continue;
-            }
-            [$field, $joined] = $split;
-            if (!isset($allowed[$field]) || !Security::isSafeFieldName($field)) {
-                continue;
-            }
-
-            $op = Facets::OP_ANY;
-            $marked = explode(':', $joined, 2);
-            if (count($marked) === 2 && in_array($marked[0], Facets::OPERATORS, true)) {
-                [$op, $joined] = $marked;
-            }
-
-            $values = [];
-            foreach (explode(',', $joined) as $raw) {
-                $value = rawurldecode($raw);
-                if (!self::isFilterableValue($value)) {
-                    continue;
-                }
-                $values[] = mb_substr($value, 0, 256);
-            }
-            if ($values !== []) {
-                $out[$field] = [
-                    'values' => array_values(array_unique(array_slice($values, 0, 20))),
-                    'op'     => $op,
-                ];
-            }
-        }
-        return $out;
-    }
-
-    /**
      * The labels of sidebar filters this section cannot honour.
      *
      * ALL of them, always, and that is the point. `f[…]` filters name fields on Loghound's
@@ -652,224 +550,6 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             $out[] = $labels[$field] ?? $field;
         }
         return $out;
-    }
-
-    /* ---------------------------------------------------------------------------------
-     * Stepped jobs
-     * ------------------------------------------------------------------------------ */
-
-    /**
-     * The job kinds this view hosts. A view with no long operations returns none.
-     *
-     * Fail closed by default: the base class accepts POSTs because it implements JobHost,
-     * but with an empty kind list every `job_start` is refused before the store is opened.
-     * A subclass opts in by naming its kinds here AND registering a planner for each.
-     *
-     * @return array<int,string>
-     */
-    protected function jobKinds(): array
-    {
-        return [];
-    }
-
-    /**
-     * Planners for this view's job kinds, keyed by kind.
-     *
-     * A planner is handed the job's context on every poll — which on the first call is
-     * exactly the parameters start() was given — and returns the whole step plan. The plan
-     * length must not vary between polls, because the store fixed `total` when the job was
-     * created and the progress fraction is read against it.
-     *
-     * @return array<string,callable(array<string,mixed>):array<int,array{label:string,run:callable}>>
-     */
-    protected function jobPlans(): array
-    {
-        return [];
-    }
-
-    /**
-     * Validate the parameters for one job start, or refuse the whole thing.
-     *
-     * OWNERSHIP IS DECIDED HERE AND NOWHERE ELSE. Jobs re-checks that parameters are flat,
-     * small and well-named; it does not and cannot know whether this account owns the index
-     * being named, so a subclass that takes an index name must check it against the
-     * account's own list before returning. Returning null refuses the job, and refusing
-     * before a job exists is the point: a job that starts and then discovers it may not read
-     * its target has already put the target in the store, in a step note and in a poll
-     * envelope.
-     *
-     * @return array<string,scalar|null>|null Null refuses the start.
-     */
-    protected function jobParams(string $kind): ?array
-    {
-        return null;
-    }
-
-    /** The job store for this view, with this view's planners registered. */
-    protected function jobs(): Jobs
-    {
-        return new Jobs($this->cfg, $this->gw, $this->jobPlans());
-    }
-
-    /**
-     * The newest job of a requested kind belonging to this operator.
-     *
-     * The kind is checked against this view's own list before the store is touched, and the
-     * store scopes every lookup to the caller's session, so this cannot read somebody
-     * else's operation. The job's context comes back with it, which is how a reloaded page
-     * decides whether the operation it found is the one it was watching.
-     *
-     * @return array<string,mixed>
-     */
-    private function latestJob(): array
-    {
-        $kinds = $this->jobKinds();
-        if ($kinds === []) {
-            return ['error' => 'Unknown operation.'];
-        }
-        $kind = self::param('kind', $kinds, '');
-        if ($kind === '') {
-            return ['error' => 'Unknown operation.'];
-        }
-        try {
-            $job = $this->jobs()->latest($kind);
-        } catch (\Throwable $e) {
-            return ['error' => 'The job store is unavailable.'];
-        }
-        return $this->envelope(['job' => $job]);
-    }
-
-    /**
-     * Handle one of the asynchronous job endpoints, answering with JSON.
-     *
-     * Declared `never` rather than `void`: both paths out of this method end in sendJson(),
-     * which exits. Saying so in the signature is what lets post() write
-     * `return $this->jobJson(...)` for each job case and stay exhaustive, instead of relying
-     * on a fall-through that happens to be harmless only because this method never comes
-     * back. Failure to open the store is reported as a failure, never silently ignored, and
-     * the message that reaches the log goes through Jobs::redact() first.
-     *
-     * @param callable(Jobs):array<string,mixed> $fn
-     */
-    private function jobJson(callable $fn): never
-    {
-        try {
-            $jobs = $this->jobs();
-        } catch (\Throwable $e) {
-            error_log('[loghound-panel] job store: ' . Jobs::redact($e->getMessage()));
-            self::sendJson(['error' => 'The job store could not be opened. Check that var/ is writable.'], 500);
-        }
-        $result = $fn($jobs);
-        self::sendJson($result, isset($result['error']) ? 400 : 200);
-    }
-
-    /**
-     * Handle a POST on one of these views.
-     *
-     * These views change no configuration; the only state they touch is the job store, so
-     * the three job endpoints are the whole of it. CSRF has already been enforced by the
-     * front controller before this is reached, and is enforced again here: this method is
-     * the boundary that decides whether a scan is started, and a control that is only
-     * applied by the caller is a control one refactor away from being gone.
-     *
-     * EVERY arm of the switch returns. The job cases end in jobJson(), which exits, and
-     * saying so in its signature is what keeps that exhaustive rather than a fall-through
-     * that is harmless only by accident.
-     *
-     * @return string The redirect query string to send the browser to.
-     */
-    public function post(): string
-    {
-        Security::requireCsrf();
-
-        $action = is_string($_POST['action'] ?? null) ? $_POST['action'] : '';
-
-        switch ($action) {
-            case 'job_start':
-                return $this->jobJson(function (Jobs $jobs): array {
-                    $kind = self::postParam('kind', $this->jobKinds());
-                    if ($kind === '') {
-                        return ['error' => 'Unknown operation.'];
-                    }
-                    $params = $this->jobParams($kind);
-                    if ($params === null) {
-                        return ['error' => 'That operation cannot run against the index you asked for.'];
-                    }
-                    return $jobs->start($kind, $params);
-                });
-
-            case 'job_poll':
-                return $this->jobJson(
-                    fn (Jobs $jobs): array => $this->onOwnJob(
-                        $jobs,
-                        self::postJobId(),
-                        static fn (Jobs $j, string $id): array => $j->advance($id)
-                    )
-                );
-
-            case 'job_cancel':
-                return $this->jobJson(
-                    fn (Jobs $jobs): array => $this->onOwnJob(
-                        $jobs,
-                        self::postJobId(),
-                        static fn (Jobs $j, string $id): array => $j->cancel($id)
-                    )
-                );
-
-            default:
-                return '?v=' . rawurlencode($this->slug()) . '&err=unknown_action';
-        }
-    }
-
-    /**
-     * Act on a job only if it is one of THIS view's kinds.
-     *
-     * The store scopes every lookup to the signed-in operator, so an id can only ever name
-     * a job they own — but ownership is not enough here. Every one of these views accepts
-     * POSTs, and each registers a different set of planners, so advancing a job of another
-     * view's kind would rebuild it against a plan that does not contain its steps: the
-     * store would find no step at the job's index and mark a scan that had barely begun as
-     * finished. Checking the kind first turns that into a refusal.
-     *
-     * A job of the wrong kind is reported exactly as one that does not exist, so an id
-     * cannot be probed for which view owns it.
-     *
-     * @param callable(Jobs,string):array<string,mixed> $fn
-     * @return array<string,mixed>
-     */
-    private function onOwnJob(Jobs $jobs, string $id, callable $fn): array
-    {
-        $kinds = $this->jobKinds();
-        if ($kinds === [] || $id === '') {
-            return ['error' => 'That operation is no longer available. Start it again.'];
-        }
-        $job = $jobs->get($id);
-        if (!isset($job['kind']) || !in_array($job['kind'], $kinds, true)) {
-            return ['error' => 'That operation is no longer available. Start it again.'];
-        }
-        return $fn($jobs, $id);
-    }
-
-    /**
-     * Read a POST field constrained to an allowlist.
-     *
-     * Returns the empty string when the value is absent or not on the list, so a caller
-     * that forgets to check gets a value the job store will refuse rather than one it will
-     * act on.
-     *
-     * @param array<int,string> $allowed
-     */
-    private static function postParam(string $key, array $allowed): string
-    {
-        $value = $_POST[$key] ?? null;
-        return is_string($value) && in_array($value, $allowed, true) ? $value : '';
-    }
-
-    /** Read a job id from a POST body, shape-checked before it reaches the store. */
-    private static function postJobId(): string
-    {
-        $value = $_POST['id'] ?? null;
-        return is_string($value) && Jobs::isJobId($value) ? $value : '';
     }
 
     /**
@@ -892,24 +572,20 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             'active'   => $this->logFilters(),
             'outcome'  => $this->outcome(),
             'ignored'  => $this->ignoredSidebarFilters(),
-            'lf_packed' => $this->encodeLogFilters(),
         ], $extra));
     }
 
     /**
      * Answer the actions every Opensolr view shares, or null when it is not one of them.
      *
-     * `facets` and `volume` are here rather than in each view because all three views carry
-     * the same filter rail and the same primary chart, and three copies of one facet call is
-     * three places for the field list to drift.
+     * `facets` and `volume` are here rather than in the view because the filter rail and the
+     * primary chart belong to the plane rather than to one page of it, and a second copy of one
+     * facet call is a second place for the field list to drift.
      *
      * @return array<string,mixed>|null
      */
     protected function sharedApi(string $action): ?array
     {
-        if ($action === 'job_latest') {
-            return $this->latestJob();
-        }
         if ($action === 'facets') {
             return $this->filterFacets();
         }
@@ -927,7 +603,6 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             'indexes'  => $list['indexes'],
             'selected' => $this->core(),
             'outcome'  => $this->outcome(),
-            'lf_packed' => $this->encodeLogFilters(),
         ]);
     }
 
@@ -1147,14 +822,11 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             . 'against the web traffic Loghound already analyses. Everything else in Loghound works '
             . 'without it — this is the search half, and it is switched off because there is no '
             . 'Opensolr account configured.</p>';
-        echo '<p>With an account connected, these pages answer:</p>';
+        echo '<p>With an account connected, this section answers:</p>';
         echo '<ul>';
-        echo '<li>how many queries each index served, how long they took, and which node answered;</li>';
-        echo '<li>which <strong>shapes</strong> of query run most often — grouped by structure, not by the '
-            . 'words a visitor typed — and which of those shapes return no results at all;</li>';
-        echo '<li>which addresses query your index, and how much of that work is being done for traffic '
-            . 'Loghound has already classified as a bot;</li>';
-        echo '<li>which queries reach your index from clients that never appear in your web logs at all.</li>';
+        echo '<li>how many queries each index served, and how long they took;</li>';
+        echo '<li>how often a query came back with nothing at all;</li>';
+        echo '<li>which handler on the index took the traffic, and what it answered with.</li>';
         echo '</ul>';
         echo '<p>To connect one, put the email address of your Opensolr account and its API key into the '
             . '<code>opensolr</code> section of <code>config/loghound.php</code>, which lives outside the '
@@ -1241,8 +913,7 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             $id,
             $this->cardNumber($id),
             'Slice these figures',
-            'Every card on this page answers under the filters set here. They travel in the URL, so a '
-            . 'filtered page is a link.',
+            'Every page of this view answers under the filters set here.',
             $tools
         );
         self::skeleton($id, 'rows', 0, 'Faceting the request log');
@@ -1266,7 +937,7 @@ abstract class OpensolrView extends Controller implements JobHost, Sections
             $id,
             $this->cardNumber($id),
             'Requests over time',
-            'Every request the platform logged for this index under the current filters, bucketed by time.'
+            'Every request the platform logged for this index under the current filters.'
         );
         self::skeleton($id, 'chart', 300, 'Faceting request volume');
 

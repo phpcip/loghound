@@ -53,7 +53,6 @@ use Loghound\Setup\Detector;
 use Loghound\Setup\Job;
 use Loghound\Setup\Pairs;
 use Loghound\Setup\Requirements;
-use Loghound\Setup\Reset;
 use Loghound\Setup\Schema;
 use Loghound\Setup\Steps;
 use Loghound\Setup\Storage;
@@ -96,13 +95,18 @@ final class Settings extends Controller implements JobHost, Sections
     private const KIND_SCHEMA = 'schema_check';
 
     /**
-     * The job kind that removes this installation, indexes and all.
+     * The job kind that starts the installation over: indexes, configuration, state and all.
      *
      * A job for a reason that is not about execution time, although that applies too: this is
      * the operation the owner most wants to WATCH. It deletes two indexes on a remote platform,
      * empties a directory and removes a configuration, and an operator who pressed a button and
      * got a blank page afterwards has no idea which of those happened. A stepped job names each
      * one as it happens, says what the outcome was, and leaves a record that survives a reload.
+     *
+     * THE KIND KEEPS ITS OLD NAME because it is the same run: the panel once offered a gentle
+     * reinstall beside this, the distinction was never the owner's, and what survived is the
+     * destructive one. Renaming the kind would orphan any run already in a job store mid-upgrade
+     * for no gain.
      *
      * Registering the kind is not permission to run it. See uninstall() and the `job_start`
      * arm of post(): a run needs a typed word, a current second factor, and a one-time grant
@@ -172,8 +176,51 @@ final class Settings extends Controller implements JobHost, Sections
         return match ($action) {
             'beacon'     => $this->envelope(['beacon' => $this->beaconStatus()]),
             'job_latest' => $this->latestJob(),
+            'regions'    => $this->regions(),
             default      => ['error' => 'Unknown action'],
         };
+    }
+
+    /**
+     * The regions this account may actually put an index in.
+     *
+     * ASKED FOR, NOT RENDERED. The region field used to be a free-text input, validated only on
+     * save: an operator had to know the platform's own spelling of a region name, and learned
+     * they had it wrong by being refused. It is a select now — and it is populated over fetch()
+     * rather than server-side for the reason every other number on every page of this panel is:
+     * the list belongs to the account and can only be had from opensolr.com, and a Settings page
+     * that reached out to the control plane before it rendered a byte would be an outage waiting
+     * to be discovered.
+     *
+     * A FAILURE IS A SENTENCE, NEVER A THROW. With no credentials, no network or a refused key
+     * there is no list to offer, and assets/js/smartselect.js leaves the operator typing a region
+     * exactly as they did before — degraded, not broken. The reason travels with the empty list
+     * so the card can print it.
+     *
+     * @return array<string,mixed>
+     */
+    private function regions(): array
+    {
+        $chosen = (string) $this->cfg->get('opensolr.region', '');
+
+        try {
+            $regions = Storage::listRegions($this->cfg);
+        } catch (\Throwable $e) {
+            return $this->envelope([
+                'regions'  => [],
+                'selected' => $chosen,
+                'note'     => 'Opensolr did not answer with the list of regions, so this is a free-text '
+                    . 'field for now. What came back: ' . Jobs::redact($e->getMessage()),
+            ]);
+        }
+
+        return $this->envelope([
+            'regions'  => $regions,
+            'selected' => $chosen,
+            'note'     => $regions === []
+                ? 'This account was offered no regions at all, so this is a free-text field for now.'
+                : '',
+        ]);
     }
 
     /**
@@ -291,14 +338,16 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
-     * The teardown, as the same ordered steps `install/uninstall.sh` prints.
+     * Starting over, as the same ordered steps `install/uninstall.sh` prints.
      *
-     * ONE LIST OF STEPS, TWO FRONT ENDS. Setup\Teardown::STEPS is the canonical order and the
-     * canonical wording; the shell uninstaller prints it and so does this, so an operator
-     * watching a terminal and an operator watching the panel see the same run. Every step this
-     * panel cannot perform is still SHOWN, in its place, saying why it needs a shell and naming
-     * the command — because a run that silently omitted six of eleven steps would be a run that
-     * left the operator believing the machine was clean.
+     * ONE LIST OF STEPS, TWO FRONT ENDS, TWO SCOPES. Setup\Teardown::STEPS is the canonical
+     * order and the canonical wording; the shell uninstaller prints it and so does this, so an
+     * operator watching a terminal and an operator watching the panel see the same run. What
+     * differs is how far it goes: the shell takes Loghound off the machine, and this deletes
+     * everything Loghound holds and hands the operator back to the installer. Every step this
+     * panel does not perform is still SHOWN, in its place, saying that it is left standing and
+     * why — because a run that silently omitted six of eleven steps would be a run that left
+     * the operator guessing what state the machine was in.
      *
      * @return array<int,array{label:string,run:callable}>
      */
@@ -318,7 +367,7 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
-     * Execute one teardown step.
+     * Execute one step of starting over.
      *
      * DESIGNED TO COMPLETE, NOT TO BE REFUSED. The refusals live earlier — in the typed word,
      * the second factor, the one-time arm, and the five ownership gates in
@@ -326,6 +375,10 @@ final class Settings extends Controller implements JobHost, Sections
      * should happen has been settled, and the job's business is to do it and say what happened.
      * The two things that DO stop it are the two an operator has to know about: ownership that
      * cannot be proved, and an index that is still on the account after being deleted.
+     *
+     * A STEP THIS PANEL DOES NOT PERFORM IS NOT A FAILURE AND IS NOT SKIPPED SILENTLY. It is
+     * part of the machine installation, starting over leaves it standing on purpose, and the
+     * reason travels with it along with the command that would remove it instead.
      *
      * @param array<string,mixed> $ctx
      * @return array<string,mixed>
@@ -335,9 +388,10 @@ final class Settings extends Controller implements JobHost, Sections
         if (!Teardown::isPanelStep($id)) {
             return [
                 'ok'     => true,
-                'note'   => 'needs a shell',
-                'detail' => (Teardown::shellOnlyReasons()[$id] ?? 'This step needs root.')
-                    . ' Run ' . Teardown::shellCommand(self::root()) . ' when this has finished.',
+                'note'   => 'left in place',
+                'detail' => (Teardown::shellOnlyReasons()[$id] ?? 'Left in place; removing it needs root.')
+                    . ' Run ' . Teardown::shellCommand(self::root()) . ' to take Loghound off this '
+                    . 'machine instead of setting it up again.',
             ];
         }
 
@@ -545,6 +599,12 @@ final class Settings extends Controller implements JobHost, Sections
      * of the rebuild onwards — the operator would rebuild, watch it fill with nothing, and have
      * no way to tell why.
      *
+     * THE PERSISTENT-LOGIN TOKENS ARE REVOKED RATHER THAN MERELY DELETED WITH THEIR STORE. The
+     * wipe takes the store away, which makes every remembered browser fail on its next request;
+     * revoking first also clears the cookie out of THIS browser, so the operator is not carrying
+     * a credential for an account that no longer exists into the installer they are about to be
+     * sent to. It is called before the wipe because it writes to `var/`.
+     *
      * The setup grant is issued BEFORE the wipe and again in the closing step, so an operator
      * whose run stops here is still able to reach the installer.
      *
@@ -554,13 +614,16 @@ final class Settings extends Controller implements JobHost, Sections
     {
         Token::grant();
 
+        Persistence::revokeAll($cfg->varDir());
+
         $wipe = Teardown::wipeState($cfg, self::TEARDOWN_KEEP);
         Teardown::ensureSessionDir($cfg);
 
         $detail = $wipe['removed'] . ' item' . ($wipe['removed'] === 1 ? '' : 's')
             . ' removed from ' . $cfg->varDir() . ', including the state database with the reader\'s '
             . 'position in every log file, the setup token, signed-in sessions, remembered '
-            . 'browsers, recovery code hashes, the rate-limit ledgers and the saved schema check.';
+            . 'browsers, recovery code hashes, the rate-limit ledgers and the saved schema check. '
+            . 'Every persistent-login token was revoked first, this browser\'s included.';
 
         if ($wipe['failed'] !== []) {
             $detail .= ' Could not remove: ' . implode(', ', $wipe['failed'])
@@ -584,6 +647,12 @@ final class Settings extends Controller implements JobHost, Sections
      * request — this browser's or anybody's — is the installer. So it happens in the closing
      * step, after the report has been built, and the response carrying `done` is the last one
      * this installation will ever serve.
+     *
+     * IT IS ALSO WHAT TAKES THE OPENSOLR ACCOUNT WITH IT. The email, the API key and the region
+     * live in that file and nowhere else, and nothing about the plan's index allowance is
+     * persisted at all — it is read from the platform whenever it is wanted. So deleting the
+     * file is the whole of "nothing is carried across": setup asks for the account again, and
+     * there is no remembered pair for it to offer, because the pair was deleted three steps ago.
      *
      * THE NAMES TRAVEL IN THE REPORT WHEN ABSENCE COULD NOT BE PROVEN, because that is the one
      * fact the operator cannot recover afterwards: in a minute this box will no longer be able
@@ -626,8 +695,9 @@ final class Settings extends Controller implements JobHost, Sections
             'ok'      => true,
             'note'    => 'finished',
             'detail'  => $done . ' Everything Loghound created on the platform and in this tree\'s '
-                . 'own state is gone. What is left is listed below, and none of it was ever ours.',
-            'report'  => "What was NOT removed, and why\n\n  - " . implode("\n  - ", $left)
+                . 'own state is gone, the Opensolr account details with it. Setup starts from '
+                . 'nothing. What is left is listed below, and none of it is data.',
+            'report'  => "What was left standing, and why\n\n  - " . implode("\n  - ", $left)
                 . "\n\n  One session file is written after the wipe: your own, carrying the one-time\n"
                 . "  grant that lets you reach the installer without reading var/install-token over\n"
                 . "  a shell. " . Teardown::shellCommand(self::root()) . " removes the tree and it.",
@@ -827,9 +897,6 @@ final class Settings extends Controller implements JobHost, Sections
             case 'opensolr_credentials':
                 return $this->saveOpensolrCredentials();
 
-            case 'reinstall':
-                return $this->reinstall();
-
             case 'uninstall':
                 return $this->uninstall();
 
@@ -865,7 +932,7 @@ final class Settings extends Controller implements JobHost, Sections
 
             case 'totp_download':
                 $this->totpDownload();
-                return '?v=settings#set-2fa';
+                return '?v=settings&s=2fa';
 
             case 'job_start':
                 return $this->jobJson(function (Jobs $jobs): array {
@@ -1010,11 +1077,11 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function saveOpensolrCredentials(): string
     {
-        $anchor = '#set-solr';
+        $back = '&s=solr';
 
         $refused = $this->requireSecondFactor();
         if ($refused !== '') {
-            return '?v=settings&err=' . $refused . $anchor;
+            return '?v=settings&err=' . $refused . $back;
         }
 
         $before = [
@@ -1039,20 +1106,20 @@ final class Settings extends Controller implements JobHost, Sections
         );
         if ($problems !== []) {
             $this->restoreOpensolr($before);
-            return $this->refuseCredentials(implode(' ', $problems), $anchor);
+            return $this->refuseCredentials(implode(' ', $problems), $back);
         }
 
         try {
             $regions = Storage::listRegions($this->cfg);
         } catch (\Throwable $e) {
             $this->restoreOpensolr($before);
-            return $this->refuseCredentials(Storage::explainApi($e->getMessage()), $anchor);
+            return $this->refuseCredentials(Storage::explainApi($e->getMessage()), $back);
         }
 
         $chosen = Storage::settleRegion($this->cfg, $regions, $region !== '');
         if ($chosen === null) {
             $this->restoreOpensolr($before);
-            return $this->refuseCredentials(Storage::regionRefusal($region, $regions), $anchor);
+            return $this->refuseCredentials(Storage::regionRefusal($region, $regions), $back);
         }
         $this->cfg->set('opensolr.region', $chosen);
 
@@ -1064,7 +1131,7 @@ final class Settings extends Controller implements JobHost, Sections
         $err = $this->persist();
         if ($err !== null) {
             $this->restoreOpensolr($before);
-            return '?v=settings&err=' . $err . $anchor;
+            return '?v=settings&err=' . $err . $back;
         }
 
         self::stashSolrNote(
@@ -1072,7 +1139,7 @@ final class Settings extends Controller implements JobHost, Sections
             $this->credentialOutcome($before, $chosen, $moved, $ownership)
         );
 
-        return '?v=settings&ok=opensolr_saved' . $anchor;
+        return '?v=settings&ok=opensolr_saved' . $back;
     }
 
     /**
@@ -1109,7 +1176,7 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function savePanelPassword(): string
     {
-        $anchor = '#set-auth';
+        $back = '&s=auth';
 
         $current = is_string($_POST['current_password'] ?? null) ? $_POST['current_password'] : '';
         $hash    = (string) $this->cfg->get('auth.password_hash', '');
@@ -1117,13 +1184,13 @@ final class Settings extends Controller implements JobHost, Sections
         if ($hash === '' || !password_verify($current, $hash)) {
             unset($_POST['current_password'], $_POST['password'], $_POST['password2']);
             $this->factorFailure();
-            return '?v=settings&err=bad_current_password' . $anchor;
+            return '?v=settings&err=bad_current_password' . $back;
         }
 
         $refused = $this->requireSecondFactor();
         if ($refused !== '') {
             unset($_POST['current_password'], $_POST['password'], $_POST['password2']);
-            return '?v=settings&err=' . $refused . $anchor;
+            return '?v=settings&err=' . $refused . $back;
         }
 
         $totp = (array) $this->cfg->get('auth.totp', []);
@@ -1141,17 +1208,17 @@ final class Settings extends Controller implements JobHost, Sections
 
         if ($problems !== []) {
             self::stashAuthNote(implode(' ', $problems));
-            return '?v=settings&err=password_refused' . $anchor;
+            return '?v=settings&err=password_refused' . $back;
         }
 
         $this->cfg->set('auth.totp', $totp);
 
         $err = $this->persist();
         if ($err !== null) {
-            return '?v=settings&err=' . $err . $anchor;
+            return '?v=settings&err=' . $err . $back;
         }
 
-        return '?v=settings&ok=password_saved' . $anchor;
+        return '?v=settings&ok=password_saved' . $back;
     }
 
     /** Queue the precise reason a password was refused, for the card to render once. */
@@ -1226,57 +1293,12 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
-     * Reset this installation and hand the same browser back to the installer.
+     * Confirm starting the installation over. This does not perform it; it arms it.
      *
-     * WHAT IT IS. The owner wanted a way to start the installation over from inside the panel.
-     * The installer gate stays exactly as it is — Installer::isNeeded() is structural and
-     * nothing here changes it — and this button is simply a supported way of making it true
-     * again. That the button lives behind a signed-in session is what makes it acceptable where
-     * an open "re-run setup" route would not be.
-     *
-     * THE LOCKOUT THIS HAS TO AVOID, and it is the whole design problem. Clearing the
-     * configuration makes the installer reachable, and the installer demands the token from
-     * var/install-token — which needs shell access to read. An operator who runs this box
-     * entirely through a browser would otherwise destroy their panel and be locked out of the
-     * installer in the same click. So the proof is carried forward: pressing this button in an
-     * authenticated session IS the proof the token exists to provide, and Token::grant() hands
-     * it to this session, one-shot and short-lived. Nothing is relaxed for anybody else — a
-     * visitor who did not press it still has to produce the file.
-     *
-     * IT COSTS A CURRENT SECOND FACTOR when one is configured, for the same reason disabling
-     * two-factor does and then some: this destroys a working installation's sign-in and its
-     * link to its own data, and a stolen session cookie must not be enough to do that. The
-     * ledger and the delay are the sign-in form's, through requireSecondFactor().
-     *
-     * The confirmation is a typed word rather than a second button, because the consequences
-     * list above it is long and the point is that it gets read.
-     */
-    private function reinstall(): string
-    {
-        $anchor = '#set-reinstall';
-
-        $refused = $this->requireSecondFactor();
-        if ($refused !== '') {
-            return '?v=settings&err=' . $refused . $anchor;
-        }
-
-        $typed = is_string($_POST['confirm'] ?? null) ? strtoupper(trim($_POST['confirm'])) : '';
-        if ($typed !== 'REINSTALL') {
-            return '?v=settings&err=reinstall_unconfirmed' . $anchor;
-        }
-
-        $result = Reset::perform($this->cfg);
-        if (!$result['ok']) {
-            return '?v=settings&err=save_failed' . $anchor;
-        }
-
-        Token::grant();
-
-        return './';
-    }
-
-    /**
-     * Confirm a destructive uninstall. This does not perform it; it arms it.
+     * THERE IS ONE OF THESE NOW, NOT TWO. The panel used to offer a reinstall that kept the
+     * indexes, the account and the API key beside an uninstall that deleted them, and the
+     * distinction was never the owner's: starting over means starting from zero. So this is the
+     * only path, it is the destructive one, and the card above it says so line by line.
      *
      * WHY THE CONFIRMATION AND THE WORK ARE SEPARATE. The work is a stepped job driven by a
      * poll loop, and a confirmation attached to a poll is a confirmation that has to be
@@ -1293,30 +1315,39 @@ final class Settings extends Controller implements JobHost, Sections
      * THE WORD IS TYPED, not clicked. The consequences above it are long, the first of them is
      * that the data is unrecoverable without an Opensolr backup nobody buys by accident, and
      * the point of the word is that the list gets read.
+     *
+     * THE LOCKOUT THE RUN ITSELF HAS TO AVOID, carried over from the reset this replaces.
+     * Removing the configuration makes the installer reachable, and the installer demands the
+     * token from var/install-token — which needs shell access to read. An operator who runs this
+     * box entirely through a browser would otherwise destroy their panel and be locked out of
+     * the installer in the same click. So the proof is carried forward: confirming here in an
+     * authenticated session IS the proof the token exists to provide, and the run's own steps
+     * call Token::grant() before and after the wipe, one-shot and short-lived. Nothing is
+     * relaxed for anybody else — a visitor who did not confirm still has to produce the file.
      */
     private function uninstall(): string
     {
-        $anchor = '#set-uninstall';
+        $back = '&s=uninstall';
 
         if ($this->gw->isDemo()) {
-            return '?v=settings&err=uninstall_demo' . $anchor;
+            return '?v=settings&err=uninstall_demo' . $back;
         }
 
         $refused = $this->requireSecondFactor();
         if ($refused !== '') {
             Teardown::disarm();
-            return '?v=settings&err=' . $refused . $anchor;
+            return '?v=settings&err=' . $refused . $back;
         }
 
         $typed = is_string($_POST['confirm'] ?? null) ? strtoupper(trim($_POST['confirm'])) : '';
         if ($typed !== Teardown::CONFIRM_WORD) {
             Teardown::disarm();
-            return '?v=settings&err=uninstall_unconfirmed' . $anchor;
+            return '?v=settings&err=uninstall_unconfirmed' . $back;
         }
 
         Teardown::arm();
 
-        return '?v=settings&ok=uninstall_armed' . $anchor;
+        return '?v=settings&ok=uninstall_armed' . $back;
     }
 
     /**
@@ -1330,7 +1361,7 @@ final class Settings extends Controller implements JobHost, Sections
     {
         Incidents::clear($this->cfg->varDir());
 
-        return '?v=settings&ok=incidents_cleared#set-errors';
+        return '?v=settings&ok=incidents_cleared&s=errors';
     }
 
     /**
@@ -1358,7 +1389,7 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function addSource(): string
     {
-        $anchor = '#set-sources';
+        $back = '&s=sources';
 
         $path   = is_string($_POST['path'] ?? null) ? $_POST['path'] : '';
         $format = is_string($_POST['format'] ?? null) ? $_POST['format'] : '';
@@ -1367,21 +1398,21 @@ final class Settings extends Controller implements JobHost, Sections
         $result = Detector::manualSource($this->cfg, $path, $format, $regex);
         if (!$result['ok']) {
             self::stashSourceNote($result['error']);
-            return '?v=settings&err=source_refused' . $anchor;
+            return '?v=settings&err=source_refused' . $back;
         }
 
         $problems = Steps::applySources($this->cfg, [$result['source']]);
         if ($problems !== []) {
             self::stashSourceNote(implode(' ', $problems));
-            return '?v=settings&err=source_refused' . $anchor;
+            return '?v=settings&err=source_refused' . $back;
         }
 
         $err = $this->persist();
         if ($err !== null) {
-            return '?v=settings&err=' . $err . $anchor;
+            return '?v=settings&err=' . $err . $back;
         }
 
-        return '?v=settings&ok=source_added' . $anchor;
+        return '?v=settings&ok=source_added' . $back;
     }
 
     /** Queue the precise reason a source was refused, for the card to render once. */
@@ -1483,7 +1514,7 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function chooseIndexes(): string
     {
-        $anchor = '#set-solr';
+        $back = '&s=solr';
 
         /* A SECOND FACTOR, ON EXACTLY THE REASONING saveOpensolrCredentials() GIVES. That method
            demands one because "being able to REPLACE it from a stolen session means pointing this
@@ -1492,14 +1523,14 @@ final class Settings extends Controller implements JobHost, Sections
            core pair achieves the same redirection of the write path, and it did not ask. */
         $refused = $this->requireSecondFactor();
         if ($refused !== '') {
-            return '?v=settings&err=' . $refused . $anchor;
+            return '?v=settings&err=' . $refused . $back;
         }
 
         $choice = is_string($_POST['install_id'] ?? null) ? $_POST['install_id'] : '';
         $new    = $choice === Pairs::CHOICE_NEW;
 
         if (!$new && !preg_match('/^[a-f0-9]{4,32}$/D', $choice)) {
-            return '?v=settings&err=pair_unknown' . $anchor;
+            return '?v=settings&err=pair_unknown' . $back;
         }
 
         $was = [
@@ -1518,7 +1549,7 @@ final class Settings extends Controller implements JobHost, Sections
             $blocked = $this->provisionRefusal();
             if ($blocked !== '') {
                 self::stashSolrNote('bad', $blocked);
-                return '?v=settings&err=pair_failed' . $anchor;
+                return '?v=settings&err=pair_failed' . $back;
             }
         }
 
@@ -1530,19 +1561,19 @@ final class Settings extends Controller implements JobHost, Sections
             );
         } catch (\Throwable $e) {
             self::stashSolrNote('bad', 'The job store could not be opened: ' . Jobs::redact($e->getMessage()));
-            return '?v=settings&err=pair_failed' . $anchor;
+            return '?v=settings&err=pair_failed' . $back;
         }
 
         @set_time_limit(0);
 
         if (!$job->runAll($this->cfg, self::root())) {
             self::stashSolrNote('bad', Jobs::redact($job->error()));
-            return '?v=settings&err=pair_failed' . $anchor;
+            return '?v=settings&err=pair_failed' . $back;
         }
 
         self::stashSolrNote('good', $this->chosenOutcome($was, $new));
 
-        return '?v=settings&ok=' . ($new ? 'pair_created' : 'pair_switched') . $anchor;
+        return '?v=settings&ok=' . ($new ? 'pair_created' : 'pair_switched') . $back;
     }
 
     /**
@@ -1651,8 +1682,6 @@ final class Settings extends Controller implements JobHost, Sections
             return;
         }
 
-        echo '<p>' . Security::esc($step['intro']) . '</p>';
-
         foreach ($step['halves'] as $notice) {
             echo '<p class="muted">' . Security::esc($notice) . '</p>';
         }
@@ -1661,44 +1690,97 @@ final class Settings extends Controller implements JobHost, Sections
         self::csrfField();
         echo '<input type="hidden" name="action" value="opensolr_indexes">';
 
+        echo '<div class="optlist">';
+
         $first = true;
         foreach ($step['pairs'] as $pair) {
-            echo '<label class="radio">';
-            echo '<input type="radio" name="install_id" value="'
-                . Security::esc($pair['install_id']) . '"' . ($first ? ' checked' : '') . ' required>';
-            echo '<span><span class="mono">' . Security::esc($pair['hits']) . '</span><br>'
-                . '<span class="mono">' . Security::esc($pair['sessions']) . '</span>'
-                . ($pair['current'] ? ' <span class="chip chip-good">already in use here</span>' : '')
-                . '</span>';
-            echo '</label>';
+            self::option(
+                'install_id',
+                (string) $pair['install_id'],
+                (string) $pair['install_id'],
+                [(string) $pair['hits'], (string) $pair['sessions']],
+                $first,
+                $pair['current'] ? 'In use here' : ''
+            );
             $first = false;
         }
 
         if ($step['can_new']) {
-            echo '<label class="radio">';
-            echo '<input type="radio" name="install_id" value="' . Security::esc(Pairs::CHOICE_NEW) . '"'
-                . ($first ? ' checked' : '') . ' required>';
-            echo '<span>' . Security::esc($step['new_label']) . '</span>';
-            echo '</label>';
-            echo '<p class="muted">' . Security::esc($step['new_detail']) . '</p>';
-        } elseif ($step['new_blocked'] !== '') {
+            self::option(
+                'install_id',
+                Pairs::CHOICE_NEW,
+                (string) $step['new_label'],
+                [(string) $step['new_detail']],
+                $first,
+                ''
+            );
+        }
+        echo '</div>';
+
+        if (!$step['can_new'] && $step['new_blocked'] !== '') {
             echo '<p class="muted">' . Security::esc($step['new_blocked']) . '</p>';
         }
 
         if ($step['pairs'] !== []) {
             echo '<p class="muted">' . Security::esc($step['consequence']) . '</p>';
             echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
-                . 'If the pair you pick was made by an older Loghound, add the fields this version '
-                . 'writes</label>';
-            echo '<p class="muted">Left unticked, the shape is checked first and nothing changes if it '
-                . 'does not match. Ticked, the missing fields are added, which only ever adds and does '
-                . 'not alter or remove a single document already in there.</p>';
+                . 'Add the fields this version writes, if the pair was made by an older Loghound</label>';
         }
 
         echo '<button type="submit" class="primary">Use these indexes</button>';
         echo '</form>';
-        echo '<p class="muted">Whichever you pick, this runs the steps the installer runs and can take '
-            . 'a minute. Nothing on your account is deleted, cleared or moved by it.</p>';
+    }
+
+    /**
+     * One option in a list of them: a whole row that is the control.
+     *
+     * WHAT THIS REPLACES. A pair of indexes is ONE choice, and it was rendered as a radio dot
+     * beside the first index name, the second index name on a line below it with no control at
+     * all, and a bordered pill floating mid-line beside that. It read as broken markup rather
+     * than as one selectable thing, and the only place it could be pressed was a twelve-pixel
+     * dot.
+     *
+     * The <label> wraps the input, so the whole row is the hit area — which is the rule this
+     * component exists to make structural: whatever an operator can choose, they can press
+     * anywhere on. The input stays a real radio, so the group keeps arrow-key navigation, the
+     * required check and the form's own semantics; the stylesheet takes the dot out of the
+     * layout and marks the SELECTED row instead, because a row that is visibly chosen does not
+     * also need a dot to say so.
+     *
+     * @param string            $name    Form field name; the radio group.
+     * @param string            $value   The value this option submits.
+     * @param string            $title   The option's own name, in the reader's words.
+     * @param array<int,string> $meta    Supporting lines — index names, a sentence.
+     * @param bool              $checked Whether this is the option selected on arrival.
+     * @param string            $status  A short state, rendered where a state belongs.
+     * @param bool              $mono    Whether the meta lines are identifiers rather than prose.
+     */
+    private static function option(
+        string $name,
+        string $value,
+        string $title,
+        array $meta,
+        bool $checked,
+        string $status = '',
+        bool $mono = true
+    ): void {
+        echo '<label class="opt">';
+        echo '<input type="radio" name="' . Security::esc($name) . '" value="' . Security::esc($value) . '"'
+            . ($checked ? ' checked' : '') . ' required>';
+        echo '<span class="opt-body">';
+        echo '<span class="opt-title">' . Security::esc($title) . '</span>';
+        foreach ($meta as $line) {
+            if ((string) $line === '') {
+                continue;
+            }
+            echo '<span class="opt-meta' . ($mono ? ' mono' : '') . '">'
+                . Security::esc((string) $line) . '</span>';
+        }
+        echo '</span>';
+        if ($status !== '') {
+            echo '<span class="opt-state">' . Security::esc($status) . '</span>';
+        }
+        echo '</label>';
     }
 
     /**
@@ -1831,10 +1913,10 @@ final class Settings extends Controller implements JobHost, Sections
      * anything from the query string out of the page; this puts the sentence in the session
      * instead and the card renders it, escaped, once.
      */
-    private function refuseCredentials(string $why, string $anchor): string
+    private function refuseCredentials(string $why, string $back): string
     {
         self::stashSolrNote('bad', $why);
-        return '?v=settings&err=opensolr_refused' . $anchor;
+        return '?v=settings&err=opensolr_refused' . $back;
     }
 
     /**
@@ -2081,7 +2163,7 @@ final class Settings extends Controller implements JobHost, Sections
            not a posture. */
         $refused = $this->requireSecondFactor();
         if ($refused !== '') {
-            return '?v=settings&err=' . $refused . '#set-privacy';
+            return '?v=settings&err=' . $refused . '&s=privacy';
         }
 
         $mode = is_string($_POST['ip_mode'] ?? null) ? $_POST['ip_mode'] : '';
@@ -2160,7 +2242,7 @@ final class Settings extends Controller implements JobHost, Sections
            presenting one — which is precisely what totpDisable() exists to prevent. */
         $refused = $this->requireSecondFactor();
         if ($refused !== '') {
-            return '?v=settings&err=' . $refused . '#set-auth';
+            return '?v=settings&err=' . $refused . '&s=auth';
         }
 
         $mode = is_string($_POST['auth_mode'] ?? null) ? $_POST['auth_mode'] : '';
@@ -2211,14 +2293,19 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<input type="hidden" name="action" value="auth_mode">';
 
         echo '<fieldset><legend>How you sign in</legend>';
+        echo '<div class="optlist">';
         foreach (Security::authModes() as $val => $meta) {
-            echo '<label class="radio"><input type="radio" name="auth_mode" value="' . Security::esc($val) . '"'
-                . ($mode === $val ? ' checked' : '') . '>';
-            echo '<span><strong>' . Security::esc($meta['label']) . '</strong><br><span class="muted">'
-                . Security::esc($meta['text']) . ' ' . Security::esc($meta['cost'])
-                . '</span></span></label>';
+            self::option(
+                'auth_mode',
+                (string) $val,
+                (string) $meta['label'],
+                [trim($meta['text'] . ' ' . $meta['cost'])],
+                $mode === $val,
+                '',
+                false
+            );
         }
-        echo '</fieldset>';
+        echo '</div></fieldset>';
 
         echo '<button type="submit" class="primary">Save sign-in method</button>';
         echo '</form>';
@@ -2255,9 +2342,8 @@ final class Settings extends Controller implements JobHost, Sections
 
         $this->passwordPart();
 
-        echo '<p class="muted">Or change it from a shell, which a headless install still needs. Every '
-            . 'prompt is defaulted to the stored value, so Enter through the rest and change only what '
-            . 'you came for.</p>';
+        echo '<p class="muted">Or from a shell, which a headless install needs. Every prompt is defaulted '
+            . 'to the stored value.</p>';
         self::commandBlock('set-auth-setup', self::setupGroup());
 
         $this->rememberedPart($mode);
@@ -2550,7 +2636,7 @@ final class Settings extends Controller implements JobHost, Sections
     {
         Persistence::revokeAll($this->cfg->varDir());
 
-        return '?v=settings&ok=remembered_revoked#set-auth';
+        return '?v=settings&ok=remembered_revoked&s=auth';
     }
 
     /**
@@ -2611,12 +2697,12 @@ final class Settings extends Controller implements JobHost, Sections
     private function totpBegin(): string
     {
         if (TwoFactor::isEnabled((array) $this->cfg->get('auth', []))) {
-            return '?v=settings&err=totp_already_on#set-2fa';
+            return '?v=settings&err=totp_already_on&s=2fa';
         }
 
         TwoFactor::beginEnrollment();
 
-        return '?v=settings#set-2fa';
+        return '?v=settings&s=2fa';
     }
 
     /** Throw away an enrollment in progress. */
@@ -2624,7 +2710,7 @@ final class Settings extends Controller implements JobHost, Sections
     {
         TwoFactor::cancelEnrollment();
 
-        return '?v=settings&ok=totp_cancelled#set-2fa';
+        return '?v=settings&ok=totp_cancelled&s=2fa';
     }
 
     /**
@@ -2641,12 +2727,12 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $blocked = $this->factorGate();
         if ($blocked !== '') {
-            return '?v=settings&err=' . $blocked . '#set-2fa';
+            return '?v=settings&err=' . $blocked . '&s=2fa';
         }
 
         $secret = TwoFactor::pendingSecret();
         if ($secret === '') {
-            return '?v=settings&err=totp_expired#set-2fa';
+            return '?v=settings&err=totp_expired&s=2fa';
         }
 
         $code = is_string($_POST['code'] ?? null) ? $_POST['code'] : '';
@@ -2654,19 +2740,19 @@ final class Settings extends Controller implements JobHost, Sections
 
         if ($result['errors'] !== []) {
             $this->factorFailure();
-            return '?v=settings&err=totp_bad_code#set-2fa';
+            return '?v=settings&err=totp_bad_code&s=2fa';
         }
 
         $err = $this->persist();
         if ($err !== null) {
             $this->cfg->set('auth.totp', ['enabled' => false, 'secret' => '', 'recovery' => []]);
-            return '?v=settings&err=' . $err . '#set-2fa';
+            return '?v=settings&err=' . $err . '&s=2fa';
         }
 
         TwoFactor::cancelEnrollment();
         TwoFactor::stashCodes($result['codes']);
 
-        return '?v=settings&ok=totp_on#set-2fa';
+        return '?v=settings&ok=totp_on&s=2fa';
     }
 
     /**
@@ -2680,18 +2766,18 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $blocked = $this->factorGate();
         if ($blocked !== '') {
-            return '?v=settings&err=' . $blocked . '#set-2fa';
+            return '?v=settings&err=' . $blocked . '&s=2fa';
         }
 
         $code = is_string($_POST['code'] ?? null) ? $_POST['code'] : '';
 
         if (TwoFactor::disable($this->cfg, $code, $this->cfg->varDir()) !== []) {
             $this->factorFailure();
-            return '?v=settings&err=totp_bad_code#set-2fa';
+            return '?v=settings&err=totp_bad_code&s=2fa';
         }
 
         $err = $this->persist();
-        return $err !== null ? '?v=settings&err=' . $err . '#set-2fa' : '?v=settings&ok=totp_off#set-2fa';
+        return $err !== null ? '?v=settings&err=' . $err . '&s=2fa' : '?v=settings&ok=totp_off&s=2fa';
     }
 
     /**
@@ -2707,30 +2793,30 @@ final class Settings extends Controller implements JobHost, Sections
     private function totpRegenerate(): string
     {
         if (!TwoFactor::isEnabled((array) $this->cfg->get('auth', []))) {
-            return '?v=settings&err=totp_off_already#set-2fa';
+            return '?v=settings&err=totp_off_already&s=2fa';
         }
 
         $blocked = $this->factorGate();
         if ($blocked !== '') {
-            return '?v=settings&err=' . $blocked . '#set-2fa';
+            return '?v=settings&err=' . $blocked . '&s=2fa';
         }
 
         $code = is_string($_POST['code'] ?? null) ? $_POST['code'] : '';
         if (TwoFactor::check($this->cfg, $code, $this->cfg->varDir()) === 'no') {
             $this->factorFailure();
-            return '?v=settings&err=totp_bad_code#set-2fa';
+            return '?v=settings&err=totp_bad_code&s=2fa';
         }
 
         $codes = TwoFactor::regenerate($this->cfg);
 
         $err = $this->persist();
         if ($err !== null) {
-            return '?v=settings&err=' . $err . '#set-2fa';
+            return '?v=settings&err=' . $err . '&s=2fa';
         }
 
         TwoFactor::stashCodes($codes);
 
-        return '?v=settings&ok=totp_codes#set-2fa';
+        return '?v=settings&ok=totp_codes&s=2fa';
     }
 
     /**
@@ -2799,7 +2885,7 @@ final class Settings extends Controller implements JobHost, Sections
         $this->cfg->set('cache.ttl_seconds', Cache::clampTtl($_POST['cache_ttl_seconds'] ?? null));
 
         $err = $this->persist();
-        return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=cache_saved#set-cache';
+        return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=cache_saved&s=cache';
     }
 
     /**
@@ -2847,7 +2933,7 @@ final class Settings extends Controller implements JobHost, Sections
             return '?v=settings&err=' . $err;
         }
 
-        return '?v=settings&ok=' . ($enabled ? 'source_ingesting' : 'source_paused') . '#set-sources';
+        return '?v=settings&ok=' . ($enabled ? 'source_ingesting' : 'source_paused') . '&s=sources';
     }
 
     /** Save display preferences: timezone used for rendering timestamps. */
@@ -2920,9 +3006,9 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'from now on. Anything it was using before is still on your account, untouched.',
             'source_added'     => 'Log file added. The reader picks it up on its next reload, and starts '
                 . 'from the end of the file rather than replaying its history.',
-            'uninstall_armed'  => 'Confirmed. The removal is running below — watch it, and do not close '
-                . 'this tab until it finishes. When it does, this panel no longer exists and you land '
-                . 'on the installer.',
+            'uninstall_armed'  => 'Confirmed. It is running below — watch it, and do not close this tab '
+                . 'until it finishes. When it does, this installation no longer exists and you land on '
+                . 'the installer with nothing carried across.',
             'incidents_cleared' => 'The recorded failures were cleared. Anything still broken is '
                 . 'reported again below, because that is measured rather than remembered.',
         ];
@@ -2959,8 +3045,6 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'pass and try again — the same limit that protects the sign-in form protects this.',
             'opensolr_refused' => 'The Opensolr account was NOT changed. What was already stored is still '
                 . 'stored and still working; the reason is on the Solr card below.',
-            'reinstall_unconfirmed' => 'Nothing was reset. Type REINSTALL in the box to confirm — the '
-                . 'word is asked for because the list above it is worth reading first.',
             'bad_current_password' => 'That is not the current password, so nothing was changed. It is '
                 . 'asked for because a session that outlives a closed browser must not be enough on '
                 . 'its own to take the panel over.',
@@ -3001,11 +3085,11 @@ final class Settings extends Controller implements JobHost, Sections
      * well as the sentence, and only when there IS something wrong: a card that always carried
      * the marker would be a card that never folds.
      *
-     * `awaiting` IS WHY THE FORM CLASS IS NOT ENOUGH ON ITS OWN. Three unrelated forms on this
-     * page are a `.confirm-form` — the source that has not been confirmed yet, the button that
-     * stops ingesting a source, and the reinstall form — and only the first is a thing waiting
+     * `awaiting` IS WHY THE FORM CLASS IS NOT ENOUGH ON ITS OWN. Three unrelated forms in this
+     * view are a `.confirm-form` — the source that has not been confirmed yet, the button that
+     * stops ingesting a source, and the start-over form — and only the first is a thing waiting
      * on the operator. Keying the fold on the bare class force-opened the log sources and the
-     * reinstall card on every render of every installation, so neither could ever show the
+     * start-over card on every render of every installation, so neither could ever show the
      * choice the operator had made.
      */
     private static function problemBanner(string $text): void
@@ -3036,7 +3120,7 @@ final class Settings extends Controller implements JobHost, Sections
      *
      * @var array<int,array{0:string,1:string,2:string}> id, nav label, renderer
      */
-    private const SECTIONS = [
+    public const SECTIONS = [
         ['set-finish', 'Finish setup', 'finishSection'],
         ['set-errors', 'Critical errors', 'errorsSection'],
         ['set-ops', 'Running it', 'operationsSection'],
@@ -3051,18 +3135,16 @@ final class Settings extends Controller implements JobHost, Sections
         ['set-auth', 'Sign-in', 'authSection'],
         ['set-2fa', 'Two-factor', 'twoFactorSection'],
         ['set-display', 'Display', 'displaySection'],
-        ['set-reinstall', 'Reinstall', 'reinstallSection'],
-        ['set-uninstall', 'Remove Loghound', 'uninstallSection'],
+        ['set-uninstall', 'Start over', 'uninstallSection'],
     ];
 
     /**
-     * The card list, for the jump bar Layout pins above the page and for the numbering.
+     * The pages this view has, for the navigation and for the numbering.
      *
-     * The bar itself used to be emitted here, inside `.view`, and did not work: `.view` is a
-     * flex column, and a `position: sticky` child of a flex container is sticky within its own
-     * flex item box — a box exactly as tall as the bar — so it had no travel and scrolled away
-     * once the reader passed the sixth card. Layout renders it as a sibling of `.view`, where
-     * its containing block is the whole page.
+     * Fifteen of them, which is why Settings is the view the split into pages was most obviously
+     * right for: it was one document fifteen sections long, and the only way to reach the ninth
+     * was to scroll past eight. It was sixteen until the reinstall page and the remove-everything
+     * page became the one destructive `set-uninstall` page — see uninstallSection().
      *
      * @return array<int,array<int,string>>
      */
@@ -3071,7 +3153,7 @@ final class Settings extends Controller implements JobHost, Sections
         return self::SECTIONS;
     }
 
-    /** The number a card carries, from its position in SECTIONS rather than a literal. */
+    /** The number a page carries, from its position in SECTIONS rather than a literal. */
     private static function sectionNum(string $id): string
     {
         return Layout::cardNum(self::SECTIONS, $id);
@@ -4372,10 +4454,12 @@ final class Settings extends Controller implements JobHost, Sections
      * thing to do from here — and it matches what the shell wizard's prompt does, which is the
      * property the two paths are supposed to share.
      *
-     * The region is a text field rather than a menu because the list belongs to the account and
-     * cannot be known without a network call, and a card that reached out to opensolr.com on
-     * every render of the Settings page would be an outage waiting to be discovered. A value
-     * that is not on the account's list is refused on submit, and the refusal names the list.
+     * THE REGION IS A MENU, FILLED AFTER THE PAGE HAS RENDERED. The list belongs to the account
+     * and cannot be known without a network call, and a card that reached out to opensolr.com on
+     * every render of the Settings page would be an outage waiting to be discovered — so the
+     * markup carries the stored value and the browser asks `?v=settings&api=regions` for the
+     * rest. A value that is not on the account's list is still refused on submit, by the same
+     * check as before: the menu is an affordance, never the validation.
      *
      * The second-factor field appears only when a second factor is configured, and it is
      * required when it appears; saveOpensolrCredentials() enforces that server-side regardless
@@ -4395,10 +4479,8 @@ final class Settings extends Controller implements JobHost, Sections
         $twoFactor = TwoFactor::isEnabled((array) $this->cfg->get('auth', []));
 
         echo '<h4>Which Opensolr account this installation uses</h4>';
-        echo '<p class="muted">Changing the API key, the account email or the region is done here; which '
-            . 'indexes to use is the next question, below. The key is checked against Opensolr before '
-            . 'anything is written, so a key that does not authenticate can never replace one that does — a '
-            . 'typo leaves the working credentials exactly as they were and tells you what came back.</p>';
+        echo '<p class="muted">The key is checked against Opensolr before anything is written, so a typo '
+            . 'leaves the working credentials as they were.</p>';
 
         echo '<form method="post" action="?v=settings" class="setup-form" autocomplete="off">';
         self::csrfField();
@@ -4417,13 +4499,24 @@ final class Settings extends Controller implements JobHost, Sections
                 . 'fact that one is set — and leaving the field blank keeps the key you already have.'
             : 'No key is stored. It is under <strong>Account</strong> in your Opensolr control panel.') . '</p>';
 
+        /* A SELECT OF WHAT THIS ACCOUNT MAY ACTUALLY USE, filled over fetch(). It renders as the
+           stored value and nothing else, and assets/js/views/settings.js adds the account's
+           regions when the platform answers — so the page never blocks on a control-plane call,
+           the form round-trips correctly with script off, and an account that cannot be asked
+           degrades to the free-text field this used to be rather than to a menu with no options
+           in it. `data-free` is what tells the smart select that a typed value it does not know
+           is legitimate here; every other select in the panel is a closed list. */
+        $region = (string) $this->cfg->get('opensolr.region', '');
         echo '<label for="opensolr_region">Region</label>';
-        echo '<input type="text" id="opensolr_region" name="opensolr_region" size="20" autocomplete="off" '
-            . 'spellcheck="false" value="'
-            . Security::esc((string) $this->cfg->get('opensolr.region', '')) . '">';
-        echo '<p class="muted">Where indexes created from here are placed. Changing it does not move the two '
-            . 'you already have — they stay where they were made. A region this account cannot use is refused '
-            . 'on save, and the refusal lists the ones it can.</p>';
+        echo '<select id="opensolr_region" name="opensolr_region" data-smart="Region" data-free="1">';
+        echo '<option value=""' . ($region === '' ? ' selected' : '') . '>Not set</option>';
+        if ($region !== '') {
+            echo '<option value="' . Security::esc($region) . '" selected>' . Security::esc($region) . '</option>';
+        }
+        echo '</select>';
+        echo '<p class="muted" id="opensolr_region_note">Where indexes created from here are placed. Changing it '
+            . 'does not move the two you already have — they stay where they were made. A region this account '
+            . 'cannot use is refused on save, and the refusal lists the ones it can.</p>';
 
         if ($twoFactor) {
             echo '<label for="opensolr_code">Code from your authenticator</label>';
@@ -4435,6 +4528,50 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         echo '<button type="submit" class="primary">Check and save</button>';
+        echo '</form>';
+    }
+
+    /**
+     * The Clear cache control, and the one line that follows a press.
+     *
+     * WHY IT IS HERE AND NOT IN THE PAGE HEAD ANY MORE. It used to sit in the toolbar of every
+     * view that reads cached data — ten pages carrying a control that discards a store none of
+     * them owns. The top bar carries the four controls that SCOPE a page and nothing else now,
+     * and this is not one of them: it changes an installation-wide setting's effect, which is
+     * what this card is about. Each card already has its own refresh control for "get me this
+     * section again", which is the question an operator standing on a view actually has.
+     *
+     * IT IS A FORM, NOT A LINK. Clearing state is a POST with a CSRF token, for the ordinary
+     * reason — a GET route would let any page on the internet empty an operator's cache with an
+     * <img> tag. The front controller answers it with a redirect back to this page, so a refresh
+     * cannot clear twice and the outcome arrives as a validated query parameter rather than as a
+     * rendered POST.
+     *
+     * NOT OFFERED WHEN THERE IS NOTHING TO CLEAR. An installation with caching off, or with a
+     * cache that is not answering, gets the state above and no button: a control that discards
+     * nothing and reports success is a wrong answer.
+     *
+     * @param array<string,mixed> $status Cache::status(), already read by the caller.
+     */
+    private function clearCacheControl(array $status): void
+    {
+        if (empty($status['working'])) {
+            return;
+        }
+
+        echo '<form method="post" action="' . Security::esc(Layout::settingsUrl('cache')) . '" class="cacheclear">';
+        self::csrfField();
+        echo '<button type="submit" name="clear_cache" value="1" class="ghost small">Clear cache</button>';
+
+        $cleared = $_GET['cleared'] ?? null;
+        if (is_string($cleared) && ($cleared === 'no' || preg_match('/^\d{1,9}$/D', $cleared) === 1)) {
+            $n = $cleared === 'no' ? -1 : (int) $cleared;
+            $said = $n < 0
+                ? 'Nothing was cleared — the cache did not answer.'
+                : ($n === 1 ? '1 cached answer discarded.' : number_format($n) . ' cached answers discarded.');
+            echo '<span class="job-meta" role="status">' . Security::esc($said) . '</span>';
+        }
+
         echo '</form>';
     }
 
@@ -4474,38 +4611,16 @@ final class Settings extends Controller implements JobHost, Sections
 
         self::cacheState($status);
 
-        echo '<p>Cached queries make the panel instant and cut the plan bandwidth it consumes. '
-            . 'Opensolr meters outgoing traffic &mdash; the responses Solr sends back &mdash; so it is '
-            . 'reads that spend your allowance, not writes: the tailer uploads log lines and gets back '
-            . 'a short acknowledgement, which is why ingestion costs almost nothing. The metered '
-            . 'bandwidth on a Loghound installation is therefore almost entirely this panel&rsquo;s own '
-            . 'reads, and a facet response over a large index is not small.</p>';
+        /* KEPT BECAUSE IT CHANGES A DECISION, and cut to the half that does. Opensolr meters
+           OUTGOING traffic, so the metered bandwidth on a Loghound installation is almost
+           entirely this panel's own reads — which is why the cache is the only real lever on the
+           bill, and is not obvious from anywhere else in the product. */
+        echo '<p>Opensolr meters the responses Solr sends back, so the plan bandwidth on a Loghound '
+            . 'installation is almost entirely this panel&rsquo;s own reads. The cache is the lever on it.</p>';
 
         self::cacheSavingsLine($this->gw->cacheSavings());
 
-        /* THE LIST IS EXACT, and tests/test_cache_surfaces.php proves it against the views
-           themselves rather than against this sentence, so a view that changes its mind about
-           Controller::SCOPE_CACHE breaks the build instead of quietly making this prose wrong.
-
-           THE TENSE IS NOT. Layout::clearCache() renders nothing when the cache is off or is
-           not answering, and caching ships OFF — so the present tense made a false statement
-           about ten pages, on the one card where the operator is deciding whether to turn it
-           on, which is precisely the moment it is guaranteed to be false. */
-        $live = !empty($status['working']);
-
-        echo '<p class="muted">Clear cache ' . ($live ? 'is' : 'appears')
-            . ' in the page head of every page that reads cached data '
-            . '&mdash; Overview, Bot forensics, Attacks, Fingerprints, Networks, Session explorer, Performance, '
-            . 'Virtual hosts, Who is querying and Storage &amp; bandwidth &mdash; and deliberately not on '
-            . 'Index analytics, Query analysis or this page: the first two read the Opensolr request '
-            . 'log, which is not cached, and Settings makes no cached read at all.'
-            . ($live
-                ? ''
-                : ' It is not on any of them at the moment, because '
-                    . (empty($status['configured'])
-                        ? 'caching is switched off below.'
-                        : 'the cache is not answering &mdash; the state above says why.'))
-            . '</p>';
+        self::clearCacheControl($status);
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
@@ -4594,107 +4709,49 @@ final class Settings extends Controller implements JobHost, Sections
     }
 
     /**
-     * Start the installation over, from the panel.
+     * Start the installation over: the consequences, the confirmation, and the run.
      *
-     * LAST CARD ON THE PAGE, on purpose. It is the most destructive control Loghound has that
-     * is not the uninstaller, and nothing below it competes for the attention of somebody who
-     * has scrolled this far.
+     * ONE CARD, BECAUSE THERE IS ONE ACTION. There used to be two of these side by side — a
+     * reinstall that kept the indexes, the Opensolr account and the API key, and an uninstall
+     * that deleted them — and the operator was asked to work out which of the two words he
+     * meant. That distinction was never the owner's. Starting the installation over means
+     * starting from zero: the indexes go from the platform, the account goes with the
+     * configuration, `var/` is emptied, and setup asks for every one of them again.
      *
-     * The consequences are enumerated before the control rather than summarised after it, and
-     * each line names a real thing and says what becomes of it — the indexes, the logs, the
-     * sign-in, the sessions database, the daemons. A generic "this cannot be undone" teaches
-     * nobody anything; the point of this list is that the two lines people most need are the
-     * two that are easiest to get wrong, namely that the data survives and that the sign-in
-     * does not.
+     * LAST CARD ON THE PAGE, on purpose. It is the most destructive control in the product, and
+     * nothing below it competes for the attention of somebody who has scrolled this far.
      *
-     * The control is a typed word, not a second button. The list above it is long, and a word
-     * that has to be read and copied is the cheapest way to make sure it was.
-     */
-    private function reinstallSection(): void
-    {
-        self::cardOpen('set-reinstall', self::sectionNum('set-reinstall'), 'Start the installation over');
-
-        echo '<p class="pop">This resets this machine and walks you back through setup. It does '
-            . 'not delete your data.</p>';
-
-        echo '<dl class="kv">';
-        foreach (Reset::consequences() as $row) {
-            echo '<dt>' . Security::esc($row['what']) . '</dt>';
-            echo '<dd>' . Security::esc($row['happens']) . '</dd>';
-        }
-        echo '</dl>';
-
-        echo '<p class="muted">You stay signed in to this browser for setup itself: pressing the '
-            . 'button proves who you are, and that proof is carried into the installer so you are '
-            . 'not asked for the token file from the server. It lasts half an hour, it is used '
-            . 'once, and it belongs to this browser alone — anyone else reaching the installer '
-            . 'still has to read <code class="mono">var/install-token</code> over a shell.</p>';
-
-        echo '<h4>If you want ingestion stopped while you do it</h4>';
-        echo '<p class="muted">Optional. The reader keeps the configuration it started with and a '
-            . 'reload onto a half-finished one is refused, so leaving it running is safe — it '
-            . 'simply carries on writing to the indexes it already had.</p>';
-        self::commandBlock('set-reinstall-stop', [
-            'key'     => 'stop',
-            'title'   => 'Stop ingestion for the duration',
-            'lines'   => [Reset::stopCommand()],
-            'problem' => '',
-        ]);
-
-        echo '<h4>If you meant remove Loghound entirely</h4>';
-        echo '<p class="muted">That is a different thing and it has its own tool, which asks '
-            . 'before it deletes anything and proves your account owns an index before it removes '
-            . 'it. This button never deletes an index.</p>';
-        self::commandBlock('set-reinstall-uninstall', [
-            'key'     => 'uninstall',
-            'title'   => 'Remove Loghound from this machine',
-            'lines'   => ['sudo ' . self::root() . '/install/uninstall.sh'],
-            'problem' => '',
-        ]);
-
-        echo '<form method="post" action="?v=settings" class="setup-form confirm-form">';
-        self::csrfField();
-        echo '<input type="hidden" name="action" value="reinstall">';
-
-        if (TwoFactor::isEnabled((array) $this->cfg->get('auth', []))) {
-            echo '<label for="reinstall_code">Code from your authenticator</label>';
-            echo '<input type="text" id="reinstall_code" name="code" inputmode="numeric" '
-                . 'autocomplete="one-time-code" size="12" spellcheck="false" required>';
-        }
-
-        echo '<label for="reinstall_confirm">Type REINSTALL to confirm</label>';
-        echo '<input type="text" id="reinstall_confirm" name="confirm" size="20" autocomplete="off" '
-            . 'spellcheck="false" required>';
-
-        echo '<button type="submit" class="primary">Reset and start setup</button>';
-        echo '</form>';
-
-        self::cardEnd();
-    }
-
-    /**
-     * The destructive uninstall: the confirmation, and the run.
+     * THE CONSEQUENCES ARE ENUMERATED BEFORE THE CONTROL rather than summarised after it, and
+     * each line names a real thing and says what becomes of it. A generic "this cannot be
+     * undone" teaches nobody anything. Two of those lines are the boundary and never move: the
+     * access log files are the web server's, and the `LogFormat` line lives in a file Loghound
+     * does not own.
      *
-     * TWO STATES, AND ONLY TWO. Unarmed, the card is the consequences and the confirmation.
-     * Armed — which only happens immediately after a POST that carried the typed words and a
-     * current second factor — it is the run: assets/js/views/settings.js sees the marker and
-     * starts the job, and the operator watches each step happen. There is no third state where
-     * a button sits waiting to be pressed by accident, and no state where the run starts from
-     * a page load that did not follow a confirmation, because the arm is one-time and is spent
-     * the moment the job starts.
+     * TWO STATES AFTER THAT, AND ONLY TWO. Unarmed, the card is the consequences and the
+     * confirmation. Armed — which only happens immediately after a POST that carried the typed
+     * words and a current second factor — it is the run: assets/js/views/settings.js sees the
+     * marker and starts the job, and the operator watches each step happen. There is no third
+     * state where a button sits waiting to be pressed by accident, and no state where the run
+     * starts from a page load that did not follow a confirmation, because the arm is one-time
+     * and is spent the moment the job starts.
      *
-     * THE PANEL DOES NOT PRETEND TO DO THE SYSTEM HALF. Every step it cannot perform is listed
-     * in the run with the reason and the command, because there is no exec, shell_exec,
-     * proc_open or SSH anywhere in src/, bin/ or public/ — a published property of this product
-     * that is not being traded for a button that stops a systemd unit.
+     * THE MACHINE INSTALLATION STAYS, AND THE CARD SAYS SO. The units, the vhost, the pool, the
+     * command links, the service user and this tree are what setup is about to run on, and this
+     * panel could not touch them anyway: there is no exec, shell_exec, proc_open or SSH
+     * anywhere in src/, bin/ or public/, which is a published property of this product and is
+     * not being traded for a button that stops a systemd unit. `install/uninstall.sh` is the
+     * command for an operator who wants Loghound off the machine instead of set up again.
      */
     private function uninstallSection(): void
     {
-        self::cardOpen('set-uninstall', self::sectionNum('set-uninstall'), 'Remove Loghound entirely');
+        self::cardOpen('set-uninstall', self::sectionNum('set-uninstall'), 'Start the installation over');
 
-        echo '<p class="pop">This deletes the Loghound indexes and everything in them, permanently, '
-            . 'and then removes this installation\'s configuration and state. It is not the '
-            . 'reinstall above: that keeps your data, and this destroys it.</p>';
+        echo '<p class="pop">This starts from zero. Both Opensolr indexes and every document in '
+            . 'them are deleted from your account, this installation\'s configuration goes with '
+            . 'the Opensolr email, API key and region in it, everything under '
+            . '<code class="mono">var/</code> is emptied, and you land on the installer and set '
+            . 'Loghound up again from nothing. There is no version of this that keeps your '
+            . 'data.</p>';
 
         if ($this->gw->isDemo()) {
             echo '<p class="muted">The panel is showing demo data, so this is switched off. It will '
@@ -4710,10 +4767,17 @@ final class Settings extends Controller implements JobHost, Sections
         }
         echo '</dl>';
 
+        echo '<p class="muted">You stay signed in to this browser for setup itself: confirming '
+            . 'below proves who you are, and that proof is carried into the installer so you are '
+            . 'not asked for the token file from the server. It lasts half an hour, it is used '
+            . 'once, and it belongs to this browser alone — anyone else reaching the installer '
+            . 'still has to read <code class="mono">var/install-token</code> over a shell.</p>';
+
         echo '<h4>Stop ingestion first</h4>';
         echo '<p class="muted">Recommended, not required. The reader holds the configuration it '
             . 'started with, so while this runs it carries on trying to write to indexes that are '
-            . 'being deleted. Nothing is corrupted by that; it simply fills your log with errors.</p>';
+            . 'being deleted. Nothing is corrupted by that; it simply fills your log with errors. '
+            . 'Start it again when setup is finished.</p>';
         self::commandBlock('set-uninstall-stop', [
             'key'     => 'stop',
             'title'   => 'Stop ingestion',
@@ -4721,14 +4785,15 @@ final class Settings extends Controller implements JobHost, Sections
             'problem' => '',
         ]);
 
-        echo '<h4>The part that needs root</h4>';
-        echo '<p class="muted">The units, the timers, the vhost, the PHP-FPM pool, the command '
-            . 'links, the service user and this install tree are removed by the uninstaller, which '
-            . 'proves it wrote a file before it deletes one. Run it after this finishes — or instead '
-            . 'of this, since it does all of the above as well.</p>';
+        echo '<h4>If you meant remove Loghound from this machine</h4>';
+        echo '<p class="muted">That is a different ending, and it has its own tool. It deletes the '
+            . 'indexes through the same code this card uses, and then takes away the units, the '
+            . 'timers, the vhost, the PHP-FPM pool, the command links, the service user and this '
+            . 'install tree — which need root, and which this card leaves standing because setup '
+            . 'is about to run on them. It proves it wrote a file before it deletes one.</p>';
         self::commandBlock('set-uninstall-shell', [
             'key'     => 'uninstall',
-            'title'   => 'Finish the removal from a shell',
+            'title'   => 'Remove Loghound from this machine',
             'lines'   => [Teardown::shellCommand(self::root())],
             'problem' => '',
         ]);
@@ -4761,7 +4826,7 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<input type="text" id="uninstall_confirm" name="confirm" size="24" autocomplete="off" '
             . 'spellcheck="false" required>';
 
-        echo '<button type="submit" class="danger">Delete the indexes and remove Loghound</button>';
+        echo '<button type="submit" class="danger">Delete everything and start setup</button>';
         echo '</form>';
 
         self::cardEnd();
@@ -4774,16 +4839,21 @@ final class Settings extends Controller implements JobHost, Sections
      * when the session holds a current, unspent arm, so a page reload after the run has begun
      * does not start a second one — and `Jobs::start()` hands back the running job for a kind
      * rather than launching another, which is the second lock on the same door.
+     *
+     * EVERY CANONICAL STEP IS LISTED, including the ones this panel does not perform, because a
+     * plan that silently omitted six of eleven would leave the operator guessing what state the
+     * machine is in. They are marked as left in place rather than as failures: they are the
+     * machine installation, and setup is about to run on it.
      */
     private function uninstallRun(bool $armed): void
     {
-        echo '<h4>Removing Loghound</h4>';
+        echo '<h4>Deleting everything</h4>';
         echo '<p class="pop">' . ($armed
-            ? 'This is running now. Leave the tab open until it finishes; when it does, this panel '
-                . 'no longer exists and you land on the installer.'
-            : 'A removal was started from this browser. Its progress is below. If it stopped, read '
+            ? 'This is running now. Leave the tab open until it finishes; when it does, this '
+                . 'installation no longer exists and you land on the installer.'
+            : 'A run was started from this browser. Its progress is below. If it stopped, read '
                 . 'the block it left, then confirm again to run it from the beginning — nothing '
-                . 'local is removed until every index is proven gone, so starting over is safe.')
+                . 'local is removed until every index is proven gone, so starting again is safe.')
             . '</p>';
 
         echo '<ol class="teardown-plan">';
@@ -4792,7 +4862,7 @@ final class Settings extends Controller implements JobHost, Sections
                 . Security::esc($label)
                 . (Teardown::isPanelStep($id)
                     ? ''
-                    : ' <span class="chip">needs a shell</span>')
+                    : ' <span class="chip">left in place</span>')
                 . '</li>';
         }
         echo '</ol>';
@@ -5489,25 +5559,22 @@ final class Settings extends Controller implements JobHost, Sections
 
         self::cardOpen('set-privacy', self::sectionNum('set-privacy'), 'Privacy');
 
-        echo '<p class="muted">Setup does not ask about these. A new installation keeps the full '
-            . 'address and deletes hits after 90 days; this card is where both are changed.</p>';
+        echo '<p class="muted">A new installation keeps the full address and deletes hits after 90 days.</p>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="privacy">';
 
         echo '<fieldset><legend>How IP addresses are stored</legend>';
+        echo '<div class="optlist">';
         foreach ([
-            ['full', 'Full address', 'Stored as received. You already have these in your own access log; this keeps the panel consistent with it. Best detection quality.'],
-            ['truncate', 'Truncated (/24 and /48)', 'The host part is zeroed. Network-level analysis and fingerprint clustering still work; the individual address is gone. Per-IP drill-down becomes per-netblock.'],
-            ['hash', 'Hashed with a daily-rotating salt', 'Replaced by a keyed hash that changes every day, so the same person cannot be followed across days. Sessionisation still works within a day. Rotating-proxy detection is weakened because distinct-IP counts become distinct-hash counts.'],
+            ['full', 'Full address', 'Stored as received. Best detection quality.'],
+            ['truncate', 'Truncated (/24 and /48)', 'The host part is zeroed. Clustering still works; per-IP drill-down becomes per-netblock.'],
+            ['hash', 'Hashed with a daily-rotating salt', 'Nobody can be followed across days. Sessionisation still works within one; rotating-proxy detection is weakened.'],
         ] as [$val, $label, $desc]) {
-            echo '<label class="radio"><input type="radio" name="ip_mode" value="' . Security::esc($val) . '"'
-                . ($mode === $val ? ' checked' : '') . '>';
-            echo '<span><strong>' . Security::esc($label) . '</strong><br><span class="muted">'
-                . Security::esc($desc) . '</span></span></label>';
+            self::option('ip_mode', (string) $val, (string) $label, [(string) $desc], $mode === $val, '', false);
         }
-        echo '</fieldset>';
+        echo '</div></fieldset>';
 
         echo '<fieldset><legend>Retention</legend>';
         echo '<label for="retention">Delete hits and sessions older than</label> ';

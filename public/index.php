@@ -97,26 +97,15 @@ require __DIR__ . '/../src/autoload.php';
 use Loghound\Auth\Persistence;
 use Loghound\Config;
 use Loghound\Geo\Countries;
-use Loghound\Panel\Attacks;
-use Loghound\Panel\Bots;
-use Loghound\Panel\Callers;
 use Loghound\Panel\Controller;
-use Loghound\Panel\Fingerprints;
 use Loghound\Panel\Gateway;
-use Loghound\Panel\Hosts;
-use Loghound\Panel\Indexes;
 use Loghound\Panel\JobHost;
 use Loghound\Panel\Jobs;
 use Loghound\Panel\Layout;
 use Loghound\Panel\Login;
-use Loghound\Panel\Networks;
-use Loghound\Panel\Overview;
-use Loghound\Panel\Performance;
-use Loghound\Panel\Queries;
+use Loghound\Panel\OpensolrView;
 use Loghound\Panel\Query;
-use Loghound\Panel\Sessions;
-use Loghound\Panel\Settings;
-use Loghound\Panel\Usage;
+use Loghound\Panel\Scope;
 use Loghound\Panel\Vocabulary;
 use Loghound\Security;
 use Loghound\Setup\Installer;
@@ -177,34 +166,55 @@ Security::requireCsrf();
 
 $gw = Gateway::fromConfig($cfg);
 
-/**
- * The route table. Keys are the only values `?v=` may take.
- *
- * @var array<string,class-string<Controller>> $routes
- */
-$routes = [
-    'overview'     => Overview::class,
-    'bots'         => Bots::class,
-    'attacks'      => Attacks::class,
-    'fingerprints' => Fingerprints::class,
-    'networks'     => Networks::class,
-    'sessions'     => Sessions::class,
-    'performance'  => Performance::class,
-    'hosts'        => Hosts::class,
-    'indexes'      => Indexes::class,
-    'queries'      => Queries::class,
-    'callers'      => Callers::class,
-    'usage'        => Usage::class,
-    'settings'     => Settings::class,
-];
+/* THE SCOPE THE OPERATOR LEFT THE PANEL IN. Panel\Scope merges the remembered range, host,
+   filters, index and outcome slice into `$_GET` before a single reader touches it, so every
+   controller, every facet layer and every link is written against one request and cannot miss
+   the session. The rule it applies — the URL wins when it speaks, the session fills the silence
+   — is stated in full on that class. */
+$restored = Scope::apply();
 
-$slug = $_GET['v'] ?? 'overview';
+/** @var array<string,class-string<Controller>> $routes */
+$routes = Layout::routes();
+
+$slug = $_GET['v'] ?? Layout::DEFAULT_VIEW;
 if (!is_string($slug) || !isset($routes[$slug])) {
-    $slug = 'overview';
+    $slug = Layout::DEFAULT_VIEW;
 }
 
 /** @var Controller $view */
 $view = new $routes[$slug]($cfg, $gw);
+
+/* THE SECTION THIS PAGE IS. Resolved against the view's own declared list, so an unknown or
+   stale value lands on the view's first page rather than on a 404 — a bookmark to a section
+   that has been renamed should show the view it named. */
+$section = $view->sectionFor(is_string($_GET['s'] ?? null) ? $_GET['s'] : null);
+
+/* A RESTORED SCOPE IS PUT BACK IN THE ADDRESS BAR, once, on a page load and nothing else.
+   Three things read the query string and cannot be reached from PHP — the JSON endpoint each
+   card fetches, the CSV export links, and everything Layout::urlWith() renders — so applying
+   the scope server-side alone would leave the page scoped and the file it exports not. The
+   redirect cannot loop: after it, every key is in the URL, so nothing is restored and nothing
+   is added. */
+if ($restored !== []
+    && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET'
+    && !isset($_GET['api'])
+    && !isset($_GET['export'])) {
+    $_GET['v'] = $slug;
+    if ($section === '') {
+        unset($_GET['s']);
+    } else {
+        $_GET['s'] = Controller::sectionSlug($section);
+    }
+    header('Location: ?' . http_build_query($_GET), true, 303);
+    exit;
+}
+
+/* THE SESSION LOCK GOES BACK NOW ON EVERY REQUEST THAT WILL NOT MINT A CSRF TOKEN. A panel page
+   puts a dozen card fetches in flight at once and PHP's file session handler is an exclusive
+   lock for the life of a request, so holding it here would serialise them behind each other. */
+if (isset($_GET['api']) || isset($_GET['export'])) {
+    Scope::release();
+}
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     /* CLEAR CACHE, handled here rather than in a view because it belongs to no view. The
@@ -219,7 +229,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
        put in the form reaches the Location header as text. */
     if (isset($_POST['clear_cache'])) {
         $outcome = $gw->cache()->clear();
-        $target = Layout::urlWith(['v' => $slug])
+        $target = Layout::settingsUrl('cache')
             . '&cleared=' . ($outcome['cleared'] ? (string) $outcome['entries'] : 'no');
         header('Location: ' . $target, true, 303);
         exit;
@@ -312,6 +322,23 @@ if (is_string($action) && $action !== '') {
 
 $boot = [
     'view'    => $slug,
+
+    /* WHICH PAGE OF THIS VIEW THIS IS, as the card id it renders and as the slug that names it.
+       The front end needs both: the card id is what a view module's loader keys on, and the slug
+       is what a link has to carry. `sections` is the whole list, so assets/js/app.js can send a
+       stale `#<card>-card` deep link to the page that card now lives on instead of leaving the
+       reader on a fragment that is not in the document. */
+    'section' => $section,
+    'section_slug' => Controller::sectionSlug($section),
+    'sections' => array_map(
+        static fn (array $entry): array => [
+            'id'    => (string) ($entry[0] ?? ''),
+            'slug'  => Controller::sectionSlug((string) ($entry[0] ?? '')),
+            'label' => (string) ($entry[1] ?? ''),
+        ],
+        $view->sections()
+    ),
+
     'range'   => Query::range(is_string($_GET['range'] ?? null) ? $_GET['range'] : null)['key'],
     'csrf'    => Security::csrfToken(),
     'demo'    => $gw->isDemo(),
@@ -347,6 +374,14 @@ $boot = [
        fourth copy of the reading rules and knew nothing about the operator. */
     'filters' => $view->facetLayer()->payload(),
     'dimensions' => Query::filterFields(),
+
+    /* THE OTHER FILTER PLANE, when this view has one. The Opensolr request log is filtered
+       through `lf[…]` against its own four fields, and the applied-filters dialog in the top bar
+       is one control over both planes — an operator who has narrowed the request log and cannot
+       see it in the bar is reading a narrowed number that does not say it is narrowed, which is
+       the same defect on either plane. Absent on every other view, where it would be an empty
+       object the front end had to special-case anyway. */
+    'log_filters' => $view instanceof OpensolrView ? $view->logFilterPayload() : null,
 
     /* Which page-toolbar controls this view actually honours, straight from the view
        itself. The host selector and the filter bar are injected by the front end, so the

@@ -962,8 +962,6 @@ final class View
             return;
         }
 
-        echo '<p>' . Security::esc($step['intro']) . '</p>';
-
         foreach ($step['halves'] as $notice) {
             echo '<p class="muted">' . Security::esc($notice) . '</p>';
         }
@@ -971,25 +969,32 @@ final class View
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
         $this->csrf(Installer::STEP_STORAGE, 'indexes');
 
+        echo '<div class="optlist">';
+
         $first = true;
         foreach ($step['pairs'] as $pair) {
-            echo '<label class="radio">';
-            echo '<input type="radio" name="install_id" value="' . Security::esc($pair['install_id']) . '"'
-                . ($first ? ' checked' : '') . ' required>';
-            echo '<span><span class="mono">' . Security::esc($pair['hits']) . '</span><br>'
-                . '<span class="mono">' . Security::esc($pair['sessions']) . '</span>'
-                . ($pair['current'] ? ' <span class="chip chip-good">already in use here</span>' : '')
-                . '</span>';
-            echo '</label>';
+            self::option(
+                'install_id',
+                (string) $pair['install_id'],
+                (string) $pair['install_id'],
+                [(string) $pair['hits'], (string) $pair['sessions']],
+                $first,
+                $pair['current'] ? 'In use here' : ''
+            );
             $first = false;
         }
 
         if ($step['can_new'] && $regions !== []) {
-            echo '<label class="radio">';
-            echo '<input type="radio" name="install_id" value="' . Security::esc(Pairs::CHOICE_NEW) . '"'
-                . ($first ? ' checked' : '') . ' required>';
-            echo '<span>' . Security::esc($step['new_label']) . '</span>';
-            echo '</label>';
+            self::option(
+                'install_id',
+                Pairs::CHOICE_NEW,
+                (string) $step['new_label'],
+                [(string) $step['new_detail']],
+                $first,
+                '',
+                false
+            );
+            echo '</div>';
 
             echo '<label for="region">Region for a new pair</label>';
             echo '<select id="region" name="region">';
@@ -1000,25 +1005,61 @@ final class View
                     . Security::esc($region) . '</option>';
             }
             echo '</select>';
-            echo '<p class="muted">' . Security::esc($step['new_detail'])
-                . ' These are the regions your account can use, as the platform returned them.</p>';
-        } elseif ($step['new_blocked'] !== '') {
-            echo '<p class="muted">' . Security::esc($step['new_blocked']) . '</p>';
+        } else {
+            echo '</div>';
+            if ($step['new_blocked'] !== '') {
+                echo '<p class="muted">' . Security::esc($step['new_blocked']) . '</p>';
+            }
         }
 
         if ($step['pairs'] !== []) {
             echo '<p class="muted">' . Security::esc($step['consequence']) . '</p>';
             echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
-                . 'If the pair you pick was made by an older Loghound, add the fields this version '
-                . 'writes</label>';
-            echo '<p class="muted">Left unticked, the shape is checked first and nothing changes if it '
-                . 'does not match. Ticked, the missing fields are added, which only ever adds and does '
-                . 'not alter or remove a single document already in there.</p>';
+                . 'Add the fields this version writes, if the pair was made by an older Loghound</label>';
         }
 
         echo '<button type="submit" class="primary">Use these indexes</button>';
         echo '</form>';
         echo '</section>';
+    }
+
+    /**
+     * One option in a list of them: a whole row that is the control.
+     *
+     * The panel's own renderer, repeated here rather than shared, because the installer
+     * deliberately loads no panel PHP beyond what \Loghound\Setup needs — it has to run before
+     * an installation exists. Same markup, same class names, same stylesheet: see
+     * Panel\Settings::option() for why a pair of indexes is ONE row with one hit area rather
+     * than a radio dot beside the first of its two names.
+     *
+     * @param array<int,string> $meta
+     */
+    private static function option(
+        string $name,
+        string $value,
+        string $title,
+        array $meta,
+        bool $checked,
+        string $status = '',
+        bool $mono = true
+    ): void {
+        echo '<label class="opt">';
+        echo '<input type="radio" name="' . Security::esc($name) . '" value="' . Security::esc($value) . '"'
+            . ($checked ? ' checked' : '') . ' required>';
+        echo '<span class="opt-body">';
+        echo '<span class="opt-title">' . Security::esc($title) . '</span>';
+        foreach ($meta as $line) {
+            if ((string) $line === '') {
+                continue;
+            }
+            echo '<span class="opt-meta' . ($mono ? ' mono' : '') . '">'
+                . Security::esc((string) $line) . '</span>';
+        }
+        echo '</span>';
+        if ($status !== '') {
+            echo '<span class="opt-state">' . Security::esc($status) . '</span>';
+        }
+        echo '</label>';
     }
 
     /**
@@ -1091,17 +1132,22 @@ final class View
         echo '<fieldset>';
         echo '<legend>Which sign-in should Loghound use?</legend>';
 
+        echo '<div class="optlist">';
         foreach (Steps::authModes() as $key => $mode) {
-            echo '<label class="radio"><input type="radio" name="auth_mode" value="'
-                . Security::esc((string) $key) . '"' . ($key === $current ? ' checked' : '') . '>';
-            echo '<span><strong>' . Security::esc($mode['label']) . '</strong><br>'
-                . Security::esc($mode['text'])
-                . '<br><span class="muted">' . Security::esc($mode['cost']) . '</span></span></label>';
+            self::option(
+                'auth_mode',
+                (string) $key,
+                (string) $mode['label'],
+                [trim($mode['text'] . ' ' . $mode['cost'])],
+                $key === $current,
+                '',
+                false
+            );
         }
+        echo '</div>';
 
         echo '</fieldset>';
-        echo '<p class="muted">You can change this later under Settings without setting the password '
-            . 'again.</p>';
+        echo '<p class="muted">Changeable later under Settings, without setting the password again.</p>';
     }
 
     /**

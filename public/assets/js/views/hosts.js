@@ -3,16 +3,13 @@
  *
  * Two exports.
  *
- * `initHostPicker()` runs on EVERY view. Choosing a host adds `f[host_s][]` to the URL,
- * which the server already turns into a filter on every sessions-core query, so one control
- * scopes the entire dashboard rather than one card. It is a plain navigation: the selection
- * is in the URL, so it survives a reload, it can be bookmarked, and it appears in a
- * screenshot — which matters when the screenshot is the evidence in a conversation about
+ * `initHostPicker()` runs on EVERY view. It fills the hostname selector Panel\Layout renders in
+ * the top bar, and it hands assets/js/url.js the list every full URL on the page is composed
+ * from. Choosing a host submits `f[host_s][]`, which the server already turns into a filter on
+ * every sessions-core query, so one control scopes the entire dashboard rather than one card —
+ * and the selection is in the URL, so it survives a reload, it can be bookmarked, and it appears
+ * in a screenshot, which matters when the screenshot is the evidence in a conversation about
  * which site is being scraped.
- *
- * The picker is NOT inserted when the answer would be trivial. One host, or no host recorded
- * at all, means no selector: a control offering a single choice is furniture nobody needs,
- * and a multi-site feature must not clutter a single-site install.
  *
  * `init()` is the comparison view itself.
  */
@@ -25,6 +22,7 @@ import {
 import { barsH, tokens } from '../charts.js';
 import { dimRow, dimValue } from '../identity.js';
 import { noteHosts, outLink } from '../url.js';
+import { fillHosts, hostsUnavailable } from '../topbar.js';
 
 /** Population keys in the order the table and the bar use them. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -34,49 +32,25 @@ const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
  * ---------------------------------------------------------------------- */
 
 /**
- * Build the URL for a host choice.
+ * Fetch the virtual hosts, for the selector in the top bar and for every full URL on the page.
  *
- * The empty value means "every host", and it removes the parameter rather than setting it to
- * an empty string — an empty filter value would be sent, allowlisted, and turned into a
- * filter matching nothing, which reads as "no traffic" rather than as "all traffic".
+ * TWO CONSUMERS, ONE REQUEST, AND THE SECOND ONE IS WHY THE FETCH IS NOT GATED. The selector is
+ * rendered by Panel\Layout and filled here — it is a plain form control, so choosing a host
+ * submits `f[host_s][]` and the server turns it into a filter on every sessions-core query, which
+ * is what makes one control scope the whole dashboard. But assets/js/url.js also needs the
+ * answer: a path facet bucket carries no host, so the panel cannot compose a full URL for it
+ * unless it knows whether the installation serves one site or several.
  *
- * Paging is reset with it: a start offset that was valid for six sites is meaningless for
- * one of them.
- */
-function hostUrl(host) {
-    const params = new URLSearchParams(window.location.search);
-    params.delete('f[host_s][]');
-    params.delete('start');
-    if (host) {
-        params.append('f[host_s][]', host);
-    }
-    return '?' + params.toString();
-}
-
-/**
- * Insert the host selector into the page header, if there is a choice worth offering.
+ * THE SELECTOR IS NOT OFFERED WHERE IT WOULD DO NOTHING. A view that does not declare
+ * Controller::SCOPE_HOST has no `#lh-host` in its bar at all, so there is nothing to fill; and a
+ * single-host installation has no choice worth offering, so the field is taken off screen. Both
+ * decisions are made where the fact is known rather than by a list of view slugs.
  *
- * Silent on failure for the same reason the bandwidth strip is: this runs on every view, and
- * a panel whose route is not wired up, or whose sessions core is briefly unreachable, must
- * not grow an error in its header on every page.
- *
- * IT ALSO ANSWERS A QUESTION EVERY OTHER VIEW HAS. A path facet bucket carries no host, so the
- * panel cannot link a full URL for it unless it knows the installation serves exactly one site.
- * This request already has that answer, and url.js is told it — including when the request
- * fails, so nothing is left waiting on a list that is never coming.
- */
-/**
- * Does the view on this page honour the host selector?
- *
- * THE FETCH IS NOT GATED, ONLY THE CONTROL. The request this function guards also answers a
- * question every view needs — url.js cannot compose a full URL for a path facet bucket unless
- * it knows whether the installation serves one site or several — so skipping the call to avoid
- * drawing a selector would take the host out of every link on pages that have no selector.
- *
- * The declaration comes from Controller::toolbar() through the boot payload, so the selector
- * appears exactly where the view's own queries are filtered by it. On Index analytics, Query
- * analysis and Who is querying it is absent because `f[host_s][]` reaches a different plane and
- * changes nothing there; on Storage & bandwidth and Settings nothing is scoped at all.
+ * Silent on failure for the same reason every other piece of page furniture is: this runs on
+ * every view, and a panel whose sessions core is briefly unreachable must not grow an error in
+ * its header on every page. The one thing that IS said is said on the control itself — see
+ * hostsUnavailable() — because a multi-site operator being shown every host at once has to know
+ * the control that would narrow it is missing.
  */
 function scopedByHost() {
     const declared = boot.toolbar;
@@ -85,15 +59,10 @@ function scopedByHost() {
 
 export function initHostPicker() {
     /* THE REQUEST IS NOT MADE WHERE NOTHING NEEDS IT. This ran unconditionally, so every page
-       in the panel paid for one extra Solr facet — including the five views that neither draw
-       the selector nor render a single site path. The views that need the answer are exactly
-       the views that declare the host selector, because they are the ones that render paths
-       whose host has to be resolved before url.js can link them.
-
-       Where the call is skipped the list is still SETTLED, as empty rather than unknown. Any
-       mark waiting on it then resolves to "no host known" instead of waiting for a reply that
-       is never coming — there should be none on these views, and a stuck placeholder would be
-       a worse way to find out than an honest one. */
+       in the panel paid for one extra Solr facet — including the views that neither draw the
+       selector nor render a single site path. Where the call is skipped the list is still
+       SETTLED, as empty rather than unknown, so any mark waiting on it resolves to "no host
+       known" instead of waiting for a reply that is never coming. */
     if (!scopedByHost()) {
         noteHosts([]);
         return;
@@ -101,52 +70,11 @@ export function initHostPicker() {
 
     api('hosts', 'list').then((data) => {
         noteHosts((data.hosts || []).map((row) => row.host));
-
-        const tools = document.querySelector('.head-tools');
-        if (!tools || !data.multi || byId('lh-host')) {
-            return;
-        }
-
-        const selected = (data.selected || [])[0] || '';
-
-        const select = el('select', { id: 'lh-host', 'aria-label': 'Virtual host' }, [
-            el('option', { value: '', selected: selected === '' ? true : null, text: 'All hosts' }),
-            ...data.hosts.map((row) => el('option', {
-                value: row.host,
-                selected: row.host === selected ? true : null,
-                text: row.host + ' (' + num(row.sessions) + ')'
-            }))
-        ]);
-        select.addEventListener('change', () => {
-            window.location.href = hostUrl(select.value);
-        });
-
-        const wrap = el('div', { class: 'hostpick', id: 'lh-hostpick' }, [
-            el('label', { for: 'lh-host', text: 'Host' }),
-            select
-        ]);
-
-        tools.insertBefore(wrap, byId('lh-page-status') || null);
+        fillHosts(data.hosts || [], !!data.multi);
     }).catch((err) => {
-        /* The selector scopes the WHOLE dashboard, so its absence changes what every number on
-           the page means. Still not a report — it does not take a card's failure state — but a
-           multi-site operator who is quietly being shown all hosts at once has to be told the
-           control they use to narrow that is missing, and given something to paste. */
         noteHosts([]);
-        window.console.error('loghound: the virtual-host selector could not load', err);
-        const tools = document.querySelector('.head-tools');
-        if (!tools || byId('lh-hostpick-failed')) {
-            return;
-        }
-        tools.insertBefore(
-            el('span', {
-                class: 'job-meta',
-                id: 'lh-hostpick-failed',
-                title: String(err && err.message ? err.message : err),
-                text: 'Host filter unavailable — these figures cover every host'
-            }),
-            byId('lh-page-status') || null
-        );
+        window.console.error('loghound: the virtual-host list could not load', err);
+        hostsUnavailable(err);
     });
 }
 

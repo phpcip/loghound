@@ -34,6 +34,16 @@ use Loghound\Security;
 
 final class Fingerprints extends Controller
 {
+
+    /**
+     * The pages this view has, in render order.
+     *
+     * @var array<int,array{0:string,1:string}>
+     */
+    public const SECTIONS = [
+        ['fp-explain', 'What this table is'],
+        ['fp-table', 'Clusters'],
+    ];
     /** Hard ceiling on cluster rows: each one costs a nested range facet. */
     private const MAX_CLUSTERS = 100;
 
@@ -54,8 +64,14 @@ final class Fingerprints extends Controller
         'recent'   => 'Most recently seen first',
     ];
 
-    /** Hard ceiling on member IPs shown when a cluster is expanded. */
-    private const MAX_MEMBERS = 250;
+    /**
+     * The threshold at which a cluster is marked as a proxy fleet.
+     *
+     * Five distinct addresses, no mobile carrier, nothing self-declared. Here rather than as a
+     * literal inside clusters(), because the number is printed in the legend on the card and a
+     * legend that says five while the code tests four is worse than no legend.
+     */
+    public const FLEET_IPS = 5;
 
     /**
      * Which page-toolbar controls this view honours.
@@ -264,7 +280,7 @@ final class Fingerprints extends Controller
                 'country'   => self::firstVal($b, 'country'),
                 'beacon'    => self::qcount($b, 'beacon'),
                 'declared'  => self::qcount($b, 'declared') > 0,
-                'fleet'     => $ips >= 5
+                'fleet'     => $ips >= self::FLEET_IPS
                     && self::firstVal($b, 'astype') !== 'mobile'
                     && self::qcount($b, 'declared') === 0,
             ];
@@ -295,32 +311,25 @@ final class Fingerprints extends Controller
             return $this->envelope(['rows' => [], 'error' => 'Not a fingerprint hash.']);
         }
 
-        $limit = Security::clampInt($_GET['limit'] ?? null, 5, self::MAX_MEMBERS, 100);
+        $start = Paging::start();
+        $limit = Paging::rows();
 
         $f = $this->gw->facet('fp.members', $this->gw->sessionsCore(), [
             'q'  => '*:*',
             'fq' => array_merge($this->sessionFqs(), [Query::term('fp_hash_s', $fp)]),
         ], [
-            'ips' => [
-                'type'  => 'terms',
-                'field' => 'ip_s',
-                'limit' => $limit,
-                'sort'  => 'count desc',
+            'ips' => Paging::terms('ip_s', $start, $limit, 'count desc', [
                 'facet' => [
                     'hits'    => 'sum(hits_i)',
                     'score'   => 'avg(bot_score_f)',
                     'first'   => 'min(ts_start)',
                     'last'    => 'max(ts_end)',
-                    'asn'     => ['type' => 'terms', 'field' => 'asn_i', 'limit' => 1],
                     'org'     => ['type' => 'terms', 'field' => 'as_org_s', 'limit' => 1],
                     'astype'  => ['type' => 'terms', 'field' => 'as_type_s', 'limit' => 1],
-                    'netname' => ['type' => 'terms', 'field' => 'netname_s', 'limit' => 1],
                     'country' => ['type' => 'terms', 'field' => 'country_s', 'limit' => 1],
                     'city'    => ['type' => 'terms', 'field' => 'city_s', 'limit' => 1],
-                    'rdns'    => ['type' => 'terms', 'field' => 'rdns_s', 'limit' => 1],
-                    'net'     => ['type' => 'terms', 'field' => 'ip_net_s', 'limit' => 1],
                 ],
-            ],
+            ]),
             'uniq_asns' => 'unique(asn_i)',
             'uniq_nets' => 'unique(ip_net_s)',
             'uniq_countries' => 'unique(country_s)',
@@ -331,18 +340,13 @@ final class Fingerprints extends Controller
         foreach (self::buckets($f, 'ips') as $b) {
             $rows[] = [
                 'ip'       => (string) ($b['val'] ?? ''),
-                'net'      => self::firstVal($b, 'net'),
                 'sessions' => (int) ($b['count'] ?? 0),
                 'hits'     => self::num($b, 'hits'),
-                'asn'      => self::firstVal($b, 'asn'),
                 'org'      => self::firstVal($b, 'org'),
                 'as_type'  => self::firstVal($b, 'astype'),
-                'netname'  => self::firstVal($b, 'netname'),
                 'country'  => self::firstVal($b, 'country'),
                 'city'     => self::firstVal($b, 'city'),
-                'rdns'     => self::firstVal($b, 'rdns'),
                 'score'    => self::num($b, 'score'),
-                'first'    => is_string($b['first'] ?? null) ? $b['first'] : null,
                 'last'     => is_string($b['last'] ?? null) ? $b['last'] : null,
             ];
         }
@@ -354,8 +358,14 @@ final class Fingerprints extends Controller
             'uniq_nets'      => (int) (self::num($f, 'uniq_nets') ?? 0),
             'uniq_countries' => (int) (self::num($f, 'uniq_countries') ?? 0),
             'ua'             => self::firstVal($f, 'ua'),
-            'truncated'      => count($rows) >= $limit,
             'rows'           => $rows,
+            'page'           => Paging::block(
+                $start,
+                $limit,
+                Paging::distinct($f, 'ips'),
+                'addresses',
+                count($rows)
+            ),
         ]);
     }
 
@@ -446,7 +456,7 @@ final class Fingerprints extends Controller
             . '<col style="width:17%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col" class="w-expand"><span class="sr-only">Expand</span></th>'
-            . '<th scope="col">Fingerprint</th>'
+            . '<th scope="col">Signature</th>'
             . '<th scope="col" class="num" title="Distinct addresses, and under it the netblocks '
             . 'and networks they are spread across">IPs</th>'
             . '<th scope="col" class="num">Sess.</th>'
@@ -454,6 +464,17 @@ final class Fingerprints extends Controller
             . '<th scope="col">Client</th>'
             . '<th scope="col">Verdict</th>'
             . '</tr></thead><tbody></tbody></table></div>';
+
+        /* THE ORANGE RULE HAS A MEANING AND NOW IT IS WRITTEN DOWN. Some rows in this table carry
+           a vertical accent on their left edge and some do not, and nothing on the page said what
+           the difference was — so it read as a border being painted over by a row background
+           rather than as a finding. It marks the proxy-fleet pattern, which is the whole point of
+           the view, and the legend states the three conditions and the threshold. */
+        echo '<p class="legend"><span class="legend-fleet" aria-hidden="true"></span>'
+            . '<span>An orange rule marks the <strong>proxy-fleet pattern</strong>: ' . self::FLEET_IPS
+            . ' or more distinct addresses on one client signature, no mobile carrier, nothing '
+            . 'self-declared. Carriers are excluded because a gateway legitimately puts many people behind '
+            . 'one fingerprint.</span></p>';
 
         self::cardClose('fp-table');
     }

@@ -252,6 +252,28 @@ return [
          */
         'catchall' => true,
 
+        /**
+         * Write a document for every SUB-RESOURCE request: images, stylesheets, scripts,
+         * fonts, media and source maps.
+         *
+         * Off, and that is the right default for almost everybody. Sub-resources are the
+         * large majority of lines in an ordinary access log, so leaving this on means the
+         * index is mostly pictures — paid for in disk, in your Opensolr quota and in the
+         * size of every facet — to answer questions nobody asks about a font file. They
+         * also crowded out the "Top pages" table with `/img/logo.png`.
+         *
+         * NOTHING IS LOST FROM THE SCORING. These requests are still read, still enriched,
+         * still attack-matched and still counted into their session: the asset ratio, the
+         * sub-resource count, the repeated-URI check behind `no_304_on_repeat` and the
+         * inter-request timing all see the complete traffic. Only the per-request document
+         * is refused.
+         *
+         * Turn it on if you want per-image latency on the Performance view, or if you are
+         * debugging a CDN. Requests that are not sub-resources — pages, APIs, robots.txt,
+         * the beacon collector — are always stored whatever this says.
+         */
+        'index_assets' => false,
+
         /** A "line" longer than this is malformed or hostile. Dropped and reported. */
         'max_line_bytes' => 16384,
 

@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 1080" width="1160" height="1080" role="img" aria-labelledby="t d">
+<title id="t">The three-plane model</title>
+<desc id="d">Visitors reach the web server. Access log lines feed the tail daemon, which is planes one and two. The page also loads b.js, whose beacon posts to the collector, which is plane three. The daemon writes one document per line to the hits core; the collector writes only to a local SQLite file. The scorer reads both, closes idle sessions, merges beacon timings and applies the rules, writing one document per session to the sessions core, which is what the panel reads.</desc>
+
+<style>
+  .b   { fill:#fbfaf8; stroke:#111111; stroke-width:2; }
+  .bx  { fill:#ffffff; stroke:#c05520; stroke-width:2.5; }
+  .h   { font:700 19px 'Space Grotesk','Helvetica Neue',Helvetica,Arial,sans-serif; fill:#111111; }
+  .ha  { font:700 19px 'Space Grotesk','Helvetica Neue',Helvetica,Arial,sans-serif; fill:#c05520; }
+  .l   { font:400 16px 'Space Grotesk','Helvetica Neue',Helvetica,Arial,sans-serif; fill:#4a4540; }
+  .m   { font:400 15px ui-monospace,'SF Mono',Menlo,Consolas,monospace; fill:#4a4540; }
+  .tag { font:700 14px 'Space Grotesk','Helvetica Neue',Helvetica,Arial,sans-serif; fill:#c05520; letter-spacing:.08em; }
+  .ln  { stroke:#111111; stroke-width:2; fill:none; }
+  .la  { stroke:#c05520; stroke-width:2; fill:none; }
+</style>
+
+<rect width="1160" height="1080" fill="#ffffff"/>
+
+<!-- visitors -->
+<text class="l" x="24" y="62">your visitors</text>
+<path class="ln" d="M146 56 H292"/>
+<path class="ln" d="M284 50 l8 6 -8 6"/>
+
+<rect class="b" x="300" y="26" width="560" height="60" rx="2"/>
+<text class="h" x="324" y="63">Apache / nginx / Caddy</text>
+
+<!-- split -->
+<path class="ln" d="M430 86 V96"/>
+<path class="ln" d="M730 86 V96"/>
+<text class="l" x="430" y="112" text-anchor="middle" dy="-4">access log lines</text>
+<text class="l" x="730" y="112" text-anchor="middle" dy="-4">the page loads b.js</text>
+
+<text class="tag" x="120" y="156">PLANE 1 + 2 &#183; TRANSPORT AND BEHAVIOUR</text>
+<text class="tag" x="660" y="156">PLANE 3 &#183; EXECUTION</text>
+
+<path class="ln" d="M430 122 V168"/>
+<path class="ln" d="M424 160 l6 8 6 -8"/>
+<path class="ln" d="M730 122 V168"/>
+<path class="ln" d="M724 160 l6 8 6 -8"/>
+
+<!-- tail -->
+<rect class="b" x="120" y="172" width="430" height="214" rx="2"/>
+<text class="h" x="144" y="206">loghound-tail</text>
+<text class="l" x="144" y="230">a systemd daemon</text>
+<text class="m" x="144" y="266">tail &#8212; rotation safe</text>
+<text class="m" x="144" y="292">parse &#8212; compiled LogFormat</text>
+<text class="m" x="144" y="318">enrich &#8212; geo / ASN / rDNS / UA</text>
+<text class="m" x="144" y="344">session &#8212; ip_net + ua_hash</text>
+<text class="m" x="144" y="370">batch &#8212; softCommit only</text>
+
+<!-- collect -->
+<rect class="b" x="620" y="172" width="430" height="188" rx="2"/>
+<text class="h" x="644" y="206">public/collect.php</text>
+<text class="l" x="644" y="230">the public write path</text>
+<text class="m" x="644" y="266">HMAC token checked</text>
+<text class="m" x="644" y="292">rate limited per address</text>
+<text class="m" x="644" y="318">timing claims sanity checked</text>
+<text class="m" x="644" y="344">writes SQLite, never Solr</text>
+
+<path class="ln" d="M335 386 V438"/>
+<path class="ln" d="M329 430 l6 8 6 -8"/>
+<path class="ln" d="M835 360 V412"/>
+<path class="ln" d="M829 404 l6 8 6 -8"/>
+
+<!-- stores -->
+<rect class="b" x="150" y="442" width="370" height="96" rx="2"/>
+<text class="h" x="174" y="476">Solr core <tspan font-family="ui-monospace,Menlo,monospace">hits</tspan></text>
+<text class="l" x="174" y="504">one document per log line</text>
+
+<rect class="b" x="650" y="416" width="370" height="122" rx="2"/>
+<text class="h" x="674" y="450">var/state.db</text>
+<text class="l" x="674" y="478">read offsets, open sessions,</text>
+<text class="l" x="674" y="502">staged beacons, enrichment caches</text>
+
+<!-- into scorer -->
+<path class="ln" d="M335 538 V576"/>
+<path class="ln" d="M329 568 l6 8 6 -8"/>
+<path class="ln" d="M835 538 V560 H585 V576"/>
+<path class="ln" d="M579 568 l6 8 6 -8"/>
+
+<!-- scorer -->
+<rect class="bx" x="150" y="580" width="870" height="176" rx="2"/>
+<text class="ha" x="174" y="614">loghound-score</text>
+<text class="l" x="174" y="638">a systemd timer, every 60 seconds &#8212; this is where a verdict is decided</text>
+<text class="m" x="174" y="676">close idle sessions</text>
+<text class="m" x="174" y="702">merge the beacon timings onto the session</text>
+<text class="m" x="174" y="728">fp_ips_24h &#8212; one facet per hour bucket</text>
+<text class="m" x="600" y="676">weigh the rules</text>
+<text class="m" x="600" y="702">write the verdict</text>
+<text class="m" x="600" y="728">and the reasons behind it</text>
+
+<path class="la" d="M585 756 V800"/>
+<path class="la" d="M579 792 l6 8 6 -8"/>
+
+<!-- sessions -->
+<rect class="b" x="330" y="804" width="510" height="100" rx="2"/>
+<text class="h" x="354" y="838">Solr core <tspan font-family="ui-monospace,Menlo,monospace">sessions</tspan></text>
+<text class="l" x="354" y="866">one document per session &#8212; this is what the panel reads</text>
+
+<path class="ln" d="M585 904 V944"/>
+<path class="ln" d="M579 936 l6 8 6 -8"/>
+
+<!-- panel -->
+<rect class="b" x="330" y="948" width="510" height="100" rx="2"/>
+<text class="h" x="354" y="982">public/index.php</text>
+<text class="l" x="354" y="1010">the panel &#8212; behind sign-in, CSP locked, charts served from disk</text>
+
+<!-- retention -->
+<text class="l" x="900" y="984">loghound-retention</text>
+<text class="l" x="900" y="1008">a daily timer that</text>
+<text class="l" x="900" y="1030">enforces both limits</text>
+</svg>

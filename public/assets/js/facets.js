@@ -47,12 +47,11 @@
 
 'use strict';
 
-import { api, boot, byId, clear, el, fill, num } from './core.js';
+import { api, byId, el, fill, num } from './core.js';
 import { FILTER_LABELS, dimLabel, dimValue, isFilterable } from './identity.js';
 import {
     basisNote,
     blockBasisNote,
-    clearAllUrl,
     clearFieldUrl,
     commonBasisNote,
     filterInput,
@@ -244,9 +243,7 @@ function option(group, bucket, largest) {
         el('a', {
             class: 'facet-opt' + (state === 'on' ? ' is-on' : '') + (state === 'excluded' ? ' is-excluded' : ''),
             href: toggleUrl(group.field, bucket.value, group.ns),
-            title: bucket.why || (state === 'off'
-                ? 'Filter every view to ' + label + ': ' + shown
-                : 'Remove this filter'),
+            title: bucket.why || '',
             'aria-label': label + ' ' + shown + ', ' + (count === null ? 'not counted' : num(count) + ' sessions') + verb
         }, [
             el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
@@ -397,89 +394,39 @@ export function renderFacetPanel(holder, groups, note, max) {
         unfilterable
             ? el('p', {
                 class: 'facet-note facet-note-all',
-                text: 'Dimensions shown without pressable values are distributions only: they are not in the '
-                    + 'panel\'s filter allowlist yet.'
+                text: 'Dimensions with unpressable values are not filterable yet.'
             })
             : null
     ]);
 }
 
 /* -------------------------------------------------------------------------
- * The page-wide bar
+ * The panel
  * ---------------------------------------------------------------------- */
 
 /**
- * One removable chip per active filter.
+ * Mount the dimension lists as a column of the view.
  *
- * The whole chip is the removal link, which is what the session explorer's chips already did, so
- * there is one gesture to learn rather than two.
+ * WHAT MOVED OUT OF HERE, AND WHY. This used to build two things: a `.filterbar` of removable
+ * chips plus a "Filter by…" button, which was injected into the page toolbar, and the `.fpanel`
+ * of dimension lists, which went into the view. The bar half is gone. The top bar now carries
+ * exactly four controls — applied filters, duration, hostname, Opensolr resources — and the
+ * chips were a fifth thing competing with them for a row that already clipped on the session
+ * explorer. What the chips did is done better by the applied-filters dialog, which lists every
+ * value on BOTH filter planes and lets them be removed together rather than one reload at a time.
  *
- * A chip under the "None of" operator says so ON ITSELF and carries `.is-excluded`. It is the
- * difference between "show me hosting traffic" and "show me everything except hosting", and a bar
- * that rendered both identically would make every number under it unreadable.
- */
-function chip(filter) {
-    const excluded = filter.op === 'none';
-    const dim = boot.vocabulary && boot.vocabulary[filter.field];
-    const spoken = dim && dim[filter.value] ? dim[filter.value].label : filter.value;
-
-    return el('a', {
-        class: 'fchip' + (excluded ? ' is-excluded' : ''),
-        href: toggleUrl(filter.field, filter.value),
-        title: excluded ? 'Stop excluding this value' : 'Remove this filter'
-    }, [
-        el('span', { class: 'fchip-dim', text: dimLabel(filter.field) }),
-        excluded ? el('span', { class: 'fchip-not', text: 'not' }) : null,
-        el('span', { class: 'fchip-val' }, [dimValue(filter.field, filter.value, { text: spoken, link: false })]),
-        el('span', { class: 'fchip-x', 'aria-hidden': 'true', text: '\u00d7' })
-    ]);
-}
-
-/**
- * The active-filter row.
- *
- * Absent when nothing is filtered, because a strip saying "no filters" on every page is noise.
- * Present, it states in words that every number on the page is scoped — a filtered number that
- * does not say it is filtered is a wrong number, and this is drawn from the URL with no request
- * at all so it is on screen before any card has a number in it.
- */
-function renderActive(holder) {
-    const filters = activeFilters();
-    if (!filters.length) {
-        clear(holder);
-        holder.hidden = true;
-        return;
-    }
-    holder.hidden = false;
-    fill(holder, [
-        el('span', { class: 'filterbar-label', text: 'Filtered by' }),
-        ...filters.map(chip),
-        el('a', { class: 'filterbar-clear', href: clearAllUrl(), text: 'Clear all' }),
-        el('span', {
-            class: 'filterbar-note',
-            text: 'Every number on this page counts only the traffic these filters leave.'
-        })
-    ]);
-}
-
-/**
- * Mount the bar as the first child of the view.
- *
- * Created here rather than emitted by each view's body() for the same reason the host selector
- * and the bandwidth strip are: it belongs on every page, and a control that seven view files
- * each have to remember to render is one that will be missing from the eighth.
+ * The disclosure that opens and closes the lists moved WITH them, into the panel's own head,
+ * where it belongs: it governs this column, it is read next to what it governs, and it is not
+ * page chrome.
  *
  * THE PANEL'S STATE IS THE OPERATOR'S, NOT THIS FUNCTION'S. It used to be created `hidden` on
- * every single page load with nothing written down, and all three of the defects the owner
- * reported came out of that one line. Applying a filter reloads the page, so the sidebar
- * vanished at the exact moment the next facet was wanted; the stylesheet's two-column layout
- * is gated on the panel being open, so a shut panel left the chips and the button as a strip
- * across the top with every card pushed below it; and hiding the panel was forgotten by the
- * next navigation. The state is read from storage here and written on every press, so the
- * panel arrives in the state it was left in and the column exists either way.
+ * every single page load with nothing written down, so applying a filter — which reloads the
+ * page — made the sidebar vanish at the exact moment the next facet was wanted, and hiding it
+ * was forgotten by the next navigation. The state is read from storage here and written on every
+ * press, so the panel arrives in the state it was left in.
  */
 function mount() {
-    const existing = byId('lh-filters');
+    const existing = byId('lh-facets-panel');
     if (existing) {
         return existing;
     }
@@ -489,59 +436,32 @@ function mount() {
     }
 
     const shown = panelShown();
-    const active = el('div', { class: 'filterbar-active', id: 'lh-filters-active', hidden: true });
     const toggle = el('button', {
         type: 'button',
         class: 'ghost small',
         id: 'lh-facets-toggle',
-        'aria-controls': 'lh-facets-panel'
+        'aria-controls': 'lh-facets-groups'
     });
-    const panel = el('div', { class: 'fpanel', id: 'lh-facets-panel', hidden: !shown });
-
-    labelToggle(toggle, shown);
-
-    /* THE CONTROL AND THE GROUPS ARE TWO DIFFERENT THINGS, IN TWO DIFFERENT PLACES, and they
-       used to be one element that could only ever be in one of them.
-
-       `.filterbar` is the applied filters and the button that opens the groups. It belongs to
-       the PAGE — it says what every number on the page is narrowed to — so it goes in the
-       sticky toolbar with the range picker and the host selector, where it stays readable four
-       sections down. That is where the chips do the most good, because a figure whose scope has
-       scrolled off the top is a figure that gets quoted wrongly.
-
-       `.fpanel` is the dimension lists. It belongs beside the RESULTS, as a left column, and it
-       is several hundred pixels tall — pinned inside a toolbar it would cover the page it is
-       filtering. It stays the first child of `.view`, where the stylesheet's two-column rules
-       put it in the first track.
-
-       Splitting them is also what makes the shut state honest. When the whole bar was one
-       element, hiding the groups left the chips and the button with nowhere to be except a
-       band across the top of the content, which is the "horizontal block" that was reported.
-       Now the groups can simply be gone and nothing else moves. */
-    const bar = el('div', { class: 'filterbar', id: 'lh-filters' }, [
-        active,
-        el('div', { class: 'filterbar-tools' }, [toggle])
+    const groups = el('div', { class: 'fpanel-groups', id: 'lh-facets-groups', hidden: !shown });
+    const panel = el('div', { class: 'fpanel', id: 'lh-facets-panel' }, [
+        el('div', { class: 'fpanel-head' }, [toggle]),
+        groups
     ]);
 
-    const slot = byId('lh-page-tools');
-    if (slot) {
-        slot.insertBefore(bar, slot.querySelector('.pt-scope'));
-    } else {
-        view.insertBefore(bar, view.firstChild);
-    }
+    labelToggle(toggle, shown);
     view.insertBefore(panel, view.firstChild);
 
     toggle.addEventListener('click', () => {
-        const open = panel.hidden;
-        panel.hidden = !open;
+        const open = groups.hidden;
+        groups.hidden = !open;
         labelToggle(toggle, open);
         rememberPanel(open);
         if (open && !loaded) {
-            load(panel);
+            load(groups);
         }
     });
 
-    return bar;
+    return panel;
 }
 
 /**
@@ -575,11 +495,12 @@ function load(panel) {
 }
 
 /**
- * Wire the filter bar.
+ * Wire the filter panel.
  *
  * The behaviour every facet list shares — the inline filter box, the value browser, the operator
  * control — is wired by facetfilter.js's initFacetControls() with delegated listeners on the
- * document, so the sidebar and this bar get it identically and neither can drift.
+ * document, so the session explorer's own rail and this panel get it identically and neither can
+ * drift.
  *
  * Safe to call on a page with no `.view` container: it does nothing rather than throwing.
  *
@@ -590,16 +511,14 @@ function load(panel) {
  * has just applied a filter sees the value selected in the sidebar with no second gesture.
  * Failure is still stated inside the panel and nowhere else — see load().
  */
-export function initFilterBar() {
-    const bar = mount();
-    if (!bar) {
+export function initFilterPanel() {
+    if (!mount()) {
         return;
     }
-    renderActive(byId('lh-filters-active'));
 
-    const panel = byId('lh-facets-panel');
-    if (panel && !panel.hidden && !loaded) {
-        load(panel);
+    const groups = byId('lh-facets-groups');
+    if (groups && !groups.hidden && !loaded) {
+        load(groups);
     }
 }
 
