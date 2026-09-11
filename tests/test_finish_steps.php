@@ -158,7 +158,11 @@ return [
         foreach (['loghound-tail.service', 'loghound-score.timer', 'loghound-retention.timer'] as $unit) {
             lh_contains($line, $unit, 'the merged command names ' . $unit);
         }
-        lh_same(1, preg_match_all('/systemctl/', $line), 'systemctl is invoked exactly once');
+        lh_same(
+            1,
+            preg_match_all('/systemctl enable/', $line),
+            'the three units are enabled by ONE enable, not three'
+        );
     },
 
     'every next-step snippet is a single line, so a copy button yields something runnable'

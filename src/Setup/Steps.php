@@ -422,10 +422,7 @@ final class Steps
             [
                 'key'     => 'ingest',
                 'title'   => 'Start reading the logs, now and after every reboot',
-                'lines'   => [
-                    'sudo systemctl enable --now loghound-tail.service '
-                        . 'loghound-score.timer loghound-retention.timer',
-                ],
+                'lines'   => self::ingestCommands($root),
                 'problem' => '',
             ],
             [
@@ -443,6 +440,83 @@ final class Steps
                 'problem' => $problem,
             ],
         ];
+    }
+
+    /** Where a systemd unit lives, and the one this installation is named after. */
+    private const SYSTEMD_DIR = '/etc/systemd/system';
+
+    private const TAIL_UNIT = 'loghound-tail.service';
+
+    /**
+     * The commands that actually start ingestion on THIS machine.
+     *
+     * `systemctl enable --now loghound-tail.service` is the whole answer only when the unit
+     * files are on the machine, and they are not always: install.sh puts them there, but a
+     * tree deployed any other way — copied into place, checked out, provisioned by a control
+     * panel — has the code and no units. Handing that operator a command whose only possible
+     * outcome is `Unit file loghound-tail.service does not exist` is the same failure as
+     * handing them a beacon snippet pointing at a host nobody owns: they copy it, they trust
+     * it, and what comes back tells them nothing about what to do instead.
+     *
+     * So the units are looked for first, and the install step is prepended only when it is
+     * needed — or when we cannot see, which is its own answer rather than a guess. The units
+     * ship inside the tree, so installing them is a copy and one substitution: they carry the
+     * default prefix throughout, which is exactly what install.sh rewrites.
+     *
+     * It stays ONE line, chained on `&&`, because the copy button next to it promises a
+     * pasteable command and a two-line block is two pastes and a chance to run the second
+     * without the first. `&&` also means a failed copy never reaches the enable.
+     *
+     * @return array<int,string>
+     */
+    private static function ingestCommands(string $root): array
+    {
+        $enable = 'sudo systemctl enable --now loghound-tail.service '
+            . 'loghound-score.timer loghound-retention.timer';
+
+        if (self::unitsInstalled() === true) {
+            return [$enable];
+        }
+
+        $root = rtrim($root, '/');
+
+        return [
+            'sudo install -m 0644 ' . $root . '/install/loghound-*.service '
+                . $root . '/install/loghound-*.timer ' . self::SYSTEMD_DIR . '/'
+                . ' && sudo sed -i "s#/opt/loghound#' . $root . '#g" '
+                . self::SYSTEMD_DIR . '/loghound-*.service ' . self::SYSTEMD_DIR . '/loghound-*.timer'
+                . ' && sudo systemctl daemon-reload'
+                . ' && ' . $enable,
+        ];
+    }
+
+    /**
+     * Are the systemd units on this machine?
+     *
+     * Returns null when the question cannot be answered rather than guessing at it. The
+     * panel runs under an open_basedir that does not include the systemd directory on a
+     * stock install, and there `is_readable()` returns false for a unit that is present —
+     * so a bare false would report "not installed" to every correctly installed operator
+     * and tell them to reinstall files they already have.
+     */
+    private static function unitsInstalled(): ?bool
+    {
+        $basedir = (string) ini_get('open_basedir');
+        if ($basedir !== '') {
+            $visible = false;
+            foreach (explode(PATH_SEPARATOR, $basedir) as $allowed) {
+                $allowed = rtrim(trim($allowed), '/');
+                if ($allowed !== '' && str_starts_with(self::SYSTEMD_DIR . '/', $allowed . '/')) {
+                    $visible = true;
+                    break;
+                }
+            }
+            if (!$visible) {
+                return null;
+            }
+        }
+
+        return @is_readable(self::SYSTEMD_DIR . '/' . self::TAIL_UNIT);
     }
 
     /**

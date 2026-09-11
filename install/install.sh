@@ -1169,7 +1169,7 @@ php_admin_value[upload_max_filesize] = 1M
 php_admin_value[max_execution_time]  = 60
 php_admin_flag[file_uploads]         = off
 
-php_admin_value[open_basedir]        = $PREFIX:/tmp
+php_admin_value[open_basedir]        = $PREFIX:/tmp:/etc/systemd/system
 php_admin_value[disable_functions]   = exec,passthru,shell_exec,system,proc_open,popen,proc_nice,dl,pcntl_exec,pcntl_fork
 php_admin_flag[expose_php]           = off
 php_admin_flag[display_errors]       = off

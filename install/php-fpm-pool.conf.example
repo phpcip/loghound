@@ -95,7 +95,7 @@ php_admin_flag[file_uploads] = off
 ;
 ; Adjust the first path if you installed somewhere other than /opt/loghound, and
 ; drop /etc/nginx or /etc/apache2 if you do not run that server.
-php_admin_value[open_basedir] = /opt/loghound:/var/log:/etc/apache2:/etc/nginx:/tmp
+php_admin_value[open_basedir] = /opt/loghound:/var/log:/etc/apache2:/etc/nginx:/tmp:/etc/systemd/system
 
 ; Functions the panel has no use for and an attacker has every use for.
 php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,proc_nice,dl,pcntl_exec,pcntl_fork
