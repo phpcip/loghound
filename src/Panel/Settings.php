@@ -41,6 +41,7 @@ use Loghound\Config;
 use Loghound\LogDetect;
 use Loghound\Security;
 use Loghound\Setup\Detector;
+use Loghound\Setup\Requirements;
 use Loghound\Setup\Steps;
 
 final class Settings extends Controller implements JobHost
@@ -835,6 +836,7 @@ final class Settings extends Controller implements JobHost
         self::flash();
         $this->finishSection();
         $this->operationsSection();
+        $this->systemCheckSection();
         $this->sourcesSection();
         $this->solrSection();
         $this->beaconSection();
@@ -929,6 +931,94 @@ final class Settings extends Controller implements JobHost
         echo '</details>';
         echo '<p class="muted">' . Security::esc(Steps::beaconRationale()) . '</p>';
         self::cardEnd();
+    }
+
+    /**
+     * The installer's system check, kept available after the installer is gone.
+     *
+     * Every one of these can break AFTER a successful install and nothing else would say so:
+     * an open_basedir narrowed by a PHP upgrade, a log directory whose permissions changed
+     * under a distribution update, an extension dropped by a package change. The installer
+     * knew how to report each of them and exactly which command fixes it, and all of that
+     * disappeared the moment setup completed — leaving the operator with a panel that shows
+     * nothing and no way to find out why.
+     *
+     * The same Requirements the installer runs, so the two cannot disagree. Failures are
+     * shown expanded with their fix; a clean machine gets one line and the whole list behind
+     * a disclosure, because a card that shouts on a healthy install is a card people stop
+     * reading.
+     */
+    private function systemCheckSection(): void
+    {
+        $req  = new Requirements(self::root(), $this->cfg);
+        $rows = $req->all();
+
+        $bad = [];
+        foreach ($rows as $row) {
+            if ((string) $row['state'] !== 'pass') {
+                $bad[] = $row;
+            }
+        }
+
+        self::cardOpen(
+            'set-check',
+            '03',
+            'System check',
+            'What this installation needs from the machine, re-checked every time you open this page.'
+        );
+
+        echo '<p class="muted">Checked as <code>' . Security::esc(Requirements::phpUser())
+            . '</code>, the user this page runs as. Any command below is written for that user.</p>';
+
+        if ($bad === []) {
+            echo '<div class="finish-state finish-ok" role="status">';
+            echo '<span class="finish-dot" aria-hidden="true"></span>';
+            echo '<div class="finish-text"><strong>Everything this installation needs is in place.</strong>';
+            echo '<span class="muted">' . count($rows) . ' checks, all passing.</span>';
+            echo '</div></div>';
+        } else {
+            foreach ($bad as $row) {
+                self::checkRow($row);
+            }
+        }
+
+        echo '<details class="finish-all"' . ($bad === [] ? '' : ' open') . '>';
+        echo '<summary>Every check, including the ones that pass</summary>';
+        foreach ($rows as $row) {
+            self::checkRow($row);
+        }
+        echo '</details>';
+
+        self::cardEnd();
+    }
+
+    /**
+     * One requirement, with the command that fixes it when there is one.
+     *
+     * @param array<string,mixed> $row From Requirements::all().
+     */
+    private static function checkRow(array $row): void
+    {
+        $state = (string) $row['state'];
+        $chip  = $state === 'pass' ? 'chip-good' : ($state === 'warn' ? 'chip-warn' : 'chip-bad');
+        $word  = $state === 'pass' ? 'OK' : ($state === 'warn' ? 'Note' : 'Fix');
+
+        echo '<div class="check-row">';
+        echo '<p><span class="chip ' . $chip . '">' . $word . '</span> <strong>'
+            . Security::esc((string) $row['label']) . '</strong></p>';
+        echo '<p class="muted">' . Security::esc((string) $row['detail']) . '</p>';
+
+        $fix = array_values(array_filter(
+            array_map('strval', (array) $row['fix']),
+            static fn (string $line): bool => trim($line) !== ''
+        ));
+        if ($fix !== []) {
+            self::commandBlock(
+                'check-fix-' . substr(hash('sha256', (string) $row['label']), 0, 12),
+                ['key' => 'fix', 'title' => '', 'lines' => $fix, 'problem' => '']
+            );
+        }
+        echo '</div>';
     }
 
     /**

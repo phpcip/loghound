@@ -1345,3 +1345,14 @@ td .shape { white-space: nowrap; }
 }
 .copy-btn:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .copy-btn.copy-done { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+/*
+ * One requirement in the Settings system check.
+ *
+ * The installer shows these in a table; here they are stacked, because a failing check is
+ * read one at a time and its fix is a command block that has no business inside a cell.
+ */
+.check-row { padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.check-row:last-child { border-bottom: 0; }
+.check-row p { margin: 0 0 4px; font-size: 14px; }
+.check-row .muted { overflow-wrap: anywhere; }
