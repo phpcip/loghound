@@ -17,9 +17,9 @@ Documentation=https://github.com/phpcip/loghound
 After=network-online.target
 Wants=network-online.target
 
-# A daemon that cannot start because of a bad config should give up rather
-# than restart forever and fill the journal. Ten attempts in five minutes,
-# then it stays down until someone looks at it.
+# A genuine crash is worth retrying; a configuration a human has to finish
+# is not. Ten attempts in five minutes covers the first and the unit below
+# refuses to retry the second at all.
 StartLimitIntervalSec=300
 StartLimitBurst=10
 
@@ -45,6 +45,19 @@ TimeoutStopSec=30
 
 Restart=always
 RestartSec=5
+
+# EX_CONFIG. The daemon exits 78 when the configuration is incomplete or
+# unusable, which is a state that does not resolve on its own: retrying it
+# every five seconds spends the whole start limit in under a minute, and
+# systemd then refuses to start the unit AT ALL -- so finishing setup
+# afterwards changes nothing and `systemctl start` answers "Start request
+# repeated too quickly" without trying. The operator is left with a service
+# that will not run for a reason that no longer exists.
+#
+# Not retrying it means one clean failure with the reason in the journal,
+# no budget spent, and a plain `systemctl start` working the moment the
+# configuration is finished.
+RestartPreventExitStatus=78
 
 # ---- Hardening -------------------------------------------------------
 # This process parses attacker-controlled bytes (request paths, User-Agent

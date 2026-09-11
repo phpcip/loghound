@@ -444,6 +444,58 @@ final class Steps
     }
 
     /**
+     * Running Loghound: what is on, how to watch it, how to stop it, how to remove it.
+     *
+     * Separate from nextSteps() because these are not setup steps — they are the answers an
+     * operator needs on day two and at 3am, and a product that only documents how to turn
+     * itself on is a product people are afraid to run. Every line names this installation's
+     * own paths, so none of it has to be adapted before it is pasted.
+     *
+     * One line per group, for the same reason nextSteps() is: each sits under a copy button
+     * that promises a single paste.
+     *
+     * @return array<int,array{key:string,title:string,lines:array<int,string>,problem:string}>
+     */
+    public static function operations(string $root): array
+    {
+        $root  = rtrim($root, '/');
+        $units = 'loghound-tail.service loghound-score.timer loghound-retention.timer';
+
+        return [
+            [
+                'key'     => 'units',
+                'title'   => 'What is running, and whether it comes back after a reboot',
+                'lines'   => ['systemctl --no-pager status ' . $units],
+                'problem' => '',
+            ],
+            [
+                'key'     => 'journal',
+                'title'   => 'Watch what the reader is doing, live',
+                'lines'   => ['sudo journalctl -u loghound-tail.service -f'],
+                'problem' => '',
+            ],
+            [
+                'key'     => 'ownlog',
+                'title'   => 'Its own errors, if a page misbehaves',
+                'lines'   => ['sudo tail -n 100 ' . $root . '/var/php-error.log'],
+                'problem' => '',
+            ],
+            [
+                'key'     => 'stop',
+                'title'   => 'Stop it, and keep it stopped across reboots',
+                'lines'   => ['sudo systemctl disable --now ' . $units],
+                'problem' => '',
+            ],
+            [
+                'key'     => 'uninstall',
+                'title'   => 'Remove Loghound from this machine',
+                'lines'   => ['sudo ' . $root . '/install/uninstall.sh'],
+                'problem' => '',
+            ],
+        ];
+    }
+
+    /**
      * The reason starting the daemon would fail right now, or an empty string.
      *
      * The ingest command is shown on the last screen of the installer, where setup has not
@@ -674,7 +726,26 @@ final class Steps
 
         $raw = @file_get_contents($file);
         $doc = is_string($raw) ? json_decode($raw, true) : null;
-        if (!is_array($doc) || !is_string($doc['generated_at'] ?? null)) {
+        if (!is_array($doc)) {
+            return ['state' => 'unreadable'] + $blank;
+        }
+
+        if (($doc['state'] ?? '') === 'refused') {
+            $errors = [];
+            foreach ((array) ($doc['errors'] ?? []) as $error) {
+                if (is_string($error) && $error !== '') {
+                    $errors[] = $error;
+                }
+            }
+
+            return [
+                'state'  => 'refused',
+                'at'     => is_int($doc['at'] ?? null) ? $doc['at'] : null,
+                'errors' => $errors,
+            ] + $blank;
+        }
+
+        if (!is_string($doc['generated_at'] ?? null)) {
             return ['state' => 'unreadable'] + $blank;
         }
 
@@ -703,8 +774,11 @@ final class Steps
      */
     public static function beaconRationale(): string
     {
-        return 'Without it Loghound still works, but the execution plane is blind: headless '
-            . 'automation is inferred rather than proven, and time-on-site falls back to the '
-            . 'weak log-derived number every other log analyser reports.';
+        return 'If your site sends a Content-Security-Policy, the browser will refuse this script '
+            . 'until you allow it: add this panel\'s origin to script-src and to connect-src, '
+            . 'because the tag loads from there and the beacon posts back to the same place. '
+            . 'Without the beacon Loghound still works, but the execution plane is blind — '
+            . 'headless automation is inferred rather than proven, and time-on-site falls back '
+            . 'to the weak log-derived number every other log analyser reports.';
     }
 }

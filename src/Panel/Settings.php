@@ -834,6 +834,7 @@ final class Settings extends Controller implements JobHost
     {
         self::flash();
         $this->finishSection();
+        $this->operationsSection();
         $this->sourcesSection();
         $this->solrSection();
         $this->beaconSection();
@@ -909,6 +910,13 @@ final class Settings extends Controller implements JobHost
             $key = (string) $group['key'];
             echo '<div class="finish-group" id="finish-g-' . Security::esc($key) . '">';
             echo '<h3>' . Security::esc((string) $group['title']) . '</h3>';
+            if ($key === 'beacon') {
+                echo '<p class="muted"><strong>If your site sends a Content-Security-Policy, the browser '
+                    . 'will refuse this script until you allow it.</strong> Add the panel\'s origin to '
+                    . '<code>script-src</code> and to <code>connect-src</code> — the tag loads from there '
+                    . 'and the beacon posts back to the same place. Without both, the console says the '
+                    . 'load was blocked and nothing else is wrong.</p>';
+            }
             if ($key === 'ingest') {
                 echo '<p class="muted">One command. <code>enable --now</code> starts the service and both '
                     . 'timers immediately and brings them back after a reboot; this panel reports whether '
@@ -920,6 +928,49 @@ final class Settings extends Controller implements JobHost
 
         echo '</details>';
         echo '<p class="muted">' . Security::esc(Steps::beaconRationale()) . '</p>';
+        self::cardEnd();
+    }
+
+    /**
+     * Running it: what is on, how to watch it, how to stop it, how to remove it.
+     *
+     * Its own card, always visible, never behind a disclosure. An operator who installs
+     * something is entitled to know how to see what it is doing and how to get rid of it
+     * without going to look for documentation, and a product that only explains how to turn
+     * itself on is one people are reluctant to run at all.
+     *
+     * Every command names this installation's own paths and units, so none of it has to be
+     * adapted before it is pasted.
+     */
+    private function operationsSection(): void
+    {
+        self::cardOpen(
+            'set-ops',
+            '02',
+            'Running it',
+            'Everything Loghound put on this machine, and how to inspect, stop or remove it.'
+        );
+
+        echo '<p class="muted">Three units do the work, and nothing else runs. '
+            . '<code>loghound-tail.service</code> reads the logs continuously; '
+            . '<code>loghound-score.timer</code> scores finished sessions about once a minute; '
+            . '<code>loghound-retention.timer</code> trims old data once a day. The panel you are '
+            . 'reading is served by your web server and stores nothing itself.</p>';
+
+        foreach (Steps::operations(self::root()) as $group) {
+            $key = (string) $group['key'];
+            echo '<div class="finish-group" id="ops-g-' . Security::esc($key) . '">';
+            echo '<h3>' . Security::esc((string) $group['title']) . '</h3>';
+            if ($key === 'uninstall') {
+                echo '<p class="muted">Stops and removes the units, the timers, the service user and the '
+                    . 'files, and shreds every secret rather than unlinking it. It asks before it deletes '
+                    . 'anything, it asks separately before deleting the two Opensolr indexes, and '
+                    . '<code>--dry-run</code> prints every action without doing any of them.</p>';
+            }
+            self::commandBlock('ops-cmd-' . $key, $group);
+            echo '</div>';
+        }
+
         self::cardEnd();
     }
 
@@ -948,6 +999,7 @@ final class Settings extends Controller implements JobHost
         return match ((string) $ingest['state']) {
             'live'  => 'Ingestion: running',
             'stale' => 'Ingestion: stopped',
+            'refused' => 'Ingestion: refused to start',
             'unreadable' => 'Ingestion: cannot tell',
             default => 'Ingestion: never started',
         };
@@ -966,6 +1018,14 @@ final class Settings extends Controller implements JobHost
         if ((string) $ingest['state'] === 'unreadable') {
             return $ingest['file'] . ' exists but is not a status document. Check that the user '
                 . 'bin/loghound-tail runs as can write it.';
+        }
+        if ((string) $ingest['state'] === 'refused') {
+            $why = implode(' · ', array_slice((array) ($ingest['errors'] ?? []), 0, 3));
+
+            return 'The daemon started, refused the configuration and stopped'
+                . ($why === '' ? '' : ': ' . $why)
+                . '. Fix that, then start it again — systemd does not retry this by itself, '
+                . 'deliberately, because it is not a condition that resolves on its own.';
         }
         if ((string) $ingest['state'] === 'absent') {
             return 'Nothing has ever written ' . $ingest['file'] . ', so no log line has been read on this '

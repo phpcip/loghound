@@ -164,7 +164,8 @@ if ($errors !== []) {
     foreach ($errors as $e) {
         fwrite(STDERR, "  - $e\n");
     }
-    fwrite(STDERR, "Run bin/loghound-setup to fix this.\n");
+    fwrite(STDERR, "Finish setting up, then start this service again.\n");
+    recordRefusal($STATUS_FILE, $errors);
     exit(78);
 }
 
@@ -624,6 +625,42 @@ function guardQuota(object $quota, Pipeline $pipeline, string $core, bool $verbo
     } elseif ($verbose && $result['action'] !== 'none') {
         logLine('info', 'plan window for ' . $core . ': ' . $result['action']
             . ' — ' . (string) ($result['reason'] ?? ''));
+    }
+}
+
+/**
+ * Leave a record that the daemon refused to start, and why.
+ *
+ * Without it the panel cannot tell "the daemon has never run here" from "the daemon ran,
+ * refused a configuration it could not use, and stopped" — and it reported the first for
+ * both, which sends the operator to look at setup when setup is finished, or at the service
+ * when the service is doing exactly what it should.
+ *
+ * Deliberately its own state rather than a status document with zeroes in it: a refusal is
+ * not an idle daemon, and anything reading this must not average it in as one.
+ *
+ * Best effort. A daemon that cannot write its own diagnostic still exits with the reason on
+ * stderr, where systemd keeps it, and failing to record must never become a second failure
+ * the operator has to understand.
+ *
+ * @param array<int,string> $errors
+ */
+function recordRefusal(string $path, array $errors): void
+{
+    $doc = [
+        'state'     => 'refused',
+        'at'        => time(),
+        'pid'       => getmypid(),
+        'errors'    => array_values(array_map('strval', $errors)),
+    ];
+
+    $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.tmp';
+    if (@file_put_contents($tmp, (string) json_encode($doc, JSON_PRETTY_PRINT)) === false) {
+        return;
+    }
+    @chmod($tmp, 0640);
+    if (!@rename($tmp, $path)) {
+        @unlink($tmp);
     }
 }
 

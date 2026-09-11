@@ -185,16 +185,22 @@ final class Layout
         if (!$gw->isDemo()) {
             $ingest = Steps::ingestStatus(dirname(__DIR__, 2));
             if ($ingest['state'] !== 'live') {
+                $headline = match ((string) $ingest['state']) {
+                    'refused' => 'The log reader refused to start.',
+                    'absent'  => 'Nothing is reading your logs.',
+                    default   => 'The log reader has stopped.',
+                };
+                $detail = match ((string) $ingest['state']) {
+                    'refused' => 'It started, found the configuration unusable and stopped, and systemd will '
+                        . 'not retry that on its own.',
+                    'absent'  => 'The ingest daemon has never reported in on this machine, so every number in '
+                        . 'this panel will stay empty until it is started.',
+                    default   => 'The ingest daemon is not reporting any more, so nothing new is arriving.',
+                };
+
                 echo '<div class="banner banner-warn" role="alert"><strong>'
-                    . ($ingest['state'] === 'absent'
-                        ? 'Nothing is reading your logs.'
-                        : 'The log reader has stopped.')
-                    . '</strong> '
-                    . ($ingest['state'] === 'absent'
-                        ? 'The ingest daemon has never reported in on this machine, so every number in this '
-                            . 'panel will stay empty until it is started.'
-                        : 'The ingest daemon is not reporting any more, so nothing new is arriving.')
-                    . ' <a href="?v=settings#set-finish-card">Finish setting up</a></div>' . "\n";
+                    . Security::esc($headline) . '</strong> ' . Security::esc($detail)
+                    . ' <a href="?v=settings#set-finish-card">What to do</a></div>' . "\n";
             }
         }
 
