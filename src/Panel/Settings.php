@@ -3130,7 +3130,7 @@ final class Settings extends Controller implements JobHost, Sections
         ['set-cache', 'Cached queries', 'cacheSection'],
         ['set-beacon', 'Beacon', 'beaconSection'],
         ['set-privacy', 'Privacy', 'privacySection'],
-        ['set-retention', 'How much data you keep', 'retentionSection'],
+        ['set-retention', 'Data kept', 'retentionSection'],
         ['set-scoring', 'Scoring', 'scoringSection'],
         ['set-auth', 'Sign-in', 'authSection'],
         ['set-2fa', 'Two-factor', 'twoFactorSection'],

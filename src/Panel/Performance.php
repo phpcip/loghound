@@ -39,7 +39,7 @@ final class Performance extends Controller
      */
     public const SECTIONS = [
         ['pf-headline', 'What to measure'],
-        ['pf-time', 'Latency over time'],
+        ['pf-time', 'Over time'],
         ['pf-paths', 'Slowest paths'],
         ['pf-status', 'Status codes'],
     ];

@@ -38,9 +38,9 @@ final class Networks extends Controller
      */
     public const SECTIONS = [
         ['net-stats', 'Totals'],
-        ['net-asns', 'Autonomous systems'],
+        ['net-asns', 'ASNs'],
         ['net-types', 'Network types'],
-        ['net-map', 'Where they answered from'],
+        ['net-map', 'Map'],
         ['net-netnames', 'Netblocks'],
         ['net-countries', 'Countries'],
         ['net-pivot', 'Type by verdict'],

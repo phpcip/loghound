@@ -41,7 +41,7 @@ final class Fingerprints extends Controller
      * @var array<int,array{0:string,1:string}>
      */
     public const SECTIONS = [
-        ['fp-explain', 'What this table is'],
+        ['fp-explain', 'About'],
         ['fp-table', 'Clusters'],
     ];
     /** Hard ceiling on cluster rows: each one costs a nested range facet. */

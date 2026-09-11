@@ -2032,7 +2032,10 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
     border-radius: var(--radius);
     cursor: pointer;
 }
-.tb-filters:hover { background: var(--band); border-color: var(--accent-ink); }
+/* BOTH SIDES. Same leak as .ss-button:hover — the generic `button:hover` inverts to ink with
+   page-coloured text, so a rule that restores only the background leaves white text on it. */
+.tb-filters:hover {
+    color: var(--ink); background: var(--band); border-color: var(--accent-ink); }
 
 .tb-badge {
     display: inline-flex;
@@ -2050,12 +2053,18 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 /* The Opensolr resources control: an icon, because it opens a dialog rather than changing the
    page, and because a fifth set of words in this row would drown the four that scope it. Its
    name is on `aria-label` and in `title`, so it is never unnamed. */
+/* PADDING ZERO, AND IT IS NOT COSMETIC. The generic `button` rule sets `padding: 10px 18px`,
+   and with border-box a 36px square spends all 36 of them on the horizontal padding alone —
+   so the mark inside was laid out at zero width and this control rendered as an empty bordered
+   box. A fixed-size icon button has to state its own padding rather than inherit one written
+   for a button with words in it. */
 .tb-res {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 36px;
     height: 36px;
+    padding: 0;
     color: var(--muted);
     background: transparent;
     border: 1px solid var(--hairline);
@@ -2905,10 +2914,17 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
 
     :root.lh-rail-collapsed .navtwist { display: none; }
 
+    /* FLUSH AGAINST THE RAIL, AND THAT IS WHAT MAKES IT CLICKABLE. The flyout used to sit 10px
+       clear, and it is shown by :hover on the group — so reaching for it crossed 10px of page,
+       the group stopped being hovered, and the list closed before the pointer arrived. A
+       transparent bridge cannot fix that from inside the flyout, because `overflow-y: auto`
+       stops `overflow-x` being visible and clips anything outside the box. Removing the gap
+       removes the dead zone outright; ten pixels of separation are not worth a menu that cannot
+       be reached. */
     :root.lh-rail-collapsed .navsub {
         position: fixed;
         z-index: 41;
-        left: calc(var(--side-w) + 10px);
+        left: var(--side-w);
         top: var(--lh-navtip-y);
         width: 230px;
         max-height: 60vh;
@@ -3989,7 +4005,11 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
     cursor: pointer;
     text-align: left;
 }
-.ss-button:hover { border-color: var(--ink); background: var(--page); }
+/* BOTH SIDES, AND THE COLOUR IS THE POINT. The generic `button:hover` inverts a button to ink
+   with page-coloured text. This control is a field, not a button with words in it, so it keeps
+   its page background — and stating only the background left the generic rule's white text in
+   force, which is white on white. A state that restores one side has to restore the other. */
+.ss-button:hover { border-color: var(--ink); background: var(--page); color: var(--ink); }
 .ss-button[aria-expanded="true"] { border-color: var(--accent); }
 
 .ss-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

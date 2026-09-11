@@ -40,11 +40,11 @@ final class Overview extends Controller
      */
     public const SECTIONS = [
         ['ov-stats', 'Who was here'],
-        ['ov-timing', 'How long they stayed'],
+        ['ov-timing', 'Dwell time'],
         ['ov-series', 'Over time'],
         ['ov-pages', 'Top pages'],
         ['ov-searches', 'Searches'],
-        ['ov-pivot', 'Country by verdict'],
+        ['ov-pivot', 'By country'],
     ];
     /**
      * Which page-toolbar controls this view honours.

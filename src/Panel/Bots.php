@@ -37,12 +37,12 @@ final class Bots extends Controller
      * @var array<int,array{0:string,1:string}>
      */
     public const SECTIONS = [
-        ['bf-split', 'Declared versus evasive'],
+        ['bf-split', 'Bot kinds'],
         ['bf-reasons', 'Signals'],
         ['bf-verdicts', 'Verdicts'],
         ['bf-histogram', 'Score spread'],
         ['bf-classes', 'Bot classes'],
-        ['bf-crawlers', 'Declared crawlers'],
+        ['bf-crawlers', 'Crawlers'],
         ['bf-pivot', 'Class by network'],
     ];
     /**

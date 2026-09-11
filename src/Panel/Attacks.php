@@ -86,8 +86,8 @@ final class Attacks extends Controller implements Sections
         ['atk-who', 'Who'],
         ['atk-impersonation', 'Impersonation'],
         ['atk-when', 'When'],
-        ['atk-pivot', 'Pattern by status'],
-        ['atk-explain', 'What this does not claim'],
+        ['atk-pivot', 'By status'],
+        ['atk-explain', 'Limits'],
     ];
 
     /**
