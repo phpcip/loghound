@@ -791,12 +791,7 @@ final class View
      */
     private function stepAdmin(): void
     {
-        $guessed = rtrim((string) $this->cfg->get('base_url', ''), '/');
-        if ($guessed === '') {
-            $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
-            $scheme = (($_SERVER['HTTPS'] ?? '') !== '') ? 'https' : 'http';
-            $guessed = $host === '' ? '' : $scheme . '://' . $host;
-        }
+        $guessed = Steps::effectiveBaseUrl($this->cfg, true);
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_ADMIN) . '" class="card">';
         $this->csrf(Installer::STEP_ADMIN, 'finish');
@@ -886,7 +881,7 @@ final class View
             . 'under <strong>Settings</strong> in the panel as well, together with whether each one has '
             . 'actually taken effect, so nothing here is lost when this screen goes away.</p>';
 
-        foreach (Steps::nextSteps($this->cfg, $this->root) as $group) {
+        foreach (Steps::nextSteps($this->cfg, $this->root, true) as $group) {
             echo '<h4>' . Security::esc($group['title']) . '</h4>';
             self::commandBlock('finish-cmd-' . (string) $group['key'], $group);
         }

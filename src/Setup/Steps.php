@@ -414,9 +414,9 @@ final class Steps
      *
      * @return array<int,array{key:string,title:string,lines:string[],problem:string}>
      */
-    public static function nextSteps(Config $cfg, string $root): array
+    public static function nextSteps(Config $cfg, string $root, bool $mayUseRequestHost = false): array
     {
-        [$snippet, $problem] = self::beaconSnippet($cfg);
+        [$snippet, $problem] = self::beaconSnippet($cfg, $mayUseRequestHost);
 
         return [
             [
@@ -446,22 +446,70 @@ final class Steps
     }
 
     /**
+     * The panel's address as this screen should present it.
+     *
+     * The saved value wins. Falling back to the request is offered only where the operator
+     * is looking at that same address in an editable field — during setup — so that the
+     * field and everything derived from it cannot disagree. Elsewhere the fallback is off
+     * and an unset address stays visible as unset.
+     */
+    public static function effectiveBaseUrl(Config $cfg, bool $mayUseRequestHost = false): string
+    {
+        $saved = rtrim(trim((string) $cfg->get('base_url', '')), '/');
+        if ($saved !== '') {
+            return $saved;
+        }
+
+        return $mayUseRequestHost ? self::requestBaseUrl() : '';
+    }
+
+    /**
+     * The address this request arrived on, or an empty string.
+     *
+     * The Host header is chosen by whoever sent the request, so it is shape-checked before
+     * it is echoed into a page: a hostname or an IPv4 literal with an optional port, and
+     * nothing else. A header carrying a path, a scheme, a credential or markup yields
+     * nothing rather than a URL built around it.
+     */
+    public static function requestBaseUrl(): string
+    {
+        $host = (string) ($_SERVER['HTTP_HOST'] ?? '');
+        if ($host === '' || strlen($host) > 255) {
+            return '';
+        }
+        if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(?::[0-9]{1,5})?$/', $host)) {
+            return '';
+        }
+
+        $scheme = (($_SERVER['HTTPS'] ?? '') !== '') ? 'https' : 'http';
+
+        return $scheme . '://' . $host;
+    }
+
+    /**
      * The one-line beacon tag, or the reason there is not one to give.
      *
      * The snippet is worthless unless the URL in it is the URL visitors' browsers can
-     * actually reach, and the only value that can be is `base_url` — the request's own Host
-     * header is whatever the person looking at the panel happened to type, and is routinely
-     * an internal name or an IP address. So there is no fallback host here and no example
-     * domain: either the operator has configured the address, or this says so.
+     * actually reach. That is `base_url` once setup has saved one. There is no example
+     * domain and never a made-up host: a snippet somebody copies, trusts and pastes into
+     * their site has to work, and one that points at a plausible-looking host nobody owns
+     * fails silently and reads as the product being broken.
+     *
+     * DURING SETUP there is no saved value yet, and refusing outright would be pedantry: the
+     * address field on that same screen is already filled in from the request, the operator
+     * can see it and correct it, and it is the value the form is about to save. So the
+     * installer passes $mayUseRequestHost and the snippet shows the same address the field
+     * shows — one value in two places, never two. After setup the flag is off, because by
+     * then an empty base_url is a real misconfiguration and inventing a host would hide it.
      *
      * "Unusable" is judged by the same two checks applyBaseUrl() refuses a value with, so a
      * config file edited by hand is held to the standard the form enforces.
      *
      * @return array{0:string,1:string} [snippet, problem] — exactly one is ever non-empty.
      */
-    public static function beaconSnippet(Config $cfg): array
+    public static function beaconSnippet(Config $cfg, bool $mayUseRequestHost = false): array
     {
-        $base = rtrim(trim((string) $cfg->get('base_url', '')), '/');
+        $base = self::effectiveBaseUrl($cfg, $mayUseRequestHost);
 
         if ($base === '') {
             return ['', 'The public address of this panel is not set, so there is no snippet to copy. '
