@@ -417,13 +417,14 @@ final class Steps
     public static function nextSteps(Config $cfg, string $root, bool $mayUseRequestHost = false): array
     {
         [$snippet, $problem] = self::beaconSnippet($cfg, $mayUseRequestHost);
+        $ingestProblem = self::ingestProblem($cfg);
 
         return [
             [
                 'key'     => 'ingest',
                 'title'   => 'Start reading the logs, now and after every reboot',
-                'lines'   => self::ingestCommands($root),
-                'problem' => '',
+                'lines'   => $ingestProblem === '' ? self::ingestCommands($root) : [],
+                'problem' => $ingestProblem,
             ],
             [
                 'key'     => 'status',
@@ -440,6 +441,35 @@ final class Steps
                 'problem' => $problem,
             ],
         ];
+    }
+
+    /**
+     * The reason starting the daemon would fail right now, or an empty string.
+     *
+     * The ingest command is shown on the last screen of the installer, where setup has not
+     * been finished — and until it is, `beacon.secret` and the address salt do not exist,
+     * because ensureSecrets() runs at finish. The daemon validates its configuration before
+     * it does anything and exits 78/CONFIG on an incomplete one, straight into a restart
+     * loop, with a message telling the operator to run install.sh, which is not the answer.
+     *
+     * So the command is withheld until it would work, and the screen says what to do instead.
+     * A command printed next to a copy button is a promise that pasting it achieves
+     * something; printing one that cannot yet succeed spends the operator's trust to save
+     * ourselves a conditional.
+     *
+     * The daemon's own check is reused rather than a second list of preconditions here —
+     * two lists disagree eventually, and the one that matters is the daemon's.
+     */
+    private static function ingestProblem(Config $cfg): string
+    {
+        if ($cfg->validate() === []) {
+            return '';
+        }
+
+        return 'Finish setting up first — the button above. The ingest daemon reads the '
+            . 'configuration this screen is about to write, checks it before it starts, and '
+            . 'stops on an incomplete one, so there is nothing to start yet. This command '
+            . 'appears here once it will work, and it is in Settings afterwards.';
     }
 
     /** Where a systemd unit lives, and the one this installation is named after. */

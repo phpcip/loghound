@@ -43,6 +43,22 @@ function lh_finish_config(): Config
     $cfg->set('solr.base_url', 'http://127.0.0.1:65535/solr');
     $cfg->set('solr.hits_core', 'lh_test_hits');
     $cfg->set('solr.sessions_core', 'lh_test_sessions');
+    $cfg->set('opensolr.email', 'test@example.com');
+    $cfg->set('opensolr.api_key', str_repeat('k', 32));
+    $cfg->set('beacon.secret', str_repeat('b', 64));
+    return $cfg;
+}
+
+/**
+ * A configuration setup has not finished writing yet.
+ *
+ * The last installer screen renders these steps against exactly this: storage provisioned,
+ * secrets not yet minted. It is the state in which the ingest command cannot work.
+ */
+function lh_finish_unfinished_config(): Config
+{
+    $cfg = lh_finish_config();
+    $cfg->set('beacon.secret', '');
     return $cfg;
 }
 
@@ -148,6 +164,24 @@ function lh_finish_strip_comments(string $source): string
 }
 
 return [
+
+    'the ingest command is withheld while it could only fail' => static function (): void {
+        $group = lh_finish_group(lh_finish_unfinished_config(), 'ingest');
+
+        lh_same([], $group['lines'], 'no command is offered against an unusable configuration');
+        lh_true($group['problem'] !== '', 'the reason is given instead');
+        lh_false(
+            str_contains($group['problem'], 'install.sh'),
+            'the reason does not send the operator to install.sh, which is not the fix here'
+        );
+    },
+
+    'the ingest command returns once the configuration is usable' => static function (): void {
+        $group = lh_finish_group(lh_finish_config(), 'ingest');
+
+        lh_same('', $group['problem'], 'nothing is wrong with a finished configuration');
+        lh_same(1, count($group['lines']), 'and the command is back, as one line');
+    },
 
     'the service and both timers are enabled by one pasteable command' => function (): void {
         $group = lh_finish_group(lh_finish_config(), 'ingest');
