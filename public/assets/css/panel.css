@@ -4668,13 +4668,19 @@ button.stat:hover .stat-go { color: var(--accent); }
     50% { opacity: 0.35; }
 }
 
-.live-table td { vertical-align: baseline; }
+/* ONE REQUEST IS ONE LINE. Seven columns in the content width left the request path showing
+   about a dozen characters and pushed the opener onto a second line under every row, so the
+   table was double-height and the one column worth reading was the one being truncated. A
+   step down in size and no wrapping buys the path the room instead. */
+.live-table { font-size: 13px; }
+.live-table td { vertical-align: baseline; white-space: nowrap; }
 .urlwrap > .live-method { flex: 0 0 auto; font-size: 13px; }
 
 /* The opener floats rather than the cell becoming a flex row, because responsive.js turns a
    narrow table's cells into label/value rows and a `display: flex` on the cell would fight it.
    The same shape the visit table's verdict cell already uses. */
-.live-table td.live-read > .rowopen { float: right; margin-left: 8px; }
+.live-table td.live-client > .rowopen { float: right; margin-left: 8px; }
+.live-client-name { overflow: hidden; text-overflow: ellipsis; }
 
 /* Three tones and no more. A reading is a reading, so the strongest of them is the accent the
    rest of the panel already spends on "look here" — never a second colour that would have to be
@@ -4682,6 +4688,34 @@ button.stat:hover .stat-go { color: var(--accent); }
 .live-tone-plain { color: var(--muted); font-weight: 400; }
 .live-tone-watch { color: var(--ink); }
 .live-tone-alarm { color: var(--accent-ink); }
+
+/* The reader's glance and the reader's decision, on one row above the table. */
+.live-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px;
+}
+
+.live-find {
+    flex: 1 1 300px;
+    min-width: 0;
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--ink);
+    background: var(--page);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+}
+
+.live-find:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.live-excl-note { font-size: 13px; }
+
+/* ECHARTS MEASURES ITS CONTAINER, so the height has to come from here: a div with no height
+   renders nothing at all and looks like a chart that failed rather than one never sized. */
+.live-chart { height: 120px; margin: 0 0 16px; }
 
 .live-sources { margin-top: 20px; }
 .live-verdicts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }

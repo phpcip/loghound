@@ -287,6 +287,29 @@ return [
     ],
 
     // =====================================================================
+    // The live page
+    //
+    // THESE HIDE LINES FROM ONE PAGE. They are not an ingestion filter: a request matched
+    // here is still read, still scored and still indexed exactly as it was. What they buy is
+    // a readable tail — an endpoint your own monitoring hits twice a second drowns a live
+    // view and tells you nothing you did not already know.
+    //
+    // To stop something being STORED AT ALL, that is a different setting per hostname, in
+    // Settings under Exclusions. These two are deliberately separate.
+    //
+    // Each rule is a field, a pattern and whether it is on. The pattern is a regular
+    // expression BODY — no delimiters, no flags; matching is case-insensitive. Fields:
+    // host, ip, path, query, method, status, ua, browser.
+    // =====================================================================
+
+    'live' => [
+        'exclusions' => [
+            // ['field' => 'path', 'pattern' => '^/solr_manager/', 'enabled' => true],
+            // ['field' => 'ua',   'pattern' => 'uptime|pingdom',  'enabled' => true],
+        ],
+    ],
+
+    // =====================================================================
     // Enrichment
     //
     // Each of these sends visitor IP ADDRESSES to a third party. Turn off anything you

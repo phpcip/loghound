@@ -57,9 +57,10 @@ declare(strict_types=1);
 namespace Loghound\Panel;
 
 use Loghound\Live\Reader;
+use Loghound\Live\Rules;
 use Loghound\Security;
 
-final class Live extends Controller
+final class Live extends Controller implements JobHost
 {
     /**
      * One card, so the view is one page and an ordinary link in the navigation.
@@ -148,10 +149,77 @@ final class Live extends Controller
     public function api(string $action): array
     {
         return match ($action) {
-            'stream' => $this->stream(),
-            'client' => $this->client(),
-            default  => ['error' => 'Unknown action'],
+            'stream'     => $this->stream(),
+            'client'     => $this->client(),
+            'exclusions' => $this->exclusionsPayload(),
+            default      => ['error' => 'Unknown action'],
         };
+    }
+
+    /**
+     * The display filter, for the dialog that manages it.
+     *
+     * The field list travels with the rules so the dialog cannot offer a field the matcher
+     * does not test: one source for both halves, rather than a list in the browser that drifts
+     * from the one in Live\Rules.
+     *
+     * @return array<string,mixed>
+     */
+    private function exclusionsPayload(): array
+    {
+        $rules = Rules::fromConfig($this->cfg);
+
+        return [
+            'rules'  => $rules->all(),
+            'active' => $rules->activeCount(),
+            'fields' => Rules::FIELDS,
+            'max'    => Rules::MAX_RULES,
+        ];
+    }
+
+    /**
+     * Save the display filter.
+     *
+     * ANSWERS JSON AND EXITS, which JobHost explicitly allows: the dialog is an AJAX surface
+     * and there is no page to redirect back to. A POST this view does not recognise falls
+     * through to the live page, because the front controller expects a redirect target from
+     * every other path.
+     *
+     * The CSRF check is repeated here even though the front controller already made it, for
+     * the reason Settings gives in the same place: a control applied only by the caller is one
+     * refactor away from being absent.
+     *
+     * WHAT IS SAVED IS WHAT Rules WILL RUN. The submitted list goes through Rules::sanitise(),
+     * so a pattern PCRE cannot compile, an unknown field or a forty-first rule never reaches
+     * the file — and the response carries back the list as stored, so the dialog shows what
+     * actually happened rather than what was typed.
+     */
+    public function post(): string
+    {
+        Security::requireCsrf();
+
+        $action = is_string($_POST['action'] ?? null) ? $_POST['action'] : '';
+        if ($action !== 'live_exclusions') {
+            return '?v=live';
+        }
+
+        $raw = is_string($_POST['rules'] ?? null) ? $_POST['rules'] : '[]';
+        $decoded = json_decode($raw, true);
+        $clean = Rules::sanitise(is_array($decoded) ? $decoded : []);
+
+        $this->cfg->set(Rules::CONFIG_KEY, $clean);
+
+        try {
+            $this->cfg->save();
+        } catch (\Throwable $e) {
+            \json_out(['error' => 'The rules could not be written to the configuration file.'], 500);
+        }
+
+        \json_out([
+            'ok'     => true,
+            'rules'  => $clean,
+            'active' => Rules::fromList($clean)->activeCount(),
+        ]);
     }
 
     /**
@@ -495,21 +563,42 @@ final class Live extends Controller
             . '<span class="live-counts muted" id="lv-counts"></span>'
             . '</div>';
 
+        /* THE TWO CONTROLS DO DIFFERENT THINGS AND SIT TOGETHER ON PURPOSE. The search is a
+           reader's glance — it hides rows already on screen and nothing else. The rules are a
+           decision that travels to the reader, so an excluded request costs one comparison on
+           the server and never becomes a frame, a row or a byte on the wire. Neither of them
+           touches what is stored: that is per hostname, in Settings. */
+        echo '<div class="live-tools">'
+            . '<input type="search" id="lv-find" class="live-find" '
+            . 'placeholder="Filter these rows — host, address, path, status, client" '
+            . 'autocomplete="off" spellcheck="false" aria-label="Filter the rows on screen">'
+            . '<button type="button" class="small" id="lv-excl">Exclusions</button>'
+            . '<span class="muted live-excl-note" id="lv-excl-note"></span>'
+            . '</div>';
+
+        echo '<div class="live-chart" id="lv-chart" role="img" '
+            . 'aria-label="Requests per second, as they arrive"></div>';
+
         echo '<div class="note"><p><strong>One line is not a session.</strong> A verdict is scored over '
             . 'a whole visit; the last column says what this request shows. Open a row for what the index '
             . 'already knows about the client.</p></div>';
 
+        /* SIX COLUMNS, AND THE REQUEST GETS WHAT THE SEVENTH WAS USING. "This line" said the
+           same thing as Client — "no User-Agent" beside "No User-Agent", "curl" beside "Says
+           it is curl" — so it was a column wide enough to matter spent on a restatement. Its
+           reading still exists: it is the title on the Client cell and the whole of the
+           dialog. The open control moves in beside the client, where it no longer wraps onto
+           a line of its own under every row. */
         echo '<div class="table-wrap"><table id="lv-table" class="table-fixed live-table"><colgroup>'
-            . '<col style="width:9%"><col style="width:16%"><col style="width:15%">'
-            . '<col style="width:29%"><col style="width:7%"><col style="width:13%">'
-            . '<col style="width:11%"></colgroup><thead><tr>'
+            . '<col style="width:8%"><col style="width:15%"><col style="width:15%">'
+            . '<col style="width:40%"><col style="width:6%"><col style="width:16%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Time</th>'
             . '<th scope="col">Host</th>'
             . '<th scope="col">Client address</th>'
             . '<th scope="col">Request</th>'
             . '<th scope="col" class="num">Status</th>'
             . '<th scope="col">Client</th>'
-            . '<th scope="col">This line</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         echo '<p class="pop" id="lv-empty-note">Waiting for the first request.</p>';

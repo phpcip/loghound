@@ -31,7 +31,8 @@
 
 'use strict';
 
-import { api, boot, byId, el, fill, bytes, durUs, num, timeOnly, when } from '../core.js';
+import { api, boot, byId, el, fill, post, tip, bytes, durUs, num, timeOnly, when } from '../core.js';
+import { draw } from '../charts.js';
 import { dimValue, drillRow, flagNode, openButton, valueText, valueWords } from '../identity.js';
 import { hostCell } from '../hostcolor.js';
 import { pathCell } from '../url.js';
@@ -312,9 +313,13 @@ function addRows(rows) {
     const batch = rows.slice().sort((a, b) => String(a.ts || '').localeCompare(String(b.ts || '')));
     for (const row of batch) {
         held.set(row.id, row);
-        body.insertBefore(buildRow(row), body.firstChild);
+        const tr = buildRow(row);
+        hideIfFiltered(tr);
+        body.insertBefore(tr, body.firstChild);
         seen++;
     }
+
+    countIntoChart(batch.length);
 
     while (body.children.length > MAX_ROWS) {
         const last = body.lastChild;
@@ -333,13 +338,20 @@ function buildRow(row) {
         title: when(row.ts)
     }));
 
+    /* NOTHING IN THIS TABLE IS A FILTER LINK. Every other view's cells drill into the
+       dashboard, but a row here opens the request dialog — and a link inside the row won the
+       click instead, navigating away with `f[ip_s][]=…` in the URL and reloading the page the
+       operator was watching. A live tail cannot survive a page load, so the dimension links
+       are rendered as plain values and the row keeps its own gesture. */
     tr.appendChild(el('td', { class: 'clip', title: row.host || 'The line names no host' }, [
-        hostCell(row.host, { mono: true })
+        hostCell(row.host, { mono: true, link: false })
     ]));
 
     tr.appendChild(el('td', { class: 'clip mono', title: placeWords(row) }, [
         row.country ? flagNode(row.country) : null,
-        row.ip ? dimValue('ip_s', row.ip, { mono: true }) : el('span', { class: 'muted', text: '—' })
+        row.ip
+            ? dimValue('ip_s', row.ip, { mono: true, link: false })
+            : el('span', { class: 'muted', text: '—' })
     ]));
 
     tr.appendChild(el('td', {
@@ -357,16 +369,11 @@ function buildRow(row) {
             })
     ]));
 
-    tr.appendChild(el('td', { class: 'clip', title: row.ua || 'No User-Agent was logged' }, [
-        clientWords(row)
-    ]));
-
-    tr.appendChild(el('td', { class: 'live-read' }, [
-        el('span', {
-            class: 'state live-tone-' + row.read.tone,
-            text: row.read.label,
-            title: row.read.why
-        }),
+    /* THE CLIENT AND THE WAY IN, ON ONE LINE. The reading this row got — what "This line"
+       used to print — is the title here, so nothing it said is lost; it was the same fact as
+       the client name in every row anybody looked at. */
+    tr.appendChild(el('td', { class: 'clip live-client', title: row.read.why || row.ua || 'No User-Agent was logged' }, [
+        el('span', { class: 'live-client-name' }, [clientWords(row)]),
         openButton('liveline', { id: row.id }, 'Open this request')
     ]));
 
@@ -395,7 +402,8 @@ function clientWords(row) {
     }
     if (row.browser) {
         return dimValue('browser_s', row.browser, {
-            text: [row.browser, row.browser_ver].filter(Boolean).join(' ')
+            text: [row.browser, row.browser_ver].filter(Boolean).join(' '),
+            link: false
         });
     }
     if (row.ua_logged && !row.ua) {
@@ -725,6 +733,282 @@ function renderKnown(mount, ip, data, generation) {
 }
 
 /* -------------------------------------------------------------------------
+ * Finding a row, excluding a request, and the shape of the last minute
+ *
+ * THREE CONTROLS, AND ONLY ONE OF THEM REACHES THE SERVER. The find box hides rows that are
+ * already here; the rules travel to Live\Reader, so an excluded request is never turned into
+ * a frame at all; the chart counts what arrived. None of the three changes what is stored —
+ * that is per hostname, in Settings, and deliberately somewhere else.
+ * ---------------------------------------------------------------------- */
+
+/** Seconds the chart keeps. One minute reads as "now" and fits without a scroll. */
+const CHART_WINDOW = 60;
+
+/** Requests per wall-clock second, oldest first, as [epochSecond, count] pairs. */
+const perSecond = [];
+
+/** The lower-cased find text, or '' when the box is empty. */
+let findText = '';
+
+/** Rules as last read from the server, so the dialog can render without a second fetch. */
+let rules = [];
+
+/** Field slug to the words the dialog shows, filled from the same payload. */
+let ruleFields = {};
+
+/** Cap the server will enforce anyway; the dialog says so before a save is refused. */
+let ruleMax = 40;
+
+/**
+ * Does this row survive the find box?
+ *
+ * The whole row's text, lower-cased, against the typed text. That is what "a simple grep over
+ * what is on screen" means, and it is why no field has to be chosen: a hostname, an address, a
+ * path, a status and a client name are all in there already.
+ */
+function matchesFind(tr) {
+    return findText === '' || String(tr.textContent || '').toLowerCase().includes(findText);
+}
+
+/** Hide or show one row against the current find text. */
+function hideIfFiltered(tr) {
+    tr.hidden = !matchesFind(tr);
+}
+
+/** Re-apply the find text to every row now in the table. */
+function applyFind() {
+    const table = byId('lv-table');
+    const body = table ? table.tBodies[0] : null;
+    if (!body) {
+        return;
+    }
+    for (const tr of body.children) {
+        hideIfFiltered(tr);
+    }
+}
+
+/**
+ * Fold this batch into the current second and redraw.
+ *
+ * Counted by arrival rather than by the line's own timestamp: the chart is answering "how busy
+ * is it right now", and a batch read from several files carries timestamps that are close but
+ * not equal. Redrawn once per batch, which the poll interval already bounds.
+ */
+function countIntoChart(n) {
+    if (n <= 0 && perSecond.length === 0) {
+        return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const last = perSecond.length ? perSecond[perSecond.length - 1] : null;
+
+    if (last && last[0] === now) {
+        last[1] += n;
+    } else {
+        if (last) {
+            for (let t = last[0] + 1; t < now; t++) {
+                perSecond.push([t, 0]);
+            }
+        }
+        perSecond.push([now, n]);
+    }
+
+    while (perSecond.length > CHART_WINDOW) {
+        perSecond.shift();
+    }
+
+    renderChart();
+}
+
+/** The last minute as a bar per second. */
+function renderChart() {
+    draw('lv-chart', (theme) => ({
+        grid: { top: 8, bottom: 4, left: 4, right: 4, containLabel: true },
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: { type: 'shadow', shadowStyle: { color: theme.sunken } },
+            formatter: (params) => {
+                const p = params[0];
+                return tip`${p.name}<br><strong>${num(p.value)}</strong> requests`;
+            }
+        },
+        xAxis: {
+            type: 'category',
+            data: perSecond.map((point) => timeOnly(new Date(point[0] * 1000).toISOString())),
+            axisLine: { lineStyle: { color: theme.border } },
+            axisTick: { show: false },
+            axisLabel: { color: theme.axis, fontSize: 14, interval: 14 }
+        },
+        yAxis: {
+            type: 'value',
+            minInterval: 1,
+            axisLine: { show: false },
+            axisTick: { show: false },
+            splitLine: { lineStyle: { color: theme.grid, type: 'dashed' } },
+            axisLabel: { color: theme.axis, fontSize: 14, formatter: (v) => num(v) }
+        },
+        series: [{
+            type: 'bar',
+            barCategoryGap: '20%',
+            data: perSecond.map((point) => point[1]),
+            itemStyle: { color: theme.accent }
+        }]
+    }));
+}
+
+/** What the line beside the Exclusions button says. */
+function noteRules() {
+    const note = byId('lv-excl-note');
+    if (!note) {
+        return;
+    }
+    const on = rules.filter((rule) => rule.enabled).length;
+    note.textContent = on === 0
+        ? 'Nothing is being excluded.'
+        : (on === 1 ? '1 rule is hiding requests.' : on + ' rules are hiding requests.');
+}
+
+/** Read the stored rules once, so the button can say what is in force before it is pressed. */
+async function loadRules() {
+    try {
+        const data = await api('live', 'exclusions');
+        rules = Array.isArray(data.rules) ? data.rules : [];
+        ruleFields = data.fields && typeof data.fields === 'object' ? data.fields : {};
+        ruleMax = Number(data.max) || ruleMax;
+        noteRules();
+    } catch (err) {
+        rules = [];
+    }
+}
+
+/**
+ * The rules dialog.
+ *
+ * Edits are held in the browser and written in one POST, so half a change cannot reach the
+ * file: the operator adds three rules, removes one, and presses Save once. The response is the
+ * list AS STORED — a pattern the server refused is simply not in it, which is how the dialog
+ * shows what actually happened rather than what was typed.
+ */
+function openExclusions() {
+    const { body, generation } = openDialog(
+        'Exclusions for this page',
+        'Hide requests from the live stream. Nothing here changes what is stored.'
+    );
+
+    const draftRules = rules.map((rule) => ({ ...rule }));
+    renderExclusions(body, generation, draftRules);
+}
+
+/** Draw the dialog's contents against the working copy. */
+function renderExclusions(mount, generation, draft) {
+    if (!isCurrent(generation)) {
+        return;
+    }
+
+    const table = el('table', { class: 'tight table-fixed' }, [
+        el('colgroup', {}, [
+            el('col', { style: 'width:22%' }),
+            el('col', { style: 'width:50%' }),
+            el('col', { style: 'width:14%' }),
+            el('col', { style: 'width:14%' })
+        ]),
+        el('thead', {}, [el('tr', {}, [
+            el('th', { scope: 'col', text: 'Field' }),
+            el('th', { scope: 'col', text: 'Pattern' }),
+            el('th', { scope: 'col', text: 'On' }),
+            el('th', { scope: 'col', text: '' })
+        ])]),
+        el('tbody', {}, draft.length
+            ? draft.map((rule, i) => ruleRow(rule, i, mount, generation, draft))
+            : [el('tr', {}, [el('td', {
+                colspan: '4',
+                class: 'muted',
+                text: 'No rules yet. Everything the tail reads is shown.'
+            })])])
+    ]);
+
+    const fieldSelect = el('select', { id: 'lv-new-field' },
+        Object.keys(ruleFields).map((slug) => el('option', { value: slug, text: ruleFields[slug] })));
+
+    const patternInput = el('input', {
+        type: 'text',
+        id: 'lv-new-pattern',
+        class: 'live-find',
+        placeholder: 'Regular expression, e.g. ^/wp-login',
+        autocomplete: 'off',
+        spellcheck: 'false'
+    });
+
+    const addButton = el('button', { type: 'button', class: 'small', text: 'Add rule' });
+    addButton.addEventListener('click', () => {
+        const pattern = String(patternInput.value || '').trim();
+        if (pattern === '') {
+            return;
+        }
+        if (draft.length >= ruleMax) {
+            return;
+        }
+        draft.push({ field: fieldSelect.value, pattern: pattern, enabled: true });
+        patternInput.value = '';
+        renderExclusions(mount, generation, draft);
+    });
+
+    const saveButton = el('button', { type: 'button', class: 'small', text: 'Save rules' });
+    const status = el('span', { class: 'muted' });
+
+    saveButton.addEventListener('click', async () => {
+        saveButton.disabled = true;
+        status.textContent = 'Saving…';
+        try {
+            const data = await post({ action: 'live_exclusions', rules: JSON.stringify(draft) });
+            rules = Array.isArray(data.rules) ? data.rules : [];
+            noteRules();
+            status.textContent = 'Saved. The stream picks them up when it next reconnects.';
+            renderExclusions(mount, generation, rules.map((rule) => ({ ...rule })));
+        } catch (err) {
+            status.textContent = err && err.message ? err.message : 'The rules could not be saved.';
+        }
+        saveButton.disabled = false;
+    });
+
+    fill(mount, [
+        el('p', { class: 'muted' }, [
+            'A rule is a field and a regular expression. Matching is case-insensitive, and the ',
+            'pattern is the expression itself — no slashes and no flags. ',
+            el('code', { class: 'mono', text: '^/wp-login' }),
+            ' hides every request whose path starts that way; ',
+            el('code', { class: 'mono', text: '^4' }),
+            ' on Status hides every 4xx.'
+        ]),
+        el('div', { class: 'table-wrap' }, [table]),
+        el('div', { class: 'live-tools' }, [fieldSelect, patternInput, addButton]),
+        el('div', { class: 'live-tools' }, [saveButton, status])
+    ]);
+}
+
+/** One rule, with its on switch and its remove control. */
+function ruleRow(rule, index, mount, generation, draft) {
+    const toggle = el('input', { type: 'checkbox' });
+    toggle.checked = rule.enabled !== false;
+    toggle.addEventListener('change', () => {
+        draft[index].enabled = toggle.checked;
+    });
+
+    const remove = el('button', { type: 'button', class: 'small', text: 'Remove' });
+    remove.addEventListener('click', () => {
+        draft.splice(index, 1);
+        renderExclusions(mount, generation, draft);
+    });
+
+    return el('tr', {}, [
+        el('td', { text: ruleFields[rule.field] || rule.field }),
+        el('td', { class: 'mono clip', title: rule.pattern, text: rule.pattern }),
+        el('td', {}, [toggle]),
+        el('td', {}, [remove])
+    ]);
+}
+
+/* -------------------------------------------------------------------------
  * Entry point
  * ---------------------------------------------------------------------- */
 
@@ -736,6 +1020,21 @@ function renderKnown(mount, ip, data, generation) {
  */
 export default function init() {
     registerOpener('liveline', (data) => openLine(String(data.id || '')));
+
+    const find = byId('lv-find');
+    if (find) {
+        find.addEventListener('input', () => {
+            findText = String(find.value || '').trim().toLowerCase();
+            applyFind();
+        });
+    }
+
+    const exclusions = byId('lv-excl');
+    if (exclusions) {
+        exclusions.addEventListener('click', openExclusions);
+    }
+
+    loadRules();
 
     const button = byId('lv-toggle');
     if (button) {

@@ -115,6 +115,9 @@ final class Reader
     /** @var array<int,string> Hosts the operator has selected, or empty for all of them. */
     private array $hosts;
 
+    /** The operator's display filter, applied to every row before it goes on the wire. */
+    private Rules $rules;
+
     /** The read-only handle on the enrichment cache the ingest daemon fills, or null. */
     private ?SQLite3 $cache = null;
 
@@ -136,9 +139,10 @@ final class Reader
     /**
      * @param array<int,string> $hosts Virtual hosts to keep, or an empty list for every host.
      */
-    public function __construct(Config $cfg, array $hosts = [])
+    public function __construct(Config $cfg, array $hosts = [], ?Rules $rules = null)
     {
         $this->cfg = $cfg;
+        $this->rules = $rules ?? Rules::fromConfig($cfg);
         $this->hosts = array_values(array_filter(array_map(
             static fn ($h): string => is_string($h) ? strtolower(trim($h)) : '',
             $hosts
@@ -246,6 +250,7 @@ final class Reader
         $rows = [];
         $lag = 0;
         $dropped = 0;
+        $excluded = 0;
         $budget = self::LINE_BUDGET;
 
         foreach ($this->sources as $i => $src) {
@@ -292,6 +297,10 @@ final class Reader
 
                 $row = $this->translate($line, $i, $offset);
                 if ($row !== null) {
+                    if ($this->rules->excludes($row)) {
+                        $excluded++;
+                        continue;
+                    }
                     $rows[] = $row;
                     $budget--;
                 }
@@ -315,6 +324,7 @@ final class Reader
             'unparsed'     => $this->unparsed,
             'unparsed_why' => $this->unparsedWhy,
             'dropped'      => $dropped,
+            'excluded'     => $excluded,
         ];
     }
 
