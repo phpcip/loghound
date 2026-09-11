@@ -184,6 +184,14 @@ h1 { font-size: clamp(28px, 3.2vw, 38px); line-height: 1.05; }
 h2 { font-size: 20px; }
 h3 { font-size: 17px; letter-spacing: -0.015em; }
 h4 { font-size: 15px; letter-spacing: 0; }
+
+/* A SUB-HEADING THAT FOLLOWS SOMETHING NEEDS AIR ABOVE IT. The reset above zeroes every
+   heading margin, so an h3 or h4 printed after a button, a form or a paragraph sat flush
+   against it and read as that block's caption instead of the start of a new one. Keyed on
+   :not(:first-child) so a card's own opening heading keeps the spacing its container gives
+   it, and the rule cannot add a gap at the top of a box. */
+h3:not(:first-child),
+h4:not(:first-child) { margin-top: 24px; }
 p { margin: 0 0 10px; }
 p:last-child { margin-bottom: 0; }
 

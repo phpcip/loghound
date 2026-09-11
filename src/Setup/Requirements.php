@@ -431,10 +431,31 @@ final class Requirements
             return null;
         }
 
+        /* ONLY PATHS THAT EXIST ON THIS MACHINE. The candidate lists carry every distribution's
+           layout, so a Debian box was told it "cannot read /etc/httpd/conf" — a directory it
+           has never had — and offered a fix widening open_basedir towards nothing. A reader
+           has no way to know that is harmless, so it reads as a real fault.
+
+           Per category: if one candidate is already reachable AND present, the alternatives are
+           that distribution's spelling of the same thing and are not this operator's problem.
+           Nothing is suppressed when no candidate is reachable, because then the warning is
+           the honest answer. */
         $blocked = [];
-        foreach ($this->interestingDirs() as $dir) {
-            if (self::openBasedirBlocks($dir)) {
-                $blocked[] = $dir;
+        foreach ($this->interestingDirs() as $dirs) {
+            $satisfied = false;
+            foreach ($dirs as $dir) {
+                if (!self::openBasedirBlocks($dir) && is_dir($dir)) {
+                    $satisfied = true;
+                    break;
+                }
+            }
+            if ($satisfied) {
+                continue;
+            }
+            foreach ($dirs as $dir) {
+                if (self::openBasedirBlocks($dir)) {
+                    $blocked[] = $dir;
+                }
             }
         }
 
@@ -483,21 +504,28 @@ final class Requirements
      */
     private function interestingDirs(): array
     {
-        $dirs = [];
         $discover = (array) $this->cfg->get('discover', []);
-        foreach ((array) ($discover['apache_configs'] ?? []) as $f) {
-            $dirs[dirname((string) $f)] = true;
+
+        $webserver = [];
+        foreach (['apache_configs', 'nginx_configs', 'fallback_globs'] as $key) {
+            foreach ((array) ($discover[$key] ?? []) as $path) {
+                $webserver[dirname((string) $path)] = true;
+            }
         }
-        foreach ((array) ($discover['nginx_configs'] ?? []) as $f) {
-            $dirs[dirname((string) $f)] = true;
+
+        $logs = [];
+        foreach ((array) $this->cfg->get('allowed_log_roots', []) as $root) {
+            $logs[(string) $root] = true;
         }
-        foreach ((array) ($discover['fallback_globs'] ?? []) as $g) {
-            $dirs[dirname((string) $g)] = true;
+
+        $out = [];
+        if ($webserver !== []) {
+            $out['webserver configuration'] = array_keys($webserver);
         }
-        foreach ((array) $this->cfg->get('allowed_log_roots', []) as $r) {
-            $dirs[(string) $r] = true;
+        if ($logs !== []) {
+            $out['log directory'] = array_keys($logs);
         }
-        return array_keys($dirs);
+        return $out;
     }
 
     /**

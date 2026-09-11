@@ -319,7 +319,7 @@ function sharedPairProbe(Solr $solr, string $sessionCore, string $hitsCore, stri
             return true;
         }
 
-        $buckets = $res['installs']['buckets'] ?? null;
+        $buckets = $res['facets']['installs']['buckets'] ?? null;
         if (!is_array($buckets)) {
             fwrite(STDERR, 'Loghound: cannot tell whether ' . $core . ' is shared; assuming it is.' . "\n");
             return true;
