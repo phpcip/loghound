@@ -607,6 +607,16 @@ final class Login
      */
     private function head(string $title, string $heading): void
     {
+        /* THE SESSION STARTS BEFORE THE FIRST BYTE, and this is the only place that can promise
+           it. Both forms called head() and then asked for a CSRF token — and asking for the
+           token is what started the session, by which time the doctype had been echoed. A
+           session cookie cannot be set after output, so Security::startSession() refused and
+           wrote "sign-in and CSRF will fail" into the error log for every sign-in page served.
+           Fixed here rather than in each form because head() is what emits the first byte, so a
+           third page added later cannot reintroduce it. Idempotent: an already-active session
+           returns immediately. */
+        Security::startSession();
+
         $asset = fn (string $rel): string => Assets::url($rel, $this->root);
 
         header('Content-Type: text/html; charset=utf-8');
