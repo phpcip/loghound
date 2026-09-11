@@ -83,6 +83,34 @@ return [
         }
     },
 
+    'a failed job is shown, not treated as a failed request' => static function (): void {
+        $js = (string) file_get_contents(__DIR__ . '/../public/assets/js/setup.js');
+
+        if (preg_match('/if\s*\(\s*!?status\s*(&&|\|\|)\s*!?status\.error\s*\)/', $js)) {
+            throw new \RuntimeException(
+                'setup.js treats a populated status.error as a failed request again. Every status '
+                . 'payload carries that key; a job that fails then never gets painted and the '
+                . 'installer freezes on the last frame it drew.'
+            );
+        }
+        if (!str_contains($js, 'function isJobStatus(')) {
+            throw new \RuntimeException('The request/job-state distinction is gone from setup.js.');
+        }
+    },
+
+    'the installer still offers a way out of a failed job' => static function (): void {
+        $view = (string) file_get_contents(__DIR__ . '/../src/Setup/View.php');
+
+        foreach (['Try again', 'banner-bad'] as $needed) {
+            if (!str_contains($view, $needed)) {
+                throw new \RuntimeException(
+                    'A failed setup job no longer renders "' . $needed . '", so the operator is '
+                    . 'left with a dead screen and no way to retry.'
+                );
+            }
+        }
+    },
+
     'the documentation tells people the flag exists' => static function (): void {
         $docs = [
             'README.md',

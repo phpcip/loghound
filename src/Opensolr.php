@@ -660,43 +660,7 @@ final class Opensolr
             );
         }
 
-        $decoded = (array) $decoded;
-        if (isset($decoded['msg'])) {
-            $decoded['msg'] = $this->redactDeep($decoded['msg']);
-        }
-
-        return $decoded;
-    }
-
-    /**
-     * Redact every string inside a decoded `msg`, whatever shape it has.
-     *
-     * The platform reports failure two ways: an HTTP error status, and HTTP 200 carrying
-     * `{"status":false,"msg":…}`. Only the first was redacted, so the second walked the key
-     * out of this class intact — and a caller then wrote it into a setup job note, which is
-     * a 0600 file under var/setup/ AND the JSON the job endpoint returns to a browser that
-     * is not yet authenticated, because the installer runs before an account exists.
-     *
-     * `msg` is a string in most responses and a structure in some (`core_data` among them),
-     * so this walks rather than flattens: stringifying would redact correctly and destroy
-     * every caller that reads a field out of it.
-     *
-     * @param mixed $value
-     * @return mixed
-     */
-    private function redactDeep($value)
-    {
-        if (is_string($value)) {
-            return $this->redact($value);
-        }
-        if (is_array($value)) {
-            $out = [];
-            foreach ($value as $k => $v) {
-                $out[$k] = $this->redactDeep($v);
-            }
-            return $out;
-        }
-        return $value;
+        return (array) $decoded;
     }
 
     /**

@@ -129,36 +129,45 @@ function lh_leak_jobs(array $plans): Jobs
 
 return [
 
-    'a 200 response carrying status:false is redacted like an error is' => static function (): void {
-        $echoed = 'Bad request: /api/get_core_status?email=test%40example.com&api_key=' . LH_LEAK_KEY;
-
-        $out = lh_leak_client(['status' => false, 'msg' => $echoed])->indexStatus('lh_probe_core');
-
-        lh_leak_assert_clean($out, 'the decoded response');
-    },
-
-    'a structured msg is redacted without being flattened' => static function (): void {
-        $body = [
-            'status' => true,
-            'msg'    => [
-                'core_data' => [
-                    'disk_used'  => 1234,
-                    'last_error' => 'upstream said api_key=' . LH_LEAK_KEY,
+    'a credential that happens to equal the API key survives intact'
+        => static function (): void {
+            $body = [
+                'status' => true,
+                'msg'    => [
+                    'info' => [
+                        'connection_url' => 'https://fi.solrcluster.test:443/solr/loghound_deadbeef_hits',
+                        'auth_username'  => 'lh01abcd',
+                        'auth_password'  => LH_LEAK_KEY,
+                    ],
                 ],
-            ],
-        ];
+            ];
 
-        $out = lh_leak_client($body)->indexStatus('lh_probe_core');
+            $conn = lh_leak_client($body)->connectionDetails('loghound_deadbeef_hits');
 
-        lh_leak_assert_clean($out, 'the decoded response');
+            if (($conn['http_pass'] ?? '') !== LH_LEAK_KEY) {
+                throw new \RuntimeException(
+                    'The index password was altered on its way out of the client. Opensolr sets a new '
+                    . 'index\'s HTTP auth password to the account API key, so a blanket redaction of '
+                    . 'the response replaces the credential with its own marker and every authenticated '
+                    . 'query then fails 401. Got: ' . var_export($conn['http_pass'] ?? null, true)
+                );
+            }
+        },
 
-        if (($out['msg']['core_data']['disk_used'] ?? null) !== 1234) {
-            throw new \RuntimeException(
-                'Redacting the message destroyed its structure, so every caller reading a field out '
-                . 'of msg breaks. Got: ' . var_export($out['msg'] ?? null, true)
-            );
-        }
-    },
+    'redaction happens where a value is shown, not where it is read'
+        => static function (): void {
+            $echoed = 'Bad request: /api/get_core_status?email=test%40example.com&api_key=' . LH_LEAK_KEY;
+
+            $out = lh_leak_client(['status' => false, 'msg' => $echoed])->indexStatus('lh_probe_core');
+
+            if (($out['msg'] ?? '') !== $echoed) {
+                throw new \RuntimeException(
+                    'decode() is altering response values again. It must not: a response legitimately '
+                    . 'carries credentials the caller needs. Containment belongs at the sinks — '
+                    . 'Setup\\Job::note(), Jobs::shape() and the error log — each of which has its own test.'
+                );
+            }
+        },
 
     'an HTTP error still throws a redacted message' => static function (): void {
         $client = lh_leak_client(['status' => false, 'msg' => 'api_key=' . LH_LEAK_KEY], 500);

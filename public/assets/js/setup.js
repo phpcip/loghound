@@ -222,7 +222,7 @@ async function drive(panel) {
 
     const polling = window.setInterval(async function () {
         const status = await jobRequest(id, 'status');
-        if (status && !status.error) {
+        if (isJobStatus(status)) {
             paint(panel, status);
         }
     }, 1000);
@@ -231,7 +231,7 @@ async function drive(panel) {
     while (guard < 60) {
         guard += 1;
         const status = await jobRequest(id, 'run');
-        if (!status || status.error) {
+        if (!isJobStatus(status)) {
             break;
         }
         paint(panel, status);
@@ -243,6 +243,28 @@ async function drive(panel) {
     }
 
     window.clearInterval(polling);
+}
+
+/**
+ * Is this payload a job reporting on itself?
+ *
+ * The distinction this draws is the one the loop above used to get wrong. `jobRequest`
+ * returns null when the REQUEST failed, and a status payload otherwise — and a status
+ * payload always carries an `error` key, holding the job's own message and empty when there
+ * is nothing wrong. Treating a populated `error` as a failed request meant that the moment a
+ * job actually failed, the runner broke out without painting the failure and without
+ * reloading, so the installer sat on the last frame it had drawn — reporting step 1 of 8
+ * while the work behind it had already stopped. A failed job is something to SHOW, not a
+ * reason to stop looking.
+ *
+ * A payload with no `state` is a refusal from the endpoint itself — a stale CSRF token, an
+ * unknown id — and there is nothing to paint.
+ *
+ * @param {Object|null} status
+ * @returns {boolean}
+ */
+function isJobStatus(status) {
+    return !!status && typeof status.state === 'string' && status.state !== '';
 }
 
 /**
