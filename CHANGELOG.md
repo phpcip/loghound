@@ -127,7 +127,9 @@ First public release.
 
 **Enrichment**
 
-- Geolocation (ezcmd), ASN and network type (Team Cymru), RIR netname (whois), reverse DNS
+- Geolocation (the Opensolr platform, with the country and a single-zone country's timezone
+  derived from the Team Cymru lookup that already runs), ASN and network type (Team Cymru),
+  RIR netname (whois), reverse DNS
   with forward confirmation, and local User-Agent parsing. Each is individually switchable;
   with all four off and your own Solr, nothing leaves the machine.
 - Every lookup is cached in SQLite, **including negative results** (geo/ASN/whois ≥ 30 days,

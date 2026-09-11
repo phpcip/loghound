@@ -41,6 +41,7 @@ use Loghound\Panel\Query;
 use Loghound\Panel\Sessions;
 use Loghound\Panel\Settings;
 use Loghound\Security;
+use Loghound\Setup\Steps;
 use Loghound\Solr;
 
 /**
@@ -760,6 +761,65 @@ return [
             !str_contains($html, 'name="action" value="auth_mode"'),
             'a form that could only ever be refused must not be shown'
         );
+    },
+
+    /**
+     * Settings is where the two privacy settings are decided, now that setup does not ask.
+     *
+     * The salt is the part that has to hold: hash mode is the only mode that reads
+     * `privacy.ip_salt`, and a configuration that never had one — written by hand, or with its
+     * secrets shredded — must still be able to select that mode without ending up with a mode
+     * whose secret does not exist.
+     */
+    'privacy is set in Settings, and hash mode mints a salt when there is none' => function (): void {
+        $root = lh_tmpdir('lhpriv');
+        $cfg = Config::load($root . '/loghound.php');
+        $cfg->set('privacy.ip_salt', '');
+
+        $captured = [];
+        $view = new Settings($cfg, lh_panel_gateway($captured));
+
+        $saved = $_POST;
+        try {
+            $_POST = ['action' => 'privacy', 'ip_mode' => 'telepathy', 'retention_days' => '30'];
+            lh_same('?v=settings&err=bad_ip_mode', $view->post(), 'an invented mode is refused');
+            lh_same('full', $cfg->get('privacy.ip_mode'), 'and nothing is written');
+
+            $_POST = ['action' => 'privacy', 'ip_mode' => 'hash', 'retention_days' => '30'];
+            lh_same('?v=settings&ok=privacy_saved', $view->post(), 'a real mode is accepted');
+            lh_same('hash', $cfg->get('privacy.ip_mode'), 'and stored');
+            lh_same(30, $cfg->get('privacy.retention_days'), 'with the retention window');
+            lh_true(
+                strlen((string) $cfg->get('privacy.ip_salt')) >= 16,
+                'hash mode must never be selectable without the salt it reads'
+            );
+        } finally {
+            $_POST = $saved;
+            lh_rmtree($root);
+        }
+    },
+
+    'the privacy card offers both settings and says setup no longer asks' => function (): void {
+        $cfg = lh_panel_config();
+
+        $saved = $_GET;
+        $captured = [];
+        try {
+            $_GET = [];
+            ob_start();
+            (new Settings($cfg, lh_panel_gateway($captured)))->body();
+            $html = (string) ob_get_clean();
+        } finally {
+            $_GET = $saved;
+        }
+
+        lh_contains($html, 'name="action" value="privacy"', 'the card must post the privacy action');
+        lh_contains($html, 'Setup does not ask about these', 'and say where the question went');
+        foreach (Steps::ipModes() as $mode) {
+            lh_contains($html, 'name="ip_mode" value="' . $mode . '"', 'the ' . $mode . ' choice must be offered');
+        }
+        lh_contains($html, 'name="retention_days"', 'and the retention window must be changeable');
+        lh_contains($html, 'value="full" checked', 'the mode in force must be the one preselected');
     },
 
     'a bad sign-in mode is refused and a good one is stored' => function (): void {

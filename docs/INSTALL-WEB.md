@@ -4,7 +4,7 @@ There are two ways to set Loghound up, and they produce the same result:
 
 | | |
 |---|---|
-| **In a browser** | Point a vhost at `public/`, open the URL, follow four screens. This document. |
+| **In a browser** | Point a vhost at `public/`, open the URL, follow three screens. This document. |
 | **In a shell** | `bin/loghound-setup` over SSH. See [INSTALL.md](INSTALL.md). |
 
 Neither is a lesser version of the other. Both call the same code in `src/Setup/` to decide
@@ -97,11 +97,15 @@ entered. Guessing is rate limited, and the token file is deleted the moment setu
 
 ---
 
-## The four steps
+## The three steps
 
 Each one writes its answers straight into `config/loghound.php` as you go. There is no
 hidden wizard state: reload, change browser, or switch to the shell wizard, and you pick up
 exactly where you were.
+
+Setup does not ask how visitor IP addresses are stored or how long hits are kept. A new
+installation keeps the full address and deletes hits after 90 days; both are changed under
+**Settings → Privacy** in the panel.
 
 ### 1. Access logs
 
@@ -195,13 +199,7 @@ the two indexes on your Opensolr account. **Nothing migrates your existing docum
 new indexes start empty, and Loghound backfills only as far as your own log retention reaches.
 Your old cores are untouched; delete them when you no longer want them.
 
-### 3. Privacy
-
-What you keep about your visitors: the full address, the network only, or a daily-rotating
-hash. Each is one plain sentence, and each says what it costs the bot detection as well as
-what it protects. Then a retention window, which a real timer job enforces.
-
-### 4. Sign-in
+### 3. Sign-in
 
 A username and a password of at least ten characters, stored as a hash. Loghound shows
 every visitor, page and address on your site, so it is never served without one.
@@ -314,8 +312,11 @@ and once to read the new token.
 |---|---|
 | Access logs | `sources`, and `allowed_log_roots` when you explicitly agree to widen it |
 | Storage | `solr.mode` (always `opensolr`), `solr.install_id`, `solr.hits_core`, `solr.sessions_core`, `solr.base_url`, `solr.http_user`, `solr.http_pass`, `opensolr.email`, `opensolr.api_key`, `opensolr.region` |
-| Privacy | `privacy.ip_mode`, `privacy.retention_days`, `privacy.ip_salt`, `beacon.secret` |
-| Sign-in | `auth.mode`, `auth.user`, `auth.password_hash`, `base_url` |
+| Sign-in | `auth.mode`, `auth.user`, `auth.password_hash`, `base_url`, and the two generated secrets `beacon.secret` and `privacy.ip_salt` |
+
+`privacy.ip_mode` and `privacy.retention_days` are not written by either installer. They keep
+their defaults — the full address, 90 days — until they are changed under **Settings →
+Privacy**.
 
 `config/loghound.example.php` documents every setting, including the ones neither installer
 asks about.

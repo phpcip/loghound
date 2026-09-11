@@ -1139,7 +1139,11 @@ final class Pipeline
 
         if (class_exists('\\Loghound\\Enrich\\Geo')) {
             try {
-                $this->geo = new \Loghound\Enrich\Geo($enrichCfg, $state);
+                $this->geo = new \Loghound\Enrich\Geo(
+                    $enrichCfg,
+                    $state,
+                    (array) $this->cfg->get('opensolr', [])
+                );
             } catch (\Throwable $e) {
                 logLine('warn', 'Geo enrichment unavailable: ' . $e->getMessage());
             }

@@ -12,8 +12,12 @@
  *      indexes, push the configsets, verify.
  *   3. Generate the beacon HMAC secret and the IP hashing salt with random_bytes().
  *   4. Set up panel authentication (password stored as a password_hash, never plaintext).
- *   5. Choose the privacy mode and the retention window.
- *   6. Write config/loghound.php at mode 0640 through Config::save().
+ *   5. Write config/loghound.php at mode 0640 through Config::save().
+ *
+ * IT DOES NOT ASK HOW TO STORE A VISITOR'S ADDRESS OR HOW LONG TO KEEP HITS. Those two
+ * settings keep the defaults in Config::defaults() — the full address, 90 days — and are
+ * changed on the panel's Settings page. LOGHOUND_IP_MODE and LOGHOUND_RETENTION_DAYS are
+ * still honoured, so an unattended install can set them; there is no prompt behind either.
  *
  * IDEMPOTENT AND RE-RUNNABLE. Every prompt offers the current value as its default, an
  * existing secret is kept unless you ask for a new one, and an index that already exists
@@ -49,8 +53,10 @@
  *   LOGHOUND_OPENSOLR_REGION       Opensolr region
  *   LOGHOUND_RECONFIGURE_STORAGE   yes|no — re-run provisioning on an install that already
  *                                  has both indexes; defaults to no
- *   LOGHOUND_IP_MODE               full|truncate|hash
- *   LOGHOUND_RETENTION_DAYS        integer, 0 = never delete
+ *   LOGHOUND_IP_MODE               full|truncate|hash — no prompt asks this; set it here or
+ *                                  change it in Settings. Default: full
+ *   LOGHOUND_RETENTION_DAYS        integer, 0 = never delete — no prompt asks this either.
+ *                                  Default: 90
  *   LOGHOUND_RESET_PANEL_AUTH      yes|no — replace existing panel credentials
  *   LOGHOUND_PANEL_USER            panel username
  *   LOGHOUND_PANEL_PASSWORD        panel password (never echoed; hashed immediately)
@@ -232,34 +238,10 @@ if (strlen((string) $cfg->get('beacon.secret', '')) >= 32) {
     }
 }
 
-$UI->nl();
-$UI->step(4, 'Privacy');
-
-$UI->info('How should visitor IP addresses be stored?');
-foreach (Steps::ipModes() as $key => $mode) {
-    $UI->raw('  ' . str_pad((string) $key, 10) . $mode['text']);
-    $UI->raw('  ' . str_repeat(' ', 10) . $mode['cost']);
-}
-
-$ipMode = $UI->choice(
-    'IP storage mode',
-    array_keys(Steps::ipModes()),
-    (string) $cfg->get('privacy.ip_mode', 'full'),
-    'LOGHOUND_IP_MODE'
-);
-
-$retention = $UI->ask(
-    'Delete hits older than how many days? (0 = never delete)',
-    (string) (int) $cfg->get('privacy.retention_days', 90),
-    'LOGHOUND_RETENTION_DAYS'
-);
-
-foreach (Steps::applyPrivacy($cfg, $ipMode, $retention) as $problem) {
-    $UI->err($problem);
-}
+applyPrivacyEnvironment($cfg, $UI);
 
 $UI->nl();
-$UI->step(5, 'Panel access');
+$UI->step(4, 'Panel access');
 
 $UI->info('The panel shows every visitor, path and IP on your site. It is never');
 $UI->info('served without authentication — an open analytics dashboard is a breach.');
@@ -288,7 +270,7 @@ foreach (Steps::applyBaseUrl($cfg, $baseUrl) as $problem) {
 }
 
 $UI->nl();
-$UI->step(6, 'Writing the configuration');
+$UI->step(5, 'Writing the configuration');
 
 $errors = $cfg->validate();
 if ($errors !== []) {
@@ -406,6 +388,47 @@ function presentSource(array $d, Ui $UI): void
     }
 
     $UI->rule();
+}
+
+/**
+ * Apply the two privacy settings when, and only when, the environment supplies them.
+ *
+ * There is no prompt here and no step heading: an operator running the wizard by hand is
+ * not asked how to store an address or how long to keep hits, and gets the defaults from
+ * Config::defaults(). LOGHOUND_IP_MODE and LOGHOUND_RETENTION_DAYS stay because an
+ * unattended install from Ansible or CI is the one case where a non-default answer has to
+ * arrive with no human present.
+ *
+ * Either variable works on its own; the one that is not supplied keeps whatever the
+ * configuration already holds, so pre-seeding one does not silently reset the other.
+ *
+ * An unusable value is reported and nothing is stored, rather than being rounded into
+ * something that looked close enough.
+ */
+function applyPrivacyEnvironment(Config $cfg, Ui $UI): void
+{
+    $mode = getenv('LOGHOUND_IP_MODE');
+    $days = getenv('LOGHOUND_RETENTION_DAYS');
+
+    if ($mode === false && $days === false) {
+        return;
+    }
+
+    $problems = Steps::applyPrivacy(
+        $cfg,
+        $mode === false ? (string) $cfg->get('privacy.ip_mode', 'full') : $mode,
+        $days === false ? (int) $cfg->get('privacy.retention_days', 90) : $days
+    );
+
+    foreach ($problems as $problem) {
+        $UI->err($problem);
+    }
+
+    if ($problems === []) {
+        $UI->ok('Privacy settings taken from the environment: addresses stored as '
+            . (string) $cfg->get('privacy.ip_mode') . ', hits deleted after '
+            . (int) $cfg->get('privacy.retention_days') . ' days.');
+    }
 }
 
 /**

@@ -116,9 +116,6 @@ final class View
             case Installer::STEP_STORAGE:
                 $this->stepStorage();
                 break;
-            case Installer::STEP_PRIVACY:
-                $this->stepPrivacy();
-                break;
             case Installer::STEP_ADMIN:
                 $this->stepAdmin();
                 break;
@@ -144,7 +141,6 @@ final class View
             Installer::STEP_STATUS  => ['Set up Loghound', 'Everything this server needs, checked one item at a time. Anything that needs fixing comes with the command that fixes it.'],
             Installer::STEP_SOURCES => ['Choose your access logs', 'Loghound reads your webserver\'s own log files. Check that it has understood the format before anything is indexed.'],
             Installer::STEP_STORAGE => ['Where should the index live?', 'Loghound keeps what it learns in two Solr indexes that it creates and manages for you on your Opensolr account.'],
-            Installer::STEP_PRIVACY => ['What to keep about your visitors', 'You decide what is stored and for how long. This is a real choice, not a formality.'],
             Installer::STEP_ADMIN   => ['Create your sign-in', 'Set the username and password you will use to sign in to Loghound.'],
         ];
 
@@ -166,7 +162,6 @@ final class View
         static $labels = [
             Installer::STEP_SOURCES => 'Access logs',
             Installer::STEP_STORAGE => 'Storage',
-            Installer::STEP_PRIVACY => 'Privacy',
             Installer::STEP_ADMIN   => 'Sign-in',
         ];
 
@@ -249,9 +244,9 @@ final class View
             echo '<p>A configuration file already exists, so nothing you have done is lost. '
                 . 'These are the pieces that are still missing:</p>';
         } else {
-            echo '<p>Nothing has been configured yet. This takes four short steps: which log '
-                . 'files to read, where to keep the index, what to store about visitors, and '
-                . 'the password you will sign in with.</p>';
+            echo '<p>Nothing has been configured yet. This takes three short steps: which log '
+                . 'files to read, where to keep the index, and the password you will sign in '
+                . 'with.</p>';
         }
 
         if ($missing !== []) {
@@ -691,7 +686,7 @@ final class View
             echo '<dt>Address</dt><dd class="mono wrap">'
                 . Security::esc((string) $this->cfg->get('solr.base_url')) . '</dd>';
             echo '</dl>';
-            echo '<p><a class="btn primary" href="?setup=' . Security::esc(Installer::STEP_PRIVACY)
+            echo '<p><a class="btn primary" href="?setup=' . Security::esc(Installer::STEP_ADMIN)
                 . '">Continue</a></p>';
             echo '</section>';
 
@@ -786,43 +781,6 @@ final class View
         }
 
         echo '</section>';
-    }
-
-    /**
-     * The privacy step.
-     *
-     * Each mode gets a plain sentence for what it does and a plain sentence for what it
-     * costs, because an operator choosing what to keep about their visitors deserves both
-     * halves of the trade rather than the flattering one.
-     */
-    private function stepPrivacy(): void
-    {
-        $current = (string) $this->cfg->get('privacy.ip_mode', 'full');
-        $days = (int) $this->cfg->get('privacy.retention_days', 90);
-
-        echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_PRIVACY) . '" class="card">';
-        $this->csrf(Installer::STEP_PRIVACY, 'save');
-
-        echo '<h2>Visitor addresses</h2>';
-        echo '<fieldset>';
-        echo '<legend>How should an IP address be stored?</legend>';
-        foreach (Steps::ipModes() as $key => $mode) {
-            echo '<label class="radio"><input type="radio" name="ip_mode" value="' . Security::esc((string) $key) . '"'
-                . ($key === $current ? ' checked' : '') . '>';
-            echo '<span><strong>' . Security::esc($mode['label']) . '</strong><br>'
-                . Security::esc($mode['text'])
-                . '<br><span class="muted">' . Security::esc($mode['cost']) . '</span></span></label>';
-        }
-        echo '</fieldset>';
-
-        echo '<h2>How long to keep it</h2>';
-        echo '<label for="retention_days">Delete hits older than</label>';
-        echo '<input type="number" id="retention_days" name="retention_days" min="0" max="3650" value="'
-            . $days . '"> <span class="muted">days — 0 keeps everything for ever. '
-            . 'A timer job does the deleting; this is not a promise in the documentation.</span>';
-
-        echo '<p><button type="submit" class="primary">Save and continue</button></p>';
-        echo '</form>';
     }
 
     /**

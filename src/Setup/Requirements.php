@@ -547,7 +547,7 @@ final class Requirements
             $out[] = ['step' => Installer::STEP_STORAGE, 'text' => 'The index exists but Loghound has no address to reach it on.'];
         }
         if (strlen((string) $this->cfg->get('beacon.secret', '')) < 32) {
-            $out[] = ['step' => Installer::STEP_PRIVACY, 'text' => 'The signing key that stops visitors forging timing data has not been generated yet.'];
+            $out[] = ['step' => Installer::STEP_ADMIN, 'text' => 'The signing key that stops visitors forging timing data has not been generated yet. Finishing setup generates it.'];
         }
         if ((string) $this->cfg->get('auth.password_hash', '') === '') {
             $out[] = ['step' => Installer::STEP_ADMIN, 'text' => 'There is no username and password for signing in to Loghound.'];

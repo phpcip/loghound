@@ -18,7 +18,8 @@
  *
  * The page also owns the settings that change what gets stored about people — IP privacy
  * mode and retention — which are given their own section and plain-language consequences
- * rather than being buried in a list of toggles.
+ * rather than being buried in a list of toggles. Neither installer asks for them, so this
+ * is the only place either one is chosen as well as the only place either is changed.
  *
  * Secrets (Opensolr API key, beacon HMAC secret, IP salt, Solr password) are NEVER echoed
  * back, not even masked in a value attribute. They are reported as present or absent.
@@ -601,11 +602,21 @@ final class Settings extends Controller implements JobHost
         @file_put_contents(self::DETECT_FILE, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     }
 
-    /** Save the privacy section, refusing anything outside the documented values. */
+    /**
+     * Save the privacy section, refusing anything outside the documented values.
+     *
+     * THIS IS THE ONLY PLACE EITHER SETTING IS CHOSEN. Neither installer asks for them, so a
+     * configuration reaching here may never have had an answer beyond Config::defaults().
+     *
+     * Hash mode is the one mode that needs `privacy.ip_salt`, and it is minted here if it is
+     * missing — setup mints one for every installation, but a configuration written by hand,
+     * or one whose salt was shredded, must not be able to select a mode whose secret does not
+     * exist. Steps::ipModes() is the list both this and the wizard validate against.
+     */
     private function savePrivacy(): string
     {
         $mode = is_string($_POST['ip_mode'] ?? null) ? $_POST['ip_mode'] : '';
-        if (!in_array($mode, ['full', 'truncate', 'hash'], true)) {
+        if (!in_array($mode, Steps::ipModes(), true)) {
             return '?v=settings&err=bad_ip_mode';
         }
         $days = Security::clampInt($_POST['retention_days'] ?? null, 0, 3650, 90);
@@ -1428,13 +1439,23 @@ final class Settings extends Controller implements JobHost
         self::cardEnd();
     }
 
-    /** IP privacy mode and retention, with the consequence of each spelled out. */
+    /**
+     * IP privacy mode and retention, with the consequence of each spelled out.
+     *
+     * Setup does not ask about either one, so this card is where both are decided as well as
+     * changed, and it says so — an operator who expected the question during installation has
+     * to be able to find where it went.
+     */
     private function privacySection(): void
     {
         $mode = (string) $this->cfg->get('privacy.ip_mode', 'full');
         $days = (int) $this->cfg->get('privacy.retention_days', 90);
 
         self::cardOpen('set-privacy', '04', 'Privacy');
+
+        echo '<p class="muted">Setup does not ask about these. A new installation keeps the full '
+            . 'address and deletes hits after 90 days; this card is where both are changed.</p>';
+
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="privacy">';

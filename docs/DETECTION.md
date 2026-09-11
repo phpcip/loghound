@@ -109,7 +109,7 @@ Weights are overridable in `scoring.weights`.
 | `ua_secch_mismatch` | **75** | `Sec-CH-UA` is absent from, or contradicts, a Chrome UA claim | Chrome always sends `Sec-CH-UA` on a secure origin. A "Chrome 152" that does not, or that says something else, has been dressed up. Requires the header to be logged. |
 | `platform_mismatch` | **70** | `Sec-CH-UA-Platform` contradicts the OS the UA claims | "Windows NT 10.0" in the UA and `"Linux"` in the client hint is a headless container in a Windows costume. |
 | `hosting_asn_browser_ua` | **45** | `as_type_s = hosting` with a consumer-browser UA | People do browse from VPSes, so this is not decisive. But a consumer browser arriving from AWS, Hetzner or DigitalOcean is unusual enough to be worth 45 points stacked with anything else. |
-| `tz_mismatch` | **35** | The browser's `Intl` timezone disagrees with the timezone derived from the IP's geolocation | Travellers, VPN users and anyone with a deliberately-set timezone trip this legitimately, so it is low. It is a *stacking* signal: meaningless alone, meaningful next to a fingerprint cluster. |
+| `tz_mismatch` | **35** | The browser's `Intl` timezone disagrees with the timezone derived from the IP's geolocation | Travellers, VPN users and anyone with a deliberately-set timezone trip this legitimately, so it is low. It is a *stacking* signal: meaningless alone, meaningful next to a fingerprint cluster. Needs `tz_s`, which needs `enrich.geo_enabled`. |
 
 ### Behavioural plane
 
@@ -440,6 +440,18 @@ the score.
 **Traveller and VPN timezones.** `tz_mismatch` fires on anyone whose browser timezone does
 not match their exit IP, which describes every VPN user and everybody on a plane. It is
 weighted 35 because it is nearly useless alone.
+
+**Where the IP-derived timezone comes from, and when it is absent.** `tz_s` is whatever the
+geolocation service named, and otherwise it is derived from the country — but only where the
+country has exactly one IANA timezone, which is 216 of the 247 territories PHP's timezone
+database covers. For the other 31 — the United States, Russia, Canada, Australia, Brazil,
+Mexico, Indonesia, Kazakhstan, China, Germany and the rest — `tz_s` is **absent** unless the
+service supplied a zone, and this rule then cannot fire at all. That is deliberate.
+`tz_match_b` compares zone identifiers as exact strings, so picking the most populous zone for
+a multi-zone country would report a mismatch for everybody outside it — a false positive on a
+weight-35 rule, manufactured by us, on traffic that did nothing wrong. A rule that stays quiet
+is better than one that is confidently wrong, and the derivation covers most of the world for
+free either way.
 
 **Prefetch and preconnect.** Browsers and browser extensions speculatively fetch pages the
 user never visits. Those look like single-page, no-asset, no-interaction sessions.

@@ -231,12 +231,40 @@ return [
     // =====================================================================
 
     'enrich' => [
+        /**
+         * Geolocation: country_s, region_s, city_s, geo_p and tz_s.
+         *
+         * Off means NONE of those five fields appears on any document, and the panel's map
+         * and country facets are empty. It also costs you `tz_mismatch`, one of the
+         * seventeen scoring rules — see docs/DETECTION.md.
+         *
+         * There are two sources behind these fields and they need nothing from you:
+         *
+         *   - The Opensolr platform's geolocation endpoint, authenticated with the
+         *     opensolr.email / opensolr.api_key pair already set above. City level.
+         *   - Team Cymru's country column, which comes back with the ASN lookup that is
+         *     already being made. Country level, free, and it keeps working when the
+         *     endpoint above is unreachable. It needs asn_enabled below, because it is
+         *     that query which carries it.
+         *
+         * tz_s is taken from whichever of those reported the country, and is derived from
+         * the country itself for the 216 territories that have exactly one IANA timezone.
+         * Multi-zone countries — the US, Russia, Canada, Australia, Brazil, Germany and 25
+         * others — get no tz_s unless the endpoint supplied one, because guessing a zone
+         * would make tz_mismatch fire on people who did nothing wrong.
+         */
         'geo_enabled'  => true,
-        'geo_endpoint' => 'https://ezcmd.com/apps/api_ezip_locator/lookup/%s/1/%s',
-        'geo_key'      => '',
+
+        /**
+         * Leave EMPTY unless you are pointed at a staging platform with a geolocation
+         * endpoint at a different address. Empty derives the URL from opensolr.api_base,
+         * so a staging control plane is followed automatically. https only.
+         */
+        'geo_endpoint' => '',
+
         'geo_ttl_days' => 30,
 
-        'asn_enabled'  => true,   // Team Cymru: ASN, AS org, network type
+        'asn_enabled'  => true,   // Team Cymru: ASN, AS org, network type, country
         'asn_ttl_days' => 30,
 
         'whois_enabled'  => true, // RIR whois: netname — catches leased ranges

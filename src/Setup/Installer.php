@@ -52,11 +52,20 @@ final class Installer
     public const STEP_STATUS  = 'status';
     public const STEP_SOURCES = 'sources';
     public const STEP_STORAGE = 'storage';
-    public const STEP_PRIVACY = 'privacy';
     public const STEP_ADMIN   = 'admin';
 
-    /** The ordered wizard, after the status page. */
-    public const ORDER = [self::STEP_SOURCES, self::STEP_STORAGE, self::STEP_PRIVACY, self::STEP_ADMIN];
+    /**
+     * The ordered wizard, after the status page.
+     *
+     * THERE IS NO PRIVACY STEP. It asked how to store a visitor's address and how long to
+     * keep hits, before the operator had seen a single screen of the product, about data
+     * their own access log already holds. `privacy.ip_mode` and `privacy.retention_days`
+     * keep their defaults from Config::defaults() and are changed in Settings.
+     *
+     * `?setup=privacy` is consequently not a route. requestedRoute() allowlists this array,
+     * so the retired name falls back to the status page like any other unrecognised value.
+     */
+    public const ORDER = [self::STEP_SOURCES, self::STEP_STORAGE, self::STEP_ADMIN];
 
     private Config $cfg;
 
@@ -239,9 +248,6 @@ final class Installer
                 break;
             case self::STEP_STORAGE . ':test':
                 $this->startJob(Job::KIND_SOLRTEST, []);
-                break;
-            case self::STEP_PRIVACY . ':save':
-                $this->doPrivacy();
                 break;
             case self::STEP_ADMIN . ':finish':
                 $this->doFinish();
@@ -488,29 +494,6 @@ final class Installer
         }
 
         $this->startJob(Job::KIND_OPENSOLR, ['region' => $region]);
-    }
-
-    /**
-     * Store the privacy answers and generate the secrets that depend on them.
-     *
-     * @return never
-     */
-    private function doPrivacy(): void
-    {
-        $errors = Steps::applyPrivacy(
-            $this->cfg,
-            is_string($_POST['ip_mode'] ?? null) ? $_POST['ip_mode'] : '',
-            $_POST['retention_days'] ?? 90
-        );
-
-        if ($errors !== []) {
-            $this->flash('error', implode(' ', $errors));
-            $this->redirect(self::STEP_PRIVACY);
-        }
-
-        $this->persist(self::STEP_PRIVACY);
-        $this->flash('ok', 'Saved.');
-        $this->redirect(self::STEP_ADMIN);
     }
 
     /**

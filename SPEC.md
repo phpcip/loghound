@@ -129,8 +129,8 @@ loghound/
     LogFormat.php          # LogFormat/log_format string → compiled parser
     LogDetect.php          # discover config files + log files, detect format
     Parser.php             # line → normalized hit array
-    Enrich/Geo.php         # ezcmd ip-to-location, cached
-    Enrich/Asn.php         # ASN + netblock org via Team Cymru + RIR whois, cached
+    Enrich/Geo.php         # ip-to-location via Opensolr, Cymru country floor, tz from country
+    Enrich/Asn.php         # ASN + netblock org + country via Team Cymru + RIR whois, cached
     Enrich/Ua.php          # UA → browser/os/device + bot classification
     Sessionizer.php        # hit → session_id, running session state
     Score/Signals.php      # extract individual signals from a hit/session
@@ -207,9 +207,9 @@ the index and nothing uses it.
 | `netname_s` | string | ✓ | ✓ | | RIR netname — catches leased ranges |
 | `rdns_s` | string | ✓ | ✓ | | |
 | `rdns_ok_b` | boolean | ✓ | ✓ | | forward-confirmed rDNS passed |
-| `country_s` `region_s` `city_s` | string | ✓ | ✓ | | ezcmd |
-| `geo_p` | location | ✓ | | | lat,lon |
-| `tz_s` | string | ✓ | ✓ | | IANA tz from geo |
+| `country_s` `region_s` `city_s` | string | ✓ | ✓ | | Opensolr geolocation. `country_s` falls back to Team Cymru's `CC`, which arrives free with the ASN lookup, so the country survives the geolocation endpoint being off or down. May be a registry pseudo-code (`EU`) when that is what the registry says. |
+| `geo_p` | location | ✓ | | | lat,lon. **ABSENT when the service returned only a country-level centroid** (MaxMind's `37.751,-97.822`) with no city, and absent for `0,0` and out-of-range pairs. A false point is worse than no point. |
+| `tz_s` | string | ✓ | ✓ | | IANA tz. From the geolocation service when it names one, otherwise **derived from `country_s`** for the 216 territories that have exactly one IANA zone. Absent for a multi-zone country (US, RU, CA, AU, BR, DE, …) unless the service named a zone — guessing one would make `tz_mismatch` fire on innocent traffic. |
 
 **Request**
 | `method_s` | string | ✓ | ✓ | | |
@@ -302,9 +302,14 @@ Verdict: `bot_score_f` (0–100), `bot_verdict_s`
    truncation (size < offset → restart at 0). Handle `.1`/`.gz` appearing.
 2. **Parse** via the compiled parser for that file's format. A line that fails to parse is
    counted in `parse_errors` and sampled to `var/badlines.log` (capped) — never silently dropped.
-3. **Enrich**: geo (ezcmd, cached in SQLite ≥30d), ASN/netname (Cymru + whois, cached per
-   netblock ≥30d), UA parse, rDNS + forward confirm (cached, ≥7d). All caches are
-   negative-caching too. Enrichment failure never blocks indexing — the field is simply absent.
+3. **Enrich**: geo (Opensolr geolocation endpoint, authenticated with the account's own
+   `opensolr.email` / `api_key`, cached per address in SQLite ≥30d, with Team Cymru's `CC` as
+   the country of last resort and `tz_s` derived from a single-zone country), ASN/netname
+   (Cymru + whois, cached per netblock ≥30d), UA parse, rDNS + forward confirm (cached, ≥7d).
+   All caches are negative-caching too. Enrichment failure never blocks indexing — the field is
+   simply absent, a transport failure is not negative-cached as if it were an answer, and a run
+   of them trips a breaker so a dead endpoint costs a bounded number of timeouts rather than
+   one per address.
 4. **Sessionize**: `client_key = ip_net + ua_hash`. 30-min idle timeout (configurable).
    Open sessions live in SQLite. `session_id = sha1(client_key + first_ts + random)`.
 5. **Index** into `hits` in batches (default 500 docs / 2s, whichever first).
@@ -527,7 +532,9 @@ Views for v1:
    declared crawlers listed separately from evasive ones.
 3. **Fingerprint clusters** — THE view. Table of `fp_hash_s` with `unique(ip_s)`, session count,
    timespan sparkline, expand to member IPs and their ASNs. This is the README hero image.
-4. **Networks** — ASN treemap coloured by `as_type_s`; netname table; geo map from ezcmd.
+4. **Networks** — ASN treemap coloured by `as_type_s`; netname table; geo map from `geo_p`.
+   Country facets are wider than the map, because `country_s` is populated for addresses that
+   have no point at all.
 5. **Session explorer** — searchable (edismax over the catchall), filterable by every facet,
    drill into a single session's hit timeline with the beacon overlay.
 6. **Performance** — p50/p95/p99 latency by path from `dur_us_l`, status heatmap by hour.

@@ -39,6 +39,12 @@ final class Steps
      * turns their honest timing reports into "forged" — which the scorer, correctly,
      * treats as evidence of a bot.
      *
+     * THE ADDRESS SALT IS MINTED HERE FOR EVERY INSTALLATION, whichever front end ran and
+     * whatever `privacy.ip_mode` ends up as. It is only read by hash mode, but minting it
+     * unconditionally is what makes switching to hash mode later a setting change rather
+     * than a setting change that silently needs a secret nobody generated. Settings mints
+     * one too if it ever finds the mode moving to hash without a salt behind it.
+     *
      * @return string[] Names of the secrets that were generated, for the progress line.
      */
     public static function ensureSecrets(Config $cfg): array
@@ -173,51 +179,32 @@ final class Steps
     }
 
     /**
-     * The three IP storage modes, each explained in one plain sentence.
+     * The three ways a visitor's address may be stored.
      *
-     * This is the screen where an operator decides what they are keeping about their
-     * visitors. It has to be legible, not a formality — so the trade-off of each mode is
-     * stated, including what it costs the bot detection, rather than only its benefit.
+     * The list itself, and nothing else. Setup does not ask which one to use — the default
+     * in Config::defaults() stands and the panel's Settings page is where it is changed —
+     * so the prose describing each mode lives on that screen, next to the control that
+     * changes it. This is the one list both that screen and applyPrivacy() validate against.
      *
-     * @return array<string,array{label:string,text:string,cost:string}>
+     * @return string[]
      */
     public static function ipModes(): array
     {
-        return [
-            'full' => [
-                'label' => 'Keep the full address',
-                'text'  => 'The visitor\'s IP address is stored as it is. You already have it in '
-                    . 'your own access log, so this stores nothing you were not keeping already.',
-                'cost'  => 'Strongest detection. Choose another mode if you would rather not hold '
-                    . 'addresses in a second place.',
-            ],
-            'truncate' => [
-                'label' => 'Drop the last part of the address',
-                'text'  => 'Only the network is kept — the first three parts of an IPv4 address, '
-                    . 'the first three groups of an IPv6 one. Individual visitors stop being '
-                    . 'identifiable while network-level analysis still works.',
-                'cost'  => 'Slightly weaker: a proxy fleet whose exits share one network now looks '
-                    . 'like a single address, so the fingerprint-cluster count under-reports.',
-            ],
-            'hash' => [
-                'label' => 'Store an unreadable hash',
-                'text'  => 'The address is replaced by a keyed hash that changes every day. '
-                    . 'Sessions still work within a day; joining a person\'s visits across days '
-                    . 'becomes impossible, including for you.',
-                'cost'  => 'Weakest for forensics: you can no longer look up who an address '
-                    . 'belonged to, or check it against a threat list.',
-            ],
-        ];
+        return ['full', 'truncate', 'hash'];
     }
 
     /**
-     * Store the privacy answers.
+     * Store the privacy settings.
+     *
+     * Neither installer asks for these any more. What still calls this is the shell wizard,
+     * when LOGHOUND_IP_MODE or LOGHOUND_RETENTION_DAYS is supplied by an unattended install,
+     * and the tests that pin what those variables do.
      *
      * @return string[] Problems; empty means stored.
      */
     public static function applyPrivacy(Config $cfg, string $ipMode, $retentionDays): array
     {
-        if (!array_key_exists($ipMode, self::ipModes())) {
+        if (!in_array($ipMode, self::ipModes(), true)) {
             return ['Choose one of the three ways to store visitor addresses.'];
         }
 
@@ -369,7 +356,6 @@ final class Steps
         return [
             Installer::STEP_SOURCES => (array) $cfg->get('sources', []) !== [],
             Installer::STEP_STORAGE => $solrReady,
-            Installer::STEP_PRIVACY => strlen((string) $cfg->get('beacon.secret', '')) >= 32,
             Installer::STEP_ADMIN   => (string) $cfg->get('auth.password_hash', '') !== '',
         ];
     }

@@ -7,7 +7,7 @@
  *   offsets         where the tailer had read up to in each log file
  *   sessions_open   sessions that have not yet been idle long enough to close and score
  *   beacon_staging  beacon payloads the public collector accepted, awaiting merge
- *   cache_geo       ezcmd geolocation results, with negative caching
+ *   cache_geo       geolocation results keyed per address, with negative caching
  *   cache_asn       Team Cymru + RIR whois results, keyed per netblock
  *   cache_rdns      forward-confirmed reverse DNS results
  *   ratelimit       token buckets for the public beacon endpoint

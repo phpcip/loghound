@@ -61,7 +61,9 @@ indexes it; it does not create it.
 
 | Field | Source | Sent upstream |
 |---|---|---|
-| `country_s` `region_s` `city_s` `geo_p` `tz_s` | ezcmd geolocation | **The IP address** |
+| `region_s` `city_s` `geo_p` | Opensolr geolocation | **The IP address** |
+| `country_s` | Opensolr geolocation, or Team Cymru when that is unavailable | **The IP address** |
+| `tz_s` | Opensolr geolocation, or derived locally from `country_s` | **The IP address**, or nothing when it is derived |
 | `asn_i` `as_org_s` `as_type_s` | Team Cymru | **The IP address** |
 | `netname_s` | RIR whois | **The IP address** |
 | `rdns_s` `rdns_ok_b` | Your DNS resolver | **The IP address** |
@@ -70,6 +72,21 @@ indexes it; it does not create it.
 Each is individually switchable in `config/loghound.php` under `enrich`. All results are
 cached in SQLite (geo/ASN/whois ≥ 30 days, rDNS ≥ 7) so a repeat visitor's address is looked
 up once per cache window rather than once per request.
+
+Two of those switches are worth spelling out, because the sources overlap:
+
+- **`geo_enabled = false` removes all five geographic fields**, the map, the country facets
+  and the `tz_mismatch` rule. Nothing geographic is derived, recorded or sent, including the
+  country that would otherwise have cost no request at all.
+- **`asn_enabled = false` also removes the country fallback and the timezone derived from
+  it**, because both come out of the Team Cymru answer. With ASN off and the Opensolr
+  geolocation endpoint unreachable, there is no country.
+
+`tz_s` is the one enriched field that is often produced **without sending anything anywhere**:
+when the country is known and that country has exactly one IANA timezone — 216 of the 247
+territories PHP's timezone database covers — the timezone is derived locally from the country
+rather than asked for. Multi-zone countries get no `tz_s` unless the geolocation service
+supplied one.
 
 **Negative results are cached too, but only for one hour** — a fixed value, not the
 configured TTL. A lookup that fails is usually a rate limit or a network problem, and
@@ -151,7 +168,9 @@ setting cookies has broken its promise.
 
 ## The three IP modes
 
-`privacy.ip_mode` in `config/loghound.php`. The setup wizard asks about it prominently.
+`privacy.ip_mode` in `config/loghound.php`. Setup does not ask about any of this. A new
+installation keeps the full address (`privacy.ip_mode: full`) and deletes hits after 90 days
+(`privacy.retention_days: 90`); both are changed under **Settings → Privacy** in the panel.
 
 ### `full` (default)
 
@@ -212,7 +231,7 @@ Everything, in one list:
 
 | Destination | What is sent | Turn it off with |
 |---|---|---|
-| ezcmd geolocation | visitor IP addresses | `enrich.geo_enabled = false` |
+| Opensolr geolocation endpoint | visitor IP addresses, plus your account email and API key so the platform knows whose lookup it is | `enrich.geo_enabled = false` |
 | Team Cymru | visitor IP addresses | `enrich.asn_enabled = false` |
 | RIR whois servers | visitor IP addresses | `enrich.whois_enabled = false` |
 | Your DNS resolver | visitor IP addresses (reverse lookups) | `enrich.rdns_enabled = false` |

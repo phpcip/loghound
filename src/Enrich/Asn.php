@@ -8,7 +8,9 @@
  *  - **Team Cymru's IP-to-ASN whois service** (`whois.cymru.com`, bulk `begin`/`verbose`
  *    mode) gives the ASN, the AS name, the country and — importantly — the BGP prefix the
  *    address falls in. That prefix is the natural cache key: one lookup covers every address
- *    in the announcement.
+ *    in the announcement. The country is exposed by country(): it is the cheapest geography
+ *    in the product, because this query is already being made for the ASN, and `Enrich\Geo`
+ *    uses it as its country of last resort.
  *  - **RIR whois** (ARIN / RIPE / APNIC / LACNIC / AFRINIC, selected from Cymru's registry
  *    field) gives the `netname` and the org that actually holds the range. This is what
  *    catches LEASED ranges: a /24 rented out of a big ISP's allocation to a proxy provider
@@ -45,6 +47,14 @@ final class Asn
     /** Cymru's bulk whois endpoint. Bulk mode is one connection per batch, not per address. */
     private const CYMRU_HOST = 'whois.cymru.com';
     private const CYMRU_PORT = 43;
+
+    /**
+     * Key under which Cymru's country travels inside the cached payload.
+     *
+     * Underscore-prefixed because it is not a `hits` field; documentFields() removes it before
+     * anything can index it, and country() is the only reader.
+     */
+    private const CARRIED_CC = '_cc';
 
     /** Cymru's `registry` column => the RIR whois server that holds the netname. */
     private const RIR_SERVERS = [
@@ -177,6 +187,16 @@ final class Asn
 
     private ?State $state;
 
+    /**
+     * @var callable|null Whois transport override.
+     *                    fn(string $host, int $port, string $query, int $timeout): ?string
+     *
+     * Exists so the test suite can exercise the Cymru and RIR response parsing — including
+     * the country column — against recorded answers rather than against the network, which
+     * SPEC §12 forbids the suite from touching. Null means the real TCP socket below.
+     */
+    private $whois;
+
     /** @var array<string,array> In-process memo keyed by netblock / address. */
     private array $memoAsn = [];
     private array $memoRdns = [];
@@ -187,25 +207,72 @@ final class Asn
     /**
      * @param array<string,mixed> $enrichCfg Config::get('enrich')
      * @param State|null          $state     Cache backing store.
+     * @param callable|null       $whois     Whois transport override; see $whois.
      */
-    public function __construct(array $enrichCfg, ?State $state = null)
+    public function __construct(array $enrichCfg, ?State $state = null, ?callable $whois = null)
     {
         $this->cfg   = $enrichCfg;
         $this->state = $state;
+        $this->whois = $whois;
     }
 
     /**
      * Look up ASN, AS org, network type and RIR netname for an address.
+     *
+     * @return array<string,mixed> `asn_i`, `as_org_s`, `as_type_s`, `netname_s`. Empty on
+     *                             failure; individual keys absent when unknown. Never
+     *                             contains a carried key — see documentFields().
+     */
+    public function lookup(string $ip): array
+    {
+        return self::documentFields($this->cached($ip));
+    }
+
+    /**
+     * The country Team Cymru reports for the prefix this address is announced in.
+     *
+     * This is the `CC` column of the bulk whois answer, which the parser has always read and
+     * the enrichment output has always thrown away. It costs NOTHING to use: the query is
+     * already being made for the ASN, so there is no extra credential, no extra dependency
+     * and no extra outbound request. `Enrich\Geo` uses it as its country of last resort, which
+     * is what keeps country-level geography — and, through it, `tz_s` and the `tz_mismatch`
+     * rule — working when the upstream geolocation lookup is unconfigured, disabled or down.
+     *
+     * It is the country of the ALLOCATION, not of the host: a German prefix leased by a US
+     * company can be registered as US. Geo therefore treats it as the weaker of its two
+     * sources and lets the geolocation service override it. See Geo::compose().
+     *
+     * Cymru also uses registry pseudo-codes for supranational allocations (`EU`, `AP`). Those
+     * are passed through as-is, because they are what the registry says; they simply have no
+     * single timezone, so no `tz_s` is derived from them.
+     *
+     * An entry cached by a build that predates this method has no country in it and answers
+     * null until its TTL expires. That is a cold-start cost measured in days, not a bug.
+     *
+     * @return string|null Uppercase ISO-3166-1 alpha-2, or a registry pseudo-code, or null.
+     */
+    public function country(string $ip): ?string
+    {
+        $cc = $this->cached($ip)[self::CARRIED_CC] ?? null;
+        if (!is_string($cc) || !preg_match('/^[A-Z]{2}$/', $cc)) {
+            return null;
+        }
+        return $cc;
+    }
+
+    /**
+     * The cached Cymru/RIR payload for an address, including carried non-document keys.
      *
      * Cached per NETBLOCK rather than per address (SPEC §5.3 "cached per netblock"): the key
      * is the /24 for IPv4 and the /48 for IPv6. A /24 that straddles two autonomous systems
      * is rare enough that the cost — one mislabelled ASN on a handful of hits — is far below
      * the cost of doing a whois round trip for every distinct address on a scanned server.
      *
-     * @return array<string,mixed> `asn_i`, `as_org_s`, `as_type_s`, `netname_s`. Empty on
-     *                             failure; individual keys absent when unknown.
+     * lookup() and country() both read through here, so asking for both costs one lookup.
+     *
+     * @return array<string,mixed>
      */
-    public function lookup(string $ip): array
+    private function cached(string $ip): array
     {
         if (empty($this->cfg['asn_enabled'])) {
             return [];
@@ -241,11 +308,39 @@ final class Asn
     }
 
     /**
+     * Strip the carried keys, leaving only fields the `hits` schema defines.
+     *
+     * The payload holds one value that is NOT a document field: Cymru's country, which
+     * `Enrich\Geo` consumes and which the schema has no `_cc` field for. It travels inside the
+     * cached payload rather than in a second cache entry so that one whois answer serves both
+     * readers, and it is removed here so that no caller of lookup() can accidentally index it.
+     * The underscore prefix matches the convention bin/loghound-tail already uses for
+     * pipeline-internal keys.
+     *
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    private static function documentFields(array $payload): array
+    {
+        $out = [];
+        foreach ($payload as $k => $v) {
+            if (!is_string($k) || $k === '' || $k[0] !== '_') {
+                $out[$k] = $v;
+            }
+        }
+        return $out;
+    }
+
+    /**
      * The uncached half of lookup(): Cymru, then optionally the RIR, then classify.
      *
      * The RIR lookup is a second network round trip. It is what finds leased ranges, but it is
      * also the slowest part, which is why it is separately switchable. Its org name is
      * preferred only when Cymru gave us nothing.
+     *
+     * Cymru's country is carried out under CARRIED_CC for Geo to read. It is validated to the
+     * two-letter shape here rather than at the point of use, so that a malformed whois line
+     * cannot put anything else into the cache.
      *
      * @return array<string,mixed>
      */
@@ -259,6 +354,9 @@ final class Asn
         $out = [];
         if ($cymru['asn'] > 0) {
             $out['asn_i'] = $cymru['asn'];
+        }
+        if (preg_match('/^[A-Za-z]{2}$/', $cymru['cc'])) {
+            $out[self::CARRIED_CC] = strtoupper($cymru['cc']);
         }
         if ($cymru['as_name'] !== '') {
             $out['as_org_s'] = self::clean($cymru['as_name'], 255);
@@ -411,10 +509,19 @@ final class Asn
      * The connect is @-suppressed: an unreachable whois server is an ordinary, expected
      * condition here, not something worth emitting a PHP warning into the daemon's log for. A
      * whois answer is a few kilobytes, so the 256 KB cap means something is wrong.
+     *
+     * An injected transport replaces the socket entirely, which is how the suite pins the
+     * response parsing without making a request. It is held to the same contract: a string or
+     * null, never an empty string standing in for a failure.
      */
     private function whoisQuery(string $host, int $port, string $query): ?string
     {
         $timeout = max(1, (int) ($this->cfg['lookup_timeout'] ?? 3));
+
+        if ($this->whois !== null) {
+            $body = ($this->whois)($host, $port, $query, $timeout);
+            return is_string($body) && $body !== '' ? $body : null;
+        }
 
         $errno  = 0;
         $errstr = '';

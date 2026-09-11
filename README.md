@@ -155,7 +155,7 @@ and finish over SSH.
 
 | | |
 |---|---|
-| **In a browser** — the normal path | Open the site and you land on the installer: a system check with the exact command for anything that is not passing, then four screens — access logs, storage, privacy, sign-in. **[docs/INSTALL-WEB.md](docs/INSTALL-WEB.md)** |
+| **In a browser** — the normal path | Open the site and you land on the installer: a system check with the exact command for anything that is not passing, then three screens — access logs, storage, sign-in. **[docs/INSTALL-WEB.md](docs/INSTALL-WEB.md)** |
 | **In a shell** | `bin/loghound-setup` over SSH. This is what `install/install.sh` hands over to, and what unattended installs use. **[docs/INSTALL.md](docs/INSTALL.md)** |
 
 `install.sh` hands over to the shell wizard by default; **`--skip-setup`** stops once the
@@ -325,7 +325,7 @@ beacon is independent of whatever other analytics you run.
 
 | | |
 |---|---|
-| [docs/INSTALL-WEB.md](docs/INSTALL-WEB.md) | Setting up from a browser: the system check, the setup token, the four screens, how the long operations run as jobs, and what each screen writes into the configuration |
+| [docs/INSTALL-WEB.md](docs/INSTALL-WEB.md) | Setting up from a browser: the system check, the setup token, the three screens, how the long operations run as jobs, and what each screen writes into the configuration |
 | [docs/INSTALL.md](docs/INSTALL.md) | Installation and the shell wizard: what `install.sh` does, the permission model, the recommended `LogFormat`, exactly which signals each extra header buys you, Solr and Opensolr setup, upgrading, troubleshooting |
 | [docs/DETECTION.md](docs/DETECTION.md) | The three planes, every rule with its weight and rationale, a worked example on real captured traffic, and a frank section on evasion and false positives |
 | [docs/BEACON.md](docs/BEACON.md) | The beacon: the three clocks, every field it sends, every signal code, the wire protocol, and what it cannot detect |

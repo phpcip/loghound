@@ -89,9 +89,9 @@ remains, routing anything unrecognised into a type that indexes and stores nothi
 | `netname_s` | string | ✓ | ✓ | | RIR netname. Catches leased ranges that share an ASN with legitimate traffic — a residential-proxy operator renting space inside a consumer ISP shows up here and nowhere else. | ~2 B. |
 | `rdns_s` | string | ✓ | ✓ | | PTR record. | ~3 B. |
 | `rdns_ok_b` | boolean | ✓ | ✓ | | Forward-confirmed rDNS passed. The only honest way to verify a Googlebot claim; `rdns_claim_failed` (weight 95) depends on it. | ~1 B. |
-| `country_s` `region_s` `city_s` | string | ✓ | ✓ | | Geo, from ezcmd. | ~1 / ~2 / ~2 B. |
-| `geo_p` | location | ✓ | | | lat,lon. Answers bounding-box and heatmap facets. | BKD points only. **Cannot be retrieved or sorted by distance as shipped** — see §5. |
-| `tz_s` | string | ✓ | ✓ | | IANA timezone from geo, compared against the browser's own `Intl` timezone by `tz_mismatch`. | ~1 B. |
+| `country_s` `region_s` `city_s` | string | ✓ | ✓ | | Geo, from the Opensolr geolocation endpoint. `country_s` falls back to the country Team Cymru returns with the ASN, so it is populated far more often than the other two — including with the geolocation endpoint disabled or down. | ~1 / ~2 / ~2 B. |
+| `geo_p` | location | ✓ | | | lat,lon. Answers bounding-box and heatmap facets. **Absent when the service returned only a country-level centroid** (`37.751,-97.822`) with no city, and for `0,0` — so the map is sparser than the country facet, deliberately. | BKD points only. **Cannot be retrieved or sorted by distance as shipped** — see §5. |
+| `tz_s` | string | ✓ | ✓ | | IANA timezone, compared against the browser's own `Intl` timezone by `tz_mismatch`. From the service when it names one, otherwise derived from `country_s` for the 216 territories with exactly one IANA zone. Absent for a multi-zone country. | ~1 B. |
 
 ### Request
 

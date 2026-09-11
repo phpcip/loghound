@@ -63,7 +63,7 @@ do it:
 
 | | |
 |---|---|
-| **In a browser** | Point a vhost at `public/`, open the URL, follow four screens. This is the path most people take, and it has its own document: **[INSTALL-WEB.md](INSTALL-WEB.md)**. |
+| **In a browser** | Point a vhost at `public/`, open the URL, follow three screens. This is the path most people take, and it has its own document: **[INSTALL-WEB.md](INSTALL-WEB.md)**. |
 | **In a shell** | `bin/loghound-setup` over SSH. This is what `install/install.sh` hands over to, and what unattended installs drive from `LOGHOUND_*` environment variables. This document. |
 
 `install/install.sh` hands over to the shell wizard by default. Pass **`--skip-setup`** to
@@ -496,8 +496,10 @@ deployed to, the crontab held:
 Ten days. Everything older simply does not exist.
 
 **So if you care about long-range history, keep it in Loghound, not in your web server.**
-Set `privacy.retention_days` (the setup wizard asks; default 90) to the window you
-actually want, and let `loghound-retention` enforce it. A Solr document is roughly an
+Set `privacy.retention_days` to the window you actually want, and let `loghound-retention`
+enforce it. Setup does not ask: the default is 90 days, and it is changed under **Settings →
+Privacy** in the panel, alongside how visitor IP addresses are stored (the default keeps the
+full address). A Solr document is roughly an
 order of magnitude smaller than the raw log line it came from once `keep_raw` is off, and
 it is indexed, which the raw log is not.
 
@@ -719,6 +721,11 @@ sudo LOGHOUND_HOSTNAME=loghound.example.com \
 
 The full list of `LOGHOUND_*` variables is in the header comment of `bin/loghound-setup`.
 The API key is never echoed to the terminal and never written to the install log.
+
+`LOGHOUND_IP_MODE` and `LOGHOUND_RETENTION_DAYS` are overrides with no prompt behind them —
+the wizard does not ask about either, interactively or otherwise. Leave them out and the
+defaults stand: the full address, 90 days, changed afterwards under **Settings → Privacy**.
+Either works on its own; the one you do not set keeps whatever the configuration already holds.
 
 There is **no variable that supplies a Solr address, HTTP credentials or a core name**. The
 connection details come back from Opensolr and the two index names are generated, so an
