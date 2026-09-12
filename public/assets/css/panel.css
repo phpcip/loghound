@@ -2424,6 +2424,59 @@ tr.lf-pick a:hover { background: none; color: var(--accent-ink); text-decoration
     .bopt-meta dd { margin-bottom: 6px; }
 }
 
+/* The detection ruleset, as cards rather than a table.
+
+   Three of its five columns are a paragraph of prose each, so as a table every row was five
+   narrow shafts of wrapped text and the reader compared nothing. A rule is a unit that is READ,
+   not a row that is scanned down a column, so it is drawn as one. */
+
+.rulebook {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+}
+
+.rulecard {
+    padding: 14px 16px;
+    background: var(--page);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius);
+}
+
+.rulecard-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 10px;
+    margin-bottom: 6px;
+}
+
+.rulecard-name { font-size: 15px; font-weight: 700; }
+.rulecard-head .chip { margin-left: auto; }
+.rulecard-code { display: block; margin-bottom: 10px; font-size: 13px; }
+
+.rulecard-meta {
+    display: grid;
+    grid-template-columns: fit-content(14ch) minmax(0, 1fr);
+    gap: 6px 14px;
+    margin: 0;
+}
+
+.rulecard-meta dt {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+}
+
+.rulecard-meta dd { margin: 0; line-height: 1.55; }
+
+@media (max-width: 640px) {
+    .rulecard-meta { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .rulecard-meta dd { margin-bottom: 8px; }
+}
+
 table.table-fixed { table-layout: fixed; min-width: var(--table-min, 680px); }
 table.table-fixed td,
 table.table-fixed th { overflow: hidden; text-overflow: ellipsis; }
@@ -3704,6 +3757,20 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     flex: none;
 }
 .pivot-cell:hover .pivot-cell-n { background: none; color: var(--accent-ink); }
+
+/* The share of the row, beside the count it belongs to. Set apart from the count — lighter and
+   a step smaller — so the chip still reads count-first and the percentage is the gloss on it,
+   not a second number competing for the same glance. */
+.pivot-cell-pct {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    color: var(--faint);
+    opacity: 0.85;
+    flex: none;
+}
+.pivot-cell:hover .pivot-cell-pct { color: var(--accent-ink); }
+.pivot-cell-n + .pivot-cell-pct { margin-left: -4px; }
 
 .pivot-cell.is-rest {
     border-color: transparent;

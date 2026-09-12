@@ -964,11 +964,19 @@ export function stackedBars(id, times, series) {
  * decoration, and the panel has to work on an air-gapped box without pulling one. Points
  * are plotted at country centroids on a lon/lat grid, which is enough to answer "where is
  * this coming from" and is honest about its own resolution.
+ *
+ * @param {string} id             Card chart id.
+ * @param {Array<Object>} points  Each may carry `pick`, the value its dialog is about.
+ * @param {Function} [onPick]     Called with (pick, point) when a bubble is pressed. Omit it and
+ *                                the bubbles stay inert, rather than showing a pointer cursor
+ *                                that promises a click doing nothing.
+ * @returns {Object|null} The chart instance, or null when there is nothing to draw into.
  */
-export function geoScatter(id, points) {
+export function geoScatter(id, points, onPick) {
     const mapped = hasWorld();
+    const pickable = typeof onPick === 'function';
 
-    draw(id, (t) => ({
+    const chart = draw(id, (t) => ({
         legend: false,
         grid: mapped ? null : { left: 6, right: 6, top: 10, bottom: 6, containLabel: false },
         tooltip: {
@@ -976,7 +984,8 @@ export function geoScatter(id, points) {
             formatter: (p) => tip`<strong>${p.data.name}</strong><br>` +
                 tip`${num(p.data.sessions)} sessions · ${num(p.data.ips)} IPs<br>` +
                 tip`<span style="color:${t.muted}">${num(p.data.human)} human · ` +
-                tip`${num(p.data.evasive)} evasive</span>`
+                tip`${num(p.data.evasive)} evasive</span>` +
+                (pickable ? tip`<br><span style="color:${t.muted}">Press for every visit from here</span>` : '')
         },
         geo: mapped ? {
             map: WORLD,
@@ -1007,15 +1016,33 @@ export function geoScatter(id, points) {
             type: 'scatter',
             coordinateSystem: mapped ? 'geo' : undefined,
             symbolSize: (v, p) => p.data.size,
+            cursor: pickable ? 'pointer' : 'default',
             itemStyle: {
                 color: (p) => (p.data.evasiveRate > 0.5 ? t.pop.evasive : t.accent),
                 opacity: 0.78,
                 borderColor: t.card,
                 borderWidth: 1
             },
+            emphasis: pickable ? { itemStyle: { opacity: 1, borderColor: t.accentInk, borderWidth: 2 } } : undefined,
             data: points
         }]
     }));
+
+    /* THE HANDLER IS BOUND TO THE INSTANCE, NOT REBUILT WITH THE OPTION. A theme flip and a
+       resize both re-run the factory through setOption on this same instance, so a listener
+       bound here survives them; off() first because the caller may draw the same card again
+       with fresh data, and a second listener would open the dialog twice on one press. */
+    if (chart) {
+        chart.off('click');
+        if (pickable) {
+            chart.on('click', (p) => {
+                if (p && p.data && p.data.pick) {
+                    onPick(p.data.pick, p.data);
+                }
+            });
+        }
+    }
+    return chart;
 }
 
 /** The name the world outline is registered under. */

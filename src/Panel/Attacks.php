@@ -1179,29 +1179,26 @@ final class Attacks extends Controller implements Sections
             . 'attempted, only of what was attempted where a log can see it.</p>';
         echo '</div>';
 
-        echo '<div class="table-wrap"><table id="atk-rules-table" class="table-fixed"><colgroup>'
-            . '<col style="width:18%"><col style="width:10%"><col style="width:24%">'
-            . '<col style="width:24%"><col style="width:24%"></colgroup><thead><tr>'
-            . '<th scope="col">Pattern</th>'
-            . '<th scope="col">Family</th>'
-            . '<th scope="col">What it matches</th>'
-            . '<th scope="col">What it misses</th>'
-            . '<th scope="col">What it over-reports</th>'
-            . '</tr></thead><tbody>';
-
         $families = Rules::families();
-        foreach (Rules::RULES as $code => $rule) {
-            echo '<tr>';
-            echo '<td>' . Security::esc($rule['label'])
-                . '<br><code class="mono muted">' . Security::esc($code) . '</code></td>';
-            echo '<td>' . Security::esc($families[$rule['family']] ?? $rule['family']) . '</td>';
-            echo '<td>' . Security::esc($rule['what']) . '</td>';
-            echo '<td>' . Security::esc($rule['misses']) . '</td>';
-            echo '<td>' . Security::esc($rule['over']) . '</td>';
-            echo '</tr>';
-        }
 
-        echo '</tbody></table></div>';
+        echo '<div class="rulebook">';
+        foreach (Rules::RULES as $code => $rule) {
+            echo '<article class="rulecard">';
+            echo '<div class="rulecard-head">';
+            echo '<span class="rulecard-name">' . Security::esc($rule['label']) . '</span>';
+            echo '<span class="chip">'
+                . Security::esc($families[$rule['family']] ?? $rule['family']) . '</span>';
+            echo '</div>';
+            echo '<code class="rulecard-code mono muted">' . Security::esc($code) . '</code>';
+            echo '<dl class="rulecard-meta">';
+            echo '<dt>Matches</dt><dd>' . Security::esc($rule['what']) . '</dd>';
+            echo '<dt>Misses</dt><dd>' . Security::esc($rule['misses']) . '</dd>';
+            echo '<dt>Over-reports</dt><dd>' . Security::esc($rule['over']) . '</dd>';
+            echo '</dl>';
+            echo '</article>';
+        }
+        echo '</div>';
+
         self::cardEnd();
     }
 }

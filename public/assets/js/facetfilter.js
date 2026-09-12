@@ -48,7 +48,7 @@
 
 'use strict';
 
-import { api, el, fill, num } from './core.js';
+import { api, dec, el, fill, num } from './core.js';
 import { closeDialog, dialogFail, isCurrent, openDialog } from './dialog.js';
 import { dimValue } from './identity.js';
 import { isPathField, urlMark } from './url.js';
@@ -147,7 +147,12 @@ export function readSelection(ns) {
     const prefix = ns || NS;
     const params = new URLSearchParams(window.location.search);
     const out = new Map();
-    const values = new RegExp('^' + prefix + '\\[([A-Za-z0-9_]{1,64})\\]\\[\\]$');
+    /* BOTH SPELLINGS OF THE SAME KEY. A link this file builds says `f[field][]`, but a link the
+       SERVER builds goes through http_build_query(), which numbers its arrays — `f[field][0]`.
+       Reading only the first meant that after following a server-built filter link the selection
+       parsed as empty, so toggling the value already in force ADDED it again and produced the
+       identical URL: the value could be switched on from the sidebar and never off. */
+    const values = new RegExp('^' + prefix + '\\[([A-Za-z0-9_]{1,64})\\]\\[[0-9]*\\]$');
 
     for (const key of Array.from(params.keys())) {
         const match = values.exec(key);
@@ -1239,6 +1244,29 @@ function onCancel(event) {
  * @param {string} id   Card base id, e.g. 'ov-pivot'.
  * @param {Object} data The `pivot` payload, or null when this view has none.
  */
+/**
+ * A cell's share of its own row, written so a real count never reads as nothing.
+ *
+ * WHY NOT core.js's pct(). Rounding to a fixed place turns 1 session in 1,445 into "0%", and a
+ * row that exists is never zero per cent of anything — that is the same "unknown becomes zero"
+ * mistake the rest of the panel refuses to make, in a percentage. So the precision follows the
+ * size: whole numbers where they are honest, one place for the small values that would round
+ * away, and an explicit floor below a tenth.
+ *
+ * The denominator is the ROW, not the table. A cross-tab answers "what is this network type
+ * carrying", and the share that answers it is of the row's own sessions.
+ */
+function share(part, total) {
+    if (!total || !part) {
+        return '0%';
+    }
+    const ratio = part / total;
+    if (ratio < 0.001) {
+        return '<0.1%';
+    }
+    return dec(ratio * 100, ratio >= 0.095 ? 0 : 1) + '%';
+}
+
 export function renderPivot(id, data) {
     const table = document.getElementById(id + '-table');
     const body = table ? table.querySelector('tbody') : null;
@@ -1256,16 +1284,18 @@ export function renderPivot(id, data) {
             href: crossUrl(data.outer, row.value, data.inner, cell.value),
             title: 'Show ' + data.outer_label + ' ' + row.label + ' and '
                 + data.inner_label + ' ' + cell.label
+                + ' — ' + share(cell.count, row.count) + ' of this row'
         }, [
             el('span', { class: 'pivot-cell-label', text: cell.label }),
-            el('span', { class: 'pivot-cell-n', text: num(cell.count) })
+            el('span', { class: 'pivot-cell-n', text: num(cell.count) }),
+            el('span', { class: 'pivot-cell-pct', text: share(cell.count, row.count) })
         ]));
 
         if (shortfall > 0) {
             cells.push(el('span', {
                 class: 'pivot-cell is-rest',
                 title: 'Outside the ' + num(row.cells.length) + ' values shown for this row',
-                text: num(shortfall) + ' in other values'
+                text: num(shortfall) + ' in other values · ' + share(shortfall, row.count)
             }));
         }
 

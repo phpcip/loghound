@@ -85,7 +85,13 @@ final class Layout
     public const DEFAULT_VIEW = 'overview';
 
     /**
-     * The navigation, in the order SPEC §10 lists the views, with each view's own pages.
+     * The navigation, with each view's own pages.
+     *
+     * THE SESSION EXPLORER SITS UNDER LIVE, not down among the analyses. Both answer "show me
+     * the actual traffic" — Live as it is written, the explorer as it can be searched — and a
+     * reader who wants one wants the other next. It used to sit eleventh, after every breakdown,
+     * which put the panel's most-used page behind the ones you visit when you already know what
+     * you are looking for. Everything below it keeps the order SPEC §10 gives.
      *
      * TWO LEVELS, AND THE PARENT IS A LINK. A parent that is only a group would make the view
      * name unpressable — twelve headings you can read and not go to — and a parent that is a
@@ -105,6 +111,7 @@ final class Layout
         $views = [
             ['slug' => 'overview',     'label' => 'Overview',     'hint' => 'Who came, and how long they really stayed'],
             ['slug' => 'live',         'label' => 'Live',         'hint' => 'The access log as it is written'],
+            ['slug' => 'sessions',     'label' => 'Sessions',     'hint' => 'Search and drill into one visit'],
             ['slug' => 'sources',      'label' => 'Where they came from', 'hint' => 'What kind of thing sent each visit, and which site actually did'],
             ['slug' => 'pages',        'label' => 'Pages',        'hint' => 'Where people arrive, where the log last saw them, and what is moving'],
             ['slug' => 'searches',     'label' => 'Site search',   'hint' => 'What visitors typed into your own search box'],
@@ -114,7 +121,6 @@ final class Layout
             ['slug' => 'attacks',      'label' => 'Attacks',      'hint' => 'What was attempted, and what the server answered'],
             ['slug' => 'fingerprints', 'label' => 'Fingerprints', 'hint' => 'One header signature, many IPs'],
             ['slug' => 'networks',     'label' => 'Networks',     'hint' => 'ASN, netname and geography'],
-            ['slug' => 'sessions',     'label' => 'Sessions',     'hint' => 'Search and drill into one visit'],
             ['slug' => 'performance',  'label' => 'Performance',  'hint' => 'Latency percentiles and status codes'],
             ['slug' => 'hosts',        'label' => 'Virtual hosts','hint' => 'Every site on this machine, side by side'],
             ['slug' => 'indexes',      'label' => 'Solr',         'hint' => 'What your Opensolr search indexes are being asked'],

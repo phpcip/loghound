@@ -50,8 +50,8 @@ function tiles(b) {
             'Bounce rate',
             rate(m.bounced, m.sessions),
             m.sessions
-                ? num(m.bounced) + ' of ' + num(m.sessions) + ' human visits with a beacon.'
-                : 'No human visit in range reported a beacon.'
+                ? num(m.bounced) + ' of ' + num(m.sessions) + ' human visits that loaded a page and ran a beacon.'
+                : 'No human visit that loaded a page reported a beacon.'
         ),
         tile(
             'Read one page and stayed',
@@ -65,15 +65,18 @@ function tiles(b) {
             'One page, engagement unknown',
             rate(a.single, a.sessions),
             a.sessions
-                ? num(a.single) + ' of ' + num(a.sessions) + ' human visits had no beacon. Not part of the rate '
-                    + 'above.'
-                : 'Every human visit in range reported a beacon.'
+                ? num(a.single) + ' of ' + num(a.sessions) + ' human visits that loaded a page had no beacon. '
+                    + 'Not part of the rate above.'
+                : 'Every human visit that loaded a page reported a beacon.'
         ),
+
+        /* DIVIDED BY THE SESSIONS THAT LOADED A PAGE, not by every session: the tool this
+           imitates counts pageviews, so a session that never loaded one does not exist in it. */
         tile(
             'The conventional definition',
-            rate(b.conventional, b.all),
-            num(b.conventional) + ' of ' + num(b.all) + ' sessions had one pageview, bots included. The figure '
-                + 'another tool would print for this traffic.'
+            rate(b.conventional, b.all_landed),
+            num(b.conventional) + ' of ' + num(b.all_landed) + ' sessions with a pageview had exactly one, bots '
+                + 'included. The figure another tool would print for this traffic.'
         )
     ];
 }
@@ -95,26 +98,44 @@ function coverage(b) {
         return out;
     }
 
+    if (b.landed === 0) {
+        out.push(el('p', { class: 'muted', text:
+            'None of the ' + num(b.people) + ' completed human visits in this range loaded a page, so there is ' +
+            'no bounce rate to state.' }));
+        return out;
+    }
+
     out.push(el('p', { class: 'muted', text:
-        num(m.sessions) + ' of ' + num(b.people) + ' completed human visits (' +
-        pct(m.sessions, b.people, 0) + ') had a beacon and are what the rate is measured on. The other ' +
+        num(m.sessions) + ' of ' + num(b.landed) + ' completed human visits that loaded a page (' +
+        pct(m.sessions, b.landed, 0) + ') had a beacon and are what the rate is measured on. The other ' +
         num(a.sessions) + ' are judged on page count and reported separately.' }));
 
-    const unclassified = (m.unclassified || 0) + (a.unclassified || 0);
-    if (unclassified > 0) {
+    /* THE PAGE-LESS VISITS ARE NAMED, NOT DROPPED QUIETLY. They used to be counted as one-page
+       visits, which is what made the metric wrong; saying how many there were is what stops the
+       correction from looking like sessions going missing. */
+    if (b.nopage > 0) {
         out.push(el('p', { class: 'muted', text:
-            num(unclassified) + ' visit' + (unclassified === 1 ? '' : 's') +
-            ' carried no page count and are excluded from both.' }));
+            num(b.nopage) + ' further human visit' + (b.nopage === 1 ? '' : 's') +
+            ' loaded no page at all — assets, feeds, robots.txt or API endpoints only — so nobody arrived ' +
+            'anywhere to bounce from, and they are outside every figure on this card.' }));
+    }
+
+    if (b.unclassified > 0) {
+        out.push(el('p', { class: 'muted', text:
+            num(b.unclassified) + ' visit' + (b.unclassified === 1 ? '' : 's') +
+            ' carried no page count at all and are excluded from every figure above.' }));
     }
 
     return out;
 }
 
 /**
- * The comparison table: the four outcomes a human visit can have, with their counts.
+ * The comparison table: the outcomes a human visit that loaded a page can have, with their counts.
  *
- * A table rather than four more tiles because these four are a partition — they sum to the
- * population — and a reader checking that they do is the point of printing them.
+ * A table rather than more tiles because these rows are a partition — they sum to the visits that
+ * loaded a page — and a reader checking that they do is the point of printing them. Visits that
+ * loaded no page are not a sixth row here; they are not an outcome of arriving anywhere, and the
+ * coverage sentence above states how many there were.
  */
 function outcomes(b) {
     const m = b.measured;
@@ -129,10 +150,13 @@ function outcomes(b) {
         ['More than one page, no beacon', a.multi, 'Engagement not measured']
     ];
 
+    /* THE SHARE IS OF THE VISITS THAT LOADED A PAGE, which is what the five rows partition. It
+       used to divide by every completed human visit, so the column summed to well under 100%
+       whenever page-less visits were in range and nothing on the card said why. */
     const body = el('tbody', {}, rows.map(([label, count, why]) => el('tr', {}, [
         el('td', { text: label }),
         el('td', { class: 'num', text: num(count) }),
-        el('td', { class: 'num', text: rate(count, b.people) }),
+        el('td', { class: 'num', text: rate(count, b.landed) }),
         el('td', { class: 'muted', text: why })
     ])));
 

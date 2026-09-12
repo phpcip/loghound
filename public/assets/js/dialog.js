@@ -426,6 +426,79 @@ function datasetOf(node) {
 }
 
 /**
+ * Run a registered opener and remember, in one frame, how to get back to it.
+ *
+ * THE FRAME IS PUSHED HERE, NOT IN openDialog(), and that is what makes the drill-down
+ * reversible. This is the one place that knows both halves of a frame at once: what was
+ * pressed, and the exact call that would produce this dialog again. openDialog() is called
+ * twice by every opener — once for the loading state and once with the real heading — so a
+ * push there would count one dialog as two and Close would step back through phantoms.
+ *
+ * A row INSIDE the open dialog lands here exactly like a row on the page, which is the whole
+ * nesting case: the frame beneath it keeps the row it came from, so the chain of openers is
+ * intact rather than overwritten by the innermost one and then orphaned microseconds later
+ * when the body it lives in is replaced.
+ *
+ * A rejected opener must never leave what was pressed looking inert. If the opener got as far
+ * as putting a dialog on screen, the failure is rendered into it; if it threw before that —
+ * which is the case that used to be swallowed entirely, because there was no body to render
+ * into — a dialog is opened for the purpose. The error still reaches the console, because an
+ * operator reporting "clicking does nothing" needs something to paste.
+ *
+ * @param {string} kind        Registered opener name.
+ * @param {Object} data        What the opener is given, in the shape a row's dataset has.
+ * @param {HTMLElement|null} opener  What to hand focus back to when the dialog closes.
+ * @returns {boolean} Whether an opener was registered for this kind.
+ */
+function dispatch(kind, data, opener) {
+    const fn = openers.get(String(kind));
+    if (typeof fn !== 'function') {
+        return false;
+    }
+
+    const run = () => Promise.resolve(fn(data)).catch((err) => {
+        let body = byId('lh-dialog-body');
+        if (!body) {
+            openDialog('That could not be opened', '');
+            body = byId('lh-dialog-body');
+        }
+        if (body) {
+            dialogFail(body, err instanceof Error ? err : new Error('The detail view failed to render.'), run);
+        }
+        console.error('loghound: opening a ' + kind + ' failed', err);
+    });
+
+    if (stack.length >= MAX_DEPTH) {
+        stack.pop();
+    }
+    stack.push({ opener: opener || null, reopen: run });
+    run();
+    return true;
+}
+
+/**
+ * Open a subject from code, for a surface that has no row to press.
+ *
+ * WHY THIS EXISTS. Every dialog in the panel is opened by pressing a DOM node carrying
+ * data-lh-open, and delegation does the rest. A chart is a single canvas: a country bubble on
+ * the map is a painted mark, not an element, so it can carry no attribute and be found by no
+ * closest(). Calling the opener directly would work and would also lose the frame — the
+ * drill-down would be one-way, and Close from a visit inside the dialog would dismiss the whole
+ * stack instead of stepping back to the country. This goes through the same dispatch as a row,
+ * so a mark on a canvas behaves exactly like a row in a table.
+ *
+ * Focus returns to whatever had it when the mark was pressed, which for a chart is the card.
+ *
+ * @param {string} kind Registered opener name, e.g. 'dim'.
+ * @param {Object} data What the opener would have read off a row's dataset.
+ * @returns {boolean} Whether an opener was registered for this kind.
+ */
+export function openSubject(kind, data) {
+    const active = document.activeElement;
+    return dispatch(kind, data || {}, active && active !== document.body ? active : null);
+}
+
+/**
  * Dispatch a click or an Enter/Space on the nearest [data-lh-open] to its opener.
  *
  * A LINK ALWAYS WINS. The filter affordance in a table cell is a real <a href>, so it must
@@ -457,44 +530,11 @@ function onActivate(event) {
     if (!node) {
         return;
     }
-    const fn = openers.get(node.dataset.lhOpen);
-    if (typeof fn !== 'function') {
+    if (!openers.has(node.dataset.lhOpen)) {
         return;
     }
     event.preventDefault();
-
-    /* A rejected opener must never leave the row looking inert. If the opener got as far as
-       putting a dialog on screen, the failure is rendered into it; if it threw before that —
-       which is the case that used to be swallowed entirely, because there was no body to
-       render into — a dialog is opened for the purpose. The error still reaches the console,
-       because an operator reporting "clicking does nothing" needs something to paste. */
-    const run = () => Promise.resolve(fn(datasetOf(node))).catch((err) => {
-        let body = byId('lh-dialog-body');
-        if (!body) {
-            openDialog('That could not be opened', '');
-            body = byId('lh-dialog-body');
-        }
-        if (body) {
-            dialogFail(body, err instanceof Error ? err : new Error('The detail view failed to render.'), run);
-        }
-        console.error('loghound: opening a ' + node.dataset.lhOpen + ' failed', err);
-    });
-
-    /* THE FRAME IS PUSHED HERE, NOT IN openDialog(), and that is what makes the drill-down
-       reversible. This is the one place that knows both halves of a frame at once: the element
-       pressed, and the exact call that would produce this dialog again. openDialog() is called
-       twice by every opener — once for the loading state and once with the real heading — so a
-       push there would count one dialog as two and Close would step back through phantoms.
-
-       A row INSIDE the open dialog lands here exactly like a row on the page, which is the
-       whole nesting case: the frame beneath it keeps the page row it came from, so the chain
-       of openers is intact rather than overwritten by the innermost one and then orphaned
-       microseconds later when the body it lives in is replaced. */
-    if (stack.length >= MAX_DEPTH) {
-        stack.pop();
-    }
-    stack.push({ opener: node, reopen: run });
-    run();
+    dispatch(node.dataset.lhOpen, datasetOf(node), node);
 }
 
 document.addEventListener('click', onActivate);

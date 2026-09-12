@@ -32,6 +32,25 @@
  *     engaged time at all, so rule 3 cannot be applied to it and it falls back to the page count
  *     alone. Those two groups are never blended into one confident percentage: the payload
  *     carries both denominators and the card prints both.
+ *  5. **A visit that loaded no page is not in the metric at all.** Nobody can bounce off a page
+ *     they never arrived at.
+ *
+ * ## Rule 5, and the defect it corrects
+ *
+ * "One page or fewer" used to be the single-page test, so a session that requested only assets, a
+ * feed, robots.txt or an API endpoint — `pages_i` zero, no entry path, nobody on a page at any
+ * point — was counted in the same bucket as somebody who landed on an article and left. On
+ * opensolr.com that was 104 of 224 completed human visits: the row reading "One page, no beacon"
+ * was 46% sessions that loaded no page, and the conventional tile said "had one pageview" about
+ * sessions that had none.
+ *
+ * Both halves of that are this product's own failure mode — a labelled count whose label is not
+ * what it counts — so the page-count buckets are now exact (`pages_i:1`, `pages_i:[2 TO *]`), the
+ * population every rate divides by is the visits that loaded a page, and the visits that loaded
+ * none are counted on their own line rather than folded into the nearest one.
+ *
+ * The rates move when this lands, and they move towards the truth: the denominators shrink to the
+ * visits the metric was ever a statement about.
  *
  * ## The threshold, stated rather than buried
  *
@@ -67,11 +86,22 @@ final class Bounce
      */
     public const ENGAGED_MS = 10000;
 
-    /** Sessions that viewed one page or fewer. */
-    public const SINGLE_PAGE = 'pages_i:[* TO 1]';
+    /**
+     * Sessions that viewed exactly one page.
+     *
+     * EXACTLY, not "one or fewer". See rule 5 in the class docblock: the open-ended form swept
+     * every page-less session into the bucket the card labels "one page".
+     */
+    public const SINGLE_PAGE = 'pages_i:1';
 
     /** Sessions that viewed two pages or more. */
     public const MULTI_PAGE = 'pages_i:[2 TO *]';
+
+    /** Sessions that viewed at least one page — everything the metric is a statement about. */
+    public const LANDED = 'pages_i:[1 TO *]';
+
+    /** Sessions that viewed no page at all: assets, feeds, robots.txt, API endpoints. */
+    public const NO_PAGE = 'pages_i:0';
 
     /**
      * Sessions the beacon reported on.
@@ -101,7 +131,7 @@ final class Bounce
      */
     public static function definition(): string
     {
-        return 'Completed human visits only. A bounce is one page with under '
+        return 'Completed human visits that loaded a page. A bounce is one page with under '
             . (self::ENGAGED_MS / 1000) . ' seconds of engaged time; one page with more is counted '
             . 'separately as a visit that stayed.';
     }
@@ -118,23 +148,31 @@ final class Bounce
      * of showing it is that it covers a different population from the honest one. Presenting it
      * over the same denominator would hide half of what makes it wrong.
      *
+     * It is divided by `bounce_landed` rather than by every session, because the tool it imitates
+     * counts pageviews: a session that never loaded a page does not exist in it at all, and
+     * leaving those in the denominator would quietly flatter the figure we are arguing against.
+     *
      * @return array<string,mixed>
      */
     public static function facets(): array
     {
         return [
             'bounce_people' => ['type' => 'query', 'q' => Query::POP_HUMAN, 'facet' => [
-                'measured' => ['type' => 'query', 'q' => self::BEACONED, 'facet' => [
-                    'single'    => ['type' => 'query', 'q' => self::SINGLE_PAGE],
-                    'bounced'   => ['type' => 'query', 'q' => self::SINGLE_PAGE . ' AND -' . self::ENGAGED],
-                    'satisfied' => ['type' => 'query', 'q' => self::SINGLE_PAGE . ' AND ' . self::ENGAGED],
-                    'multi'     => ['type' => 'query', 'q' => self::MULTI_PAGE],
+                'landed' => ['type' => 'query', 'q' => self::LANDED, 'facet' => [
+                    'measured' => ['type' => 'query', 'q' => self::BEACONED, 'facet' => [
+                        'single'    => ['type' => 'query', 'q' => self::SINGLE_PAGE],
+                        'bounced'   => ['type' => 'query', 'q' => self::SINGLE_PAGE . ' AND -' . self::ENGAGED],
+                        'satisfied' => ['type' => 'query', 'q' => self::SINGLE_PAGE . ' AND ' . self::ENGAGED],
+                        'multi'     => ['type' => 'query', 'q' => self::MULTI_PAGE],
+                    ]],
+                    'assumed' => ['type' => 'query', 'q' => self::NO_BEACON, 'facet' => [
+                        'single' => ['type' => 'query', 'q' => self::SINGLE_PAGE],
+                        'multi'  => ['type' => 'query', 'q' => self::MULTI_PAGE],
+                    ]],
                 ]],
-                'assumed' => ['type' => 'query', 'q' => self::NO_BEACON, 'facet' => [
-                    'single' => ['type' => 'query', 'q' => self::SINGLE_PAGE],
-                    'multi'  => ['type' => 'query', 'q' => self::MULTI_PAGE],
-                ]],
+                'nopage' => ['type' => 'query', 'q' => self::NO_PAGE],
             ]],
+            'bounce_landed'       => ['type' => 'query', 'q' => self::LANDED],
             'bounce_conventional' => ['type' => 'query', 'q' => self::SINGLE_PAGE],
         ];
     }
@@ -168,9 +206,11 @@ final class Bounce
      * this product's standing rule is that a number which does not state what it counts is a lie.
      * The browser divides, and prints both halves.
      *
-     * `unclassified` is the honest remainder. A session whose `pages_i` Solr did not return falls
-     * into neither the single-page nor the multi-page bucket, so it is counted rather than
-     * silently dropped into whichever group would flatter the rate.
+     * THREE POPULATIONS, NAMED SEPARATELY, and the card divides by the right one. `people` is every
+     * completed human visit; `landed` is the subset that loaded at least one page, which is the only
+     * population a bounce rate means anything over; `nopage` is the rest, counted on its own line.
+     * `unclassified` is what is left after those two — a session whose `pages_i` Solr did not return
+     * at all, counted rather than silently dropped into whichever group would flatter the rate.
      *
      * @param array<string,mixed> $facets The facets block from a query that included facets().
      * @return array<string,mixed>
@@ -181,35 +221,35 @@ final class Bounce
         $count = static fn ($n): int => is_array($n) ? (int) ($n['count'] ?? 0) : 0;
 
         $people   = $node($facets, 'bounce_people');
-        $measured = $node($people, 'measured');
-        $assumed  = $node($people, 'assumed');
+        $landed   = $node($people, 'landed');
+        $measured = $node($landed, 'measured');
+        $assumed  = $node($landed, 'assumed');
 
-        $measuredTotal = $count($measured);
-        $assumedTotal  = $count($assumed);
-
-        $measuredSingle = $count($node($measured, 'single'));
-        $measuredMulti  = $count($node($measured, 'multi'));
-        $assumedSingle  = $count($node($assumed, 'single'));
-        $assumedMulti   = $count($node($assumed, 'multi'));
+        $peopleTotal = $count($people);
+        $landedTotal = $count($landed);
+        $noPage      = $count($node($people, 'nopage'));
 
         return [
             'threshold_ms' => self::ENGAGED_MS,
             'definition'   => self::definition(),
-            'people'       => $count($people),
+            'people'       => $peopleTotal,
+            'landed'       => $landedTotal,
+            'nopage'       => $noPage,
+            'unclassified' => max(0, $peopleTotal - $landedTotal - $noPage),
             'all'          => (int) ($facets['count'] ?? 0),
+            'all_landed'   => $count($node($facets, 'bounce_landed')),
             'conventional' => $count($node($facets, 'bounce_conventional')),
             'measured'     => [
-                'sessions'     => $measuredTotal,
-                'bounced'      => $count($node($measured, 'bounced')),
-                'satisfied'    => $count($node($measured, 'satisfied')),
-                'multi'        => $measuredMulti,
-                'unclassified' => max(0, $measuredTotal - $measuredSingle - $measuredMulti),
+                'sessions'  => $count($measured),
+                'bounced'   => $count($node($measured, 'bounced')),
+                'satisfied' => $count($node($measured, 'satisfied')),
+                'single'    => $count($node($measured, 'single')),
+                'multi'     => $count($node($measured, 'multi')),
             ],
             'assumed'      => [
-                'sessions'     => $assumedTotal,
-                'single'       => $assumedSingle,
-                'multi'        => $assumedMulti,
-                'unclassified' => max(0, $assumedTotal - $assumedSingle - $assumedMulti),
+                'sessions' => $count($assumed),
+                'single'   => $count($node($assumed, 'single')),
+                'multi'    => $count($node($assumed, 'multi')),
             ],
         ];
     }

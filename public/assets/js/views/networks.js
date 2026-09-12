@@ -16,6 +16,7 @@ import {
     setPop, tbody
 } from '../core.js';
 import { donut, geoScatter, loadWorld, tokens, treemap } from '../charts.js';
+import { openSubject } from '../dialog.js';
 import { countryName, locate } from '../geo.js';
 import { countryNode, dimRow, dimValue, valueText } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
@@ -244,6 +245,7 @@ async function renderMap(data) {
         }
         points.push({
             name: countryName(row.country) || at.name,
+            pick: row.country,
             value: [at.lon, at.lat],
             sessions: row.sessions,
             ips: row.uniq_ips,
@@ -261,11 +263,20 @@ async function renderMap(data) {
     hideEmpty('net-map-empty');
     cardChart('net-map', 340);
     await loadWorld('');
-    geoScatter('net-map', points);
+
+    /* A BUBBLE OPENS THE COUNTRY. The map was the one place in the panel where the obvious
+       gesture — press the thing you are looking at — did nothing: the same country was one
+       click away in the table below, and nobody reads a map and then goes looking for a row.
+       It opens the dimension dialog every country row opens, so the map is a second way into
+       one dialog rather than a second dialog to maintain. */
+    geoScatter('net-map', points, (country) => {
+        openSubject('dim', { field: 'country_s', value: country });
+    });
 
     setPop('net-map', 'All sessions in range, placed at their country. Bubble area is sessions, and a bubble is ' +
-        'drawn in the accent when more than half of its sessions were scored as evasive automation. Country ' +
-        'resolution only: a session is placed at its country, never at a street.' +
+        'drawn in the accent when more than half of its sessions were scored as evasive automation. Press a ' +
+        'bubble for everyone who came from that country — who they were, what they searched for, and every ' +
+        'visit behind the number. Country resolution only: a session is placed at its country, never at a street.' +
         (unplaced ? ' ' + num(unplaced) + ' sessions had a country value this build cannot place.' : ''));
 }
 
