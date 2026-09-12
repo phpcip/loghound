@@ -1168,6 +1168,12 @@ final class Sessions extends Controller
             'engaged_ms'  => isset($d['engaged_ms_l']) ? (int) $d['engaged_ms_l'] : null,
             'log_span_ms' => isset($d['log_span_ms_l']) ? (int) $d['log_span_ms_l'] : null,
             'bounced'     => self::bouncedOf($d),
+
+            /* WHETHER THE BOUNCE FIGURE WAS MEASURED OR INFERRED, which the reader has to be
+               able to tell apart. With a beacon the number comes from engagement actually
+               recorded in the browser; without one it is the conventional page-count guess,
+               and the cell marks it as such rather than presenting the two as one fact. */
+            'beacon'      => array_key_exists('beacon_b', $d) ? (bool) $d['beacon_b'] : false,
         ];
     }
 

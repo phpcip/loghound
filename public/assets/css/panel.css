@@ -654,6 +654,19 @@ tbody tr.lf-pick:hover td { background: var(--band); color: var(--ink); }
 
 th.num, td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 td.mono, th.mono, table .mono { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+/* A BOUNCE FIGURE NOBODY MEASURED. The padlock says the execution plane never reported on this
+   visit, so the percentage beside it is inferred from the page count — and the panel's tooltip
+   says which of the reasons it was. It replaces a dash, which asked the reader to know that a
+   symbol meant "we declined to answer". */
+.nobeacon {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: help;
+    color: var(--faint);
+}
+.nobeacon > svg { flex: none; }
 td.nowrap, th.nowrap { white-space: nowrap; }
 
 td.clip { max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

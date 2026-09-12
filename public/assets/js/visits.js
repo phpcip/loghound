@@ -168,28 +168,68 @@ export function visitRow(v) {
  * instead of guessing in either direction.
  */
 function bounceMark(v) {
-    if (v.bounced === true) {
+    const pct = v.bounced === true ? '100%' : '0%';
+
+    /* MEASURED, so the figure is stated plainly. The beacon recorded engagement in the browser,
+       which is the only way to tell a four-minute read of one page from a visitor who left
+       immediately — the distinction the conventional bounce rate gets wrong. */
+    if (v.beacon === true) {
         return el('span', {
-            class: 'chip chip-accent',
-            text: '100%',
-            title: 'Bounced: one page, and no engagement measured on it.'
+            class: v.bounced === true ? 'chip chip-accent' : 'chip',
+            text: pct,
+            title: v.bounced === true
+                ? 'Bounced: one page, and the beacon measured no engagement on it.'
+                : 'Did not bounce: more than one page, or measured engagement on the one page.'
         });
     }
-    if (v.bounced === false) {
-        return el('span', {
-            class: 'chip',
-            text: '0%',
-            title: 'Did not bounce: more than one page, or measured engagement on the one page.'
-        });
-    }
-    /* DEFENSIVE ONLY. Panel\Sessions::bouncedOf() is total now — every visit gets true or false —
-       so this branch is unreachable for a session document and exists to keep a malformed
-       payload from rendering the word "undefined" in a column of percentages. */
+
+    /* INFERRED, AND THE CELL SAYS SO RATHER THAN PRINTING A DASH. No beacon reported on this
+       visit, so there is no engagement clock and the figure is the conventional page-count
+       guess. The mark carries the explanation, because "—" made the reader decode a symbol
+       that meant "we declined to answer". */
     return el('span', {
-        class: 'muted',
-        text: '100%',
-        title: 'No page count on this record, so it is treated as a bounce.'
-    });
+        class: 'nobeacon',
+        'data-lh-tip': '1',
+        'data-full': 'No beacon data for this visit, so this is inferred from the page count '
+            + 'alone. Either the site is not carrying the beacon snippet, or the browser never '
+            + 'ran it — an extension, a blocked script, or the visitor left before it loaded.',
+        'aria-label': 'Bounce inferred: no beacon data for this visit'
+    }, [
+        noBeaconMark(),
+        el('span', { class: 'muted', text: pct })
+    ]);
+}
+
+/** Where the mark below is drawn. */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * A padlock, for a visit the execution plane never reported on.
+ *
+ * DRAWN, NOT PASTED. The panel ships a CSP with no markup sink and no outside origin, so every
+ * icon in this codebase is built with createElementNS — see icons.js and core.js's reload mark,
+ * whose 16x16 half-pixel grid and single stroke weight this follows. `currentColor`, so it
+ * takes the cell's own tone in both themes; `aria-hidden`, because the wrapper carries the name.
+ */
+function noBeaconMark() {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '13');
+    svg.setAttribute('height', '13');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+
+    for (const d of ['M3.75 7.25h8.5v6h-8.5z', 'M5.75 7.25V4.9a2.25 2.25 0 0 1 4.5 0v2.35']) {
+        const path = document.createElementNS(SVG_NS, 'path');
+        path.setAttribute('d', d);
+        svg.appendChild(path);
+    }
+    return svg;
 }
 
 /**
