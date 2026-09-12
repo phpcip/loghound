@@ -680,7 +680,16 @@ function publishTipY(node) {
         return;
     }
     const box = node.getBoundingClientRect();
-    node.style.setProperty('--lh-navtip-y', (box.top + box.height / 2) + 'px');
+
+    /* WRITTEN ON THE GROUP, NOT ON THE LINK. Two things are placed from this number: the name
+       bubble, which is inside the link, and the section flyout, which is the link's SIBLING —
+       and a custom property inherits downwards only, so the flyout never saw it. Its `top` was
+       therefore invalid, it fell back to the static position in the middle of the page, and it
+       looked like a transparent list of words lying over the content. Reaching for it also
+       closed it, because the pointer had to leave `.navgroup` to get there. Setting it on the
+       group puts both of them on the same anchor. */
+    const anchor = (node.closest && node.closest('.navgroup')) || node;
+    anchor.style.setProperty('--lh-navtip-y', (box.top + box.height / 2) + 'px');
 }
 
 /**

@@ -228,8 +228,16 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
 
 /* Shell */
 
+/* ABOVE THE CONTENT, AND THAT HAS TO BE SAID OUT LOUD. The sidebar had no z-index at all, so
+   it sat on the root level and was painted BEFORE the content that follows it in the document
+   — which meant `.topbar` (30), a sticky `thead` (1) and `.fb-head` (2) all drew over it. In
+   the expanded rail nothing overlaps so it never showed; in the collapsed rail the section
+   flyout opens across the page and came out looking transparent, with the page's own headings
+   lying on top of it. 35 clears the topbar and stays under the value tooltip (40), the
+   smart-select panel (42) and the dialog (60). */
 .side {
     position: fixed;
+    z-index: 35;
     inset: 0 auto 0 0;
     width: var(--side-w);
     padding: 32px 0 20px;
@@ -2966,7 +2974,17 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
        accent with a rule beside it — the same two devices the expanded list
        uses, so the rail is the same navigation rather than a second one. */
 
-    :root.lh-rail-collapsed .side { padding-left: 0; padding-right: 0; }
+    /* THE RAIL MUST NOT CLIP WHAT OPENS OUT OF IT. `.side` scrolls itself, and a scroll
+       container clips every descendant — including a `position: fixed` flyout, once any
+       ancestor establishes a containing block for it. Collapsed, nothing inside the rail is
+       wide enough to need a scrollbar horizontally, so the axes are split: it still scrolls
+       down a long list, and the flyout is free to cross the right-hand edge. */
+    :root.lh-rail-collapsed .side {
+        padding-left: 0;
+        padding-right: 0;
+        overflow-x: visible;
+        overflow-y: auto;
+    }
     :root.lh-rail-collapsed .brand { padding: 0 0 20px; justify-content: center; }
     :root.lh-rail-collapsed .brand-name { display: none; }
     :root.lh-rail-collapsed .lh-railbtn { justify-content: center; padding: 6px 0; }
@@ -3010,7 +3028,8 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
        be reached. */
     :root.lh-rail-collapsed .navsub {
         position: fixed;
-        z-index: 41;
+        /* Above the rail's own 35 and above the topbar, below the value tooltip at 40. */
+        z-index: 38;
         left: var(--side-w);
         top: var(--lh-navtip-y);
         width: 230px;
