@@ -78,16 +78,6 @@ function renderPages(data) {
                 title: row.path,
                 sort: row.path
             },
-            { text: num(row.people), num: true, sort: row.people },
-            {
-                text: num(row.measured),
-                num: true,
-                sort: row.measured,
-                title: row.people
-                    ? num(row.measured) + ' of the ' + num(row.people) + ' human visits that landed here had a '
-                        + 'beacon, so only those can be judged on engagement.'
-                    : ''
-            },
             {
                 text: row.measured ? pct(row.bounced, row.measured, 1) : '—',
                 num: true,

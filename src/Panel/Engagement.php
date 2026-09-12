@@ -286,19 +286,18 @@ final class Engagement extends Controller
             $this->exportTool('bouncepages')
         );
         self::skeleton('an-bouncepages', 'rows', 0, 'Measuring engagement per landing page');
-        $this->peopleCard();
 
         echo '<div class="table-wrap"><table id="an-bouncepages-table" class="table-fixed"><colgroup>'
-            . '<col style="width:38%"><col style="width:12%"><col style="width:13%">'
-            . '<col style="width:12%"><col style="width:25%"></colgroup><thead><tr>'
+            . '<col style="width:45%"><col style="width:15%"><col style="width:40%">'
+            . '</colgroup><thead><tr>'
             . '<th scope="col">Landing page</th>'
-            . '<th scope="col" class="num">Human visits</th>'
-            . '<th scope="col" class="num">Measurable</th>'
             . '<th scope="col" class="num">Bounce rate</th>'
             . '<th scope="col" class="bar-col">Bounced against engaged</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-bouncepages-pager"></div>';
 
         self::cardClose('an-bouncepages');
+
+        $this->peopleCard();
     }
 }

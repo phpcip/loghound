@@ -700,6 +700,13 @@ function publishTipY(node) {
        group puts both of them on the same anchor. */
     const anchor = (node.closest && node.closest('.navgroup')) || node;
     anchor.style.setProperty('--lh-navtip-y', (box.top + box.height / 2) + 'px');
+
+    /* THE BUBBLE IS CENTRED ON THE MARK, THE FLYOUT HANGS FROM IT. Both were placed from the
+       centre above, which is right for a one-line bubble — it subtracts half its own height —
+       and wrong for a list, which used the number as its `top` and so began halfway down the
+       icon it belonged to. The icon's own top edge is the second number, published beside the
+       first rather than derived in CSS, because only this side has measured the box. */
+    anchor.style.setProperty('--lh-navtip-top', box.top + 'px');
 }
 
 /**

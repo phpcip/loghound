@@ -3414,7 +3414,9 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         /* Above the rail's own 35 and above the topbar, below the value tooltip at 40. */
         z-index: 38;
         left: var(--side-w);
-        top: var(--lh-navtip-y);
+        /* Hangs from the icon's top edge, not from its middle. The fallback keeps the old
+           behaviour if assets/js/responsive.js has not published the second number yet. */
+        top: var(--lh-navtip-top, var(--lh-navtip-y));
         width: 230px;
         max-height: 60vh;
         overflow-y: auto;
@@ -3532,6 +3534,39 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         opacity: 0;
         visibility: hidden;
         pointer-events: none;
+    }
+
+    /* A LABEL INSIDE THE FLYOUT IS A LABEL, NOT A TOOLTIP. The rule above turns every
+       `.navlabel` in the rail into the black name bubble, and a second-level group renders its
+       row as a `.navlink` with a `.navlabel` too — but that row lives INSIDE the flyout, where
+       nothing hovers it and nothing ever brings the bubble back. The text left the row, the
+       icon stayed, and three nested groups read as three empty squares.
+
+       Restored to ordinary inline text rather than excluded from the rule above, because that
+       selector is load-bearing for every icon in the rail and this is the narrower statement.
+       The hover and focus-within variants are named as well: the blanking rules further down
+       are keyed on `.navgroup.has-sub` and would otherwise blank a second-level group's own
+       label the moment the pointer reached it. */
+    :root.lh-rail-collapsed .side .navsub .navlink .navlabel,
+    :root.lh-rail-collapsed .side .navsub .navgroup.has-sub:hover > .navrow > .navlink .navlabel,
+    :root.lh-rail-collapsed .side .navsub .navgroup.has-sub:focus-within > .navrow > .navlink .navlabel {
+        position: static;
+        z-index: auto;
+        display: inline;
+        height: auto;
+        max-width: none;
+        padding: 0;
+        overflow: visible;
+        font: inherit;
+        letter-spacing: inherit;
+        text-transform: inherit;
+        color: inherit;
+        background: none;
+        border: 0;
+        border-radius: 0;
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
     }
 
     /* Keyboard first and unconditionally: the rail is tab-navigable, and a
