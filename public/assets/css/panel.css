@@ -1205,7 +1205,11 @@ tr.members > td { padding: 0; background: var(--band); }
 /* A 2px edge on the first cell only, and a tint so faint it reads as texture rather than as a
    fill. The first attempt was a 3px black bar down every row, which turned the table into a
    ladder of rules and drowned the one row that was different. */
-tbody tr[data-verdict] > td:first-child { box-shadow: inset 2px 0 0 transparent; }
+/* THE EDGE NEEDS ROOM OF ITS OWN. `inset` draws inside the cell, so with no left padding the
+   timestamp sat directly against the bar and read as if it were underlined by it. Ten pixels of
+   gutter on the first cell, and the header keeps the same indent so the column still lines up. */
+tbody tr[data-verdict] > td:first-child { box-shadow: inset 2px 0 0 transparent; padding-left: 10px; }
+table.visits thead th:first-child { padding-left: 10px; }
 
 tbody tr[data-verdict="bot"] > td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 tbody tr[data-verdict="bot"] > td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
