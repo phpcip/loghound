@@ -180,7 +180,16 @@ abstract class OpensolrView extends Controller implements Sections
     {
         $core = $_GET['core'] ?? '';
         if (!is_string($core) || $core === '' || !Security::isSafeCoreName($core)) {
-            return '';
+            /* NAME THE FIRST INDEX RATHER THAN NAMING NOTHING. A request with no `?core=` is the
+               normal first visit, and answering it with an empty string made the browser
+               responsible for inventing a default — which it did only on the first of five
+               concurrent cards, leaving the rest waiting on a selection that never arrived.
+               The list is already in hand and memoised, so this costs nothing, and an account
+               with no indexes still yields '' because there is genuinely nothing to select. */
+            $list = $this->indexes();
+            $names = is_array($list['indexes'] ?? null) ? $list['indexes'] : [];
+
+            return $names === [] ? '' : (string) $names[0];
         }
         return $core;
     }

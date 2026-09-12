@@ -80,7 +80,12 @@ export async function resolveCore(view, selectId, onChange) {
         return null;
     }
 
-    if (selected === null) {
+    /* AN EMPTY SELECTION IS NOT A SELECTION. The server answers `selected: ''` whenever the URL
+       carries no `?core=` — which is every first visit to these views — and this tested for
+       `null` alone. An empty string passed the test, no fallback was chosen, `select.value = ''`
+       matched none of the options, and the picker sat on "Loading…" while all five cards waited
+       behind a core that never resolved. Falsy is the condition, not null. */
+    if (!selected) {
         selected = data.selected && data.indexes.indexOf(data.selected) !== -1
             ? data.selected
             : data.indexes[0];
