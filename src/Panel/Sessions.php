@@ -1488,13 +1488,19 @@ final class Sessions extends Controller
     private function facetsCard(): void
     {
         echo '<aside class="facets" aria-label="Filter the dashboard">';
-        echo '<button type="button" class="ghost small facets-fold" id="se-facets-fold" '
-            . 'aria-controls="se-explorer">Hide</button>';
+
+        /* IN THE HEAD'S TOOL SLOT, NOT FLOATING OVER IT. Positioned absolutely at the card's
+           top right, this landed on top of the refresh control that lives in the same corner —
+           two controls in one place, on every screen size. cardOpen() has a slot for exactly
+           this, beside the heading and before the refresh, so it goes there and the layout
+           keeps them apart by itself. */
         self::cardOpen(
             'se-facets',
             '03',
             'Filter by',
-            ''
+            '',
+            '<button type="button" class="ghost small facets-fold" id="se-facets-fold"'
+                . ' aria-controls="se-explorer">Hide</button>'
         );
         self::skeleton('se-facets', 'rows', 0, 'Counting facet values');
         echo '<div id="se-facet-list"></div>';

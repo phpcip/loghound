@@ -1125,12 +1125,9 @@ tr.members > td { padding: 0; background: var(--band); }
 
 .facets { position: relative; }
 
-.facets-fold {
-    position: absolute;
-    top: 0;
-    right: 0;
-    z-index: 2;
-}
+/* Sits in the card head's tool row, so the head's own spacing keeps it clear of the refresh
+   control instead of both being pinned to the same corner. */
+.facets-fold { margin-left: auto; }
 
 /* The way back. Only on screen while the rail is folded, and it sits in the grid's first row so
    it does not push the table down. */
