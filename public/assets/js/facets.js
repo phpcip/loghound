@@ -139,8 +139,17 @@ function labelToggle(toggle, shown) {
     /* NOT ON A PAGE THAT ALREADY HAS A FILTER RAIL. The session explorer carries its own rail
        with its own show/hide control, so this bar put a SECOND button for the same job three
        inches above the first — two controls, two labels, one thing. The rail wins there
-       because it is the one with the counts in it. */
+       because it is the one with the counts in it.
+
+       THE WHOLE PANEL GOES, NOT THE BUTTON. Hiding only the toggle left the groups mounted and
+       visible whenever the remembered state was "shown", so the explorer drew its rail and this
+       panel drew a second identical one beside it. The state is remembered across views, so the
+       way in was ordinary: open the filters on a view that has no rail, then go to Sessions. */
     if (document.getElementById('se-explorer')) {
+        const panel = toggle.closest('.fpanel');
+        if (panel) {
+            panel.hidden = true;
+        }
         toggle.hidden = true;
     }
 }
