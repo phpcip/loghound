@@ -2203,14 +2203,26 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
  *
  * The horizontal negative margins mirror <main>'s own padding at each breakpoint so the bar is
  * full-bleed and nothing scrolls past it in the gutters; --nav-pull does the same for main's
- * padding-top, so the bar starts flush with the top of the page rather than 40px down.
+ * padding-top, so the bar starts flush with the top of the page rather than below it.
+ *
+ * --nav-pull IS NOT A LOOK, IT IS AN EQUATION: it must equal <main>'s padding-top at the same
+ * breakpoint, and the two live in different places in this file. When it is larger, the bar's
+ * static position moves ABOVE the top of the page, sticky clamps it back down to top:0, and the
+ * difference is content that has no room at rest — permanently, at every scroll position, on
+ * every page. It drifted exactly that way: main's padding-top went 40 → 18 → 6 while this stayed
+ * at 40, and 24px of the first card sat under the bar until this line came down with it.
+ *
+ * The phone is the reason this is not one shared token. Under 900px `.lh-nav-js main` takes its
+ * padding-top from --lh-topbar-h, the FIXED navigation bar's measured height; deriving the pull
+ * from the same value would have this bar cancel out the bar it is meant to hang below.
  */
 
 :root { --topbar-h: 56px; }
 
 .topbar {
     --nav-gutter: 32px;
-    --nav-pull: 40px;
+    /* = main's padding-top (see above). Both move together or neither moves. */
+    --nav-pull: 6px;
 
     position: sticky;
     top: var(--lh-topbar-h, 0px);
