@@ -647,6 +647,26 @@ foreach ($batch as $session) {
         $doc['install_s'] = $installId;
     }
 
+    /*
+     * THE LAST GATE BEFORE SOLR, AND IT IS NOT A DUPLICATE OF THE ONE AT INGEST.
+     *
+     * The tailer refuses a loopback or RFC1918 request as it is read, so nothing new is
+     * captured. But state captured BEFORE that refusal existed is still in SQLite — sessions
+     * already open in `sessions_open`, beacon rows already staged — and every one of them is
+     * published when the session closes or the rows merge. On this installation that was a
+     * 2,040-hit session of local `/drupal/callback` traffic sitting open, which would have
+     * reappeared as a private-address session the moment it went idle, hours after the
+     * exclusion was supposedly complete.
+     *
+     * A refusal at the door is therefore not sufficient on its own: a queue drains after the
+     * door is shut. This closes it at the point of publication, which is the only place that
+     * sees every route in — log sessions, beacon merges and standalone beacon-only documents
+     * alike — so no future path can reintroduce what the panel promises is not there.
+     */
+    if (\Loghound\Security::isPrivateAddress((string) ($doc['ip_net_s'] ?? ($doc['ip_s'] ?? '')))) {
+        continue;
+    }
+
     $ready[] = $doc;
 
     if ($provisional) {
