@@ -404,44 +404,6 @@ function placeNode(s) {
     ]);
 }
 
-/**
- * Whose network they were on, in words, with the numbers demoted to one sentence.
- *
- * THE ASN AND THE NETBLOCK ARE NOT FIRST-CLASS FIELDS ANY MORE. `ASN AS7922` and `NETBLOCK
- * 73.0.0.0/8` were two labelled rows of a dialog that is supposed to be readable, and neither
- * says anything on its own — the fact is "they were on Comcast's consumer broadband", and the
- * numbers are how you'd look that up. So the name and the kind of network lead, as filter
- * controls, and the identifiers follow in a faint line for the operator who needs to quote them.
- */
-function networkBlock(s) {
-    if (!s.as_org && !s.asn && !s.netname) {
-        return null;
-    }
-
-    const head = el('div', {}, [
-        s.as_org
-            ? dimValue('as_org_s', s.as_org)
-            : el('span', { class: 'muted', text: 'An unnamed network' }),
-        s.as_type ? el('span', { text: ' — ' }) : null,
-        s.as_type ? dimValue('as_type_s', s.as_type) : null
-    ]);
-
-    const bits = [];
-    if (s.ip_net) {
-        bits.push('address block ' + s.ip_net);
-    }
-    if (s.asn) {
-        bits.push('network AS' + s.asn);
-    }
-    if (s.netname) {
-        bits.push('registered as ' + s.netname);
-    }
-
-    return el('div', {}, [
-        head,
-        bits.length ? el('div', { class: 'sub', text: 'Looked up as ' + bits.join(', ') + '.' }) : null
-    ]);
-}
 
 /**
  * What the address's own network calls it, and whether that claim can be believed.
@@ -554,6 +516,40 @@ function whatTheyDid(s) {
 }
 
 /**
+ * The one duration worth putting beside the address, and which clock it came from.
+ *
+ * FOUR CLOCKS, IN ORDER OF HONESTY. Engaged time is the only one a tab left open all afternoon
+ * cannot inflate, and it is the clock this product already judges a bounce on, so it leads.
+ * Visible and wall follow. The log span is last because it is first-request-to-last and is
+ * structurally blind to the final page — which is also why a single request produces a span of
+ * exactly zero.
+ *
+ * ZERO IS NOT A DURATION. dur() renders 0 as `0 ms`, which reads as a measurement that was taken
+ * and came back tiny, when the truth is that nothing measured anything. Every clock is therefore
+ * tested as a number greater than zero BEFORE it is formatted, and a visit nothing timed answers
+ * null so the caller says N/A rather than inventing a figure.
+ *
+ * @param {Object} s A session, as Panel\Sessions::shapeSession() returns it.
+ * @returns {{ms: number, source: string}|null}
+ */
+function timeOnSite(s) {
+    const clocks = [
+        [s.engaged_ms, ''],
+        [s.visible_ms, 'visible'],
+        [s.wall_ms, 'tab open'],
+        [s.log_span_ms, 'from the log']
+    ];
+
+    for (const [ms, source] of clocks) {
+        const v = ms === null || ms === undefined ? NaN : Number(ms);
+        if (!Number.isNaN(v) && v > 0) {
+            return { ms: v, source: source };
+        }
+    }
+    return null;
+}
+
+/**
  * Render one visit into the dialog body.
  *
  * The order is the order the questions get asked: who they say they are, who they were and what
@@ -563,10 +559,23 @@ function whatTheyDid(s) {
 function renderSession(body, data) {
     const s = data.session;
 
+    /* HOW LONG THEY STAYED SITS WITH WHO THEY WERE. It is the first thing anybody wants to know
+       about a visit, and it was reachable only by opening the "How long they were here" fold —
+       three sections down, shut by default. The network gave up the row: its name is already on
+       the dialog's own header line, so nothing was lost by taking it out of the list.
+
+       THE FALLBACK NAMES ITSELF. Engaged time is stated bare because it needs no qualification;
+       anything below it in the chain carries the clock it came from, so one number in one place
+       never quietly means two different things on two different visits. */
+    const stayed = timeOnSite(s);
+
     const who = [
         ['Address', s.ip ? dimValue('ip_s', s.ip, { mono: true }) : null],
         ['Where', placeNode(s)],
-        ['Network', networkBlock(s)],
+        ['Time on site', stayed === null ? 'N/A' : el('span', {}, [
+            el('span', { text: dur(stayed.ms) }),
+            stayed.source ? el('span', { class: 'sub', text: ' · ' + stayed.source }) : null
+        ])],
         ['Timezone of the address', s.tz, true]
     ];
 
