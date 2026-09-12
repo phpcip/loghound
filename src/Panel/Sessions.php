@@ -1150,6 +1150,7 @@ final class Sessions extends Controller
             'host'     => $str('host_s'),
             'entry'    => $str('entry_path_s'),
             'verdict'  => $str('bot_verdict_s'),
+            'ident'    => $str('ident_s'),
 
             /* TIME ON SITE AND WHETHER IT BOUNCED, which the visit table now shows in place of
                the verdict chip — the verdict is the row's colour. Both clocks travel because
@@ -1609,14 +1610,18 @@ final class Sessions extends Controller
                characters, and at 17% of a column already narrowed by the filter sidebar it was
                being cut mid-hour — "09/12/2026 03:1…" — which is the one value on the row a
                reader scans down. The width comes out of Country, which now draws the flag only. */
-            . '<col style="width:23%"><col style="width:16%"><col style="width:6%">'
-            . '<col style="width:40%"><col style="width:15%">'
+            /* SIX COLUMNS, AND THE WIDTHS ARE THE CONTRACT. This head is rendered here while the
+               rows are built by assets/js/visits.js, so the two have to agree column for column
+               — they did not, which is why the cells were landing under the wrong headings. */
+            . '<col style="width:17%"><col style="width:17%"><col style="width:28%">'
+            . '<col style="width:20%"><col style="width:9%"><col style="width:9%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Date</th>'
             . '<th scope="col">IP</th>'
-            . '<th scope="col">Country</th>'
             . '<th scope="col">Page</th>'
-            . '<th scope="col" class="visit-verdict">Verdict</th>'
+            . '<th scope="col">Email</th>'
+            . '<th scope="col">Sess time</th>'
+            . '<th scope="col" class="visit-verdict">Bounce</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="se-pager"></div>';
 

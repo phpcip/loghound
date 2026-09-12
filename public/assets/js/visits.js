@@ -41,7 +41,7 @@ import { pathCell } from './url.js';
  *
  * @type {Array<string>}
  */
-const WIDTHS = ['20%', '4%', '16%', '34%', '13%', '13%'];
+const WIDTHS = ['17%', '17%', '28%', '20%', '9%', '9%'];
 
 /* THE VERDICT IS NO LONGER A COLUMN. It was a chip at the end of every row, spending a seventh
    of the width on one word that is already the row's colour — see `.visits tbody tr[data-verdict]`
@@ -49,7 +49,7 @@ const WIDTHS = ['20%', '4%', '16%', '34%', '13%', '13%'];
    answer: how long they stayed, and whether it counted as a bounce. The flag moves to a narrow
    column left of the address, headed CTR because the glyph needs no more than three letters
    above it and the room belongs to the columns that hold real text. */
-const HEADINGS = ['Date', 'CTR', 'IP', 'Page', 'Time on site', 'Bounce'];
+const HEADINGS = ['Date', 'IP', 'Page', 'Email', 'Sess time', 'Bounce'];
 
 /**
  * The `<colgroup>` and `<thead>` a visit table starts with, for a table built in the browser.
@@ -62,7 +62,7 @@ export function visitTableHead() {
         el('thead', {}, [
             el('tr', {}, HEADINGS.map((text, i) => el('th', {
                 scope: 'col',
-                class: i === 1 ? 'visit-ctr' : (i === 5 ? 'visit-verdict' : null),
+                class: i === 5 ? 'visit-verdict' : null,
                 text: text
             })))
         ])
@@ -95,20 +95,16 @@ export function visitRow(v) {
         'data-sort': v.ts_start || ''
     }));
 
+    /* THE FLAG RIDES WITH THE ADDRESS. They answer one question — who, and from where — so
+       spending a whole column on a glyph was width taken from the page path. Both are their own
+       filter control; the flag carries the country name in the panel's tooltip. */
     tr.appendChild(el('td', {
-        class: 'visit-ctr',
-        'data-sort': v.country || ''
+        class: 'mono clip visit-who',
+        'data-sort': [v.country, v.ip].filter(Boolean).join(' ')
     }, [
         v.country
             ? countryNode(v.country, { flagOnly: true })
-            : el('span', { class: 'muted', text: '—' })
-    ]));
-
-    tr.appendChild(el('td', {
-        class: 'mono clip',
-        title: v.ip || 'Address not recorded',
-        'data-sort': v.ip || ''
-    }, [
+            : el('span', { class: 'muted visit-noflag', text: '·' }),
         v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: '—' })
     ]));
 
@@ -120,6 +116,19 @@ export function visitRow(v) {
         v.entry
             ? pathCell(v.entry, { host: v.host })
             : el('span', { class: 'muted', text: '—' })
+    ]));
+
+    /* THE NAME THE SITE GAVE US, and a filter like any other value: pressing it narrows the
+       whole dashboard to that person. `N/A` rather than a dash where the site said nothing,
+       because "we were not told" is a different fact from "there is no value". */
+    tr.appendChild(el('td', {
+        class: 'clip visit-email',
+        title: v.ident || 'No identity was sent for this visit',
+        'data-sort': v.ident || ''
+    }, [
+        v.ident
+            ? dimValue('ident_s', v.ident)
+            : el('span', { class: 'muted', text: 'N/A' })
     ]));
 
     /* TIME ON SITE, AND WHICH CLOCK IT CAME FROM. The engaged clock is the honest one and it

@@ -685,7 +685,11 @@ td.urlcell { text-overflow: clip; }
  * does not know, and anything with a box around it in a row full of links reads as pressable.
  */
 .urlamb { font-size: 14px; color: var(--faint); white-space: nowrap; cursor: help; }
-table.tight td, table.tight th { padding-top: 6px; padding-bottom: 6px; }
+/* DENSITY IS THE POINT OF A DASHBOARD TABLE. 8px a side put six or seven rows on a screen and
+   made every list a scroll; 4px puts roughly twice as many in the same space and nothing in
+   these tables wraps to a second line anyway. `.tight` goes lower still. */
+table td, table th { padding-top: 4px; padding-bottom: 4px; }
+table.tight td, table.tight th { padding-top: 3px; padding-bottom: 3px; }
 .bar-col { width: 130px; }
 
 .bar { display: block; height: 6px; background: var(--chip); border-radius: var(--radius); overflow: hidden; }
@@ -1198,26 +1202,41 @@ tr.members > td { padding: 0; background: var(--band); }
    tint is legible at a glance and still lets the row read as a row.
    --------------------------------------------------------------------------- */
 
-tbody tr[data-verdict] > td:first-child { border-left: 3px solid transparent; }
+/* A 2px edge on the first cell only, and a tint so faint it reads as texture rather than as a
+   fill. The first attempt was a 3px black bar down every row, which turned the table into a
+   ladder of rules and drowned the one row that was different. */
+tbody tr[data-verdict] > td:first-child { box-shadow: inset 2px 0 0 transparent; }
 
-tbody tr[data-verdict="bot"] > td:first-child,
-tbody tr[data-verdict="likely_bot"] > td:first-child { border-left-color: var(--accent); }
-tbody tr[data-verdict="bot"] > td,
-tbody tr[data-verdict="likely_bot"] > td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
-tbody tr[data-verdict="likely_bot"] > td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+tbody tr[data-verdict="bot"] > td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+tbody tr[data-verdict="bot"] > td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
 
-tbody tr[data-verdict="human"] > td:first-child { border-left-color: var(--ink); }
-tbody tr[data-verdict="likely_human"] > td:first-child { border-left-color: var(--c-declared); }
+tbody tr[data-verdict="likely_bot"] > td:first-child {
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+tbody tr[data-verdict="likely_bot"] > td { background: color-mix(in srgb, var(--accent) 3%, transparent); }
 
-tbody tr[data-verdict="unknown"] > td:first-child { border-left-color: var(--c-unknown); }
-tbody tr[data-verdict="unknown"] > td { background: color-mix(in srgb, var(--c-unknown) 8%, transparent); }
+tbody tr[data-verdict="human"] > td:first-child { box-shadow: inset 2px 0 0 var(--ink); }
+tbody tr[data-verdict="likely_human"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-declared); }
+tbody tr[data-verdict="unknown"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-unknown); }
 
 /* The engaged clock is the measured one, so it is inked; the log-span fallback stays muted. */
 table.visits td.visit-engaged { color: var(--ink); }
 
-/* The flag column: as narrow as a glyph, centred, and never the column that stretches. */
-table.visits td.visit-ctr,
-table.visits th.visit-ctr { text-align: center; padding-left: 4px; padding-right: 4px; }
+/* Flag and address share a cell: the glyph sits tight against the number, not spaced off it. */
+table.visits td.visit-who { white-space: nowrap; }
+table.visits td.visit-who .flag { margin-right: 6px; font-size: 17px; vertical-align: -2px; }
+table.visits td.visit-who .visit-noflag { display: inline-block; width: 22px; text-align: center; }
+table.visits td.visit-email { font-size: 14px; }
+
+/* ---------------------------------------------------------------------------
+   DENSITY. A dashboard table earns its keep by how many rows fit on one screen:
+   scrolling after every second visitor is the failure this replaces. 3px of
+   vertical padding and a fixed line box put roughly twice as many rows in the
+   same space, and nothing here wraps to a second line anyway.
+   --------------------------------------------------------------------------- */
+table.visits td,
+table.visits th { padding-top: 3px; padding-bottom: 3px; line-height: 1.45; }
+table.visits td { height: 26px; }
 
 tr.row-link { cursor: pointer; }
 tr.row-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
