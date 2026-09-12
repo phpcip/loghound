@@ -128,6 +128,23 @@ final class Live extends Controller implements JobHost
     private const KEEPALIVE_SEC = 4;
 
     /**
+     * Bytes of ignored padding written after every frame, to push it off the proxy.
+     *
+     * ONCE AT THE START IS NOT ENOUGH, AND THAT WAS THE BUG. mod_proxy_fcgi buffers FastCGI
+     * output until its block fills or the request ends, so an opening pad bought the first flush
+     * and nothing else: every event after it sat in Apache's buffer until enough bytes piled up
+     * behind it. On a quiet site that is minutes, which is precisely as live as reloading the
+     * page by hand. The old forty-five-second cap hid it by ending the response — a teardown
+     * flushes — so removing that cap exposed how little was reaching the browser in between.
+     *
+     * Four kilobytes after every frame is what Opensolr's own log stream does for the same
+     * reason, and it keeps the transport working on a stock Apache, which is what an installer
+     * can rely on. `ProxySet flushpackets=on` in the vhost is the tidier fix and this does not
+     * fight it.
+     */
+    private const PAD_BYTES = 4096;
+
+    /**
      * The shapes `ip_s` can legitimately hold, and the only ones that are looked up.
      *
      * Three, and \Loghound\Security::applyIpPrivacy() is where they come from: the address
@@ -359,14 +376,21 @@ final class Live extends Controller implements JobHost
 
         ignore_user_abort(false);
         @ini_set('zlib.output_compression', '0');
+        @ini_set('output_buffering', '0');
+        @ini_set('implicit_flush', '1');
         while (ob_get_level() > 0) {
             ob_end_flush();
         }
+        ob_implicit_flush(true);
 
         header('Content-Type: text/event-stream; charset=utf-8');
         header('Cache-Control: no-store, no-transform, private');
         header('X-Accel-Buffering: no');
         header('Connection: keep-alive');
+        header('Content-Encoding: identity');
+        if (function_exists('apache_setenv')) {
+            @apache_setenv('no-gzip', '1');
+        }
 
         /* THE FIRST EIGHT KILOBYTES BUY THE CONNECTION ITS OWN FLUSH, and without them this
            stream never starts. Apache talks to PHP over mod_proxy_fcgi, which buffers a
@@ -377,11 +401,9 @@ final class Live extends Controller implements JobHost
            never live, with three consecutive responses of byte-identical length to prove
            nothing was being streamed at all.
 
-           A comment line is the SSE no-op — a frame beginning with a colon is defined to be
-           ignored — so this is padding the protocol already knows how to throw away. It costs
-           eight kilobytes once per connection and it makes the transport work on a stock
-           Apache, which is what an installer can rely on; `ProxySet flushpackets=on` is the
-           tidier fix and this does not fight it. */
+           This opening pad buys the FIRST flush only. Every frame after it needs its own, which
+           is push()'s job and PAD_BYTES' reason for existing — an opening pad on its own left
+           the rest of the stream sitting in Apache's buffer for minutes at a time. */
         echo ': ' . str_repeat(' ', 8192) . "\n\n";
         self::push();
 
@@ -530,9 +552,17 @@ final class Live extends Controller implements JobHost
         ) . "\n\n";
     }
 
-    /** Get what has been written onto the wire rather than into a buffer. */
+    /**
+     * Get what has been written onto the wire rather than into a buffer.
+     *
+     * The padding goes out AFTER the frame, which is the whole point: it is what shoves the
+     * frame already sitting in the proxy's block out to the browser. A comment is the SSE no-op
+     * — a line beginning with a colon is defined to be ignored — so this is bytes the protocol
+     * already knows how to throw away. See PAD_BYTES for what happens without it.
+     */
     private static function push(): void
     {
+        echo ': ' . str_repeat(' ', self::PAD_BYTES) . "\n\n";
         if (ob_get_level() > 0) {
             @ob_flush();
         }
