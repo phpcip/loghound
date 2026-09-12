@@ -326,7 +326,8 @@ final class Query
      * been wrong in a way that is hard to see, because it drops every document that has no
      * value for the field.
      *
-     * @param string $field `ts_start` on the sessions core, `ts` on hits.
+     * @param string $field `ts_end` on the sessions core — the window is on last activity, see
+     *                      Controller::sessionFqs() — and `ts` on hits.
      */
     public static function rangeFq(string $field, array $range): string
     {
@@ -935,8 +936,14 @@ final class Query
     public static function sorts(): array
     {
         return [
-            'recent'  => 'ts_start desc',
-            'oldest'  => 'ts_start asc',
+            /* LAST ACTIVITY, NOT ARRIVAL. Ordering by `ts_start` put a visitor who is reading a
+               page this second below every short session that happened to begin after them, so
+               the top of the list was the most recently ARRIVED rather than the most recently
+               SEEN — and an active visitor sank down it as they kept browsing. The range filter
+               in Controller::sessionFqs() bounds the same field, so what is listed and what is
+               ordered agree by construction. */
+            'recent'  => 'ts_end desc',
+            'oldest'  => 'ts_end asc',
             'score'   => 'bot_score_f desc',
             'hits'    => 'hits_i desc',
             'engaged' => 'engaged_ms_l desc',

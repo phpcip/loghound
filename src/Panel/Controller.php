@@ -485,12 +485,26 @@ abstract class Controller
      * two. Panel\Jobs deliberately counts the whole core, because "how many documents are in this
      * index" is the question that diagnostic asks.
      *
+     * THE WINDOW IS ON LAST ACTIVITY, NOT ON ARRIVAL, and that is the difference between
+     * "who is here" and "who turned up recently". It used to bound `ts_start`, so a session
+     * was in a six-hour view only if it BEGAN inside those six hours — which excluded exactly
+     * the sessions an operator most wants to see: the long ones, still running, still logging
+     * hits this second. Somebody who arrived ten hours ago and is reading a page right now was
+     * not on the page at all, and no amount of sorting could have brought them back, because
+     * they had already been filtered out.
+     *
+     * `ts_end` is the last hit the session has logged, so a provisional document moves through
+     * the window as its visitor keeps going. The cost is stated rather than hidden: a session
+     * that began two days ago and ended inside the window now falls inside it WITH ITS WHOLE
+     * HISTORY, so a counting card can carry hits that happened before the window opened. That
+     * is the honest trade for a live population, and it is the same trade the sort order makes.
+     *
      * @return array<int,string>
      */
     protected function sessionFqs(): array
     {
         return array_merge(
-            [self::FQ_SESSION_DOCS, Query::publicIpsOnly(), Query::rangeFq('ts_start', $this->range)],
+            [self::FQ_SESSION_DOCS, Query::publicIpsOnly(), Query::rangeFq('ts_end', $this->range)],
             $this->facets->fqs()
         );
     }

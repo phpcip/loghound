@@ -49,7 +49,7 @@ const WIDTHS = ['17%', '17%', '26%', '19%', '8%', '13%'];
    answer: how long they stayed, and whether it counted as a bounce. The flag moves to a narrow
    column left of the address, headed CTR because the glyph needs no more than three letters
    above it and the room belongs to the columns that hold real text. */
-const HEADINGS = ['Date', 'IP', 'Page', 'Email', 'Sess time', 'Bounce'];
+const HEADINGS = ['Last seen', 'IP', 'Page', 'Email', 'Sess time', 'Bounce'];
 
 /**
  * The `<colgroup>` and `<thead>` a visit table starts with, for a table built in the browser.
@@ -89,10 +89,15 @@ export function visitRow(v) {
     attrs.dataset = Object.assign({}, attrs.dataset, { verdict: v.verdict || 'unknown' });
     const tr = el('tr', attrs);
 
+    /* LAST SEEN, FALLING BACK TO ARRIVAL. `ts_end` is what the server now orders and filters
+       on, so the column has to show the same instant or the top row reads as hours old. The
+       fallback covers a document written before the field was shipped. */
+    const seen = v.ts_end || v.ts_start;
+
     tr.appendChild(el('td', {
         class: 'mono nowrap visit-when',
-        text: when(v.ts_start),
-        'data-sort': v.ts_start || ''
+        text: when(seen),
+        'data-sort': seen || ''
     }));
 
     /* THE FLAG RIDES WITH THE ADDRESS. They answer one question — who, and from where — so

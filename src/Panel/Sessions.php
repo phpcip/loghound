@@ -1242,6 +1242,12 @@ final class Sessions extends Controller
         return [
             'id'       => (string) ($d['id'] ?? ''),
             'ts_start' => $str('ts_start'),
+
+            /* THE ROW IS DATED BY ITS LAST HIT. Both travel because they answer different
+               questions — the dialog says when a visit began, the table says when it was last
+               seen — and a table that dated a ten-hour session by its arrival read as stale
+               while the visitor was still on the site. */
+            'ts_end'   => $str('ts_end'),
             'ip'       => $str('ip_s'),
             'country'  => $str('country_s'),
             'region'   => $str('region_s'),
