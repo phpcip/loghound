@@ -343,6 +343,15 @@ export function dimValue(field, value, opts) {
     if (options.markOnly && mark) {
         node.setAttribute('aria-label', shown);
         node.classList.add('dim-markonly');
+
+        /* THE PANEL'S OWN TOOLTIP, NOT THE BROWSER'S. responsive.js normally marks a value for
+           one only when its text is CLIPPED, and a mark has no text to clip — so a flag standing
+           in for a country name got the grey native bubble after a second's delay, or nothing.
+           Here the words are missing by design, so the tooltip is not a fallback for truncation:
+           it is the only place the country is named, and it is declared outright. */
+        node.setAttribute('data-full', shown);
+        node.setAttribute('data-lh-tip', '1');
+        node.removeAttribute('title');
     } else {
         node.appendChild(el('span', { class: 'dim-val', text: shown }));
     }

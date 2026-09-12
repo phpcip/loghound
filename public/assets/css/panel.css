@@ -2229,8 +2229,56 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
     .topbar { --nav-gutter: 20px; --nav-pull: 32px; }
 }
 
+/* The short wording exists only for the phone bar; everywhere else the long one is the label. */
+.tb-filters-short { display: none; }
+
 @media (max-width: 620px) {
     .topbar { --nav-gutter: 16px; --nav-pull: 28px; margin-bottom: 22px; }
+
+    /* ONE LINE, THREE CONTROLS. The bar stacked into three rows on a phone — filters, then a
+       labelled duration, then the resources mark — which is a third of the screen spent on
+       chrome before the page starts. The words go (the select shows its own value, and the
+       mark has an aria-label), the duration shrinks to its content, and the hostname leaves
+       the bar entirely: it is a filter, and filters live behind the filters button. */
+    .topbar-in { flex-wrap: nowrap; gap: 8px; }
+
+    .tb-filters { padding: 0 10px; gap: 6px; }
+    .tb-filters-label { display: none; }
+    .tb-filters-short { display: inline; }
+
+    .tb-scope { flex-wrap: nowrap; gap: 8px; min-width: 0; }
+    .topbar .tb-field label { display: none; }
+    .topbar #lh-hostfield { display: none; }
+
+    .topbar #lh-range {
+        width: auto;
+        min-width: 0;
+        padding-right: 26px;
+        padding-left: 8px;
+        font-size: 14px;
+    }
+
+    /* THE EXPLORER LOSES TWO CARDS AND KEEPS THEIR ANSWER. Search and the bounce-rate breakdown
+       are desk work — a search box above a table that is already the whole screen, and a
+       five-way analysis of engagement — so on a phone they are noise in front of the visits.
+       The one number worth carrying is the bounce rate itself, which views/sessions.js prints
+       above the table instead. */
+    #se-search-card,
+    #se-bounce-card { display: none; }
+}
+
+/* The bounce figure the phone keeps: one number, stated where the visits are. */
+.se-bounce-mini { display: none; }
+
+@media (max-width: 620px) {
+    .se-bounce-mini {
+        display: block;
+        margin: 0 0 14px;
+        font: 600 15px/1.4 var(--font-ui);
+        color: var(--ink);
+    }
+    .se-bounce-mini .num { font-family: var(--font-mono); font-size: 22px; }
+    .se-bounce-mini .muted { font-weight: 400; }
 }
 
 @media print {
@@ -2540,7 +2588,11 @@ a.dim:focus-visible { background: none; color: var(--accent-ink); border-bottom-
    third-party asset — which is what lets the panel keep a CSP with no outside origin and
    still work air-gapped. The code or the country name always sits beside it as real text. */
 
-.flag { margin-right: 6px; font-size: 16px; line-height: 1; }
+/* Big enough to read as a flag rather than as a coloured smudge — it is the only thing naming
+   the country in a visit table, so it carries the whole column. No right margin when it stands
+   alone: there are no words after it to be spaced from. */
+.flag { margin-right: 6px; font-size: 20px; line-height: 1; }
+.dim-markonly .flag { margin-right: 0; font-size: 22px; }
 .geo { display: inline-flex; align-items: baseline; gap: 0; min-width: 0; }
 
 /* Dimension lists: the distribution, and every value in it a filter. */
