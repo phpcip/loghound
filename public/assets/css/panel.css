@@ -684,8 +684,8 @@ thead th {
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--faint);
-    padding: 0 10px 4px;
-    border-bottom: 1px solid var(--ink);
+    padding: 0 10px 3px;
+    border-bottom: 1px solid var(--muted);
 
     white-space: nowrap;
 }
@@ -788,6 +788,10 @@ td.urlcell { text-overflow: clip; }
    these tables wraps to a second line anyway. `.tight` goes lower still. */
 table td, table th { padding-top: 4px; padding-bottom: 4px; }
 table.tight td, table.tight th { padding-top: 3px; padding-bottom: 3px; }
+/* THE HEAD IS A LABEL, NOT A ROW. The rule above is written for DATA cells and catches `th`
+   with them, which handed the header the body's vertical padding on top of its own — so the
+   label band stood taller than the rows it names. Restated here, after it, for the head only. */
+thead th { padding-top: 0; padding-bottom: 3px; }
 .bar-col { width: 130px; }
 
 .bar { display: block; height: 6px; background: var(--chip); border-radius: var(--radius); overflow: hidden; }
@@ -2989,7 +2993,11 @@ th.sortable > .sort-btn {
     display: inline-flex;
     align-items: baseline;
     width: 100%;
-    min-height: 40px;
+    /* A DESK POINTER DOES NOT NEED A THUMB TARGET. 40px here made every sortable header a
+       40px band, and in a table where every column sorts that is the whole header row — taller
+       than three data rows for a line of 11px labels. The touch size is not this number:
+       assets/css/mobile.css raises it to var(--lh-tap) under (pointer: coarse). */
+    min-height: 22px;
     padding: 0;
     font: inherit;
     letter-spacing: inherit;
