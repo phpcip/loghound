@@ -4748,6 +4748,48 @@ final class Settings extends Controller implements JobHost, Sections
      * to a beacon payload, which is the only reading of "excluded" that does not eventually
      * surprise somebody.
      */
+    /**
+     * The exclusion rules as a file.
+     *
+     * `custom` because these come from the configuration rather than from Solr: the source
+     * callable returns the stored rules and the rest of the export machinery — preamble, BOM,
+     * formula neutralisation, filename — is shared with every other export in the panel.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'exclusions' => [
+                'label'   => 'Exclusions',
+                'shape'   => 'custom',
+                'unit'    => 'rules',
+                'cap'     => Exclusions::MAX_RULES,
+                'note'    => 'Requests this installation refuses to record. A rule here is not a '
+                    . 'filter: a matched request is never written, on either plane, and cannot be '
+                    . 'recovered afterwards. An empty hostname means the rule applies to every host.',
+                'columns' => [
+                    ['Hostname', 'host', 'text'],
+                    ['Field', 'field', 'text'],
+                    ['Pattern', 'pattern', 'text'],
+                    ['On', 'enabled', 'bool'],
+                ],
+                'source'  => function (): array {
+                    $rows = [];
+                    foreach (Exclusions::fromConfig($this->cfg)->all() as $rule) {
+                        $rows[] = [
+                            'host'    => $rule['host'] === '' ? 'every host' : $rule['host'],
+                            'field'   => Exclusions::FIELDS[$rule['field']] ?? $rule['field'],
+                            'pattern' => $rule['pattern'],
+                            'enabled' => $rule['enabled'],
+                        ];
+                    }
+                    return ['rows' => $rows];
+                },
+            ],
+        ];
+    }
+
     private function exclusionsSection(): void
     {
         $rules = Exclusions::fromConfig($this->cfg);
@@ -4816,6 +4858,16 @@ final class Settings extends Controller implements JobHost, Sections
             . '<span class="muted">' . Security::esc((string) $rules->activeCount())
             . ' in force now.</span></p>';
         echo '</form>';
+
+        /* OUTSIDE THE FORM, DELIBERATELY. It is a link and not a submit: inside the form a
+           middle-click or an Enter would post the rules rather than fetch the file, and a
+           control that saves when it was asked to download is the worst kind of surprise on a
+           card whose whole subject is what gets thrown away. */
+        echo '<p><a class="export" href="?v=settings&amp;export=exclusions"'
+            . ' data-export="exclusions" data-export-carry=""'
+            . ' title="The exclusion rules as stored, as a CSV file"'
+            . ' aria-label="The exclusion rules as stored, as a CSV file">CSV</a>'
+            . ' <span class="muted">The rules as stored, for a backup or a second install.</span></p>';
 
         self::cardEnd();
     }

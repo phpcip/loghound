@@ -166,10 +166,58 @@ final class Live extends Controller implements JobHost
         $rules = Rules::fromConfig($this->cfg);
 
         return [
-            'rules'  => $rules->all(),
-            'active' => $rules->activeCount(),
-            'fields' => Rules::FIELDS,
-            'max'    => Rules::MAX_RULES,
+            'rules'   => $rules->all(),
+            'active'  => $rules->activeCount(),
+            'fields'  => Rules::FIELDS,
+            'max'     => Rules::MAX_RULES,
+
+            /* THE BUILT-IN GROUPS AND WHICH ARE ON. Sent as the catalogue plus the switches
+               rather than as rules, because the dialog must not be able to edit or delete one:
+               they are a fixed set the operator turns on and off, and the list they type sits
+               underneath them. */
+            'builtin' => Rules::BUILTIN,
+            'builtin_on' => $rules->builtinOn(),
+        ];
+    }
+
+    /**
+     * The rules in force, as a file.
+     *
+     * Declared through the `custom` shape because a rule list is not a Solr dataset: the source
+     * callable hands back rows read from the configuration, and everything else — the preamble,
+     * the BOM, the formula neutralisation, the filename — is the same machinery every other
+     * export on every other view already uses.
+     *
+     * Built-ins are in the file alongside the operator's own, with a column saying which is
+     * which. A file listing only the half somebody typed would be read as the whole list and
+     * would be wrong about why a request is missing from the stream.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    public function exports(): array
+    {
+        return [
+            'exclusions' => [
+                'label'   => 'Live exclusions',
+                'shape'   => 'custom',
+                'unit'    => 'rules',
+                'cap'     => Rules::MAX_RULES + count(Rules::BUILTIN),
+                'note'    => 'Rules that hide rows from the live stream. Nothing here changes what '
+                    . 'is stored: every request in this file was recorded in full and is present in '
+                    . 'every other view. The built-in groups match the classification the parser '
+                    . 'already made, so one rule covers a whole category.',
+                'columns' => [
+                    ['Source', 'source', 'text'],
+                    ['Field', 'field', 'text'],
+                    ['Pattern', 'pattern', 'text'],
+                    ['On', 'enabled', 'bool'],
+                    ['What it covers', 'label', 'text'],
+                ],
+                'source'  => function (): array {
+                    $rules = Rules::fromConfig($this->cfg);
+                    return ['rows' => $rules->allInForce()];
+                },
+            ],
         ];
     }
 
@@ -203,7 +251,17 @@ final class Live extends Controller implements JobHost
         $decoded = json_decode($raw, true);
         $clean = Rules::sanitise(is_array($decoded) ? $decoded : []);
 
+        /* THE SWITCHES TRAVEL WITH THE LIST, in one POST, because they are one decision: an
+           operator turns a group on and adds a rule in the same visit to the dialog, and two
+           writes would leave a window where the file holds half of what they pressed Save on.
+           Unknown keys are dropped by sanitiseBuiltin(), so a stale switch cannot survive a
+           release that removed the group it names. */
+        $rawBuiltin = is_string($_POST['builtin'] ?? null) ? $_POST['builtin'] : '[]';
+        $decodedBuiltin = json_decode($rawBuiltin, true);
+        $cleanBuiltin = Rules::sanitiseBuiltin(is_array($decodedBuiltin) ? $decodedBuiltin : []);
+
         $this->cfg->set(Rules::CONFIG_KEY, $clean);
+        $this->cfg->set(Rules::BUILTIN_CONFIG_KEY, $cleanBuiltin);
 
         try {
             $this->cfg->save();
@@ -220,9 +278,10 @@ final class Live extends Controller implements JobHost
         }
 
         \json_out([
-            'ok'     => true,
-            'rules'  => $clean,
-            'active' => Rules::fromList($clean)->activeCount(),
+            'ok'         => true,
+            'rules'      => $clean,
+            'builtin_on' => $cleanBuiltin,
+            'active'     => Rules::fromList($clean, $cleanBuiltin)->activeCount(),
         ]);
     }
 

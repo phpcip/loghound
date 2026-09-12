@@ -39,6 +39,7 @@ import { pathCell } from '../url.js';
 import { dialogFail, isCurrent, openDialog, registerOpener } from '../dialog.js';
 import { visitCaption, visitTable } from '../visits.js';
 import { renderPager } from '../pager.js';
+import { exportLink } from '../export.js';
 
 /** Rows kept in the table. Beyond this the oldest are dropped, which the caption says. */
 const MAX_ROWS = 300;
@@ -776,6 +777,12 @@ let ruleFields = {};
 /** Cap the server will enforce anyway; the dialog says so before a save is refused. */
 let ruleMax = 40;
 
+/** The built-in groups the server offers, keyed by slug. Catalogue, never edited here. */
+let builtin = {};
+
+/** Which built-in slugs are switched on. The only part of a built-in an operator changes. */
+let builtinOn = [];
+
 /**
  * Does this row survive the find box?
  *
@@ -929,7 +936,10 @@ function noteRules() {
     if (!note) {
         return;
     }
-    const on = rules.filter((rule) => rule.enabled).length;
+    /* BUILT-INS COUNT, because they hide rows exactly as a typed rule does. A line reading
+       "nothing is being excluded" over a stream with the asset group on would be describing a
+       different page from the one on screen. */
+    const on = rules.filter((rule) => rule.enabled).length + builtinOn.length;
     note.textContent = on === 0
         ? 'Nothing is being excluded.'
         : (on === 1 ? '1 rule is hiding requests.' : on + ' rules are hiding requests.');
@@ -942,6 +952,8 @@ async function loadRules() {
         rules = Array.isArray(data.rules) ? data.rules : [];
         ruleFields = data.fields && typeof data.fields === 'object' ? data.fields : {};
         ruleMax = Number(data.max) || ruleMax;
+        builtin = data.builtin && typeof data.builtin === 'object' ? data.builtin : {};
+        builtinOn = Array.isArray(data.builtin_on) ? data.builtin_on : [];
         noteRules();
     } catch (err) {
         rules = [];
@@ -963,7 +975,14 @@ function openExclusions() {
     );
 
     const draftRules = rules.map((rule) => ({ ...rule }));
-    renderExclusions(body, generation, draftRules, '');
+
+    /* THE SWITCHES ARE DRAFTED TOO, and separately from the rules, because they are a different
+       kind of thing: a rule is a row an operator writes and can delete, a switch turns a group
+       on. Both are held in the browser and written in one POST, so half a change cannot reach
+       the file. */
+    const draftBuiltin = builtinOn.slice();
+
+    renderExclusions(body, generation, draftRules, '', draftBuiltin);
 }
 
 /**
@@ -973,7 +992,7 @@ function openExclusions() {
  * mount, so a message set before the re-render was destroyed by it — which is why saving
  * appeared to do nothing at all.
  */
-function renderExclusions(mount, generation, draft, note) {
+function renderExclusions(mount, generation, draft, note, draftBuiltin) {
     if (!isCurrent(generation)) {
         return;
     }
@@ -992,7 +1011,7 @@ function renderExclusions(mount, generation, draft, note) {
             el('th', { scope: 'col', text: '' })
         ])]),
         el('tbody', {}, draft.length
-            ? draft.map((rule, i) => ruleRow(rule, i, mount, generation, draft))
+            ? draft.map((rule, i) => ruleRow(rule, i, mount, generation, draft, draftBuiltin))
             : [el('tr', {}, [el('td', {
                 colspan: '4',
                 class: 'muted',
@@ -1023,7 +1042,7 @@ function renderExclusions(mount, generation, draft, note) {
         }
         draft.push({ field: fieldSelect.value, pattern: pattern, enabled: true });
         patternInput.value = '';
-        renderExclusions(mount, generation, draft, '');
+        renderExclusions(mount, generation, draft, '', draftBuiltin);
     });
 
     const saveButton = el('button', { type: 'button', class: 'small', text: 'Save rules' });
@@ -1033,7 +1052,12 @@ function renderExclusions(mount, generation, draft, note) {
         saveButton.disabled = true;
         status.textContent = 'Saving…';
         try {
-            const data = await post({ action: 'live_exclusions', rules: JSON.stringify(draft) });
+            const data = await post({
+                action: 'live_exclusions',
+                rules: JSON.stringify(draft),
+                builtin: JSON.stringify(draftBuiltin)
+            });
+            builtinOn = Array.isArray(data.builtin_on) ? data.builtin_on : builtinOn;
             const refused = draft.filter((r) => String(r.pattern || '').trim() !== '').length
                 - (Array.isArray(data.rules) ? data.rules.length : 0);
             rules = Array.isArray(data.rules) ? data.rules : [];
@@ -1050,22 +1074,70 @@ function renderExclusions(mount, generation, draft, note) {
                 begin();
             }
 
-            renderExclusions(mount, generation, rules.map((rule) => ({ ...rule })),
+            renderExclusions(
+                mount,
+                generation,
+                rules.map((rule) => ({ ...rule })),
                 (refused > 0
                     ? refused + (refused === 1 ? ' rule was refused' : ' rules were refused')
                         + ' — a pattern PCRE will not accept. The rest were saved'
                     : 'Saved')
-                + (wasRunning ? ' and applied to the stream now.' : '.'));
+                + (wasRunning ? ' and applied to the stream now.' : '.'),
+                builtinOn.slice()
+            );
         } catch (err) {
             status.textContent = err && err.message ? err.message : 'The rules could not be saved.';
         }
         saveButton.disabled = false;
     });
 
+    /* THE READY-MADE GROUPS, ABOVE THE LIST AND NOT IN IT. Each one matches the classification
+       the parser already made, so a single switch covers every image, script, stylesheet, font
+       and media file — and goes on covering the next format somebody invents, which a list of
+       suffixes cannot. They cannot be edited or deleted: what an operator types is always
+       additional to them, never in place of them. */
+    const builtinRows = Object.keys(builtin).map((slug) => {
+        const spec = builtin[slug] || {};
+        const box = el('input', { type: 'checkbox' });
+        box.checked = draftBuiltin.indexOf(slug) !== -1;
+        box.addEventListener('change', () => {
+            const at = draftBuiltin.indexOf(slug);
+            if (box.checked && at === -1) {
+                draftBuiltin.push(slug);
+            } else if (!box.checked && at !== -1) {
+                draftBuiltin.splice(at, 1);
+            }
+        });
+
+        return el('tr', {}, [
+            el('td', {}, [box]),
+            el('td', {}, [
+                el('span', { text: String(spec.label || slug) }),
+
+                /* NOT `.sub`, WHICH IS TRUNCATED INSIDE A TABLE. `table .sub` clips to one line
+                   with an ellipsis, which is right for a value beside a number and wrong for a
+                   sentence explaining what a switch does. A plain block says the whole thing. */
+                el('p', { class: 'muted builtin-why', text: String(spec.why || '') })
+            ])
+        ]);
+    });
+
+    const builtinTable = el('table', { class: 'tight table-fixed' }, [
+        el('colgroup', {}, [el('col', { style: 'width:8%' }), el('col', { style: 'width:92%' })]),
+        el('tbody', {}, builtinRows)
+    ]);
+
     fill(mount, [
         el('p', { class: 'muted' }, [
-            'A rule is a field and a regular expression. Matching is case-insensitive, and the ',
-            'pattern is the expression itself — no slashes and no flags. ',
+            'Ready-made groups first, then your own rules underneath. Nothing here changes what is ',
+            'stored — every request hidden from this page was recorded in full and is in every ',
+            'other view.'
+        ]),
+        el('div', { class: 'table-wrap' }, [builtinTable]),
+
+        el('p', { class: 'muted' }, [
+            'Your own rules. A rule is a field and a regular expression. Matching is ',
+            'case-insensitive, and the pattern is the expression itself — no slashes and no flags. ',
             el('code', { class: 'mono', text: '^/wp-login' }),
             ' hides every request whose path starts that way; ',
             el('code', { class: 'mono', text: '^4' }),
@@ -1073,12 +1145,16 @@ function renderExclusions(mount, generation, draft, note) {
         ]),
         el('div', { class: 'table-wrap' }, [table]),
         el('div', { class: 'live-tools' }, [fieldSelect, patternInput, addButton]),
-        el('div', { class: 'live-tools' }, [saveButton, status])
+        el('div', { class: 'live-tools' }, [
+            saveButton,
+            status,
+            exportLink('live', 'exclusions', 'Every rule in force, built-in and your own, as a CSV file', {})
+        ])
     ]);
 }
 
 /** One rule, with its on switch and its remove control. */
-function ruleRow(rule, index, mount, generation, draft) {
+function ruleRow(rule, index, mount, generation, draft, draftBuiltin) {
     const toggle = el('input', { type: 'checkbox' });
     toggle.checked = rule.enabled !== false;
     toggle.addEventListener('change', () => {
@@ -1088,7 +1164,7 @@ function ruleRow(rule, index, mount, generation, draft) {
     const remove = el('button', { type: 'button', class: 'small', text: 'Remove' });
     remove.addEventListener('click', () => {
         draft.splice(index, 1);
-        renderExclusions(mount, generation, draft, '');
+        renderExclusions(mount, generation, draft, '', draftBuiltin);
     });
 
     /* EDITED IN PLACE, because a rule that is one character wrong is the common case and

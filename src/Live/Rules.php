@@ -55,7 +55,69 @@ final class Rules
         'status'  => 'Status',
         'ua'      => 'User-Agent',
         'browser' => 'Client',
+
+        /* THE CLASSIFICATION THE PARSER ALREADY MADE. Every row arrives having been sorted into
+           page, asset, favicon, robots, api, beacon or other, and matching on that is what lets
+           one rule cover every image, script, stylesheet, font and media file at once — and go
+           on covering the next format somebody invents, which a list of suffixes cannot.
+           `kind_slug` and not `kind`: the latter is the word the row displays ("Image",
+           "Stylesheet"), the former is the stable value, and a rule must not break because a
+           label was reworded. */
+        'kind_slug' => 'Request kind',
     ];
+
+    /**
+     * The junk every access log carries, as rules nobody should have to type.
+     *
+     * WHY FOUR AND NOT FORTY. Each one matches the parser's own classification rather than a
+     * file extension, so `assets` is every image, script, stylesheet, source map, font and media
+     * file in a single comparison — correct today and still correct when a new format appears.
+     * A suffix list would be longer, slower on every line, and wrong the moment it aged.
+     *
+     * OFF BY DEFAULT, EVERY ONE. The live page's promise is that it shows the log as it is
+     * written; a panel that quietly hid most of the traffic on first run would be lying about
+     * exactly the thing it exists to show. An operator turns these on because the noise is in
+     * their way, which is a decision they have made rather than one made for them.
+     *
+     * These are not editable and are never written into the operator's own list: they sit above
+     * it, and a rule added by hand is evaluated after them. Nothing here can be deleted, so
+     * nothing here can be lost.
+     *
+     * @var array<string,array{field:string,pattern:string,label:string,why:string}>
+     */
+    public const BUILTIN = [
+        'assets' => [
+            'field'   => 'kind_slug',
+            'pattern' => '^(asset|favicon)$',
+            'label'   => 'Images, scripts, stylesheets, fonts, media and icons',
+            'why'     => 'Everything a browser fetches because a page told it to. On a busy '
+                . 'site this is most of the log and none of it is somebody arriving.',
+        ],
+        'crawl' => [
+            'field'   => 'kind_slug',
+            'pattern' => '^robots$',
+            'label'   => 'Crawl files',
+            'why'     => 'robots.txt, ads.txt, security.txt, sitemaps and /.well-known/. '
+                . 'Fetched by crawlers and by nobody reading anything.',
+        ],
+        'api' => [
+            'field'   => 'kind_slug',
+            'pattern' => '^api$',
+            'label'   => 'Machine endpoints',
+            'why'     => 'Paths under /api/, /rest/, /graphql and /wp-json/, plus anything '
+                . 'ending .json, .xml, .rss or .atom. Traffic between programs.',
+        ],
+        'beacon' => [
+            'field'   => 'kind_slug',
+            'pattern' => '^beacon$',
+            'label'   => "Loghound's own beacon",
+            'why'     => 'Every measured page posts one. It is how the execution plane is '
+                . 'read, and it is never a visit of its own.',
+        ],
+    ];
+
+    /** Where the built-in switches live: a list of the keys that are ON. */
+    public const BUILTIN_CONFIG_KEY = 'live.exclusions_builtin';
 
     /** Where the rules live in the configuration file. */
     public const CONFIG_KEY = 'live.exclusions';
@@ -75,18 +137,59 @@ final class Rules
     /** @var array<int,string> Compiled patterns, by the same index as $rules. */
     private array $compiled = [];
 
+    /** @var array<int,string> Keys of the built-in groups that are switched on. */
+    private array $builtin = [];
+
+    /** @var array<int,array{0:string,1:string}> Compiled built-ins as [field, regex] pairs. */
+    private array $builtinCompiled = [];
+
     /**
      * @param array<int,array{field:string,pattern:string,enabled:bool}> $rules Already sanitised.
+     * @param array<int,string> $builtin Keys of BUILTIN that are on, already sanitised.
      */
-    private function __construct(array $rules)
+    private function __construct(array $rules, array $builtin = [])
     {
         $this->rules = $rules;
+        $this->builtin = $builtin;
 
         foreach ($this->rules as $i => $rule) {
             if ($rule['enabled']) {
                 $this->compiled[$i] = self::wrap($rule['pattern']);
             }
         }
+
+        foreach ($builtin as $key) {
+            $spec = self::BUILTIN[$key] ?? null;
+            if ($spec !== null) {
+                $this->builtinCompiled[] = [$spec['field'], self::wrap($spec['pattern'])];
+            }
+        }
+    }
+
+    /**
+     * The built-in keys that are switched on, from whatever the file holds.
+     *
+     * An unknown key is dropped rather than kept: a group removed in a later release must not
+     * linger in the configuration as a switch for something that no longer exists.
+     *
+     * @param mixed $raw
+     * @return array<int,string>
+     */
+    public static function sanitiseBuiltin($raw): array
+    {
+        $out = [];
+        foreach ((array) $raw as $key) {
+            if (is_string($key) && isset(self::BUILTIN[$key]) && !in_array($key, $out, true)) {
+                $out[] = $key;
+            }
+        }
+        return $out;
+    }
+
+    /** Which built-in groups are on, for the dialog to render. @return array<int,string> */
+    public function builtinOn(): array
+    {
+        return $this->builtin;
     }
 
     /**
@@ -97,13 +200,16 @@ final class Rules
      */
     public static function fromConfig(Config $cfg): self
     {
-        return new self(self::sanitise((array) $cfg->get(self::CONFIG_KEY, [])));
+        return new self(
+            self::sanitise((array) $cfg->get(self::CONFIG_KEY, [])),
+            self::sanitiseBuiltin($cfg->get(self::BUILTIN_CONFIG_KEY, []))
+        );
     }
 
     /** Build from an already-sanitised list, for the save path and for tests. */
-    public static function fromList(array $rules): self
+    public static function fromList(array $rules, array $builtin = []): self
     {
-        return new self(self::sanitise($rules));
+        return new self(self::sanitise($rules), self::sanitiseBuiltin($builtin));
     }
 
     /**
@@ -178,6 +284,17 @@ final class Rules
      */
     public function excludes(array $row): bool
     {
+        /* THE BUILT-INS ARE TESTED FIRST, and that is the cheap order rather than a statement
+           about priority: they are the ones that match most of a noisy log, and first match
+           wins, so the common line costs one comparison. They cannot be edited or removed, so
+           the operator's own rules are always additional to them and never in conflict. */
+        foreach ($this->builtinCompiled as [$field, $regex]) {
+            $value = $row[$field] ?? null;
+            if ($value !== null && preg_match($regex, substr((string) $value, 0, self::MAX_SUBJECT)) === 1) {
+                return true;
+            }
+        }
+
         foreach ($this->compiled as $i => $regex) {
             $value = $row[$this->rules[$i]['field']] ?? null;
             if ($value === null) {
@@ -206,7 +323,43 @@ final class Rules
     /** How many rules are actually being applied, which is what the page reports. */
     public function activeCount(): int
     {
-        return count($this->compiled);
+        return count($this->compiled) + count($this->builtinCompiled);
+    }
+
+    /**
+     * Every rule in force, built-ins included, in the order excludes() tests them.
+     *
+     * For the CSV export, which has to describe what is actually hiding rows rather than only
+     * the half an operator typed — a file listing four of nine rules would be read as the whole
+     * list and would be wrong about why something is missing from the stream.
+     *
+     * @return array<int,array{source:string,field:string,pattern:string,enabled:bool,label:string}>
+     */
+    public function allInForce(): array
+    {
+        $out = [];
+
+        foreach (self::BUILTIN as $key => $spec) {
+            $out[] = [
+                'source'  => 'Built-in',
+                'field'   => self::FIELDS[$spec['field']] ?? $spec['field'],
+                'pattern' => $spec['pattern'],
+                'enabled' => in_array($key, $this->builtin, true),
+                'label'   => $spec['label'],
+            ];
+        }
+
+        foreach ($this->rules as $rule) {
+            $out[] = [
+                'source'  => 'Yours',
+                'field'   => self::FIELDS[$rule['field']] ?? $rule['field'],
+                'pattern' => $rule['pattern'],
+                'enabled' => $rule['enabled'],
+                'label'   => '',
+            ];
+        }
+
+        return $out;
     }
 
     /**

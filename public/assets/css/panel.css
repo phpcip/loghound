@@ -3094,6 +3094,11 @@ th.sorted-asc, th.sorted-desc { color: var(--accent-ink); }
 }
 table .sub,
 .lh-dialog .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The sentence under a built-in exclusion group. A whole sentence rather than a value beside a
+   number, so it wraps — which is why it is not `.sub`, whose in-table rule above clips to one
+   line. */
+.builtin-why { margin: 2px 0 0; font-size: 14px; line-height: 1.45; }
 .sub .chip { margin: 2px 0 0; }
 
 /* A bot score sitting next to a verdict chip: a number, so tabular and aligned. */
