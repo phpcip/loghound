@@ -336,7 +336,11 @@ function setUpNav() {
  * seen, is worse than one that announces eleven.
  */
 function setUpNavGroups(side) {
-    for (const twist of side.querySelectorAll('.navtwist')) {
+    /* THE HEADING IS A TARGET TOO. A group parent — "Visitors" — is not a page, so it carries no
+       link; that left the chevron as the only thing a press could land on, twelve pixels at the
+       end of a row that looks entirely pressable. Both carry `aria-controls`, so both are wired
+       by the same loop and neither needs logic of its own. */
+    for (const twist of side.querySelectorAll('.navtwist, .navtwist-target')) {
         if (twist.dataset.lhWired === '1') {
             continue;
         }
@@ -349,7 +353,13 @@ function setUpNavGroups(side) {
             }
             const open = list.hidden;
             list.hidden = !open;
-            twist.setAttribute('aria-expanded', open ? 'true' : 'false');
+
+            /* Both controls on the row report the same state, or a screen reader is told the
+               group is shut by one button and open by the one beside it. */
+            const row = twist.closest('.navrow');
+            for (const control of (row ? row.querySelectorAll('[aria-controls]') : [twist])) {
+                control.setAttribute('aria-expanded', open ? 'true' : 'false');
+            }
             twist.closest('.navgroup').classList.toggle('is-open', open);
         });
     }

@@ -391,11 +391,17 @@ final class Layout
                     $on = !empty($groupCurrent[$group]);
                     $groupId = 'lh-navgroup-' . $group;
 
+                    /* THE WHOLE ROW OPENS THE GROUP, not just the chevron at its end. This was a
+                       inert <span> beside a small button, so the only target that did anything
+                       was twelve pixels wide — a heading that looks pressable and is not. It is
+                       a button spanning the row now; the chevron stays as the affordance. */
                     echo '<li class="navgroup navgroup-parent has-sub' . ($on ? ' is-current' : '') . '">';
                     echo '<span class="navrow">';
-                    echo '<span class="navlink navlink-parent"'
+                    echo '<button type="button" class="navlink navlink-parent navtwist-target"'
+                        . ' aria-expanded="' . ($on ? 'true' : 'false') . '"'
+                        . ' aria-controls="' . Security::esc($groupId) . '"'
                         . ' title="' . Security::esc((string) $meta['hint']) . '">'
-                        . '<span class="navlabel">' . Security::esc((string) $meta['label']) . '</span></span>';
+                        . '<span class="navlabel">' . Security::esc((string) $meta['label']) . '</span></button>';
                     echo '<button type="button" class="navtwist" aria-expanded="' . ($on ? 'true' : 'false') . '"'
                         . ' aria-controls="' . Security::esc($groupId) . '"'
                         . ' aria-label="Views about ' . Security::esc((string) $meta['label']) . '">'

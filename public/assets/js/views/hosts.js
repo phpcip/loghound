@@ -143,10 +143,21 @@ function renderTable(data) {
     /* "SCORED SESSIONS" WAS THE WRONG POPULATION: `total` is every session the range and the
        filters matched, scored or not. The five population columns are what is scored, and they
        now add up on the row because the fifth one is finally printed. */
+    /* SAY THAT THE HOST FILTER IS LIFTED HERE. This table is the one place in the panel that
+       deliberately ignores one of the active filters: scoping the list of hosts to the host
+       already chosen would collapse it to that one row and leave no way back. Every other
+       filter still applies. Without this sentence the table looks broken — a second hostname
+       under a chip that promises everything is narrowed. */
+    const hostFilter = (((boot.filters || {}).active) || []).some((f) => f && f.field === 'host_s');
+
     setPop('hosts-table', num(data.rows.length) + ' virtual hosts, ' + num(data.total) +
         ' sessions in the selected range. The five population columns are mutually exclusive, ' +
         'so they add up to the session count on each row. Automation is the share of the row ' +
         'that is not human, which is the last three columns together.' +
+        (hostFilter
+            ? ' Every host is listed whatever the virtual-host filter says, so you can compare them ' +
+              'and switch between them; every other active filter is applied.'
+            : '') +
         (singlePlane
             ? ' ' + num(singlePlane) + ' of these hosts carry sessions measured by the beacon alone, with no ' +
               'access log behind them: their verdicts rest on one plane, and one plane is the plane a ' +
