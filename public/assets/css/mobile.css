@@ -733,7 +733,7 @@ textarea {
         display: block;
         min-width: 0;
         table-layout: auto;
-        font-size: 15px;
+        font-size: 14px;
     }
 
     table.lh-stack colgroup { display: none; }
@@ -805,7 +805,7 @@ textarea {
 
     table.lh-stack tbody td::before {
         content: attr(data-lh-col);
-        font: 600 14px/1.4 var(--font-ui);
+        font: 600 12px/1.4 var(--font-ui);
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: var(--faint);
@@ -821,7 +821,7 @@ textarea {
         margin-bottom: 4px;
         border-top: 0;
         border-bottom: 1px solid var(--hairline);
-        font-size: 16px;
+        font-size: 14px;
         font-weight: 700;
     }
     table.lh-stack tbody td:first-child::before { content: none; }
@@ -843,6 +843,92 @@ textarea {
         border-radius: 0;
     }
     table.lh-stack tbody tr.members > td { background: var(--band); }
+
+    /* ===========================================================================
+       THE SORT BAR, AND THE HEADER IT REPLACES
+
+       A sortable header on a phone was a row of chips that wrapped onto three
+       lines and spent the top third of the card on controls. Two native selects
+       say the same two things — which column, which direction — in one line, and
+       the platform renders them as a picker with the current choice visible
+       instead of an arrow glyph that has to be decoded.
+       =========================================================================== */
+
+    .lh-sortbar {
+        display: flex;
+        gap: 8px;
+        padding: 0 0 10px;
+    }
+    .lh-sortbar select {
+        flex: 1 1 0;
+        min-width: 0;
+        min-height: var(--lh-tap);
+        font-size: 14px;
+    }
+
+    /* The chips go once the selects are there. Both at once is two controls for one
+       decision, and the one that looks like a header would win the press. */
+    .table-wrap:has(> .lh-sortbar) table.lh-stack thead,
+    .table-wrap:has(> .lh-sortbar) table.lh-visit-compact thead { display: none; }
+
+    /* ===========================================================================
+       A VISIT TABLE ON A PHONE: FOUR COLUMNS, STILL A TABLE
+
+       Not stacked. A visit carries one fact per column, so a card per visit turns
+       twenty visits into a page of scrolling with the same six labels repeated
+       twenty times. What survives is the clock, the page, who it was, and how long
+       they stayed.
+
+       The date goes because every row in a scoped table carries the same one. The
+       address column goes because the flag and the email already answer "who", and
+       an IPv6 address is a line of its own at this width — responsive.js moves the
+       flag into the email cell so nothing is lost. The bounce column goes with the
+       chevron inside it, because the row itself opens the visit and always did.
+       =========================================================================== */
+
+    table.visit6.lh-visit-compact {
+        width: 100%;
+        min-width: 0;
+        table-layout: fixed;
+        font-size: 13px;
+    }
+
+    table.visit6.lh-visit-compact colgroup { display: none; }
+
+    table.visit6.lh-visit-compact tbody td {
+        padding: 5px 6px;
+        font-size: 13px;
+        line-height: 1.35;
+        vertical-align: top;
+    }
+
+    /* IP and Bounce. Hidden rather than removed: the row is still the six cells the
+       desktop renders, so nothing has to be rebuilt when the phone is turned. */
+    table.visit6.lh-visit-compact tbody td:nth-child(2),
+    table.visit6.lh-visit-compact tbody td:nth-child(6) { display: none; }
+
+    table.visit6.lh-visit-compact tbody td:nth-child(1) { width: 20%; }
+    table.visit6.lh-visit-compact tbody td:nth-child(3) { width: 34%; }
+    table.visit6.lh-visit-compact tbody td:nth-child(4) { width: 30%; }
+    table.visit6.lh-visit-compact tbody td:nth-child(5) { width: 16%; }
+
+    /* The flag arrives at the head of the email cell and must not push the address
+       it is now sitting next to onto a second line. */
+    /* THE FLAG TAKES ITS STYLING WITH IT. The rules that size it live on `td.visit-who` in
+       panel.css, which is the cell it came from and the cell that is hidden here — so the
+       moment it moves into the email cell it would render at body size with no spacing and
+       the no-flag placeholder would lose the fixed width that keeps the column aligned. */
+    table.visit6.lh-visit-compact .visit-flag {
+        margin-right: 4px;
+        vertical-align: -2px;
+    }
+    table.visit6.lh-visit-compact .visit-email .flag { font-size: 15px; }
+    table.visit6.lh-visit-compact .visit-email .visit-noflag {
+        display: inline-block;
+        width: 12px;
+        text-align: center;
+    }
+    table.visit6.lh-visit-compact .visit-email { white-space: nowrap; }
 
     /* Things sized for a column, inside a card that has no columns. */
 

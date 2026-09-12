@@ -167,6 +167,19 @@ const MARKS = {
         callers:      ['M8 12.6v.2', 'M5.6 10.4a3.4 3.4 0 0 1 4.8 0', 'M3.4 8a6.5 6.5 0 0 1 9.2 0'],
         usage:        ['M2.6 11.4a5.4 5.4 0 1 1 10.8 0Z', 'M8 11.4V6.6'],
         settings:     ['M8 5.9a2.1 2.1 0 1 1 0 4.2 2.1 2.1 0 0 1 0-4.2Z', 'M8 2.4v1.6', 'M8 12v1.6', 'M13.6 8H12', 'M4 8H2.4', 'm11.9 4.1-1.1 1.1', 'm5.2 10.8-1.1 1.1', 'm11.9 11.9-1.1-1.1', 'm5.2 5.2-1.1-1.1'],
+        /* An arrow coming in from outside: the subject is what sent the visit here, so the
+           glyph is arrival, not a globe. */
+        sources:      ['M2.4 8h6.6', 'm6.4 5.4 2.6 2.6-2.6 2.6', 'M9.6 3.2h4v9.6h-4'],
+        /* A document with a turned corner. Sessions is a framed list — a visit — and this is
+           the thing a visit lands on, so the two must not be the same rectangle. */
+        pages:        ['M4.4 2.8h4.8l2.4 2.4v8H4.4z', 'M9.2 2.8v2.4h2.4', 'M6.4 9h4', 'M6.4 11h2.6'],
+        /* A magnifier over a typed line: the visitor's own search box, not the panel's. */
+        searches:     ['M7 3.2a3.4 3.4 0 1 1 0 6.8 3.4 3.4 0 0 1 0-6.8Z', 'm9.6 9.6 3 3', 'M5.4 6.6h3.2'],
+        /* A stopwatch. Engagement is measured time, and the crown distinguishes it from the
+           gauge that means latency. */
+        engagement:   ['M8 3.6a4.6 4.6 0 1 1 0 9.2 4.6 4.6 0 0 1 0-9.2Z', 'M8 6.2v2.2l1.6 1.1', 'M6.6 2.2h2.8'],
+        /* A grid: hour of day against day of week, which is exactly what the view draws. */
+        rhythm:       ['M2.6 3.4h10.8v9.2H2.6z', 'M2.6 6.6h10.8', 'M2.6 9.6h10.8', 'M6.2 3.4v9.2', 'M9.8 3.4v9.2'],
         _:            ['M2.6 4h10.8v8H2.6z'],
     },
 

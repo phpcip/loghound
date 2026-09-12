@@ -151,7 +151,7 @@ function compare(a, b) {
  * tied rows on every click: Array.prototype.sort is required to be stable in every engine this
  * panel supports.
  */
-function sortBy(table, index, direction) {
+export function sortBy(table, index, direction) {
     const body = table.tBodies[0];
     if (!body) {
         return;

@@ -81,7 +81,7 @@ final class Scope
         $added = [];
         $keep = $stored;
 
-        foreach (['range' => 'ranges', 'core' => 'core', 'outcome' => 'outcome'] as $key => $kind) {
+        foreach (['range' => 'ranges', 'core' => 'core', 'outcome' => 'outcome', 'rows' => 'rows'] as $key => $kind) {
             $spoken = self::scalar($key, $kind);
             if ($spoken !== null) {
                 $keep[$key] = $spoken;
@@ -196,6 +196,12 @@ final class Scope
             'ranges'  => isset(Query::ranges()[$value]),
             'core'    => Security::isSafeCoreName($value),
             'outcome' => isset(OpensolrView::OUTCOMES[$value]),
+            /* HOW MANY ROWS A TABLE SHOWS IS A PREFERENCE, NOT A NAVIGATION. Chosen once in a
+               pager and expected to hold for the next card and the next visit, on whichever
+               device made the choice. Bounded by the same ceiling Paging itself clamps to, so a
+               remembered value can never ask for more than a typed one could. */
+            'rows'    => $value !== '' && ctype_digit($value)
+                && (int) $value >= 1 && (int) $value <= Paging::MAX_PAGE,
             default   => false,
         };
     }

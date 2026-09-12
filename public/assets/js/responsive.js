@@ -38,6 +38,8 @@
  */
 
 import { icon } from './icons.js';
+import { timeOnly } from './core.js';
+import { sortBy } from './sorttable.js';
 
 const NARROW = 900;
 const STACK_ATTR = 'data-lh-col';
@@ -478,6 +480,13 @@ function restack() {
         if (table.tBodies.length === 0 || table.rows.length === 0) {
             continue;
         }
+        /* A VISIT TABLE IS NOT STACKED. It is cut to four columns instead — see
+           compactVisits() — because a visit has one fact worth reading per column and a card
+           per visit turns twenty of them into a page of scrolling. */
+        if (table.classList.contains('visit6')) {
+            table.classList.remove('lh-stack');
+            continue;
+        }
         stampLabels(table);
         if (needsStack(table)) {
             table.classList.add('lh-stack');
@@ -486,7 +495,143 @@ function restack() {
         }
     }
 
+    compactVisits(on);
+    sortBars(on);
+
     stamping = false;
+}
+
+/** Where a visit row's full timestamp is kept while the phone shows only the clock. */
+const FULL_TIME = 'data-lh-full';
+
+/**
+ * The six-column visit table, cut to the four columns worth reading on a phone.
+ *
+ * TIME, PAGE, WHO, HOW LONG. The date goes because every row in a scoped table carries the same
+ * one and it costs half the width of the column; the address goes because the flag and the email
+ * already answer "who", and an IPv6 address on a 375px screen is a line of its own; the bounce
+ * column goes with the chevron in it, because the row itself opens the visit and always did.
+ *
+ * The flag MOVES rather than being drawn twice: it rides with the address on a desktop, where
+ * that column exists, and with the email on a phone, where it does not. Both directions are
+ * idempotent, because this runs on every resize and after every re-render.
+ *
+ * @param {boolean} on Whether the viewport is narrow.
+ */
+function compactVisits(on) {
+    for (const table of document.querySelectorAll('table.visit6')) {
+        table.classList.toggle('lh-visit-compact', on);
+
+        for (const body of table.tBodies) {
+            for (const row of body.rows) {
+                const when = row.querySelector('.visit-when');
+                const who = row.querySelector('.visit-who');
+                const mail = row.querySelector('.visit-email');
+                const flag = row.querySelector('.visit-flag');
+                if (!when || !who || !mail || !flag) {
+                    continue;
+                }
+
+                const home = on ? mail : who;
+                if (flag.parentNode !== home) {
+                    home.insertBefore(flag, home.firstChild);
+                }
+
+                if (on && !when.hasAttribute(FULL_TIME)) {
+                    when.setAttribute(FULL_TIME, when.textContent || '');
+                    when.textContent = timeOnly(when.dataset.sort || '');
+                } else if (!on && when.hasAttribute(FULL_TIME)) {
+                    when.textContent = when.getAttribute(FULL_TIME) || '';
+                    when.removeAttribute(FULL_TIME);
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Two selects in place of a header full of sort chips.
+ *
+ * A sortable header on a phone is a row of chips that wraps onto three lines and spends the top
+ * third of the card on controls. The same two decisions — which column, which direction — are a
+ * pair of native selects, which the platform renders as a picker and which say what is currently
+ * chosen without having to read an arrow glyph.
+ *
+ * Built only for tables that are stacked or compacted, because a table that fits on the screen
+ * keeps its own header and sorting it by pressing that header is not broken.
+ *
+ * @param {HTMLTableElement} table
+ * @returns {HTMLElement|null}
+ */
+function sortBar(table) {
+    const head = table.tHead;
+    if (!head) {
+        return null;
+    }
+    const cells = Array.prototype.slice.call(head.querySelectorAll('th.sortable'));
+    if (cells.length === 0) {
+        return null;
+    }
+
+    const bar = el('div', { class: 'lh-sortbar' });
+    const field = el('select', { class: 'lh-sortfield', 'aria-label': 'Sort by' });
+    const dir = el('select', { class: 'lh-sortdir', 'aria-label': 'Sort direction' });
+
+    for (const th of cells) {
+        field.appendChild(el('option', { value: String(th.cellIndex) }, (th.textContent || '').trim()));
+    }
+    dir.appendChild(el('option', { value: 'asc' }, 'Ascending'));
+    dir.appendChild(el('option', { value: 'desc' }, 'Descending'));
+
+    /* WHAT IT IS SORTED BY NOW, not what it would be sorted by if pressed. sortBy() records both
+       on the table, so the controls can open already showing the truth. */
+    if (table.dataset.sortCol !== undefined) {
+        field.value = String(table.dataset.sortCol);
+    }
+    if (table.dataset.sortDir) {
+        dir.value = table.dataset.sortDir;
+    }
+
+    const apply = () => sortBy(table, Number(field.value), dir.value === 'desc' ? 'desc' : 'asc');
+    field.addEventListener('change', apply);
+    dir.addEventListener('change', apply);
+
+    bar.appendChild(field);
+    bar.appendChild(dir);
+    return bar;
+}
+
+/**
+ * Put a sort bar above every table that has lost its header, and take it away again.
+ *
+ * @param {boolean} on Whether the viewport is narrow.
+ */
+function sortBars(on) {
+    for (const table of document.querySelectorAll('table')) {
+        const host = table.closest('.table-wrap') || table.parentElement;
+        if (!host) {
+            continue;
+        }
+
+        const wanted = on
+            && (table.classList.contains('lh-stack') || table.classList.contains('lh-visit-compact'));
+        const already = host.querySelector('.lh-sortbar');
+
+        if (!wanted) {
+            if (already) {
+                already.remove();
+            }
+            continue;
+        }
+        if (already) {
+            continue;
+        }
+
+        const bar = sortBar(table);
+        if (bar) {
+            host.insertBefore(bar, table);
+        }
+    }
 }
 
 /* ===================================================================================

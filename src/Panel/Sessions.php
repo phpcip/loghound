@@ -1683,7 +1683,7 @@ final class Sessions extends Controller
         );
         self::skeleton('se-results', 'rows', 0, 'Searching sessions');
 
-        echo '<div class="table-wrap"><table id="se-table" class="table-fixed visits"><colgroup>'
+        echo '<div class="table-wrap"><table id="se-table" class="table-fixed visits visit6"><colgroup>'
             /* THE DATE COLUMN NEVER TRUNCATES. `mm/dd/yyyy hh:mm:ss` is nineteen monospace
                characters, and at 17% of a column already narrowed by the filter sidebar it was
                being cut mid-hour — "09/12/2026 03:1…" — which is the one value on the row a
