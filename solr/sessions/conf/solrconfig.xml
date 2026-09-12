@@ -242,6 +242,22 @@
         <processor class="solr.LogUpdateProcessorFactory">
             <int name="maxNumToLog">0</int>
         </processor>
+
+        <!--
+          THIS IS WHAT MAKES AN ATOMIC UPDATE ATOMIC, and naming a custom chain default is what
+          removed it. The implicit chain Solr builds contains this processor; the moment a
+          solrconfig declares its own, it gets exactly the processors it lists. Without it
+          nothing merges {"field":{"set":...}} against the stored document, so the nested map
+          survives to the indexer, which reads it as a child document and refuses the update
+          with "the schema must include definitions for both a uniqueKey field and '_root_'".
+
+          The updateLog above is necessary but NOT sufficient: it supplies the read half of the
+          read-modify-write, this supplies the merge. Both, or partial updates do not work.
+
+          It must sit before RunUpdateProcessorFactory, which is the processor that actually
+          writes the document — anything that needs to alter a document has to run first.
+        -->
+        <processor class="solr.DistributedUpdateProcessorFactory"/>
         <processor class="solr.RunUpdateProcessorFactory"/>
     </updateRequestProcessorChain>
 

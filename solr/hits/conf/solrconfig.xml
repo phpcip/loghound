@@ -354,6 +354,15 @@
         <processor class="solr.LogUpdateProcessorFactory">
             <int name="maxNumToLog">0</int>
         </processor>
+
+        <!--
+          Atomic updates need this as well as the updateLog: the log supplies the stored
+          document, this merges {"field":{"set":...}} into it. Declaring a custom chain
+          default replaces Solr's implicit one, which already contained this processor — so
+          omitting it leaves partial updates failing as "docs with children". It runs before
+          RunUpdateProcessorFactory because that is the processor that writes.
+        -->
+        <processor class="solr.DistributedUpdateProcessorFactory"/>
         <processor class="solr.RunUpdateProcessorFactory"/>
     </updateRequestProcessorChain>
 
