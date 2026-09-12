@@ -224,7 +224,7 @@ final class Hosts extends Controller
 
         $f = $this->gw->facet('hosts.compare', $this->gw->sessionsCore(), [
             'q'  => '*:*',
-            'fq' => array_merge([Query::SESSION_DOCS], $this->fqsWithoutHost()),
+            'fq' => array_merge([Query::SESSION_DOCS], $this->sessionFqs()),
         ], [
             'hosts' => [
                 'type'     => 'terms',

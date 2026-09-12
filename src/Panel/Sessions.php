@@ -1150,7 +1150,40 @@ final class Sessions extends Controller
             'host'     => $str('host_s'),
             'entry'    => $str('entry_path_s'),
             'verdict'  => $str('bot_verdict_s'),
+
+            /* TIME ON SITE AND WHETHER IT BOUNCED, which the visit table now shows in place of
+               the verdict chip — the verdict is the row's colour. Both clocks travel because
+               they are different measurements: `engaged_ms` exists only where the beacon ran and
+               is the honest one, `log_span_ms` is the fallback and is blind to the final page.
+               The browser picks and says which it used. */
+            'engaged_ms'  => isset($d['engaged_ms_l']) ? (int) $d['engaged_ms_l'] : null,
+            'log_span_ms' => isset($d['log_span_ms_l']) ? (int) $d['log_span_ms_l'] : null,
+            'bounced'     => self::bouncedOf($d),
         ];
+    }
+
+    /**
+     * Did this one visit bounce, under the product's definition rather than the conventional one?
+     *
+     * One page AND under the engagement threshold. NULL when it cannot be judged — no beacon
+     * means no engaged clock, and a single-page visit with no measurement is exactly the case
+     * the conventional bounce rate gets wrong by assuming the worst. Three states, and the
+     * table prints all three.
+     */
+    private static function bouncedOf(array $d): ?bool
+    {
+        $pages = isset($d['pages_i']) ? (int) $d['pages_i'] : null;
+        if ($pages === null || $pages < 1) {
+            return null;
+        }
+        if ($pages > 1) {
+            return false;
+        }
+        if (!isset($d['engaged_ms_l'])) {
+            return null;
+        }
+
+        return (int) $d['engaged_ms_l'] < Bounce::ENGAGED_MS;
     }
 
     /**

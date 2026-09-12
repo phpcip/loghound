@@ -1179,6 +1179,46 @@ tr.members > td { padding: 0; background: var(--band); }
  * visible put back. `outline` on the row works in the collapsed border model where `box-shadow`
  * does not, and `-2px` keeps it inside the row rather than over the row above.
  */
+/* ---------------------------------------------------------------------------
+   THE VERDICT IS THE ROW'S COLOUR, EVERYWHERE.
+
+   It used to be a chip in a column of its own, which cost a seventh of every visit
+   table's width to repeat one word per line, and made the judgement something you
+   read row by row instead of seeing down the whole table at once. Any table whose
+   rows carry `data-verdict` gets this, so the visit list, the dialogs and the live
+   tail all say the same thing the same way.
+
+   IN THIS PALETTE, NOT IN RED AND GREEN. The panel has one accent and a grey ramp —
+   the same tokens the population charts and the verdict chips already use — so a
+   coloured row agrees with the chart above it instead of introducing a second colour
+   language. Bots take the accent, people take clean paper, unknown stays grey.
+
+   A LEFT EDGE RATHER THAN A WASH. A full-strength background behind a whole row
+   fights the text on it and turns a table into a heatmap; a 3px edge and a breath of
+   tint is legible at a glance and still lets the row read as a row.
+   --------------------------------------------------------------------------- */
+
+tbody tr[data-verdict] > td:first-child { border-left: 3px solid transparent; }
+
+tbody tr[data-verdict="bot"] > td:first-child,
+tbody tr[data-verdict="likely_bot"] > td:first-child { border-left-color: var(--accent); }
+tbody tr[data-verdict="bot"] > td,
+tbody tr[data-verdict="likely_bot"] > td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+tbody tr[data-verdict="likely_bot"] > td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+
+tbody tr[data-verdict="human"] > td:first-child { border-left-color: var(--ink); }
+tbody tr[data-verdict="likely_human"] > td:first-child { border-left-color: var(--c-declared); }
+
+tbody tr[data-verdict="unknown"] > td:first-child { border-left-color: var(--c-unknown); }
+tbody tr[data-verdict="unknown"] > td { background: color-mix(in srgb, var(--c-unknown) 8%, transparent); }
+
+/* The engaged clock is the measured one, so it is inked; the log-span fallback stays muted. */
+table.visits td.visit-engaged { color: var(--ink); }
+
+/* The flag column: as narrow as a glyph, centred, and never the column that stretches. */
+table.visits td.visit-ctr,
+table.visits th.visit-ctr { text-align: center; padding-left: 4px; padding-right: 4px; }
+
 tr.row-link { cursor: pointer; }
 tr.row-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 tr.row-link:focus-visible > td { background: var(--band); color: var(--ink); }

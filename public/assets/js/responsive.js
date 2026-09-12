@@ -771,7 +771,12 @@ const CONTROL_TIP_SELECTOR = '.card-refresh[data-lh-tip], .rowopen[data-lh-tip]'
  * ALWAYS marked (their text is a hint for a wordless glyph) while these two are marked only
  * when a measurement says the value is short of itself.
  */
-const VALUE_TIP_SELECTOR = '.facet-opt[data-lh-tip]';
+/* `.dim` is here because a value drawn as its MARK alone — the flag standing in for a country
+   in every visit table — has no words to fall back on and no truncation to trigger the usual
+   marking. It carries `data-lh-tip` outright (identity.js), and without it in this list nothing
+   ever measured the element, so the box fell back to its static position and appeared at the
+   bottom of the page instead of under the flag the pointer was on. */
+const VALUE_TIP_SELECTOR = '.facet-opt[data-lh-tip], .dim[data-lh-tip]';
 
 /**
  * Everything one delegated listener has to recognise, composed rather than written out again.

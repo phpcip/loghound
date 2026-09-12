@@ -27,8 +27,8 @@
 
 'use strict';
 
-import { el, num, when } from './core.js';
-import { countryNode, dimValue, drillRow, openButton, verdictChip } from './identity.js';
+import { dur, el, num, when } from './core.js';
+import { countryNode, dimValue, drillRow, openButton } from './identity.js';
 import { pathCell } from './url.js';
 
 /**
@@ -41,10 +41,15 @@ import { pathCell } from './url.js';
  *
  * @type {Array<string>}
  */
-const WIDTHS = ['17%', '15%', '14%', '39%', '15%'];
+const WIDTHS = ['20%', '4%', '16%', '34%', '13%', '13%'];
 
-/** The column headings, in order. */
-const HEADINGS = ['Date', 'IP', 'Country', 'Page', 'Verdict'];
+/* THE VERDICT IS NO LONGER A COLUMN. It was a chip at the end of every row, spending a seventh
+   of the width on one word that is already the row's colour — see `.visits tbody tr[data-verdict]`
+   in the stylesheet. What that width buys instead is the two facts a visit table could never
+   answer: how long they stayed, and whether it counted as a bounce. The flag moves to a narrow
+   column left of the address, headed CTR because the glyph needs no more than three letters
+   above it and the room belongs to the columns that hold real text. */
+const HEADINGS = ['Date', 'CTR', 'IP', 'Page', 'Time on site', 'Bounce'];
 
 /**
  * The `<colgroup>` and `<thead>` a visit table starts with, for a table built in the browser.
@@ -57,7 +62,7 @@ export function visitTableHead() {
         el('thead', {}, [
             el('tr', {}, HEADINGS.map((text, i) => el('th', {
                 scope: 'col',
-                class: i === 4 ? 'visit-verdict' : null,
+                class: i === 1 ? 'visit-ctr' : (i === 5 ? 'visit-verdict' : null),
                 text: text
             })))
         ])
@@ -77,7 +82,12 @@ export function visitTableHead() {
  * @returns {HTMLElement}
  */
 export function visitRow(v) {
-    const tr = el('tr', drillRow('session', { id: v.id }));
+    /* THE ROW CARRIES THE VERDICT AS A COLOUR. `data-verdict` is what the stylesheet colours on,
+       here and in every other table that shows a scored session, so the judgement is legible
+       down the whole table at a glance instead of being read one chip at a time. */
+    const attrs = drillRow('session', { id: v.id });
+    attrs.dataset = Object.assign({}, attrs.dataset, { verdict: v.verdict || 'unknown' });
+    const tr = el('tr', attrs);
 
     tr.appendChild(el('td', {
         class: 'mono nowrap visit-when',
@@ -86,25 +96,20 @@ export function visitRow(v) {
     }));
 
     tr.appendChild(el('td', {
+        class: 'visit-ctr',
+        'data-sort': v.country || ''
+    }, [
+        v.country
+            ? countryNode(v.country, { flagOnly: true })
+            : el('span', { class: 'muted', text: '—' })
+    ]));
+
+    tr.appendChild(el('td', {
         class: 'mono clip',
         title: v.ip || 'Address not recorded',
         'data-sort': v.ip || ''
     }, [
         v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: '—' })
-    ]));
-
-    tr.appendChild(el('td', {
-        class: 'clip',
-        title: [v.city, v.region, v.country].filter(Boolean).join(', ') || 'Not geolocated',
-        'data-sort': [v.country, v.city].filter(Boolean).join(' ')
-    }, [
-        /* THE FLAG ALONE. The country NAME was taking a third of this row's width from the
-           timestamp beside it, which is the one column a reader compares straight down and the
-           one that must never truncate. The name is still there on hover and for a screen
-           reader; the glyph is what identifies a country at a glance anyway. */
-        v.country
-            ? countryNode(v.country, { flagOnly: true })
-            : el('span', { class: 'muted', text: '—' })
     ]));
 
     tr.appendChild(el('td', {
@@ -117,12 +122,50 @@ export function visitRow(v) {
             : el('span', { class: 'muted', text: '—' })
     ]));
 
-    tr.appendChild(el('td', { class: 'visit-verdict', 'data-sort': v.verdict || '' }, [
-        verdictChip(v.verdict),
+    /* TIME ON SITE, AND WHICH CLOCK IT CAME FROM. The engaged clock is the honest one and it
+       exists only where the beacon ran; everything else falls back to the log span, which is
+       blind to the final page. The cell says which one it is showing rather than presenting two
+       different measurements as the same number. */
+    const engaged = v.engaged_ms === null || v.engaged_ms === undefined ? null : Number(v.engaged_ms);
+    const span = v.log_span_ms === null || v.log_span_ms === undefined ? null : Number(v.log_span_ms);
+    const measured = engaged !== null && engaged > 0;
+    const shown = measured ? engaged : span;
+
+    tr.appendChild(el('td', {
+        class: 'mono nowrap' + (measured ? ' visit-engaged' : ' muted'),
+        text: shown === null || shown <= 0 ? '—' : dur(shown),
+        title: shown === null || shown <= 0
+            ? 'Nothing measured a duration for this visit'
+            : (measured
+                ? 'Engaged time, measured by the beacon'
+                : 'Log span: first request to last. Blind to the final page.'),
+        'data-sort': String(shown === null ? -1 : shown)
+    }));
+
+    tr.appendChild(el('td', { class: 'visit-verdict', 'data-sort': v.bounced === null ? '' : String(v.bounced) }, [
+        bounceMark(v),
         openButton('session', { id: v.id }, 'Open this visit')
     ]));
 
     return tr;
+}
+
+/**
+ * Whether this visit bounced, in the product's own definition rather than the conventional one.
+ *
+ * A bounce is one page AND no engagement — not merely one pageview, which counts a reader who
+ * spent four minutes on the article they came for as a failure. Where no beacon ran there is no
+ * engagement to judge, so the honest answer is that it is not known, and the cell says so
+ * instead of guessing in either direction.
+ */
+function bounceMark(v) {
+    if (v.bounced === true) {
+        return el('span', { class: 'chip chip-accent', text: 'Bounced' });
+    }
+    if (v.bounced === false) {
+        return el('span', { class: 'chip', text: 'Stayed' });
+    }
+    return el('span', { class: 'muted', text: '—' });
 }
 
 /**

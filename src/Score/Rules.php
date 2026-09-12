@@ -350,6 +350,19 @@ final class Rules
     /** @var array<string,int> Effective weights after config overrides. */
     private array $weights;
 
+    /**
+     * The shortest visit that may be called `human` outright.
+     *
+     * Below this the verdict is capped at `likely_human`. Thirty seconds rather than ten — the
+     * engagement threshold — because these two answer different questions: ten seconds is enough
+     * to say a page was read rather than bounced off, and half a minute is the least that makes
+     * "this was a person" a conclusion instead of a guess.
+     */
+    private const HUMAN_FLOOR_MS = 30000;
+
+    /** The reason code the floor records, so the verdict is never unexplained. */
+    private const SHORT_VISIT_REASON = 'short_visit';
+
     /** @var array<string,int> Verdict thresholds. */
     private array $thresholds;
 
@@ -566,6 +579,13 @@ final class Rules
             'severity' => 'low',
             'why' => 'One page, gone in under ten seconds. Very weak on its own; a bounce looks the same.',
         ],
+        self::SHORT_VISIT_REASON => [
+            'label' => 'Too short to call human',
+            'severity' => 'low',
+            'why' => 'The visit lasted under ' . (self::HUMAN_FLOOR_MS / 1000) . ' seconds. Nothing in it '
+                . 'says automation — there is simply not enough of it to call a person a person, so the '
+                . 'verdict stops at likely human.',
+        ],
         self::PROVISIONAL_REASON => [
             'label' => 'Session still open',
             'severity' => 'info',
@@ -771,6 +791,36 @@ final class Rules
 
         $score   = Signals::clampScore($total);
         $verdict = $this->verdictFor($score);
+
+        /* THIRTY SECONDS IS THE FLOOR FOR CALLING SOMEBODY HUMAN. A visit that lasted less than
+           that has not shown enough of itself to earn the strongest verdict the panel can give:
+           `human` means "we are confident", and half a minute of traffic is not confidence, it
+           is an absence of evidence against. It is demoted to `likely_human`, which is exactly
+           what the reading is — probably a person, not yet proven one.
+
+           MEASURED ON THE BEST CLOCK AVAILABLE. The engaged clock is the honest one where the
+           beacon ran; the log span is the fallback and is blind to the final page, so a visit
+           whose span is short may well have been longer. Both err the same way here, which is
+           the safe direction: this rule only ever weakens a verdict, never strengthens one. A
+           visit with no duration at all is left alone — nothing was measured, so there is
+           nothing to demote on. */
+        if ($verdict === 'human') {
+            $engaged = $s['engaged_ms'] ?? null;
+            $best = $engaged !== null && (int) $engaged > 0
+                ? (int) $engaged
+                : (int) ($s['log_span_ms'] ?? 0);
+
+            if ($best > 0 && $best < self::HUMAN_FLOOR_MS) {
+                $verdict = 'likely_human';
+                $reasons[] = self::SHORT_VISIT_REASON;
+                $detail[self::SHORT_VISIT_REASON] = [
+                    'weight' => 0,
+                    'why'    => 'The visit lasted ' . round($best / 1000, 1) . ' seconds, under the '
+                        . (self::HUMAN_FLOOR_MS / 1000) . '-second floor for calling a visit human. '
+                        . 'Nothing here says automation; there is simply not enough of it to be sure.',
+                ];
+            }
+        }
 
         if (!empty($ctx['provisional']) && self::isBetterThanFloor($verdict)) {
             $verdict = self::PROVISIONAL_FLOOR;
