@@ -870,7 +870,28 @@ final class Layout
         foreach ($overrides as $k => $v) {
             $params[$k] = $v;
         }
-        return '?' . http_build_query($params);
+
+        /* `f[field][]`, NEVER `f[field][0]`. http_build_query() numbers every array it is given,
+           and the browser reads the filter state back with a parser that matches the empty-bracket
+           spelling this product writes everywhere else (Panel\Facets::urlFor). A numbered key
+           parsed as no selection at all, so after following one of these links the sidebar could
+           switch a value on and never off again. The operator keeps its literal key. */
+        $pairs = [];
+        foreach ($params as $key => $value) {
+            if (!is_array($value)) {
+                $pairs[] = rawurlencode((string) $key) . '=' . rawurlencode((string) $value);
+                continue;
+            }
+            foreach ($value as $field => $entries) {
+                $base = (string) $key . '[' . (string) $field . ']';
+                foreach ((array) $entries as $k => $entry) {
+                    $suffix = $k === 'op' ? '[op]' : '[]';
+                    $pairs[] = rawurlencode($base . $suffix) . '=' . rawurlencode((string) $entry);
+                }
+            }
+        }
+
+        return '?' . implode('&', $pairs);
     }
 
     /** The footer: honest about where the numbers came from and what they cost. */
