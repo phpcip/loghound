@@ -548,6 +548,28 @@ final class Layout
            nothing is scoped by anything, so there is no duration and no hostname — and an empty
            form with a submit button in it would be a control that answers a press by doing
            nothing, which is the one thing Controller::toolbar() exists to prevent. */
+        /* THE FILTER PANEL'S ONE CONTROL, AND IT LEADS THE BAR (2026-09-12). It replaced the
+           hostname selector, which wrote `f[host_s][]` — the WEBSITE facet's own parameter — so
+           it was a second interface onto a filter the panel already offers and the two could
+           disagree about what was in force. One control, one panel, on every view that DECLARES
+           SCOPE_FACETS: the same declaration assets/js/app.js gates initFilterPanel() on, so the
+           button is drawn exactly where there is a panel for it to open.
+
+           FIRST IN THE BAR because it is the broad control and the duration is the narrow one:
+           what is being counted comes before how far back. `.topbar-in` is a plain flex row with
+           no `order`, so this position is the markup's and nothing else has to agree with it.
+
+           Rendered here rather than built by assets/js/facets.js so it exists before any script
+           runs and cannot arrive late beside a bar that is already drawn. Its label and its
+           aria-expanded are set by that script once it knows whether the panel is open.
+
+           The applied-filters badge above stays gated more widely on purpose: assets/js/topbar.js
+           wires that one on every view and its dialog covers the `lf[…]` request-log plane too. */
+        if ($view->honours(Controller::SCOPE_FACETS)) {
+            echo '<button type="button" class="tb-field-btn" id="lh-facets-toggle"'
+                . ' aria-controls="lh-facets-groups" aria-expanded="false">Show filters</button>';
+        }
+
         if ($range || $host) {
             echo '<form class="tb-scope" method="get" action="" id="lh-scope-form">';
             self::hiddenState(['v' => $slug, 's' => Controller::sectionSlug($section)], $range, $host);
@@ -555,7 +577,11 @@ final class Layout
             if ($range) {
                 $current = Query::range(isset($_GET['range']) && is_string($_GET['range']) ? $_GET['range'] : null);
                 echo '<span class="tb-field">';
-                echo '<label for="lh-range">Duration</label>';
+                /* THE WORD IS GONE, THE LABEL IS NOT. "Duration" named a control whose own
+                   options already say what it is — 6H, 24H — so it was a word spending bar room
+                   to repeat the thing beside it. `.sr-only` keeps the select's accessible name
+                   for a screen reader, which deleting the element would have taken away. */
+                echo '<label class="sr-only" for="lh-range">Duration</label>';
                 echo '<select id="lh-range" name="range" data-smart="Duration">';
                 foreach (Query::ranges() as $key => $def) {
                     echo '<option value="' . Security::esc($key) . '"'
@@ -601,24 +627,6 @@ final class Layout
                mechanism. */
             echo '<button type="submit" class="tb-go">Apply</button>';
             echo '</form>';
-        }
-
-        /* THE FILTER PANEL'S ONE CONTROL, WHERE THE HOSTNAME SELECTOR USED TO BE (2026-09-12).
-           That selector wrote `f[host_s][]`, which is the WEBSITE facet's own parameter — it was
-           a second interface onto a filter the panel already offers, and the two could disagree
-           about what was in force. One control, one panel, on every view that DECLARES
-           SCOPE_FACETS — the same declaration assets/js/app.js gates initFilterPanel() on, so the
-           button is drawn exactly where there is a panel for it to open. The applied-filters
-           badge above is gated more widely on purpose: assets/js/topbar.js wires that one on
-           every view and its dialog covers the `lf[…]` request-log plane too, so the Opensolr
-           views keep a bar that can say their numbers are narrowed.
-
-           Rendered here rather than built by assets/js/facets.js so it exists before any script
-           runs and cannot arrive late beside a bar that is already drawn. Its label and its
-           aria-expanded are set by that script once it knows whether the panel is open. */
-        if ($view->honours(Controller::SCOPE_FACETS)) {
-            echo '<button type="button" class="tb-field-btn" id="lh-facets-toggle"'
-                . ' aria-controls="lh-facets-groups" aria-expanded="false">Show filters</button>';
         }
 
         echo '<button type="button" class="tb-res" id="lh-tb-resources" aria-haspopup="dialog"'
