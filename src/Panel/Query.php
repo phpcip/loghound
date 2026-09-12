@@ -680,6 +680,35 @@ final class Query
      *
      * @return array<string,array{0:string,1:string,2:string}>
      */
+    /**
+     * The population a VIEW is about, as sessions-core `fq` clauses.
+     *
+     * THE FILTER RAIL COUNTS WHAT THE PAGE COUNTS. The rail is one shared request for every
+     * view, so it was answering "how many sessions in total came from Romania" while sitting
+     * beside a page whose every other number is about attacks — 55 next to a table showing
+     * none. A count that does not describe the page it is printed on is worse than no count:
+     * the reader picks the value and lands on an empty table.
+     *
+     * Keyed by view slug, like pivots(), and DELIBERATELY SHORT. A view earns an entry here
+     * only when it has one fixed population; the views that offer a humans/bots switch have a
+     * CONTROL, not a scope, and giving them a fixed one here would silently override the
+     * reader's own choice. Everything absent from this table keeps the whole-traffic counts,
+     * which is the honest answer for Overview, Sessions, Networks and the rest.
+     *
+     * @return array<int,string>
+     */
+    public static function viewScope(string $view): array
+    {
+        switch ($view) {
+            case 'attacks':
+                return [self::attackFq()];
+            case 'searches':
+                return ['search_terms_ss:*'];
+            default:
+                return [];
+        }
+    }
+
     public static function pivots(): array
     {
         return [

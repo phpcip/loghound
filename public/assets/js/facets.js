@@ -47,7 +47,7 @@
 
 'use strict';
 
-import { api, byId, el, fill, num } from './core.js';
+import { api, boot, byId, el, fill, num } from './core.js';
 import { FILTER_LABELS, dimLabel, dimValue, isFilterable } from './identity.js';
 import {
     basisNote,
@@ -473,7 +473,11 @@ function mount() {
 function load(panel) {
     loaded = true;
     fill(panel, [el('p', { class: 'muted', text: 'Counting values for every dimension…' })]);
-    api('sessions', 'dimensions').then((data) => {
+    /* THE VIEW TRAVELS WITH THE REQUEST. The rail is one shared action, so the server cannot
+       otherwise know which page it is being drawn beside — and it was counting all traffic next
+       to pages that count a subset, which put 55 Romanian sessions beside an attacks table with
+       none of them in it. Panel\Query::viewScope() decides what, if anything, that narrows. */
+    api('sessions', 'dimensions', { for: boot.view || '' }).then((data) => {
         renderFacetPanel(panel, data.dimensions);
     }).catch((err) => {
         loaded = false;

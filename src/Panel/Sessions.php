@@ -645,7 +645,8 @@ final class Sessions extends Controller
         array $extra = [],
         string $text = '',
         ?array $only = null,
-        bool $numBuckets = false
+        bool $numBuckets = false,
+        array $extraFqs = []
     ): array {
         $fields = array_keys(self::browseFields());
         if ($only !== null) {
@@ -656,7 +657,7 @@ final class Sessions extends Controller
             $label,
             $this->gw->sessionsCore(),
             $text,
-            ['fq' => $this->sessionFqs()],
+            ['fq' => array_merge($this->sessionFqs(), $extraFqs)],
             array_merge($extra, $this->facetDefs($fields, $limit, $numBuckets))
         );
 
@@ -687,7 +688,23 @@ final class Sessions extends Controller
      */
     private function dimensions(): array
     {
-        [$groups, $f] = $this->dimensionGroups('sessions.dimensions', self::BROWSE_BUCKETS);
+        /* THE RAIL IS SHARED, THE PAGE IS NOT. Every view fetches this one action, so the
+           caller names the view it is drawn beside and the counts are narrowed to that view's
+           population — Query::viewScope() says which, and says nothing for the views that count
+           all traffic. The slug is checked against the router rather than trusted: an unknown
+           `for` yields no scope at all, never a filter built from request text. */
+        $for = (string) ($_GET['for'] ?? '');
+        $scope = isset(Layout::routes()[$for]) ? Query::viewScope($for) : [];
+
+        [$groups, $f] = $this->dimensionGroups(
+            'sessions.dimensions',
+            self::BROWSE_BUCKETS,
+            [],
+            '',
+            null,
+            false,
+            $scope
+        );
 
         return $this->envelope([
             'dimensions' => $groups,
