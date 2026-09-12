@@ -1628,4 +1628,89 @@ final class Security
         $addr = @inet_ntop($out);
         return ($addr === false ? $ip : $addr) . '/' . $bits;
     }
+
+    /**
+     * The IPv4 networks that are never a visitor, as the dotted prefix a stored value begins with.
+     *
+     * ONE VOCABULARY, TWO SINKS, WHICH IS WHY IT IS A TABLE AND NOT A REGEX. isPrivateAddress()
+     * below decides what is allowed to ENTER Solr; Solr::publicAddressesOnly() turns this same
+     * table into the filter that keeps whatever is already indexed OUT OF EVERY VIEW. Two
+     * hand-written lists would drift, and the drift is silent in both directions: traffic
+     * refused at the door yet still counted on a card, or a range filtered out of the panel
+     * that the tailer cheerfully keeps writing.
+     *
+     * DOTTED, SO THEY ARE SAFE AGAINST `ip_s` IN EVERY PRIVACY MODE. A `hash`-mode address is
+     * hexadecimal and contains no dot, so none of these can collide with one; a `truncate`-mode
+     * address is the network itself, which these match exactly as intended.
+     */
+    public const PRIVATE_V4_PREFIXES = [
+        '0.', '10.', '127.', '169.254.', '192.168.',
+        '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.', '172.22.', '172.23.',
+        '172.24.', '172.25.', '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
+    ];
+
+    /**
+     * The IPv6 families that are never a visitor: ULA (fc00::/7) and link-local (fe80::/10).
+     *
+     * MATCHED AGAINST `ip_net_s` ALONE, and that restriction is load-bearing rather than
+     * tidiness. `ip_net_s` is always derived from the TRUE address, before any privacy
+     * transform, so it is never a hash — whereas a hash-mode `ip_s` is hexadecimal and CAN
+     * legitimately begin `fc`, `fd` or `fe8`. Applying these to `ip_s` would therefore delete
+     * and hide real visitors on a hash-mode installation, for no reason but a prefix collision.
+     */
+    public const PRIVATE_V6_PREFIXES = ['fc', 'fd', 'fe8', 'fe9', 'fea', 'feb'];
+
+    /**
+     * IPv6 loopback and unspecified, as whole terms rather than prefixes.
+     *
+     * `::1` masked to a /48 by ipNetwork() collapses to `::`, which is written `::/48` — so the
+     * network form is what a session document actually carries and both spellings are named.
+     */
+    public const PRIVATE_V6_TERMS = ['::/48', '::1', '::'];
+
+    /**
+     * Whether an address is one this product refuses to record at all.
+     *
+     * PHP'S OWN TABLE, NOT A HAND-ROLLED CIDR LIST. `FILTER_FLAG_NO_PRIV_RANGE` covers 10/8,
+     * 172.16/12, 192.168/16 and fc00::/7; `FILTER_FLAG_NO_RES_RANGE` covers 127/8, 169.254/16,
+     * 0/8, 240/4, `::`, `::1` and fe80::/10. Four other call sites in this codebase already
+     * decide "is this address public" with exactly that pair — hostIsPublic(), the SSRF guard,
+     * Enrich\Geo and Setup\Detector — so the ingest refusal agrees with the SSRF guard by
+     * construction instead of by a comment promising that it does.
+     *
+     * CGNAT (100.64/10) IS DELIBERATELY NOT PRIVATE HERE. PHP does not treat it as private and
+     * neither should this: it is the address a great many mobile visitors genuinely arrive
+     * from, and excluding it would throw away real traffic and call it hygiene.
+     *
+     * ACCEPTS THE NETWORK FORM TOO — `10.0.0.0/24` as well as `10.0.0.1` — because by the time
+     * the tailer can ask, a privacy mode may already have rewritten `ip_s`, leaving `ip_net_s`
+     * as the only field still holding the true address. The prefix is masked off and the
+     * network address itself judged, which lands on the same verdict for every range here.
+     *
+     * A STRING THAT IS NOT AN ADDRESS IS NOT PRIVATE. A hostname from `HostnameLookups On`, a
+     * bare `-`, anything a proxy invented: it cannot be judged as an address, and refusing it
+     * here would silently drop traffic on the strength of a log-format quirk.
+     */
+    public static function isPrivateAddress(string $ip): bool
+    {
+        $ip = trim($ip);
+        if ($ip === '') {
+            return false;
+        }
+
+        $slash = strpos($ip, '/');
+        if ($slash !== false) {
+            $ip = substr($ip, 0, $slash);
+        }
+
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            return false;
+        }
+
+        return filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) === false;
+    }
 }

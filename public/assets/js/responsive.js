@@ -776,7 +776,13 @@ const CONTROL_TIP_SELECTOR = '.card-refresh[data-lh-tip], .rowopen[data-lh-tip]'
    marking. It carries `data-lh-tip` outright (identity.js), and without it in this list nothing
    ever measured the element, so the box fell back to its static position and appeared at the
    bottom of the page instead of under the flag the pointer was on. */
-const VALUE_TIP_SELECTOR = '.facet-opt[data-lh-tip], .dim[data-lh-tip]';
+/* `.urlwrap` is here for the same reason and answers the loudest complaint the tables get: a
+   page path is the longest value in any visit table, it is the one the column always has to cut,
+   and until now the reader could see the ellipsis and had no way whatever to read what was
+   behind it. Every path anywhere — visit tables, dimension dialogs, the request timeline — is
+   drawn by one function (pathCell in url.js), so marking that one wrapper puts the full path
+   under the pointer in every table at once. */
+const VALUE_TIP_SELECTOR = '.facet-opt[data-lh-tip], .dim[data-lh-tip], .urlwrap[data-lh-tip]';
 
 /**
  * Everything one delegated listener has to recognise, composed rather than written out again.
@@ -838,7 +844,13 @@ const VALUE_TIP_PARTS = [
        ellipsis is on the anchor itself — it is the flex row's first child — so that is what is
        measured; but the anchor also holds the count, so the words come from the inner span.
        `text` is the third role: measure here, quote from there. */
-    { marker: '.fgroup .dim, .lh-dialog-body .dim', value: '.dim', text: '.dim-val' }
+    { marker: '.fgroup .dim, .lh-dialog-body .dim', value: '.dim', text: '.dim-val' },
+
+    /* A PAGE PATH, WHEREVER ONE IS DRAWN. The marker is the flex wrapper because that is the
+       whole target the pointer can reach — the trailing open-in-new-tab mark is its sibling, not
+       part of the words — while the measurement and the words both come from `.urlpath`, which
+       is the element the ellipsis is actually on. */
+    { marker: '.urlwrap', value: '.urlpath' }
 ];
 
 /**

@@ -435,7 +435,7 @@ final class Live extends Controller implements JobHost
 
         $hosts = $this->selectedHosts();
         $scope = array_merge(
-            [self::FQ_SESSION_DOCS, Query::term('ip_s', $ip)],
+            [self::FQ_SESSION_DOCS, Query::publicIpsOnly(), Query::term('ip_s', $ip)],
             $this->facets->fqs(['host_s'])
         );
 
@@ -551,7 +551,7 @@ final class Live extends Controller implements JobHost
             'region'   => $str('region_s'),
             'city'     => $str('city_s'),
             'host'     => $str('host_s'),
-            'entry'    => $str('entry_path_s'),
+            'entry'    => $str('entry_path_s') ?? $str('exit_path_s'),
             'verdict'  => $str('bot_verdict_s'),
         ];
     }

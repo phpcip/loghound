@@ -1148,7 +1148,15 @@ final class Sessions extends Controller
             'region'   => $str('region_s'),
             'city'     => $str('city_s'),
             'host'     => $str('host_s'),
-            'entry'    => $str('entry_path_s'),
+
+            /* WHATEVER THEY ASKED FOR FIRST, and `entry_path_s` alone was not that. The
+               sessionizer records a landing PAGE, so a session that only ever fetched
+               /robots.txt, /sitemap.xml or a single image had no entry path at all and the
+               column printed a dash — which reads as "we lost it" when the truth is that the
+               visitor never requested a page. The exit path is the same field's other end and
+               costs nothing, being already in the field list; between the two, every session
+               that touched anything at all now names something. */
+            'entry'    => $str('entry_path_s') ?? $str('exit_path_s'),
             'verdict'  => $str('bot_verdict_s'),
             'ident'    => $str('ident_s'),
 

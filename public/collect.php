@@ -314,6 +314,10 @@ if (!$exclusions->isEmpty() && $exclusions->excludes($site, [
     lh_end();
 }
 
+if (Security::isPrivateAddress($ip)) {
+    lh_end();
+}
+
 $sessionId = (string) $payload['session_id'];
 $token     = (string) $payload['token'];
 $isHello   = ($sessionId === '' || $token === '');

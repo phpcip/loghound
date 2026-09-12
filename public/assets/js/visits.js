@@ -169,12 +169,24 @@ export function visitRow(v) {
  */
 function bounceMark(v) {
     if (v.bounced === true) {
-        return el('span', { class: 'chip chip-accent', text: 'Bounced' });
+        return el('span', {
+            class: 'chip chip-accent',
+            text: '100%',
+            title: 'Bounced: one page, and no engagement measured on it.'
+        });
     }
     if (v.bounced === false) {
-        return el('span', { class: 'chip', text: 'Stayed' });
+        return el('span', {
+            class: 'chip',
+            text: '0%',
+            title: 'Did not bounce: more than one page, or measured engagement on the one page.'
+        });
     }
-    return el('span', { class: 'muted', text: '—' });
+    return el('span', {
+        class: 'muted',
+        text: '—',
+        title: 'Not known: no beacon ran, so there is no engagement to judge a single-page visit by.'
+    });
 }
 
 /**

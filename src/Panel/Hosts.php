@@ -293,7 +293,7 @@ final class Hosts extends Controller
     private function fqsWithoutHost(): array
     {
         return array_merge(
-            [Query::rangeFq('ts_start', $this->range)],
+            [Query::rangeFq('ts_start', $this->range), Query::publicIpsOnly()],
             $this->facets->fqs(null, Query::HOST_FIELD)
         );
     }

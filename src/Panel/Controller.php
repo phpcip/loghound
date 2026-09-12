@@ -493,7 +493,7 @@ abstract class Controller
     protected function sessionFqs(): array
     {
         return array_merge(
-            [self::FQ_SESSION_DOCS, Query::rangeFq('ts_start', $this->range)],
+            [self::FQ_SESSION_DOCS, Query::publicIpsOnly(), Query::rangeFq('ts_start', $this->range)],
             $this->facets->fqs()
         );
     }
@@ -542,7 +542,7 @@ abstract class Controller
     protected function hitFqs(): array
     {
         return array_merge(
-            [Query::rangeFq('ts', $this->range)],
+            [Query::rangeFq('ts', $this->range), Query::publicIpsOnly()],
             $this->hitFacets->fqs()
         );
     }

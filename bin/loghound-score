@@ -804,6 +804,28 @@ function buildSessionDoc(array $session, bool $provisional = false): array
     if (!empty($session['paths'])) {
         $doc['paths_ss'] = array_values($session['paths']);
     }
+
+    /*
+     * A SESSION THAT ASKED FOR SOMETHING MUST NAME WHAT IT ASKED FOR.
+     *
+     * The sessionizer records a landing PAGE, and only inside its `kind === 'html'` branch — so
+     * a visitor that fetched nothing but /robots.txt, /sitemap.xml or a single image arrived
+     * with entry_path AND exit_path both null, and every visit table printed a dash for the
+     * page. On this installation that was 197 of 2,049 sessions: not an edge case, and the dash
+     * reads as "we lost it" when the truth is "they never requested a page".
+     *
+     * The fallback is the first path the session actually touched, which paths_ss already holds
+     * for exactly this reason. It is applied ONLY when there is no html landing page, so the
+     * meaning of entry_path_s where a real page exists is untouched and the Pages and
+     * Engagement views keep counting what they always counted; what changes is that a
+     * robots.txt-only crawler now says `/robots.txt` instead of nothing.
+     *
+     * Sessions whose only hit was an asset still have no path at all — the sessionizer does not
+     * track asset paths (isVisitedPath) — and those honestly have nothing to name.
+     */
+    if (!isset($doc['entry_path_s']) && !empty($doc['paths_ss'])) {
+        $doc['entry_path_s'] = (string) $doc['paths_ss'][0];
+    }
     if (!empty($session['terms'])) {
         $doc['search_terms_ss'] = array_values($session['terms']);
     }

@@ -383,7 +383,7 @@ session that do not come from the log line or from Loghound's own measurement.
 | `ident_s` | Whatever the site calls the person — an email, a customer number, an account id. Stored, because the session dialog shows it back. Capped at 128 characters, control characters stripped, valid UTF-8 enforced; markup is kept as data and escaped at the sink. |
 | `signed_in_b` | **Three states, and the third is the absence of the field.** `true` signed in, `false` explicitly not, **absent = not reported**. A site that never answers must not be counted as anonymous, so the field carries no default and is written only when a payload actually said one or the other — the same discipline as `provisional_b`, for the same reason. |
 | Resolution | Over a session: the last non-empty identity wins, and signed-in beats anonymous. |
-| Switches | `beacon.store_identity` is **off by default** — it is a name, which is personal data. `beacon.store_signed_in` is on: a boolean identifies nobody. Both gate before the value reaches SQLite, so "off" means it is never stored anywhere. |
+| Switches | **There is no switch for the identity, by design.** A site that puts `data-ident` on the beacon tag has already decided to declare who this is; a second switch here only meant the value arrived and was silently discarded, which is the last place an operator hunting a missing email thinks to look. `beacon.store_signed_in` remains and defaults to on: a boolean identifies nobody. It gates before the value reaches SQLite, so "off" means never stored anywhere. |
 
 ---
 

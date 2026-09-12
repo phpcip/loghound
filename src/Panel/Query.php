@@ -23,6 +23,7 @@ namespace Loghound\Panel;
 
 use Loghound\Score\Attacks;
 use Loghound\Security;
+use Loghound\Solr;
 
 final class Query
 {
@@ -491,6 +492,23 @@ final class Query
             throw new \InvalidArgumentException('Unsafe field name: ' . $field);
         }
         return $field . ':' . self::quote($value);
+    }
+
+    /**
+     * The clause every panel query carries so that private traffic is in no number on any page.
+     *
+     * Loopback and RFC1918 addresses are the machine talking to itself — a health check, a
+     * local cron, a reverse proxy hop — and counting them as visits inflates every total on
+     * every view. They are refused at ingest now, so this exists for what earlier versions
+     * already wrote; it stays in place permanently regardless, because one clause that is
+     * always true costs a cached filter and removes a whole class of wrong number.
+     *
+     * Delegates so there is exactly ONE place that knows the shape of these addresses; see
+     * Solr::publicAddressesOnly() and the table in Security it is built from.
+     */
+    public static function publicIpsOnly(): string
+    {
+        return Solr::publicAddressesOnly();
     }
 
     /**

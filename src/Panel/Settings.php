@@ -201,7 +201,7 @@ final class Settings extends Controller implements JobHost, Sections
         try {
             $f = $this->gw->facet('settings.hosts', $this->gw->sessionsCore(), [
                 'q'  => '*:*',
-                'fq' => [self::FQ_SESSION_DOCS],
+                'fq' => [self::FQ_SESSION_DOCS, Query::publicIpsOnly()],
             ], [
                 'hosts' => [
                     'type'     => 'terms',
@@ -5510,7 +5510,12 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $f = $this->gw->facet('settings.beacon', $this->gw->sessionsCore(), [
             'q'  => '*:*',
-            'fq' => [self::FQ_SESSION_DOCS, Query::SETTLED_SESSIONS, 'ts_start:[NOW-30DAY TO NOW]'],
+            'fq' => [
+                self::FQ_SESSION_DOCS,
+                Query::SETTLED_SESSIONS,
+                Query::publicIpsOnly(),
+                'ts_start:[NOW-30DAY TO NOW]',
+            ],
         ], [
             'withBeacon' => ['type' => 'query', 'q' => Query::POP_BEACON, 'facet' => [
                 'last' => 'max(ts_start)',

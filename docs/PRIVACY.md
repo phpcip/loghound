@@ -147,6 +147,13 @@ themselves are discarded when the page goes away.
 - **No email addresses, names or account identifiers** — unless your own URLs contain them,
   in which case see the warning above.
 - **No telemetry to the Loghound project.** There is nothing to send it to.
+- **No loopback or private-network traffic.** A request from `127.0.0.0/8`, `10/8`,
+  `172.16/12`, `192.168/16`, `169.254/16`, `::1`, `fc00::/7` or `fe80::/10` is refused at
+  ingest and never reaches Solr — that is your own machine talking to itself (a health check,
+  a local cron job, a reverse-proxy hop), not a visitor, and counting it inflates every total
+  on every view. Every panel query filters the same ranges out as well, so anything an earlier
+  version recorded is in no number either. Carrier-grade NAT (`100.64/10`) is deliberately
+  **not** in that list: it is a real address that real mobile visitors arrive from.
 
 ---
 

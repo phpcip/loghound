@@ -778,6 +778,67 @@ final class Solr
     }
 
     /**
+     * The clause that keeps loopback and private-range traffic out of every answer.
+     *
+     * THE SECOND OF THE TWO FRONTS. Security::isPrivateAddress() stops such a request ever
+     * being written; this one makes sure that whatever a previous version of this software
+     * already wrote is in no total, no facet, no table and no chart. Both are built from the
+     * one table in Security, so a range cannot be refused at the door and still counted on a
+     * card.
+     *
+     * TWO NEGATIONS RATHER THAN ONE NEGATED GROUP, because Solr caches each `fq` clause on its
+     * own and these two are the same on every request in the installation's life: they are
+     * computed once into the filterCache and cost nothing thereafter.
+     *
+     * IT KEEPS DOCUMENTS THAT HAVE NO ADDRESS AT ALL. `-field:(...)` does not match a document
+     * that lacks the field, so a session recorded before these fields existed, or one whose
+     * client was logged as a hostname, survives. Absence is not evidence of a private address.
+     */
+    public static function publicAddressesOnly(): string
+    {
+        return '-' . implode(' -', self::privateAddressGroups());
+    }
+
+    /**
+     * The same population stated positively, for the delete that clears out what is already in.
+     */
+    public static function privateAddressFilter(): string
+    {
+        return implode(' OR ', self::privateAddressGroups());
+    }
+
+    /**
+     * The two field groups the two clauses above are assembled from.
+     *
+     * `ip_net_s` carries every family, because it is always derived from the true address and
+     * so is never a hash; `ip_s` carries the dotted IPv4 prefixes only, which no hexadecimal
+     * hash can collide with. Security::PRIVATE_V6_PREFIXES explains why the v6 half is barred
+     * from `ip_s` entirely.
+     *
+     * @return array<int,string>
+     */
+    private static function privateAddressGroups(): array
+    {
+        $v4 = [];
+        foreach (Security::PRIVATE_V4_PREFIXES as $prefix) {
+            $v4[] = $prefix . '*';
+        }
+
+        $net = $v4;
+        foreach (Security::PRIVATE_V6_PREFIXES as $prefix) {
+            $net[] = $prefix . '*';
+        }
+        foreach (Security::PRIVATE_V6_TERMS as $term) {
+            $net[] = '"' . $term . '"';
+        }
+
+        return [
+            'ip_net_s:(' . implode(' OR ', $net) . ')',
+            'ip_s:(' . implode(' OR ', $v4) . ')',
+        ];
+    }
+
+    /**
      * Build `field:[from TO to]`.
      *
      * Bounds must be a plain number, an ISO-8601 instant, a Solr date-math expression

@@ -1525,6 +1525,10 @@ final class Pipeline
             return null;
         }
 
+        if (Security::isPrivateAddress((string) ($hit['ip_net_s'] ?? ($hit['ip_s'] ?? '')))) {
+            return null;
+        }
+
         $ip = (string) ($hit['ip_s'] ?? '');
         if ($ip !== '') {
             if ($this->geo !== null) {

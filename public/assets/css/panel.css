@@ -61,7 +61,13 @@
     --bad:  #c05520;
 
     --font-ui:   "Space Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    --font-mono: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+    /* NO MONOSPACE ANYWHERE IN THIS PANEL. The variable stays — some 140 rules and call sites
+       across the CSS, the PHP views and the JS renderers ask for it, and rewriting all of them
+       would be 140 chances to miss one and leave a single column typeset differently from its
+       neighbours. Pointing it at the interface face retires monospace everywhere at once, and
+       the tabular-numerals rule that travels with it keeps digit columns aligned, which is the
+       only thing the monospaced face was actually buying. */
+    --font-mono: "Space Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 
     --radius: 2px;
     --side-w: 240px;
@@ -159,7 +165,10 @@ html { color-scheme: light dark; }
 
 body {
     margin: 0;
-    font: 400 15px/1.55 var(--font-ui);
+    /* 13px, DOWN FROM 15. The panel is a dense instrument — tables of addresses, paths and
+       timestamps — and at 15px the widest columns had to truncate at ordinary window widths.
+       Set on the body so every rule that inherits comes down with it in one step. */
+    font: 400 13px/1.5 var(--font-ui);
     -webkit-font-smoothing: antialiased;
     color: var(--ink);
     background: var(--page);
@@ -200,7 +209,7 @@ a:hover { background: none; color: var(--ink); text-decoration: underline; text-
 
 code, .mono, pre { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 code {
-    font-size: 14px;
+    font-size: 13px;
     background: var(--chip);
     border: 1px solid var(--hairline);
     border-radius: var(--radius);
@@ -598,13 +607,17 @@ main {
     -webkit-overflow-scrolling: touch;
 }
 
-table { width: 100%; border-collapse: collapse; font-size: 15px; }
+/* SMALLER TYPE IS WHAT MAKES THE COLUMN FIT. A visit table's widest value is a URL path, and
+   at 15px the page column could not hold one without an ellipsis at any ordinary window width.
+   Dropping the body of the table to 13px and the head to 12px buys roughly a sixth more
+   characters per column, which is the difference between reading the path and guessing it. */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
 thead th {
     position: sticky; top: 0; z-index: 1;
     background: var(--page);
     text-align: left;
-    font: 700 14px/1.2 var(--font-ui);
+    font: 700 12px/1.2 var(--font-ui);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--faint);
@@ -640,7 +653,7 @@ tbody tr.row-link:hover td,
 tbody tr.lf-pick:hover td { background: var(--band); color: var(--ink); }
 
 th.num, td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
-td.mono, th.mono, table .mono { font-family: var(--font-mono); font-size: 14px; font-variant-numeric: tabular-nums; }
+td.mono, th.mono, table .mono { font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
 td.nowrap, th.nowrap { white-space: nowrap; }
 
 td.clip { max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
