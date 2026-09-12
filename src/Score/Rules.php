@@ -329,10 +329,22 @@ final class Rules
         'periodic_timing'        => 45,
         'no_interaction'         => 40,
         'desktop_on_mobile_asn'  => 40,
-        'tz_mismatch'            => 35,
         'no_304_on_repeat'       => 30,
         'no_assets'              => 25,
         'single_page_10s'        => 15,
+
+        /* TEN, DOWN FROM THIRTY-FIVE, AND LAST IN THE TABLE FOR A REASON. A timezone mismatch is
+           the weakest thing this scorer can observe and it was priced as one of the strongest:
+           at 35, against a `likely_human` threshold of 20, it was on its own enough to hold a
+           visit below `human`. It did exactly that to a visitor who arrived from Reddit, ran the
+           beacon, stayed 43 seconds engaged and produced 61 interactions — convicted by a
+           browser clock that disagreed with an Indian ISP's geolocation.
+
+           EVERY INNOCENT CASE PRODUCES THIS: a VPN, a traveller, a phone whose zone was set by
+           hand, a dual-SIM handset, and an IP database that is simply wrong about a consumer
+           netblock. At 10 it still stacks — with no_304_on_repeat and no_assets beside it that
+           is 65 and a conviction — and it can no longer manufacture one by itself. */
+        'tz_mismatch'            => 10,
     ];
 
     /**
@@ -610,7 +622,10 @@ final class Rules
         'tz_mismatch' => [
             'label' => 'Timezone mismatch',
             'severity' => 'low',
-            'why' => 'The browser timezone disagrees with the timezone of the IP geolocation.',
+            'why' => 'The browser timezone disagrees with the timezone of the IP geolocation. The weakest '
+                . 'signal in the table and priced accordingly: a VPN, a traveller, a clock set by hand or '
+                . 'an IP database that is simply wrong all look exactly like this. It corroborates other '
+                . 'evidence and can no longer hold a visit below human on its own.',
         ],
         'no_304_on_repeat' => [
             'label' => 'No conditional requests',
@@ -2053,14 +2068,20 @@ final class Rules
     /**
      * tz_mismatch — the browser's timezone does not match the address's geography.
      *
-     * WEIGHT 35. A browser reports Intl timezone Europe/Bucharest while the IP geolocates
+     * WEIGHT 10. A browser reports Intl timezone Europe/Bucharest while the IP geolocates
      * to Ohio. Bots on rented proxies routinely forget to align the two.
      *
-     * Only 35, and deliberately the weakest of the "contradiction" family, because the
-     * innocent population is enormous: every VPN user, every traveller, everyone who never
-     * changed their laptop's timezone after moving, and everyone whose IP geolocation is
-     * simply wrong — which is a large fraction of all IP geolocation. This rule exists to
+     * Ten, and deliberately the weakest rule in the whole table, because the innocent
+     * population is enormous: every VPN user, every traveller, everyone who never changed
+     * their laptop's timezone after moving, and everyone whose IP geolocation is simply
+     * wrong — which is a large fraction of all IP geolocation. This rule exists to
      * corroborate, never to decide.
+     *
+     * IT WAS 35 AND THAT WAS A BUG IN EVERYTHING BUT NAME. Against a `likely_human` threshold
+     * of 20, a weight of 35 meant this rule ALONE decided — it convicted a visitor who came in
+     * from Reddit, ran the beacon, stayed 43 seconds engaged and produced 61 interactions, on
+     * nothing but a clock that disagreed with an Indian ISP's geolocation. A rule documented as
+     * "corroborate, never decide" has to be priced under the threshold to be true.
      *
      * @param array<string,mixed> $s
      */
