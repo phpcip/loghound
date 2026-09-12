@@ -4673,7 +4673,9 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         echo '<form method="post" action="' . Security::esc(Layout::settingsUrl('cache')) . '"'
-            . ' class="cacheclear" id="lh-cache-clear"></form>';
+            . ' class="cacheclear" id="lh-cache-clear">';
+        self::csrfField();
+        echo '</form>';
     }
 
     /**
@@ -4683,8 +4685,10 @@ final class Settings extends Controller implements JobHost, Sections
      * caching, which is inside the settings form, while the two are different submissions to
      * different URLs: one discards a store, the other writes configuration. The `form`
      * attribute is what HTML gives for exactly this — the button lives in the action row and
-     * submits the empty form clearCacheControl() left in the document, so the POST that leaves
-     * the browser is byte for byte the one this control has always sent.
+     * submits the form clearCacheControl() left in the document. THAT FORM IS NOT EMPTY: it
+     * carries the CSRF token, and a version of it that did not shipped once and answered every
+     * press with "CSRF token mismatch". The token has to be a descendant of the form it
+     * protects; the button reaches the form by id, the token cannot.
      *
      * @param array<string,mixed> $status Cache::status(), already read by the caller.
      */
