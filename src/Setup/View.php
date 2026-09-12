@@ -583,7 +583,7 @@ final class View
                 . Security::esc((string) $src['format_string']) . '</code></dd>';
         }
         if (!empty($src['vhost'])) {
-            echo '<dt>Virtual host</dt><dd class="mono">' . Security::esc((string) $src['vhost']) . '</dd>';
+            echo '<dt>Website</dt><dd class="mono">' . Security::esc((string) $src['vhost']) . '</dd>';
         }
         echo '<dt>Sample</dt><dd>' . (int) ($src['lines_parsed'] ?? 0) . ' of '
             . (int) ($src['lines_tested'] ?? 0) . ' recent lines parsed cleanly '

@@ -294,6 +294,43 @@ export function isPathField(field) {
     return PATH_FIELDS.indexOf(String(field)) >= 0;
 }
 
+/** How much of a path a narrow filter column can show before the tail is worth more. */
+const PATH_TAIL_BUDGET = 30;
+
+/**
+ * A path, shortened from the FRONT so the informative end survives.
+ *
+ * THE END OF A PATH IS THE PART THAT IDENTIFIES IT. In a filter column three or four characters
+ * wide of usable space, `/learn/opensolr-ai-api/150/create-em…` and
+ * `/learn/opensolr-ai-api/162/create-em…` are the same string: the ellipsis eats the only part
+ * that differs, and a rail of them reads as one value repeated. Cutting the front instead —
+ * `.../create-embeddings` — leaves the segment that names the thing.
+ *
+ * The caller pairs this with `data-lh-full` carrying the whole path, so nothing is lost: the
+ * column shows the end, the tooltip shows all of it. Short paths are returned untouched, because
+ * a value that already fits gains nothing from being decorated with an ellipsis it does not need.
+ *
+ * @param {string} path
+ * @returns {string}
+ */
+export function pathTail(path) {
+    const raw = path === null || path === undefined ? '' : String(path);
+    if (raw.length <= PATH_TAIL_BUDGET) {
+        return raw;
+    }
+
+    const clean = raw.split('?')[0].replace(/\/+$/, '');
+    const cut = clean.lastIndexOf('/');
+    const last = cut >= 0 ? clean.slice(cut + 1) : clean;
+
+    /* A path whose last segment is empty or itself longer than the budget has no useful
+       boundary to cut on, so the last N characters are the best available answer. */
+    if (last === '') {
+        return '...' + raw.slice(-PATH_TAIL_BUDGET);
+    }
+    return '.../' + (last.length > PATH_TAIL_BUDGET ? last.slice(-PATH_TAIL_BUDGET) : last);
+}
+
 /**
  * The one host the whole dashboard is currently scoped to, or null.
  *

@@ -81,7 +81,7 @@ final class Hosts extends Controller
 
     public function title(): string
     {
-        return 'Virtual hosts';
+        return 'Websites';
     }
 
 

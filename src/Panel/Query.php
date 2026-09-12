@@ -523,7 +523,7 @@ final class Query
     public static function filterFields(): array
     {
         return [
-            'host_s'        => 'Virtual host',
+            'host_s'        => 'Website',
             'bot_verdict_s' => 'Verdict',
             'bot_class_s'   => 'Bot class',
             'as_type_s'     => 'Network type',
@@ -665,6 +665,53 @@ final class Query
     public static function multiValuedFilterFields(): array
     {
         return ['paths_ss', 'bot_reasons_ss', 'search_terms_ss', 'hit_flags_ss', 'status_codes_is'];
+    }
+
+    /**
+     * The dimensions the filter rail offers, in the order it offers them.
+     *
+     * A UI LIST, NOT AN ALLOWLIST. filterFields() stays the full registry and nothing here
+     * narrows it: every dimension left out of this list is still filterable from a URL, still
+     * drawn as a chip in the bar, still removable from the Applied filters dialog, still
+     * listable in the value browser and still reachable by pressing a value in a table. What
+     * this decides is only which dimensions get a permanent column in the rail, and in what
+     * order they are read.
+     *
+     * WHY IT IS EXPLICIT AND ORDERED. The rail used to be whatever filterFields() happened to
+     * contain, in whatever order the array literal happened to be written — so it grew a column
+     * every time a dimension was added anywhere, and read in the order the code was edited
+     * rather than the order an operator thinks in. Site, then verdict, then who they were and
+     * where they came from, then where they went, then what they were using: that is the order
+     * somebody actually narrows traffic in, and it is fixed here rather than emerging.
+     *
+     * NINE DIMENSIONS ARE DELIBERATELY ABSENT — client hints, TLS version, ASN, fingerprint,
+     * netname, fired signal, network type, bot class and declared crawler. Every one is a
+     * forensic detail rather than a way anybody browses traffic, and each was costing a column
+     * in a rail that has to be scanned.
+     *
+     * @return array<int,string> field names, in rail order
+     */
+    public static function browseOrder(): array
+    {
+        return [
+            'host_s',
+            'bot_verdict_s',
+            'signed_in_b',
+            'referer_type_s',
+            'referer_host_s',
+            'paths_ss',
+            'country_s',
+            'region_s',
+            'city_s',
+            'os_s',
+            'device_s',
+            'browser_s',
+            'entry_path_s',
+            'exit_path_s',
+            'hit_flags_ss',
+            'planes_s',
+            'ua_bot_cat_s',
+        ];
     }
 
     /**

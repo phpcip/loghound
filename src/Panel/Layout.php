@@ -127,7 +127,7 @@ final class Layout
             ['slug' => 'fingerprints', 'label' => 'Fingerprints', 'hint' => 'One header signature, many IPs'],
             ['slug' => 'networks',     'label' => 'Networks',     'hint' => 'ASN, netname and geography'],
             ['slug' => 'performance',  'label' => 'Performance',  'hint' => 'Latency percentiles and status codes'],
-            ['slug' => 'hosts',        'label' => 'Virtual hosts','hint' => 'Every site on this machine, side by side'],
+            ['slug' => 'hosts',        'label' => 'Websites',    'hint' => 'Every site on this machine, side by side'],
             ['slug' => 'indexes',      'label' => 'Solr',         'hint' => 'What your Opensolr search indexes are being asked'],
             ['slug' => 'usage',        'label' => 'Storage & bandwidth', 'hint' => 'How much history your plan holds, and what is left'],
             ['slug' => 'settings',     'label' => 'Settings',     'hint' => 'Log sources, privacy, scoring, beacon'],

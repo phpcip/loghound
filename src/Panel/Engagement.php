@@ -90,7 +90,7 @@ final class Engagement extends Controller
                     ['Of those, measurable', 'measured', 'number'],
                     ['Bounced', 'bounced', 'number'],
                     ['One page, but engaged', 'satisfied', 'number'],
-                    ['Virtual host', 'host', 'text'],
+                    ['Website', 'host', 'text'],
                     ['Distinct hosts serving this path', 'hosts', 'number'],
                 ],
             ],

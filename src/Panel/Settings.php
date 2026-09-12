@@ -4001,7 +4001,7 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<dl class="kv">';
             echo '<dt>Server</dt><dd class="mono">' . Security::esc((string) ($src['server'] ?? 'unknown')) . '</dd>';
             if (!empty($src['vhost'])) {
-                echo '<dt>Virtual host</dt><dd class="mono">' . Security::esc((string) $src['vhost']) . '</dd>';
+                echo '<dt>Website</dt><dd class="mono">' . Security::esc((string) $src['vhost']) . '</dd>';
             }
             echo '<dt>Format</dt><dd class="mono">' . Security::esc((string) ($src['format_name'] ?? 'custom')) . '</dd>';
             echo '<dt>Confidence</dt><dd><span class="mono">' . Security::esc(number_format($confidence, 1)) . '%</span> '

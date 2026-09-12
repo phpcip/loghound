@@ -109,7 +109,7 @@ final class Overview extends Controller
                     ['Path', 'path', 'text'],
                     ['Requests', 'requests', 'number'],
                     ['Sessions', 'sessions', 'number'],
-                    ['Virtual host', 'host', 'text'],
+                    ['Website', 'host', 'text'],
                     ['Distinct hosts serving this path', 'hosts', 'number'],
                 ],
             ],

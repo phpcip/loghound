@@ -51,7 +51,7 @@
 import { api, dec, el, fill, num } from './core.js';
 import { closeDialog, dialogFail, isCurrent, openDialog } from './dialog.js';
 import { dimValue } from './identity.js';
-import { isPathField, urlMark } from './url.js';
+import { isPathField, pathTail, urlMark } from './url.js';
 import { exportLink } from './export.js';
 
 /** The query-string prefix for Loghound's own dimensions. The Opensolr log plane uses 'lf'. */
@@ -760,19 +760,32 @@ function valueRow(group, bucket, ns) {
     const on = bucket.state === 'on' || bucket.state === 'excluded';
     const path = isPathField(group.field);
 
+    /* A PATH IS SHOWN BY ITS END, and carries the whole of itself in the tooltip. Cutting the
+       front is what keeps two paths that share a long prefix telling apart in a narrow column;
+       `data-lh-full` is what stops the shortening from costing the reader the full value, since
+       responsive.js would otherwise measure a value that now fits and take the tooltip away. */
+    const shown = String(bucket.label || value);
+    const text = path ? pathTail(shown) : shown;
+
+    const link = el('a', {
+        class: 'facet-opt' + (bucket.state === 'on' ? ' is-on' : '') + (bucket.state === 'excluded' ? ' is-excluded' : ''),
+        href: toggleUrl(group.field, value, ns),
+        title: bucket.why || value
+    }, [
+        el('span', { class: 'facet-mark', 'aria-hidden': 'true', text: on ? (bucket.state === 'excluded' ? '−' : '✓') : '' }),
+        el('span', { class: 'facet-val' + (group.mono ? ' mono' : ''), text: text }),
+        el('span', { class: 'facet-n', text: bucket.count === null ? '—' : num(bucket.count) })
+    ]);
+
+    if (text !== shown) {
+        link.setAttribute('data-lh-full', shown);
+    }
+
     return el('li', {
         class: 'facet-li' + (path ? ' facet-li-url' : ''),
         dataset: { value: value.toLowerCase() }
     }, [
-        el('a', {
-            class: 'facet-opt' + (bucket.state === 'on' ? ' is-on' : '') + (bucket.state === 'excluded' ? ' is-excluded' : ''),
-            href: toggleUrl(group.field, value, ns),
-            title: bucket.why || value
-        }, [
-            el('span', { class: 'facet-mark', 'aria-hidden': 'true', text: on ? (bucket.state === 'excluded' ? '−' : '✓') : '' }),
-            el('span', { class: 'facet-val' + (group.mono ? ' mono' : ''), text: String(bucket.label || value) }),
-            el('span', { class: 'facet-n', text: bucket.count === null ? '—' : num(bucket.count) })
-        ]),
+        link,
         path ? urlMark(value) : null
     ]);
 }

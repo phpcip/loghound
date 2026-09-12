@@ -319,7 +319,7 @@ final class Attacks extends Controller implements Sections
                 'scope'   => $ignored + ['total' => 'Answered requests in scope'],
                 'columns' => [
                     ['When', 'ts', 'date'],
-                    ['Virtual host', 'host', 'text'],
+                    ['Website', 'host', 'text'],
                     ['Method', 'method', 'id'],
                     ['Path', 'path', 'text'],
                     ['Query string', 'query', 'text'],

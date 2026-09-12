@@ -1215,7 +1215,7 @@ abstract class Controller
 
         if (isset($dimensions[Query::HOST_FIELD])) {
             $hosts = $facets->values(Query::HOST_FIELD);
-            $lines[] = ['Virtual host', $hosts === [] ? 'All hosts' : implode('; ', $hosts)];
+            $lines[] = ['Website', $hosts === [] ? 'All hosts' : implode('; ', $hosts)];
         }
 
         $filters = 0;

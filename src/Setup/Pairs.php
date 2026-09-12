@@ -322,7 +322,7 @@ final class Pairs
         return 'Nothing in ' . $pair['hits'] . ' or ' . $pair['sessions'] . ' is cleared, reshaped '
             . 'or overwritten. What this installation records joins what is already in there, and '
             . 'the two are told apart by the hostname on every document — so ' . $where . ' shows up '
-            . 'as its own value under Virtual host in the panel, alongside whatever else reports '
+            . 'as its own value under Website in the panel, alongside whatever else reports '
             . 'into this pair.';
     }
 

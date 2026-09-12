@@ -62,7 +62,7 @@ import {
     toggleUrl,
     urlFor
 } from './facetfilter.js';
-import { isPathField, urlMark } from './url.js';
+import { isPathField, pathTail, urlMark } from './url.js';
 
 /** Has the panel-wide dimension list been fetched? One request per page load. */
 let loaded = false;
@@ -222,20 +222,33 @@ function option(group, bucket, largest) {
     const shown = String(bucket.label || bucket.value);
     const path = isPathField(group.field);
 
+    /* A PATH IS SHOWN BY ITS END. Two paths sharing a long prefix are the same string once a
+       narrow column has cut the tail off both, so the front goes instead and the segment that
+       names the thing survives. `data-lh-full` below carries the whole path: without it
+       responsive.js measures a value that now fits, decides nothing was cut, and takes away the
+       tooltip that is the only way to read the rest. */
+    const text = path ? pathTail(shown) : shown;
+
     /* A value the server marked unfilterable is a static row, not a link: it has a real count and
        no filter can be built for it, and a link that does nothing when pressed is worse than a row
        that says why. Same treatment as a whole dimension that is not filterable. */
 
     if (group.filterable === false || state === 'unfilterable') {
-        return el('li', { class: 'facet-li' + (path ? ' facet-li-url' : ''), title: bucket.why || '' }, [
-            el('span', { class: 'facet-opt is-static' }, [
-                el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
-                el('span', { class: 'facet-mark', 'aria-hidden': 'true' }),
-                el('span', { class: 'facet-val' + (group.mono ? ' mono' : '') }, [
-                    dimValue(group.field, bucket.value, { text: shown, mono: group.mono, link: false })
-                ]),
-                el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
+        const staticOpt = el('span', { class: 'facet-opt is-static' }, [
+            el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
+            el('span', { class: 'facet-mark', 'aria-hidden': 'true' }),
+            el('span', { class: 'facet-val' + (group.mono ? ' mono' : '') }, [
+                dimValue(group.field, bucket.value, { text: text, mono: group.mono, link: false })
             ]),
+            el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
+        ]);
+
+        if (text !== shown) {
+            staticOpt.setAttribute('data-lh-full', shown);
+        }
+
+        return el('li', { class: 'facet-li' + (path ? ' facet-li-url' : ''), title: bucket.why || '' }, [
+            staticOpt,
             path ? urlMark(bucket.value) : null
         ]);
     }
@@ -244,27 +257,35 @@ function option(group, bucket, largest) {
         ? ' — selected, activate to remove'
         : (state === 'excluded' ? ' — excluded, activate to stop excluding it' : ' — activate to filter to it');
 
+    /* THE ACCESSIBLE NAME KEEPS THE WHOLE PATH. What the column shows may be shortened; what a
+       screen reader announces must not be, because there is no tooltip to fall back on. */
+    const link = el('a', {
+        class: 'facet-opt' + (state === 'on' ? ' is-on' : '') + (state === 'excluded' ? ' is-excluded' : ''),
+        href: toggleUrl(group.field, bucket.value, group.ns),
+        title: bucket.why || '',
+        'aria-label': label + ' ' + shown + ', ' + (count === null ? 'not counted' : num(count) + ' sessions') + verb
+    }, [
+        el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
+        el('span', {
+            class: 'facet-mark',
+            'aria-hidden': 'true',
+            text: state === 'on' ? '\u2713' : (state === 'excluded' ? '\u2212' : '')
+        }),
+        el('span', { class: 'facet-val' + (group.mono ? ' mono' : '') }, [
+            dimValue(group.field, bucket.value, { text: text, mono: group.mono, link: false })
+        ]),
+        el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
+    ]);
+
+    if (text !== shown) {
+        link.setAttribute('data-lh-full', shown);
+    }
+
     return el('li', {
         class: 'facet-li' + (path ? ' facet-li-url' : ''),
         dataset: { value: String(bucket.value).toLowerCase() }
     }, [
-        el('a', {
-            class: 'facet-opt' + (state === 'on' ? ' is-on' : '') + (state === 'excluded' ? ' is-excluded' : ''),
-            href: toggleUrl(group.field, bucket.value, group.ns),
-            title: bucket.why || '',
-            'aria-label': label + ' ' + shown + ', ' + (count === null ? 'not counted' : num(count) + ' sessions') + verb
-        }, [
-            el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
-            el('span', {
-                class: 'facet-mark',
-                'aria-hidden': 'true',
-                text: state === 'on' ? '\u2713' : (state === 'excluded' ? '\u2212' : '')
-            }),
-            el('span', { class: 'facet-val' + (group.mono ? ' mono' : '') }, [
-                dimValue(group.field, bucket.value, { text: shown, mono: group.mono, link: false })
-            ]),
-            el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
-        ]),
+        link,
         path ? urlMark(bucket.value) : null
     ]);
 }

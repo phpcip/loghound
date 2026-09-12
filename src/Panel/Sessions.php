@@ -125,8 +125,20 @@ final class Sessions extends Controller
            sessions core defines neither `status_i` nor `status_class_s`, so offering them here
            would put two dimensions in the sidebar whose every value answers zero — which reads
            as "no traffic" rather than as "wrong plane". Query::hitsOnlyFields() is the list. */
-        $out = Query::sessionFilterFields();
-        unset($out['ip_s'], $out['session_id_s']);
+        $answerable = Query::sessionFilterFields();
+        unset($answerable['ip_s'], $answerable['session_id_s']);
+
+        /* THE ORDER IS THE PRODUCT'S, NOT THE ARRAY LITERAL'S. Query::browseOrder() names the
+           dimensions the rail offers and the order it offers them in; this walks that list so a
+           dimension the sessions core cannot answer is skipped rather than shown as a column of
+           zeroes. Anything absent from the order is still filterable everywhere else — see the
+           docblock on browseOrder() and on listableFields() below. */
+        $out = [];
+        foreach (Query::browseOrder() as $field) {
+            if (isset($answerable[$field])) {
+                $out[$field] = $answerable[$field];
+            }
+        }
         return $out;
     }
 
@@ -159,13 +171,15 @@ final class Sessions extends Controller
      */
     private static function listableFields(): array
     {
-        $out = self::browseFields();
-        $all = Query::filterFields();
-        foreach (['ip_s', 'asn_i'] as $field) {
-            if (isset($all[$field])) {
-                $out[$field] = $all[$field];
-            }
-        }
+        /* EVERY DIMENSION THIS PLANE CAN ANSWER, not the rail's shortlist.
+           This used to derive from browseFields(), which was harmless while the rail offered
+           everything and became a real defect the moment the rail became a curated list: the
+           value browser validates against THIS list, so a dimension dropped from the rail would
+           have started answering "that is not a dimension this panel can list" — while still
+           being filterable from a URL and still clickable in every table. The rail decides what
+           gets a permanent column; it does not decide what exists. */
+        $out = Query::sessionFilterFields();
+        unset($out['session_id_s']);
         return $out;
     }
 
@@ -281,7 +295,7 @@ final class Sessions extends Controller
                     ['Session', 'id', 'id'],
                     ['Started', 'ts_start', 'date'],
                     ['Ended', 'ts_end', 'date'],
-                    ['Virtual host', 'host', 'text'],
+                    ['Website', 'host', 'text'],
                     ['Verdict', 'verdict', 'vocab', 'bot_verdict_s'],
                     ['Verdict code', 'verdict', 'id'],
                     ['Bot score', 'score', 'number'],
@@ -699,10 +713,14 @@ final class Sessions extends Controller
         bool $numBuckets = false,
         array $extraFqs = []
     ): array {
-        $fields = array_keys(self::browseFields());
-        if ($only !== null) {
-            $fields = array_values(array_intersect($fields, $only));
-        }
+        /* A NAMED DIMENSION IS RESOLVED AGAINST WHAT THE PLANE CAN ANSWER, not against the rail.
+           The rail's list is a curated shortlist now, and values() — the only caller that passes
+           `$only` — validates its field against listableFields(). Intersecting with the rail here
+           as well would have let a dimension pass that check and then come back as an empty
+           group, which renders as a value browser with nothing in it and no error. */
+        $fields = $only !== null
+            ? array_values(array_intersect(array_keys(self::listableFields()), $only))
+            : array_keys(self::browseFields());
 
         $f = $this->gw->searchFacet(
             $label,

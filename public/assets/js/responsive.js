@@ -907,10 +907,19 @@ function markValueTips() {
                what the ellipsis is on, but it also carries the count, and the tooltip must say
                the value and only the value. */
             const words = part.text ? marker.querySelector(part.text) : value;
+
+            /* A VALUE THE RENDERER SHORTENED ON PURPOSE CARRIES ITS OWN FULL TEXT. Measurement
+               cannot find a path that was already cut to its last segment before it reached the
+               DOM: the span fits, so `scrollWidth > clientWidth` is false, and the tooltip would
+               be stripped from the one value in the rail that most needs it. `data-lh-full` is
+               the renderer saying "this IS cut, and here is what it says" — authored rather than
+               measured, and it wins on both counts. */
+            const authored = (marker.getAttribute('data-lh-full') || '').trim();
+
             seen.push({
                 marker: marker,
-                full: ((words || value).textContent || '').trim(),
-                cut: value.scrollWidth > value.clientWidth
+                full: authored !== '' ? authored : ((words || value).textContent || '').trim(),
+                cut: authored !== '' || value.scrollWidth > value.clientWidth
             });
         }
     }

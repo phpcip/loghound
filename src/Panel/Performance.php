@@ -112,7 +112,7 @@ final class Performance extends Controller
                 'scope'   => $scope + ['timed' => 'Matched requests carrying a duration'],
                 'columns' => [
                     ['Path', 'path', 'text'],
-                    ['Virtual host', 'host', 'text'],
+                    ['Website', 'host', 'text'],
                     ['Distinct hosts serving this path', 'hosts', 'number'],
                     ['Requests', 'requests', 'number'],
                     ['Requests with a duration', 'timed', 'number'],
