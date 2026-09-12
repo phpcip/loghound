@@ -123,7 +123,73 @@ function loadResults() {
  * back rather than waiting on eight terms facets. The `?open=` deep link is handled by
  * detail.js, which app.js wires on every view.
  */
+/** Where the folded/unfolded state of the filter rail is remembered, per viewer. */
+const FOLD_KEY = 'lh.explorer.filters.folded';
+
+/**
+ * Read the remembered state.
+ *
+ * Wrapped because the accessor itself throws in a browser with site data blocked, and a filter
+ * rail that cannot remember its state must still open — an unreadable preference is "not folded",
+ * never an exception that takes the rest of the view's wiring down with it.
+ */
+function readFolded() {
+    try {
+        return window.localStorage.getItem(FOLD_KEY) === '1';
+    } catch (err) {
+        return false;
+    }
+}
+
+/** Remember it, or carry on without remembering. */
+function writeFolded(folded) {
+    try {
+        window.localStorage.setItem(FOLD_KEY, folded ? '1' : '0');
+    } catch (err) {
+        /* Nothing to do: the toggle still works for this page view. */
+    }
+}
+
+/**
+ * Fold the filter rail away and bring it back.
+ *
+ * The rail is 292px of permanent furniture in front of the table that IS this page, and once the
+ * filters are picked the reader wants the rows. Nothing is re-fetched either way — the state is
+ * one class on the grid — so the counts are exactly as they were when it comes back.
+ *
+ * Focus moves to whichever control replaced the one just pressed, because the pressed button is
+ * the one that disappears and leaving focus on a hidden element strands keyboard navigation.
+ */
+function wireFilterFold() {
+    const grid = byId('se-explorer');
+    const hide = byId('se-facets-fold');
+    const show = byId('se-facets-show');
+    if (!grid || !hide || !show) {
+        return;
+    }
+
+    const apply = (folded) => {
+        grid.classList.toggle('is-folded', folded);
+        hide.setAttribute('aria-expanded', folded ? 'false' : 'true');
+    };
+
+    apply(readFolded());
+
+    hide.addEventListener('click', () => {
+        apply(true);
+        writeFolded(true);
+        show.focus();
+    });
+
+    show.addEventListener('click', () => {
+        apply(false);
+        writeFolded(false);
+        hide.focus();
+    });
+}
+
 export default function init() {
+    wireFilterFold();
     loadResults();
     loadFacets();
     loadCard('se-bounce', 'Measuring engagement on single-page visits', async () => {

@@ -364,11 +364,14 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
 }
 .theme-toggle:hover { background: transparent; border-color: var(--ink); color: var(--ink); }
 
+/* THE TABLES GET THE WHOLE WINDOW. This was capped at `--rail + 64px`, a reading measure
+   borrowed from prose — but the panel's payload is tables of timestamps, addresses and paths,
+   and on a wide screen the cap left a third of the window empty while the Date column was
+   truncating mid-hour. Prose is still protected where prose lives: `.explain p` and the card
+   descriptions carry their own max-width, so widening here does not produce 200-character lines. */
 main {
     margin-left: var(--side-w);
-
     padding: 40px 32px 80px;
-    max-width: calc(var(--rail) + 64px);
 }
 
 /* Page head. Nothing sits above the H1 — no badge, no kicker, no eyebrow. */
@@ -1112,6 +1115,27 @@ tr.members > td { padding: 0; background: var(--band); }
 .searchbar input[type="search"] { flex: 1 1 340px; min-width: 0; }
 
 .explorer { display: grid; grid-template-columns: 292px minmax(0, 1fr); gap: 32px; align-items: start; }
+
+/* THE FILTER RAIL FOLDS AWAY. It is 292px of permanent furniture in front of the table that is
+   the actual page, and once a reader has picked their filters they want the rows, not the
+   picker. Hidden rather than removed: the state is one class on the grid, so nothing re-renders
+   and the counts are still there when it comes back. */
+.explorer.is-folded { grid-template-columns: minmax(0, 1fr); }
+.explorer.is-folded > .facets { display: none; }
+
+.facets { position: relative; }
+
+.facets-fold {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 2;
+}
+
+/* The way back. Only on screen while the rail is folded, and it sits in the grid's first row so
+   it does not push the table down. */
+.facets-show { display: none; justify-self: start; margin-bottom: -16px; }
+.explorer.is-folded > .facets-show { display: inline-flex; }
 /* The facet rail's heading is a numbered section heading like every other card's, and it was
    being held at label size by this rule — equal specificity to `.card-head > h2` and further
    down the file, so it won and card 02 alone stayed small, taking its accent number down to

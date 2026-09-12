@@ -1318,7 +1318,9 @@ final class Sessions extends Controller
         $this->searchCard();
         self::bounceCard('se-bounce', '02');
 
-        echo '<div class="explorer">';
+        echo '<div class="explorer" id="se-explorer">';
+        echo '<button type="button" class="ghost small facets-show" id="se-facets-show">'
+            . 'Show filters</button>';
         $this->facetsCard();
         $this->resultsCard();
         echo '</div>';
@@ -1401,6 +1403,8 @@ final class Sessions extends Controller
     private function facetsCard(): void
     {
         echo '<aside class="facets" aria-label="Filter the dashboard">';
+        echo '<button type="button" class="ghost small facets-fold" id="se-facets-fold" '
+            . 'aria-controls="se-explorer">Hide</button>';
         self::cardOpen(
             'se-facets',
             '03',
