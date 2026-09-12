@@ -750,6 +750,14 @@ final class Sessions extends Controller
                 'engaged' => 'percentile(engaged_ms_l,50)',
                 'wall'    => 'percentile(wall_ms_l,50)',
             ]],
+
+            /* TWO FACTS WORTH THE TOP OF THE DIALOG. Whether any of these visits searched, and
+               whether any of them attacked, are the two questions a reader asks about a
+               population before any percentage — and both were answerable only by scrolling
+               into a breakdown, or not at all. Counted as queries over the same scope, so they
+               agree with every other number here by construction. */
+            'searched'  => ['type' => 'query', 'q' => 'search_terms_ss:*'],
+            'attacked'  => ['type' => 'query', 'q' => Query::attackFq()],
         ];
         foreach (Query::populations() as $key => $filter) {
             $definitions['pop_' . $key] = ['type' => 'query', 'q' => $filter];
@@ -802,6 +810,8 @@ final class Sessions extends Controller
             'value'      => $value,
             'filterable' => isset(Query::filterFields()[$field]),
             'sessions'   => (int) ($f['count'] ?? 0),
+            'searched'   => self::qcount($f, 'searched'),
+            'attacked'   => self::qcount($f, 'attacked'),
             'uniq_ips'   => (int) (self::num($f, 'uniq_ips') ?? 0),
             'uniq_fps'   => (int) (self::num($f, 'uniq_fps') ?? 0),
             'uniq_asns'  => (int) (self::num($f, 'uniq_asns') ?? 0),
@@ -949,7 +959,7 @@ final class Sessions extends Controller
             'country_s', 'as_org_s', 'netname_s', 'as_type_s',
             'browser_s', 'os_s', 'device_s',
             'bot_verdict_s', 'bot_class_s', 'bot_reasons_ss',
-            'referer_type_s', 'host_s', 'paths_ss',
+            'referer_type_s', 'host_s', 'paths_ss', 'search_terms_ss',
         ];
         return array_values(array_filter($order, static fn (string $f): bool => $f !== $field));
     }

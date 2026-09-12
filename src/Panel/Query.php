@@ -513,6 +513,13 @@ final class Query
                schemas, so it needs no exclusion on either plane. */
             'referer_host_s' => 'Referring site',
             'bot_reasons_ss' => 'Signal fired',
+
+            /* WHAT THEY TYPED INTO YOUR OWN SEARCH BOX. The field was indexed on both cores and
+               already named in multiValuedFilterFields(), but it was never listed here — so it
+               could be stored and never asked about: no dimension, no label, and no group in
+               any breakdown. A visit that searched for something is the most legible thing a
+               visit can do, and it was the one thing the dialogs could not say. */
+            'search_terms_ss' => 'Search terms',
             'as_org_s'      => 'AS organisation',
             'netname_s'     => 'Netname',
             'fp_hash_s'     => 'Fingerprint',

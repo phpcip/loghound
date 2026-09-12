@@ -732,6 +732,46 @@ function dimHeading(data) {
     };
 }
 
+/**
+ * The three facts that belong beside the counts rather than at the bottom of the page.
+ *
+ * The virtual host is read out of the breakdown that is already on the payload rather than
+ * asked for again: one host is worth naming outright, several is worth counting, and the group
+ * still lists them all further down. Searches and attacks are counted server-side over the
+ * same scope as every other figure here, so they cannot disagree with the visit count.
+ *
+ * Rendered through dimValue() like every other dimension value, so the host carries its colour
+ * dot and its filter link, and reads the same here as it does anywhere else in the panel.
+ */
+function atAGlance(data) {
+    const rows = [];
+    const total = data.sessions || 0;
+
+    const hosts = (data.breakdowns || []).find((group) => group.field === 'host_s');
+    const buckets = hosts && Array.isArray(hosts.buckets) ? hosts.buckets : [];
+
+    if (buckets.length === 1) {
+        rows.push(['Virtual host', dimValue('host_s', buckets[0].value, { mono: true })]);
+    } else if (buckets.length > 1) {
+        rows.push(['Virtual hosts', num(buckets.length) + ' — ' + buckets[0].value
+            + ' is the busiest, with ' + pct(buckets[0].count, total || 1)]);
+    }
+
+    if (data.searched !== undefined && data.searched !== null) {
+        rows.push(['Searched the site', data.searched > 0
+            ? num(data.searched) + ' of ' + num(total) + ' · ' + pct(data.searched, total || 1)
+            : 'None of them searched']);
+    }
+
+    if (data.attacked !== undefined && data.attacked !== null) {
+        rows.push(['Matched an attack pattern', data.attacked > 0
+            ? num(data.attacked) + ' of ' + num(total) + ' · ' + pct(data.attacked, total || 1)
+            : 'None of them']);
+    }
+
+    return rows.length ? kv(rows) : null;
+}
+
 /** Render one dimension value into the dialog body. */
 function renderDimension(body, data) {
     const total = data.sessions || 0;
@@ -745,6 +785,12 @@ function renderDimension(body, data) {
         ]),
 
         filterNote(data.active),
+
+        /* THE THREE FACTS THAT WERE BURIED. The virtual host sat at the bottom of an
+           eleven-group breakdown, and whether these visits searched or attacked could not be
+           read at all. They belong beside the counts, in the same rendering every other value
+           in the panel gets — flag, icon, filter link — rather than as bare text. */
+        atAGlance(data),
 
         el('h3', { text: 'What kind of traffic this is' }),
         mixBar(data.mix, total),
