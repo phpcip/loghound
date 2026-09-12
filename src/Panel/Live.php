@@ -103,6 +103,15 @@ final class Live extends Controller implements JobHost
     /** Pause between reads of the log files. */
     private const POLL_US = 400000;
 
+    /** Seconds between re-reads of the enrichment cache for addresses that were not in it yet. */
+    private const ENRICH_EVERY_SEC = 3;
+
+    /** Seconds after which an address that never reached the cache is given up on. */
+    private const ENRICH_GIVE_UP_SEC = 120;
+
+    /** Addresses waiting on enrichment at once, so a flood cannot grow this without bound. */
+    private const ENRICH_MAX_PENDING = 500;
+
     /** Seconds of silence before the stream says out loud that it is alive and the log is quiet. */
     private const HEARTBEAT_SEC = 12;
 
@@ -391,6 +400,8 @@ final class Live extends Controller implements JobHost
         $wall = microtime(true) + self::NO_RUSAGE_WALL_SEC;
         $spoke = microtime(true);
         $wrote = microtime(true);
+        $pending = [];
+        $checked = microtime(true);
 
         while (true) {
             if (connection_aborted() !== 0) {
@@ -407,6 +418,20 @@ final class Live extends Controller implements JobHost
             $now = microtime(true);
 
             if ($batch['rows'] !== []) {
+                foreach ($batch['rows'] as $row) {
+                    $addr = $row['ip'] ?? null;
+                    if (!is_string($addr) || $addr === '') {
+                        continue;
+                    }
+                    if (!empty($row['geo_known']) && !empty($row['net_known'])) {
+                        continue;
+                    }
+                    if (!isset($pending[$addr]) && count($pending) >= self::ENRICH_MAX_PENDING) {
+                        array_shift($pending);
+                    }
+                    $pending[$addr] = $now;
+                }
+
                 self::event('lines', [
                     'rows'     => $batch['rows'],
                     'lag'      => $batch['lag'],
@@ -428,6 +453,26 @@ final class Live extends Controller implements JobHost
                 echo ":\n\n";
                 self::push();
                 $wrote = $now;
+            }
+
+            if ($pending !== [] && $now - $checked >= self::ENRICH_EVERY_SEC) {
+                $checked = $now;
+                $found = $reader->recheck(array_keys($pending));
+
+                foreach (array_keys($found) as $addr) {
+                    unset($pending[$addr]);
+                }
+                foreach ($pending as $addr => $since) {
+                    if ($now - $since >= self::ENRICH_GIVE_UP_SEC) {
+                        unset($pending[$addr]);
+                    }
+                }
+
+                if ($found !== []) {
+                    self::event('enrich', ['ips' => $found]);
+                    self::push();
+                    $wrote = $now;
+                }
             }
 
             usleep(self::POLL_US);

@@ -62,6 +62,9 @@ let source = null;
 /** Pending "Reconnecting" announcement, cancelled if the stream comes back first. */
 let reconnectTimer = 0;
 
+/** Keeps the chart's window moving while the log is quiet. */
+let chartTimer = 0;
+
 /** Rows currently in the table, by id, so the dialog can open one without a second fetch. */
 const held = new Map();
 
@@ -104,6 +107,7 @@ function connect(cursor) {
     source.addEventListener('lines', onLines);
     source.addEventListener('quiet', onQuiet);
     source.addEventListener('pause', onPause);
+    source.addEventListener('enrich', onEnrich);
     source.onerror = onError;
 }
 
@@ -165,6 +169,65 @@ function onQuiet(event) {
     arrived();
     setState('live', 'Streaming');
     counts();
+}
+
+/**
+ * Geography that arrived after the rows it belongs to.
+ *
+ * The daemon resolves an address a moment after the request that carried it has already streamed
+ * past, so the first row from a new address goes out with no country and no flag. This fills them
+ * in where they are, rather than leaving the operator looking at a table that disagrees with the
+ * dialog opened from it.
+ */
+function onEnrich(event) {
+    const data = parse(event);
+    if (data === null || !data.ips || typeof data.ips !== 'object') {
+        return;
+    }
+
+    arrived();
+
+    for (const row of held.values()) {
+        const fields = row.ip ? data.ips[row.ip] : null;
+        if (fields) {
+            Object.assign(row, fields);
+        }
+    }
+
+    paintPlaces(data.ips);
+}
+
+/**
+ * Put a newly known country onto the rows already on screen.
+ *
+ * @param {Object} map Addresses to the fields that have just become known.
+ */
+function paintPlaces(map) {
+    const table = byId('lv-table');
+    const body = table ? table.tBodies[0] : null;
+    if (!body) {
+        return;
+    }
+
+    for (const tr of Array.from(body.children)) {
+        const row = held.get(tr.dataset ? tr.dataset.id : null);
+        if (!row || !row.ip || !map[row.ip]) {
+            continue;
+        }
+
+        const cell = tr.querySelector('.live-addr');
+        if (!cell) {
+            continue;
+        }
+
+        cell.title = placeWords(row);
+        if (row.country && !cell.querySelector('.flag')) {
+            const flag = flagNode(row.country);
+            if (flag) {
+                cell.insertBefore(flag, cell.firstChild);
+            }
+        }
+    }
 }
 
 /**
@@ -242,6 +305,10 @@ let resumeFrom = '';
 /** Close the connection and say why, with a way back. */
 function stop(reason, cursor) {
     arrived();
+    if (chartTimer) {
+        window.clearInterval(chartTimer);
+        chartTimer = 0;
+    }
     if (source) {
         source.close();
         source = null;
@@ -268,6 +335,11 @@ function begin() {
     toggleLabel('Pause');
     connect(resumeFrom);
     resumeFrom = '';
+
+    tickChart();
+    if (!chartTimer) {
+        chartTimer = window.setInterval(tickChart, 1000);
+    }
 }
 
 /* -------------------------------------------------------------------------
@@ -392,7 +464,7 @@ function buildRow(row) {
         hostCell(row.host, { mono: true, link: false })
     ]));
 
-    tr.appendChild(el('td', { class: 'clip mono', title: placeWords(row) }, [
+    tr.appendChild(el('td', { class: 'clip mono live-addr', title: placeWords(row) }, [
         row.country ? flagNode(row.country) : null,
         row.ip
             ? dimValue('ip_s', row.ip, { mono: true, link: false })
@@ -897,35 +969,49 @@ function applyFind() {
 }
 
 /**
- * Fold this batch into the current second and redraw.
+ * Move the window so that it ends at this second, filling the silence with zeros.
  *
- * Counted by arrival rather than by the line's own timestamp: the chart is answering "how busy
- * is it right now", and a batch read from several files carries timestamps that are close but
- * not equal. Redrawn once per batch, which the poll interval already bounds.
+ * THE WINDOW IS A CLOCK, NOT A LIST OF THINGS THAT HAPPENED. It used to hold only the seconds
+ * something arrived in, and the axis was a category per entry — so two requests a minute apart
+ * became two categories, each drawn half the width of the card, one at each edge; and the older
+ * one disappeared the moment the gap-filling pushed the window past sixty entries. A minute is
+ * sixty bars whether or not anything happened in any of them, which is what makes one request
+ * look like one request.
  */
-function countIntoChart(n) {
-    if (n <= 0 && perSecond.length === 0) {
-        return;
-    }
-
+function advanceChart() {
     const now = Math.floor(Date.now() / 1000);
-    const last = perSecond.length ? perSecond[perSecond.length - 1] : null;
+    const last = perSecond.length ? perSecond[perSecond.length - 1][0] : now - 1;
 
-    if (last && last[0] === now) {
-        last[1] += n;
-    } else {
-        if (last) {
-            for (let t = last[0] + 1; t < now; t++) {
-                perSecond.push([t, 0]);
-            }
-        }
-        perSecond.push([now, n]);
+    for (let t = last + 1; t <= now; t++) {
+        perSecond.push([t, 0]);
     }
 
     while (perSecond.length > CHART_WINDOW) {
         perSecond.shift();
     }
+    while (perSecond.length < CHART_WINDOW) {
+        perSecond.unshift([perSecond[0][0] - 1, 0]);
+    }
+}
 
+/** Advance the window and redraw it, whether or not anything arrived. */
+function tickChart() {
+    advanceChart();
+    renderChart();
+}
+
+/**
+ * Fold this batch into the current second and redraw.
+ *
+ * Counted by arrival rather than by the line's own timestamp: the chart is answering "how busy
+ * is it right now", and a batch read from several files carries timestamps that are close but
+ * not equal.
+ */
+function countIntoChart(n) {
+    advanceChart();
+    if (n > 0) {
+        perSecond[perSecond.length - 1][1] += n;
+    }
     renderChart();
 }
 

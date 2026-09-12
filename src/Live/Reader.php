@@ -805,6 +805,59 @@ final class Reader
     }
 
     /**
+     * Read the enrichment cache again for addresses that were not in it the first time.
+     *
+     * A REQUEST OVERTAKES ITS OWN LOOKUP. The daemon resolves an address and writes it to the
+     * cache; this reader only ever reads that cache. An address nobody has seen before therefore
+     * reaches the stream a second or two before its own geography does, so the row goes out with
+     * no country and the flag never appears — while the same address, asked about a moment later
+     * in the dialog, shows one. That is a single fact rendered two ways, which reads as a bug
+     * because it is one.
+     *
+     * The memo is cleared first, deliberately. A miss is remembered as a miss for the life of the
+     * reader, which was right when a connection lasted forty-five seconds and is wrong now that
+     * one lasts hours. Nothing is looked up here either: this is still only a read of what the
+     * daemon has already written, on the same terms as geo() and network() above.
+     *
+     * @param array<int,string> $ips
+     * @return array<string,array<string,mixed>>
+     */
+    public function recheck(array $ips): array
+    {
+        $out = [];
+
+        foreach ($ips as $ip) {
+            if (!is_string($ip) || $ip === '') {
+                continue;
+            }
+
+            unset($this->geoMemo[$ip], $this->asnMemo[Security::ipNetwork($ip, 24, 48)]);
+
+            $geo = $this->geo($ip);
+            $net = $this->network($ip);
+            if ($geo === [] && $net === []) {
+                continue;
+            }
+
+            $out[$ip] = [
+                'country'   => $geo['country_s'] ?? null,
+                'region'    => $geo['region_s'] ?? null,
+                'city'      => $geo['city_s'] ?? null,
+                'tz'        => $geo['tz_s'] ?? null,
+                'geo_known' => $geo !== [],
+
+                'asn'       => isset($net['asn_i']) ? (int) $net['asn_i'] : null,
+                'as_org'    => $net['as_org_s'] ?? null,
+                'as_type'   => $net['as_type_s'] ?? null,
+                'netname'   => $net['netname_s'] ?? null,
+                'net_known' => $net !== [],
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Read one entry from the ingest daemon's enrichment cache, READ-ONLY.
      *
      * Opened with SQLITE3_OPEN_READONLY and not through \Loghound\State, deliberately. State's
