@@ -148,7 +148,10 @@ function renderTable(data) {
        already chosen would collapse it to that one row and leave no way back. Every other
        filter still applies. Without this sentence the table looks broken — a second hostname
        under a chip that promises everything is narrowed. */
-    const hostFilter = (((boot.filters || {}).active) || []).some((f) => f && f.field === 'host_s');
+    /* `active` is keyed BY FIELD, not a list — identity.js:isFiltered() rejects arrays outright.
+       Read the key; treating it as a list makes this silently always false. */
+    const active = (boot.filters || {}).active;
+    const hostFilter = !!(active && !Array.isArray(active) && active.host_s);
 
     setPop('hosts-table', num(data.rows.length) + ' virtual hosts, ' + num(data.total) +
         ' sessions in the selected range. The five population columns are mutually exclusive, ' +
