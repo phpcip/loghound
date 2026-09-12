@@ -639,17 +639,18 @@ function renderSession(body, data) {
             foldSection('used', 'What they used', [kv(used), say(signature), rawAgent(s)])
         ]),
 
-        foldSection('howlong', 'How long they were here', howLong(s)),
-
-        foldSection('arrival', 'How they arrived', [kv(arrival)]),
-
-        /* THE CIRCUIT COMES BEFORE THE CONCLUSION. This sat at the very bottom, under the
-           verdict, the execution evidence and four blocks of counters — so the one thing a
-           reader opens a visit to see, WHERE THEY WENT, was a scroll and a half below the
-           fold. It belongs beside how they arrived: first page, then every page after it. */
+        /* THE CIRCUIT COMES BEFORE EVERYTHING ELSE. This sat at the very bottom, under the
+           verdict, the execution evidence and four blocks of counters; it was then moved up
+           beside how they arrived, and that was still one fold too low. WHERE THEY WENT is the
+           thing a reader opens a visit to see, so it is the first fold under the identity — the
+           clocks and the referrer are context for it, not a preamble to it. */
         foldSection('trail', 'Pages Visited', [
             trailBlock(data.session.id, data, s.host)
         ]),
+
+        foldSection('howlong', 'How long they were here', howLong(s)),
+
+        foldSection('arrival', 'How they arrived', [kv(arrival)]),
 
         /* WHAT THEY DID COMES BEFORE THE VERDICT. The behaviour is the evidence and the verdict
            is the conclusion drawn from it, so a reader who wants to check the conclusion has to
@@ -841,6 +842,139 @@ function atAGlance(data) {
 }
 
 /** Render one dimension value into the dialog body. */
+/**
+ * One row of the pages table: the path, how many visits touched it, how many log lines it cost
+ * and when it was last seen.
+ */
+function pageRow(row) {
+    const hits = row.hits === null || row.hits === undefined ? null : Number(row.hits);
+
+    return el('tr', {}, [
+        el('td', { class: 'clip urlcell', title: row.path || '', 'data-sort': row.path || '' },
+            [pathCell(row.path, {})]),
+        el('td', { class: 'num', 'data-sort': String(row.sessions || 0), text: num(row.sessions || 0) }),
+        el('td', { class: 'num', 'data-sort': String(hits === null ? -1 : hits),
+            text: hits === null ? '—' : num(hits) }),
+        el('td', { class: 'mono nowrap', 'data-sort': row.last || '',
+            text: row.last ? when(row.last) : '—' })
+    ]);
+}
+
+/**
+ * The pages table's shell. Built once; only the body is replaced on a page turn, which is the
+ * same split visitTable()/fillVisits() uses and the reason a turn cannot lose the sort state.
+ */
+function pagesTable(rows) {
+    const body = el('tbody');
+    for (const r of (rows || [])) {
+        body.appendChild(pageRow(r));
+    }
+
+    const table = el('table', { class: 'tight table-fixed' }, [
+        el('colgroup', {}, ['52%', '14%', '14%', '20%'].map((w) => el('col', { style: 'width:' + w }))),
+        el('thead', {}, [
+            el('tr', {}, [
+                el('th', { scope: 'col', text: 'Page' }),
+                el('th', { scope: 'col', class: 'num', text: 'Visits' }),
+                el('th', { scope: 'col', class: 'num', text: 'Requests' }),
+                el('th', { scope: 'col', text: 'Last seen' })
+            ])
+        ]),
+        body
+    ]);
+
+    return el('div', { class: 'table-wrap' }, [table]);
+}
+
+/** Fill an existing pages table's body. */
+function fillPages(table, rows) {
+    if (!table) {
+        return;
+    }
+    const body = table.tBodies[0] || table.appendChild(document.createElement('tbody'));
+    body.replaceChildren();
+    for (const r of (rows || [])) {
+        body.appendChild(pageRow(r));
+    }
+}
+
+/**
+ * What the pages table says about its own scope.
+ *
+ * It counts DISTINCT paths, not visits, and says so: the numbers in the column beside it are
+ * visit counts, and a caption that said "1,890 pages" over a table of twenty rows summing to
+ * far more would be describing neither.
+ */
+function pagesCaption(page) {
+    const total = page && page.total !== null && page.total !== undefined ? Number(page.total) : null;
+    if (total === null) {
+        return 'Every page in scope.';
+    }
+    if (total === 0) {
+        return 'No page in scope.';
+    }
+    return num(total) + (total === 1 ? ' distinct page.' : ' distinct pages, all of them reachable.');
+}
+
+/**
+ * The paged list of pages one dimension value touched.
+ *
+ * FETCHED ON OPEN, NOT WITH THE DIALOG. The dimension payload is already a wide facet and this
+ * is a second bounded read, so it is asked for separately and lands when it lands — the rest of
+ * the dialog is on screen and usable while it does. A failure is this section's own sentence
+ * and never the dialog's.
+ *
+ * @param {string} field Solr field name, passed straight back to the server, which re-checks it.
+ * @param {string} value The dimension value, as rendered.
+ */
+function pagesBlock(field, value) {
+    const caption = el('p', { class: 'faint', text: 'Counting the pages…' });
+    const wrap = pagesTable([]);
+    const table = wrap.querySelector('table');
+    const mount = el('div', { class: 'pager-mount' });
+
+    const show = (page) => {
+        caption.textContent = pagesCaption(page);
+        renderPager(mount, page, async (start, rows) => {
+            mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page…' }));
+            try {
+                const next = await api('sessions', 'dimpages', {
+                    field: field,
+                    value: value,
+                    start: start,
+                    rows: rows || (page && page.rows)
+                });
+                fillPages(table, next.rows || []);
+                markSortable(wrap);
+                show(next.page);
+            } catch (err) {
+                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                again.addEventListener('click', () => show(page));
+                mount.replaceChildren(
+                    el('p', { class: 'muted', text: 'That page could not be loaded: '
+                        + String(err && err.message ? err.message : err) }),
+                    el('div', { class: 'card-error-actions' }, [again])
+                );
+            }
+        });
+    };
+
+    api('sessions', 'dimpages', { field: field, value: value }).then((data) => {
+        if (data && data.error) {
+            caption.textContent = String(data.error);
+            return;
+        }
+        fillPages(table, (data && data.rows) || []);
+        markSortable(wrap);
+        show(data && data.page);
+    }).catch((err) => {
+        caption.textContent = 'The pages could not be loaded: '
+            + String(err && err.message ? err.message : err);
+    });
+
+    return el('div', { class: 'visit-block' }, [caption, wrap, mount]);
+}
+
 function renderDimension(body, data) {
     const total = data.sessions || 0;
 
@@ -859,6 +993,28 @@ function renderDimension(body, data) {
            read at all. They belong beside the counts, in the same rendering every other value
            in the panel gets — flag, icon, filter link — rather than as bare text. */
         atAGlance(data),
+
+        /* THE VISITS COME FIRST, AND NOW THEY ACTUALLY DO. This block carried that sentence
+           while sitting fourth, below the traffic mix, the clocks and the request profile — so
+           the rows a reader opened the dialog to look at were still a screen down. Moved to the
+           top of the folds, where the comment has always said it belonged. */
+        foldSection('dim-visits', 'The visits', [
+            visitBlock(data.visitors, data.page, (start, rows) => api('sessions', 'visitors', {
+                field: data.field,
+                value: data.value,
+                start: start,
+                rows: rows || data.page.rows
+            }))
+        ]),
+
+        /* EVERY PAGE, NOT THE TOP HANDFUL. The breakdown below lists `paths_ss` as a capped
+           facet, which cannot be walked; this is the same field paged from its own endpoint, so
+           a named visitor's whole reading history is reachable. Fetched when the dialog opens
+           rather than when the fold is pressed: one bounded request, and the section can state
+           its own total in the caption instead of promising one. */
+        foldSection('dim-pages', 'The pages they visited', [
+            pagesBlock(data.field, data.value)
+        ]),
 
         foldSection('dim-kind', 'What kind of traffic this is', [
             mixBar(data.mix, total),
@@ -890,18 +1046,6 @@ function renderDimension(body, data) {
         ]),
 
         requestProfile(data.requests),
-
-        /* THE VISITS COME FIRST. The breakdown is eleven dimensions deep, so the actual rows —
-           the thing a reader opened this dialog to look at — sat below a screen and a half of
-           percentages and were routinely missed. Summary first, then the long tail. */
-        foldSection('dim-visits', 'The visits', [
-            visitBlock(data.visitors, data.page, (start, rows) => api('sessions', 'visitors', {
-                field: data.field,
-                value: data.value,
-                start: start,
-                rows: rows || data.page.rows
-            }))
-        ]),
 
         foldSection('dim-breakdown', 'How it breaks down', [
             el('div', { class: 'fpanel' }, data.breakdowns.map((group) => breakdown(group, total)))

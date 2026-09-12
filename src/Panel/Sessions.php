@@ -404,6 +404,7 @@ final class Sessions extends Controller
             'trail'      => $this->trail(),
             'dimension'  => $this->dimension(),
             'visitors'   => $this->visitors(),
+            'dimpages'   => $this->dimPages(),
             'dimensions' => $this->dimensions(),
             'values'     => $this->values(),
             default      => ['error' => 'Unknown action'],
@@ -1055,6 +1056,74 @@ final class Sessions extends Controller
             'rows' => $out,
             'page' => Paging::block($start, $rows, (int) $res['numFound'], 'visits', count($out)),
         ];
+    }
+
+    /**
+     * One page of the paths a dimension value actually touched.
+     *
+     * THE BREAKDOWN ALREADY LISTS PATHS, AND THAT IS NOT THE SAME THING. `by_paths_ss` in
+     * dimension() is a terms facet capped at DIMENSION_BUCKETS with no way past the cap: it
+     * answers "what did they mostly look at" and cannot answer "show me every page this person
+     * read", which is the question somebody opens a named visitor on. Same field, paged, so the
+     * whole set is reachable.
+     *
+     * `paths_ss` rather than `entry_path_s`. The landing page is one per visit and is already
+     * its own view; what is wanted here is the pages that were visited, not the one they
+     * arrived on.
+     *
+     * THE SCOPE IS dimensionScope()'s, UNCHANGED, for the reason visitors() reuses it too: a
+     * second way of turning a dimension value into a filter is a second chance for this list to
+     * describe a different population from the counts above it in the same dialog.
+     *
+     * @return array<string,mixed>
+     */
+    private function dimPages(): array
+    {
+        $fields = self::dimensionFields();
+        $field = self::param('field', array_keys($fields), '');
+        if ($field === '') {
+            return $this->envelope(['error' => 'That is not a dimension this panel can open.']);
+        }
+
+        $value = self::text('value', 256);
+        if ($value === '') {
+            return $this->envelope(['error' => 'That row carries no value to open.']);
+        }
+
+        $scope = $this->dimensionScope($field, $value);
+        if ($scope === null) {
+            return $this->envelope(['error' => 'That value is not in the form this dimension holds.']);
+        }
+
+        $start = Paging::start();
+        $rows = Paging::rows();
+
+        $f = $this->gw->facet('sessions.dimension.pages', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => $scope,
+        ], [
+            'paths' => Paging::terms('paths_ss', $start, $rows, 'count desc', [
+                'facet' => [
+                    'hits' => 'sum(hits_i)',
+                    'last' => 'max(ts_end)',
+                ],
+            ]),
+        ]);
+
+        $out = [];
+        foreach (self::buckets($f, 'paths') as $bucket) {
+            $out[] = [
+                'path'     => (string) ($bucket['val'] ?? ''),
+                'sessions' => (int) ($bucket['count'] ?? 0),
+                'hits'     => self::num($bucket, 'hits'),
+                'last'     => is_string($bucket['last'] ?? null) ? $bucket['last'] : null,
+            ];
+        }
+
+        return $this->envelope([
+            'rows' => $out,
+            'page' => Paging::block($start, $rows, Paging::distinct($f, 'paths'), 'pages', count($out)),
+        ]);
     }
 
     /**
