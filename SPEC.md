@@ -719,12 +719,33 @@ The detection quality ceiling is set by what gets logged. `docs/INSTALL.md` must
 copy-paste block and be honest that plain `combined` gives a weaker (but still working) result:
 
 ```
-LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\" \
-\"%{Accept}i\" \"%{Accept-Language}i\" \"%{Accept-Encoding}i\" \
-\"%{Sec-CH-UA}i\" \"%{Sec-CH-UA-Platform}i\" \"%{Sec-CH-UA-Mobile}i\" \
-\"%{Sec-Fetch-Site}i\" \"%{Sec-Fetch-Mode}i\" \"%{Sec-Fetch-Dest}i\" \"%{Sec-Fetch-User}i\" \
-\"%{X-Forwarded-For}i\" \"%H\" \"%{SSL_PROTOCOL}x\" \"%{SSL_CIPHER}x\"" loghound
+LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\" \"%{Accept}i\" \"%{Accept-Language}i\" \"%{Accept-Encoding}i\" \"%{Sec-CH-UA}i\" \"%{Sec-CH-UA-Platform}i\" \"%{Sec-CH-UA-Mobile}i\" \"%{Sec-Fetch-Site}i\" \"%{Sec-Fetch-Mode}i\" \"%{Sec-Fetch-Dest}i\" \"%{Sec-Fetch-User}i\" \"%{X-Forwarded-For}i\" \"%H\" \"%{SSL_PROTOCOL}x\" \"%{SSL_CIPHER}x\"" loghound
 ```
+
+The nginx equivalent, one line, in the `http {}` block:
+
+```
+log_format loghound '$host:$server_port $remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent $request_time "$http_referer" "$http_user_agent" "$http_accept" "$http_accept_language" "$http_accept_encoding" "$http_sec_ch_ua" "$http_sec_ch_ua_platform" "$http_sec_ch_ua_mobile" "$http_sec_fetch_site" "$http_sec_fetch_mode" "$http_sec_fetch_dest" "$http_sec_fetch_user" "$http_x_forwarded_for" "$server_protocol" "$ssl_protocol" "$ssl_cipher"';
+```
+
+The same again as JSON, for nginx's `escape=json` idiom. Keys are free — the map is built
+from the `$variable`, not from the key — and `escape=json` is required, because without it
+a User-Agent containing a quote produces a line that is not valid JSON:
+
+```
+log_format loghound_json escape=json '{"time":"$time_iso8601","vhost":"$host","port":"$server_port","ip":"$remote_addr","user":"$remote_user","request":"$request","status":"$status","bytes":"$body_bytes_sent","duration":"$request_time","referer":"$http_referer","ua":"$http_user_agent","accept":"$http_accept","accept_language":"$http_accept_language","accept_encoding":"$http_accept_encoding","sec_ch_ua":"$http_sec_ch_ua","sec_ch_ua_platform":"$http_sec_ch_ua_platform","sec_ch_ua_mobile":"$http_sec_ch_ua_mobile","sec_fetch_site":"$http_sec_fetch_site","sec_fetch_mode":"$http_sec_fetch_mode","sec_fetch_dest":"$http_sec_fetch_dest","sec_fetch_user":"$http_sec_fetch_user","xff":"$http_x_forwarded_for","proto":"$server_protocol","tls_proto":"$ssl_protocol","tls_cipher":"$ssl_cipher"}';
+```
+
+Caddy has no format to write: its structured access log is already JSON and is recognised on
+sight, so the operator only enables `log { output file ... }`. `docs/INSTALL.md` names the
+keys read from it.
+
+**EVERY PUBLISHED FORMAT IS ONE PHYSICAL LINE.** Apache and nginx both accept continuations —
+`\` before the newline for Apache, adjacent quoted strings for nginx — and a documented
+format that uses them is one nobody pastes correctly: the backslash must be the last
+character on the line, so any copy through a browser, a chat window or a PDF that reflows or
+trims trailing whitespace yields a broken directive or several lines of junk. The lines are
+long. Length is the cheaper problem, and every surface that prints one prints it unwrapped.
 
 **The nickname is part of the spec, and it is never `combined`.** Debian and Ubuntu define
 that name in `apache2.conf`; redefining it inside a `<VirtualHost>` does not reliably win,

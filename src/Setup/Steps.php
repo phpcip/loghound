@@ -575,20 +575,28 @@ final class Steps
      * The full recommended Apache LogFormat, exactly as docs/INSTALL.md publishes it.
      *
      * ONE definition, because the string is long enough that a second copy would be edited on
-     * its own and nobody would notice. The continuation backslashes are Apache's: the directive
-     * is one logical line, and a reader who retypes it without them gets a config error rather
-     * than a wrong format, which is the good failure.
+     * its own and nobody would notice.
+     *
+     * ONE PHYSICAL LINE, WITH NO CONTINUATION BACKSLASHES. It used to be published as five
+     * lines joined by Apache's `\` continuation, which is valid and which nobody pastes
+     * correctly: the backslash has to be the last character before the newline, so a copy out
+     * of a browser, a chat window or a PDF — anything that reflows or trims trailing
+     * whitespace — silently produces a broken directive or, worse, four stray lines Apache
+     * reads as separate junk. A single line survives every one of those journeys. It is long,
+     * and length is the cheaper problem.
+     *
+     * The `\"` sequences are NOT optional and are not this codebase's escaping: Apache's own
+     * parser requires a quote inside a quoted format string to be backslash-escaped, so a line
+     * with them stripped is rejected at configtest.
      */
     public static function recommendedLogFormat(): string
     {
-        return implode("\n", [
-            'LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\" \\',
-            '\"%{Accept}i\" \"%{Accept-Language}i\" \"%{Accept-Encoding}i\" \\',
-            '\"%{Sec-CH-UA}i\" \"%{Sec-CH-UA-Platform}i\" \"%{Sec-CH-UA-Mobile}i\" \\',
-            '\"%{Sec-Fetch-Site}i\" \"%{Sec-Fetch-Mode}i\" \"%{Sec-Fetch-Dest}i\" \"%{Sec-Fetch-User}i\" \\',
-            '\"%{X-Forwarded-For}i\" \"%H\" \"%{SSL_PROTOCOL}x\" \"%{SSL_CIPHER}x\"" '
-                . self::RECOMMENDED_NICKNAME,
-        ]);
+        return 'LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\" '
+            . '\"%{Accept}i\" \"%{Accept-Language}i\" \"%{Accept-Encoding}i\" '
+            . '\"%{Sec-CH-UA}i\" \"%{Sec-CH-UA-Platform}i\" \"%{Sec-CH-UA-Mobile}i\" '
+            . '\"%{Sec-Fetch-Site}i\" \"%{Sec-Fetch-Mode}i\" \"%{Sec-Fetch-Dest}i\" \"%{Sec-Fetch-User}i\" '
+            . '\"%{X-Forwarded-For}i\" \"%H\" \"%{SSL_PROTOCOL}x\" \"%{SSL_CIPHER}x\"" '
+            . self::RECOMMENDED_NICKNAME;
     }
 
     /**

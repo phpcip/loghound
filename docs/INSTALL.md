@@ -7,6 +7,7 @@
 - [The recommended LogFormat](#the-recommended-logformat)
 - [What each extra header buys you](#what-each-extra-header-buys-you)
 - [nginx](#nginx)
+- [JSON logs, Caddy and Traefik](#json-logs-caddy-and-traefik)
 - [The beacon](#the-beacon)
 - [Solr, and where the two indexes come from](#solr-and-where-the-two-indexes-come-from)
 - [Log retention: what Loghound can and cannot see](#log-retention-what-loghound-can-and-cannot-see)
@@ -394,11 +395,7 @@ Add it to `/etc/apache2/apache2.conf` (or `/etc/httpd/conf/httpd.conf`) and refe
 nickname from your vhost's `CustomLog`:
 
 ```apache
-LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\" \
-\"%{Accept}i\" \"%{Accept-Language}i\" \"%{Accept-Encoding}i\" \
-\"%{Sec-CH-UA}i\" \"%{Sec-CH-UA-Platform}i\" \"%{Sec-CH-UA-Mobile}i\" \
-\"%{Sec-Fetch-Site}i\" \"%{Sec-Fetch-Mode}i\" \"%{Sec-Fetch-Dest}i\" \"%{Sec-Fetch-User}i\" \
-\"%{X-Forwarded-For}i\" \"%H\" \"%{SSL_PROTOCOL}x\" \"%{SSL_CIPHER}x\"" loghound
+LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O %D \"%{Referer}i\" \"%{User-Agent}i\" \"%{Accept}i\" \"%{Accept-Language}i\" \"%{Accept-Encoding}i\" \"%{Sec-CH-UA}i\" \"%{Sec-CH-UA-Platform}i\" \"%{Sec-CH-UA-Mobile}i\" \"%{Sec-Fetch-Site}i\" \"%{Sec-Fetch-Mode}i\" \"%{Sec-Fetch-Dest}i\" \"%{Sec-Fetch-User}i\" \"%{X-Forwarded-For}i\" \"%H\" \"%{SSL_PROTOCOL}x\" \"%{SSL_CIPHER}x\"" loghound
 ```
 
 ```apache
@@ -518,16 +515,10 @@ header and map it — the field is waiting. Nothing in v1 depends on it.
 The equivalent, in the `http {}` block:
 
 ```nginx
-log_format loghound '$host:$server_port $remote_addr - $remote_user [$time_local] '
-                    '"$request" $status $body_bytes_sent $request_time '
-                    '"$http_referer" "$http_user_agent" '
-                    '"$http_accept" "$http_accept_language" "$http_accept_encoding" '
-                    '"$http_sec_ch_ua" "$http_sec_ch_ua_platform" "$http_sec_ch_ua_mobile" '
-                    '"$http_sec_fetch_site" "$http_sec_fetch_mode" '
-                    '"$http_sec_fetch_dest" "$http_sec_fetch_user" '
-                    '"$http_x_forwarded_for" "$server_protocol" '
-                    '"$ssl_protocol" "$ssl_cipher"';
+log_format loghound '$host:$server_port $remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent $request_time "$http_referer" "$http_user_agent" "$http_accept" "$http_accept_language" "$http_accept_encoding" "$http_sec_ch_ua" "$http_sec_ch_ua_platform" "$http_sec_ch_ua_mobile" "$http_sec_fetch_site" "$http_sec_fetch_mode" "$http_sec_fetch_dest" "$http_sec_fetch_user" "$http_x_forwarded_for" "$server_protocol" "$ssl_protocol" "$ssl_cipher"';
+```
 
+```nginx
 access_log /var/log/nginx/example_com_access.log loghound;
 ```
 
@@ -539,8 +530,59 @@ silence. Causes 2 and 3 are identical — reload for real, then rescan the sourc
 Loghound stores the format per source and a line that gained `$request_time` no longer
 matches the one it stored.
 
-JSON log formats are first-class — if you already emit JSON, point Loghound at it and the
-detector will recognise it.
+---
+
+## JSON logs, Caddy and Traefik
+
+JSON is first-class here rather than shoehorned through a regex: a key map is more robust
+than a pattern, because key order and key presence both vary between versions and neither
+matters to a map.
+
+### nginx, as JSON
+
+One line, in the `http {}` block. Every value is a variable, so this carries exactly the
+same fields as the text format above:
+
+```nginx
+log_format loghound_json escape=json '{"time":"$time_iso8601","vhost":"$host","port":"$server_port","ip":"$remote_addr","user":"$remote_user","request":"$request","status":"$status","bytes":"$body_bytes_sent","duration":"$request_time","referer":"$http_referer","ua":"$http_user_agent","accept":"$http_accept","accept_language":"$http_accept_language","accept_encoding":"$http_accept_encoding","sec_ch_ua":"$http_sec_ch_ua","sec_ch_ua_platform":"$http_sec_ch_ua_platform","sec_ch_ua_mobile":"$http_sec_ch_ua_mobile","sec_fetch_site":"$http_sec_fetch_site","sec_fetch_mode":"$http_sec_fetch_mode","sec_fetch_dest":"$http_sec_fetch_dest","sec_fetch_user":"$http_sec_fetch_user","xff":"$http_x_forwarded_for","proto":"$server_protocol","tls_proto":"$ssl_protocol","tls_cipher":"$ssl_cipher"}';
+```
+
+```nginx
+access_log /var/log/nginx/example_com_access.log loghound_json;
+```
+
+**`escape=json` is not optional.** Without it nginx escapes values for a text log and a
+User-Agent containing a quote produces a line that is not valid JSON.
+
+The key names above are arbitrary — Loghound maps on the `$variable`, not on the key — so
+if you already emit JSON with different names, keep them and point Loghound at the file.
+
+### Caddy
+
+Nothing to write. Caddy's structured access log is already JSON and is recognised on sight;
+you only have to turn it on:
+
+```caddy
+example.com {
+	log {
+		output file /var/log/caddy/example_com_access.log
+	}
+}
+```
+
+Loghound reads these keys, and any it does not find are simply absent rather than wrong:
+`ts`, `request.remote_ip` (or `remote_addr` / `client_ip`), `request.host`, `request.proto`,
+`request.method`, `request.uri`, `status`, `size`, `duration`, `request.tls.proto`,
+`request.tls.cipher_suite`, and under `request.headers`: `User-Agent`, `Referer`, `Accept`,
+`Accept-Language`, `Accept-Encoding`, `Sec-Ch-Ua`, `Sec-Ch-Ua-Platform`, `Sec-Ch-Ua-Mobile`,
+`Sec-Fetch-Site`, `Sec-Fetch-Mode`, `Sec-Fetch-Dest`, `Sec-Fetch-User`, `X-Forwarded-For`.
+
+### Traefik, HAProxy and the rest
+
+Traefik's JSON access log, HAProxy's HTTP log, AWS ALB, CloudFront and Kubernetes
+ingress-nginx are all in the built-in library and are detected without configuration. If
+your format is none of these, `loghound-setup` will show you what it inferred and let you
+correct it; a literal `LogFormat` / `log_format` string is accepted as configuration.
 
 ---
 
