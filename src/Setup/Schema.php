@@ -524,8 +524,25 @@ final class Schema
                it is the state in which every previous push reported success and changed nothing,
                so refusing to push here would leave the operator with a command that diagnoses a
                problem and declines to fix it. The push is safe in both, for the same reason — the
-               live schema HAS been read, so this is not overwriting a schema nobody looked at. */
-            if ($state !== self::BEHIND && $state !== self::MANAGED) {
+               live schema HAS been read, so this is not overwriting a schema nobody looked at.
+
+               CURRENT IS PUSHABLE TOO WHEN FORCED, for that identical reason. Its schema has
+               been read as thoroughly as any other; the only thing "current" adds is that the
+               fields already agree, which is not a safety fact and is exactly the case --force
+               exists to serve. Leaving CURRENT out of this list is what made the flag useless:
+               it cleared the skip above and then fell into this refusal instead, reporting
+               "Loghound will not overwrite a schema it has not read" about a schema it had just
+               finished reading.
+
+               WHAT STAYS REFUSED, forced or not: UNREADABLE and anything unrecognised. A push
+               replaces the whole configset, so pushing to an index that could not be read risks
+               deleting the fields of a NEWER release. Force means "the fields agreeing is not a
+               reason to skip"; it does not mean "push blind". */
+            $pushable = $state === self::BEHIND
+                || $state === self::MANAGED
+                || ($force && $state === self::CURRENT);
+
+            if (!$pushable) {
                 $failed = true;
                 $rows[] = [
                     'role'    => $role,
