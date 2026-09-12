@@ -111,12 +111,17 @@ final class Layout
         $views = [
             ['slug' => 'overview',     'label' => 'Overview',     'hint' => 'Who came, and how long they really stayed'],
             ['slug' => 'live',         'label' => 'Live',         'hint' => 'The access log as it is written'],
-            ['slug' => 'sessions',     'label' => 'Sessions',     'hint' => 'Search and drill into one visit'],
-            ['slug' => 'sources',      'label' => 'Where they came from', 'hint' => 'What kind of thing sent each visit, and which site actually did'],
-            ['slug' => 'pages',        'label' => 'Pages',        'hint' => 'Where people arrive, where the log last saw them, and what is moving'],
-            ['slug' => 'searches',     'label' => 'Site search',   'hint' => 'What visitors typed into your own search box'],
-            ['slug' => 'engagement',   'label' => 'Engagement',    'hint' => 'Bounce measured on what people did, not on how many pages loaded'],
-            ['slug' => 'rhythm',       'label' => 'When they come','hint' => 'Hour of day against day of week'],
+            /* SIX VIEWS ABOUT THE SAME SUBJECT, UNDER ONE HEADING. Each of these answers a
+               question about the people who came — who they were, what sent them, where they
+               went, what they searched for, whether they engaged, and when they arrived — and
+               as six siblings among seventeen they read as unrelated pages. Grouped, the rail
+               says what it holds; each view keeps its own sections underneath. */
+            ['slug' => 'sessions',     'label' => 'Sessions',     'group' => 'visitors', 'hint' => 'Search and drill into one visit'],
+            ['slug' => 'sources',      'label' => 'Where they came from', 'group' => 'visitors', 'hint' => 'What kind of thing sent each visit, and which site actually did'],
+            ['slug' => 'pages',        'label' => 'Pages',        'group' => 'visitors', 'hint' => 'Where people arrive, where the log last saw them, and what is moving'],
+            ['slug' => 'searches',     'label' => 'Site search',   'group' => 'visitors', 'hint' => 'What visitors typed into your own search box'],
+            ['slug' => 'engagement',   'label' => 'Engagement',    'group' => 'visitors', 'hint' => 'Bounce measured on what people did, not on how many pages loaded'],
+            ['slug' => 'rhythm',       'label' => 'When they come','group' => 'visitors', 'hint' => 'Hour of day against day of week'],
             ['slug' => 'bots',         'label' => 'Bot forensics','hint' => 'Why each verdict was reached'],
             ['slug' => 'attacks',      'label' => 'Attacks',      'hint' => 'What was attempted, and what the server answered'],
             ['slug' => 'fingerprints', 'label' => 'Fingerprints', 'hint' => 'One header signature, many IPs'],
@@ -133,10 +138,16 @@ final class Layout
         foreach ($views as $view) {
             $class = $routes[$view['slug']] ?? null;
             $view['sections'] = $class === null ? [] : self::sectionsOf($class);
+            $view['group'] = $view['group'] ?? '';
             $out[] = $view;
         }
         return $out;
     }
+
+    /** The heading a group of views is shown under, keyed by the group name they declare. */
+    private const NAV_GROUPS = [
+        'visitors' => ['label' => 'Visitors', 'hint' => 'Everything about the people who came'],
+    ];
 
     /**
      * One view class's sections, shaped for the navigation.
@@ -353,7 +364,50 @@ final class Layout
             . '<span class="brand-name">' . Security::esc($siteName) . '</span></div>' . "\n";
         echo '<ul>';
 
-        foreach (self::nav() as $item) {
+        /* A GROUP IS OPENED WHEN ITS FIRST MEMBER IS REACHED AND CLOSED AFTER ITS LAST, so the
+           order in nav() is the order on screen and no view can end up in two places. The group
+           is open when the view inside it is the one being read; otherwise it is a twist away,
+           exactly like a view's own section list. */
+        $openGroup = '';
+        $navItems = self::nav();
+        $groupCurrent = [];
+        foreach ($navItems as $entry) {
+            if ($entry['group'] !== '' && $entry['slug'] === $active) {
+                $groupCurrent[$entry['group']] = true;
+            }
+        }
+
+        foreach ($navItems as $i => $item) {
+            $group = (string) $item['group'];
+
+            if ($group !== $openGroup) {
+                if ($openGroup !== '') {
+                    echo '</ul></li>';
+                }
+                $openGroup = $group;
+
+                if ($group !== '') {
+                    $meta = self::NAV_GROUPS[$group] ?? ['label' => ucfirst($group), 'hint' => ''];
+                    $on = !empty($groupCurrent[$group]);
+                    $groupId = 'lh-navgroup-' . $group;
+
+                    echo '<li class="navgroup navgroup-parent has-sub' . ($on ? ' is-current' : '') . '">';
+                    echo '<span class="navrow">';
+                    echo '<span class="navlink navlink-parent"'
+                        . ' title="' . Security::esc((string) $meta['hint']) . '">'
+                        . '<span class="navlabel">' . Security::esc((string) $meta['label']) . '</span></span>';
+                    echo '<button type="button" class="navtwist" aria-expanded="' . ($on ? 'true' : 'false') . '"'
+                        . ' aria-controls="' . Security::esc($groupId) . '"'
+                        . ' aria-label="Views about ' . Security::esc((string) $meta['label']) . '">'
+                        . '<span class="navtwist-mark" aria-hidden="true"></span></button>';
+                    echo '</span>';
+                    echo '<ul class="navsub navsub-views" id="' . Security::esc($groupId) . '"'
+                        . ($on ? '' : ' hidden') . '>';
+                    echo '<li class="navsub-head" aria-hidden="true">'
+                        . Security::esc((string) $meta['label']) . '</li>';
+                }
+            }
+
             $current = $item['slug'] === $active;
             $sections = $item['sections'];
             $first = $sections === [] ? null : $sections[0];
@@ -400,6 +454,10 @@ final class Layout
             }
 
             echo '</li>';
+        }
+
+        if ($openGroup !== '') {
+            echo '</ul></li>';
         }
 
         echo "</ul>\n";

@@ -329,6 +329,14 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
 
 .navsub { padding: 2px 0 6px; }
 
+/* A GROUP OF VIEWS, not a group of sections. The parent is a heading with a twist rather than a
+   link: "Visitors" is not a page, and making it one would mean inventing a seventh view nobody
+   asked for. The views inside keep everything they had, their own section lists included. */
+.navlink-parent { cursor: default; }
+.navsub-views > li > .navgroup { margin: 0; }
+.navsub-views .navlink { padding-left: 26px; }
+.navsub-views .navsub .navsub-link { padding-left: 40px; }
+
 /* THE FLYOUT'S TITLE, AND IT EXISTS ONLY IN THE COLLAPSED RAIL. Expanded, the group's name is
    already on the row above the list; collapsed, the row is an icon and the tooltip that used to
    carry the name is suppressed for groups, because it drew over the flyout it shares a
