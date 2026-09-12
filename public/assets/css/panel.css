@@ -1040,10 +1040,13 @@ button.primary[disabled]:hover { background: var(--accent); color: var(--on-acce
    as two controls.
    --------------------------------------------------------------------------- */
 
+/* Same symmetry as .card-refresh above: the hover underline must not push the label off the
+   row's centre when the head centres its children. */
 .export {
     flex: none;
     align-self: center;
-    padding: 2px 0 4px;
+    padding: 4px 0;
+    border-top: 2px solid transparent;
     border-bottom: 2px solid transparent;
     font: 600 14px/1 var(--font-ui);
     letter-spacing: 0.06em;
@@ -1110,6 +1113,12 @@ button.primary[disabled]:hover { background: var(--accent); color: var(--on-acce
    only a colour would inherit that fill.
    --------------------------------------------------------------------------- */
 
+/* THE BOX IS SYMMETRIC SO THE GLYPH LANDS ON THE ROW'S CENTRE. The hover underline is a
+   2px bottom border, and with `padding: 2px 0 4px` that put six pixels under the glyph and
+   two above it. `.card-head` centres the BOX, so a glyph sitting high in its own box reads
+   as sitting low against the heading beside it — which is what it did in every card head in
+   the panel, not just this one. A transparent top border of the same 2px, and equal padding,
+   makes the two sides match without changing what hover draws. */
 .card-refresh {
     flex: none;
     align-self: center;
@@ -1119,7 +1128,8 @@ button.primary[disabled]:hover { background: var(--accent); color: var(--on-acce
     width: 30px;
     height: 26px;
     margin: 0;
-    padding: 2px 0 4px;
+    padding: 4px 0;
+    border-top: 2px solid transparent;
     background: transparent;
     color: var(--faint);
     border: 0;
@@ -1247,8 +1257,16 @@ tr.members > td { padding: 0; background: var(--band); }
 /* The facet rail's heading is a numbered section heading like every other card's, and it was
    being held at label size by this rule — equal specificity to `.card-head > h2` and further
    down the file, so it won and card 02 alone stayed small, taking its accent number down to
-   8.7px with it. What the rule still owns is the rail's own spacing. */
-.facets h2 { color: var(--ink); padding-bottom: 10px; margin-bottom: 16px; }
+   8.7px with it.
+
+   THE SPACING WENT WITH IT (2026-09-12). The rule kept `padding-bottom: 10px` and
+   `margin-bottom: 16px` from when this heading stood on its own. It does not any more: it is a
+   flex child of `.card-head`, which already owns the padding above the hairline and the gap
+   below it. Declared twice, the h2's box ended up 26px taller than its own text, and because
+   the head centres its children the heading rode high inside that box while the refresh control
+   and Hide — correctly centred on the row — read as sitting low. Nothing to replace it with:
+   `.card-head` was always the thing holding this row together. */
+.facets h2 { color: var(--ink); }
 .facet-group { margin-bottom: 22px; }
 .facet-group h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--faint); margin-bottom: 6px; }
 .facet-group ul { list-style: none; margin: 0; padding: 0; }
