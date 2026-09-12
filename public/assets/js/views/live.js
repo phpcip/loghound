@@ -955,11 +955,17 @@ function openExclusions() {
     );
 
     const draftRules = rules.map((rule) => ({ ...rule }));
-    renderExclusions(body, generation, draftRules);
+    renderExclusions(body, generation, draftRules, '');
 }
 
-/** Draw the dialog's contents against the working copy. */
-function renderExclusions(mount, generation, draft) {
+/**
+ * Draw the dialog's contents against the working copy.
+ *
+ * `note` is carried in rather than written onto the old DOM: saving re-renders this whole
+ * mount, so a message set before the re-render was destroyed by it — which is why saving
+ * appeared to do nothing at all.
+ */
+function renderExclusions(mount, generation, draft, note) {
     if (!isCurrent(generation)) {
         return;
     }
@@ -1009,22 +1015,39 @@ function renderExclusions(mount, generation, draft) {
         }
         draft.push({ field: fieldSelect.value, pattern: pattern, enabled: true });
         patternInput.value = '';
-        renderExclusions(mount, generation, draft);
+        renderExclusions(mount, generation, draft, '');
     });
 
     const saveButton = el('button', { type: 'button', class: 'small', text: 'Save rules' });
-    const status = el('span', { class: 'muted' });
+    const status = el('span', { class: 'muted', text: note || '' });
 
     saveButton.addEventListener('click', async () => {
         saveButton.disabled = true;
         status.textContent = 'Saving…';
         try {
             const data = await post({ action: 'live_exclusions', rules: JSON.stringify(draft) });
+            const refused = draft.filter((r) => String(r.pattern || '').trim() !== '').length
+                - (Array.isArray(data.rules) ? data.rules.length : 0);
             rules = Array.isArray(data.rules) ? data.rules : [];
             noteRules();
             pruneExcluded();
-            status.textContent = 'Saved. The stream picks them up when it next reconnects.';
-            renderExclusions(mount, generation, rules.map((rule) => ({ ...rule })));
+
+            /* RECONNECT NOW RATHER THAN WHEN THE SERVER NEXT LETS GO. The reader reads the rules
+               when a connection opens, and a connection lives for 45 seconds — so without this a
+               saved rule went on being ignored for most of a minute while the table filled with
+               exactly what it excluded. */
+            const wasRunning = source !== null;
+            if (wasRunning) {
+                stop('asked');
+                begin();
+            }
+
+            renderExclusions(mount, generation, rules.map((rule) => ({ ...rule })),
+                (refused > 0
+                    ? refused + (refused === 1 ? ' rule was refused' : ' rules were refused')
+                        + ' — a pattern PCRE will not accept. The rest were saved'
+                    : 'Saved')
+                + (wasRunning ? ' and applied to the stream now.' : '.'));
         } catch (err) {
             status.textContent = err && err.message ? err.message : 'The rules could not be saved.';
         }
@@ -1057,7 +1080,7 @@ function ruleRow(rule, index, mount, generation, draft) {
     const remove = el('button', { type: 'button', class: 'small', text: 'Remove' });
     remove.addEventListener('click', () => {
         draft.splice(index, 1);
-        renderExclusions(mount, generation, draft);
+        renderExclusions(mount, generation, draft, '');
     });
 
     /* EDITED IN PLACE, because a rule that is one character wrong is the common case and
