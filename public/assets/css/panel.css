@@ -2454,9 +2454,13 @@ tr.lf-pick a:hover { background: none; color: var(--accent-ink); text-decoration
    narrow shafts of wrapped text and the reader compared nothing. A rule is a unit that is READ,
    not a row that is scanned down a column, so it is drawn as one. */
 
+/* ONE RULE PER ROW. Four cards abreast turned three paragraphs of prose into four columns of
+   six-word lines — the same defect the table had, rebuilt out of cards. A rule is read across,
+   so it gets the full width, and its three paragraphs sit side by side INSIDE it, where each
+   one gets a sane measure instead of a shaft. */
 .rulebook {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 14px;
 }
 
@@ -2481,25 +2485,21 @@ tr.lf-pick a:hover { background: none; color: var(--accent-ink); text-decoration
 
 .rulecard-meta {
     display: grid;
-    grid-template-columns: fit-content(14ch) minmax(0, 1fr);
-    gap: 6px 14px;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 10px 28px;
     margin: 0;
 }
 
-.rulecard-meta dt {
+.rulecard-facet h4 {
     font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .06em;
     color: var(--muted);
+    margin: 0 0 4px;
 }
 
-.rulecard-meta dd { margin: 0; line-height: 1.55; }
-
-@media (max-width: 640px) {
-    .rulecard-meta { grid-template-columns: minmax(0, 1fr); gap: 2px; }
-    .rulecard-meta dd { margin-bottom: 8px; }
-}
+.rulecard-facet p { margin: 0; line-height: 1.55; max-width: 60ch; }
 
 table.table-fixed { table-layout: fixed; min-width: var(--table-min, 680px); }
 table.table-fixed td,

@@ -1193,11 +1193,18 @@ final class Attacks extends Controller implements Sections
                 . Security::esc($families[$rule['family']] ?? $rule['family']) . '</span>';
             echo '</div>';
             echo '<code class="rulecard-code mono muted">' . Security::esc($code) . '</code>';
-            echo '<dl class="rulecard-meta">';
-            echo '<dt>Matches</dt><dd>' . Security::esc($rule['what']) . '</dd>';
-            echo '<dt>Misses</dt><dd>' . Security::esc($rule['misses']) . '</dd>';
-            echo '<dt>Over-reports</dt><dd>' . Security::esc($rule['over']) . '</dd>';
-            echo '</dl>';
+            echo '<div class="rulecard-meta">';
+            foreach ([
+                ['Matches', $rule['what']],
+                ['Misses', $rule['misses']],
+                ['Over-reports', $rule['over']],
+            ] as [$heading, $text]) {
+                echo '<div class="rulecard-facet">';
+                echo '<h4>' . Security::esc($heading) . '</h4>';
+                echo '<p>' . Security::esc($text) . '</p>';
+                echo '</div>';
+            }
+            echo '</div>';
             echo '</article>';
         }
         echo '</div>';
