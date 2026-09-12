@@ -356,7 +356,19 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
 /* A GROUP OF VIEWS, not a group of sections. The parent is a heading with a twist rather than a
    link: "Visitors" is not a page, and making it one would mean inventing a seventh view nobody
    asked for. The views inside keep everything they had, their own section lists included. */
-.navlink-parent { cursor: default; }
+/* A GROUP HEADING THAT HAPPENS TO BE A BUTTON. `Visitors` is the one navigation entry with
+   groups under it, so Layout::topBar() renders it as a real <button> rather than an <a> — and
+   the global `button` rule then drew its 1px box around it, alone among seventeen nav rows.
+   Only the three sides of that box are cleared: `border-left` is the accent bar every nav item
+   carries from `.side .navlink`, and zeroing the shorthand would take it away on the one item
+   that most needs to show it is the current section. */
+.navlink-parent {
+    cursor: default;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
+    background: none;
+}
 .navsub-views > li > .navgroup { margin: 0; }
 .navsub-views .navlink { padding-left: 26px; }
 .navsub-views .navsub .navsub-link { padding-left: 40px; }
