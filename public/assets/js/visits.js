@@ -41,7 +41,7 @@ import { pathCell } from './url.js';
  *
  * @type {Array<string>}
  */
-const WIDTHS = ['17%', '17%', '28%', '20%', '9%', '9%'];
+const WIDTHS = ['17%', '17%', '26%', '19%', '8%', '13%'];
 
 /* THE VERDICT IS NO LONGER A COLUMN. It was a chip at the end of every row, spending a seventh
    of the width on one word that is already the row's colour — see `.visits tbody tr[data-verdict]`

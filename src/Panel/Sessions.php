@@ -518,10 +518,18 @@ final class Sessions extends Controller
      */
     private function facets(): array
     {
+        /* THE BOUNCE FACETS RIDE ALONG. The bounce card is gone from this view and its figure
+           now appears in the results caption, which is built from THIS payload — so the number
+           is read from the same facet the card read, on the same query, rather than derived a
+           second time from something else. Two independently computed bounce rates on one page
+           is exactly how a product ends up with two numbers that quietly disagree. */
         [$groups, $f] = $this->dimensionGroups(
             'sessions.facets',
             self::BROWSE_BUCKETS,
-            ['beacon' => ['type' => 'query', 'q' => Query::POP_BEACON]],
+            array_merge(
+                ['beacon' => ['type' => 'query', 'q' => Query::POP_BEACON]],
+                Bounce::facets()
+            ),
             self::text('q', 200)
         );
 
@@ -530,6 +538,7 @@ final class Sessions extends Controller
             'active'       => $this->filters,
             'matched'      => (int) ($f['count'] ?? 0),
             'beacon_count' => self::qcount($f, 'beacon'),
+            'bounce'       => Bounce::read($f),
         ]);
     }
 
@@ -1456,8 +1465,17 @@ final class Sessions extends Controller
      */
     public function body(): void
     {
-        $this->searchCard();
-        self::bounceCard('se-bounce', '02');
+        /* THE SEARCH AND BOUNCE CARDS ARE GONE FROM THIS VIEW. Both sat above the fold and
+           pushed the thing the page exists for — the list of visits — below it. The bounce
+           figure is not lost: it is stated in the results caption, in one line, from the same
+           facet the card read. The search box survives as the two hidden inputs below, because
+           the CSV export reads #se-q and #se-sort to carry the query and ordering into the
+           file; deleting them outright would have quietly stripped both from every export. */
+        echo '<form id="se-form" hidden>';
+        echo '<input type="hidden" id="se-q" name="q" value="' . Security::esc(self::text('q', 200)) . '">';
+        echo '<input type="hidden" id="se-sort" name="sort" value="'
+            . Security::esc(self::param('sort', array_keys(Query::sorts()), 'recent')) . '">';
+        echo '</form>';
 
         echo '<div class="explorer" id="se-explorer">';
         echo '<button type="button" class="ghost small facets-show" id="se-facets-show">'
@@ -1492,49 +1510,6 @@ final class Sessions extends Controller
     }
 
     /**
-     * The search form.
-     *
-     * A GET form, so every search is a bookmarkable URL and the view works with
-     * JavaScript disabled.
-     */
-    private function searchCard(): void
-    {
-        self::cardOpen(
-            'se-search',
-            '01',
-            'Search',
-            'Matched across path, User-Agent, AS organisation, netname, reverse DNS, city and country.'
-        );
-
-        echo '<form class="searchbar" method="get" action="" id="se-form">';
-        echo '<input type="hidden" name="v" value="sessions">';
-        echo '<input type="hidden" name="range" value="' . Security::esc($this->range['key']) . '">';
-        echo '<label class="sr-only" for="se-q">Search sessions</label>';
-        echo '<input type="search" id="se-q" name="q" '
-            . 'placeholder="Search paths, User-Agents, organisations, netnames, cities" '
-            . 'value="' . Security::esc(self::text('q', 200)) . '" autocomplete="off" spellcheck="false">';
-        echo '<label class="sr-only" for="se-sort">Sort by</label>';
-        echo '<select id="se-sort" name="sort">';
-        $active = self::param('sort', array_keys(Query::sorts()), 'recent');
-        foreach ([
-            'recent'  => 'Most recent',
-            'oldest'  => 'Oldest first',
-            'score'   => 'Highest bot score',
-            'hits'    => 'Most requests',
-            'engaged' => 'Most engaged time',
-            'span'    => 'Longest log span',
-        ] as $value => $label) {
-            echo '<option value="' . Security::esc($value) . '"' . ($value === $active ? ' selected' : '') . '>'
-                . Security::esc($label) . '</option>';
-        }
-        echo '</select>';
-        echo '<button type="submit" class="primary">Search</button>';
-        echo '</form>';
-
-        self::cardEnd();
-    }
-
-    /**
      * The facet sidebar, loaded separately from the results.
      *
      * Headed "Filter by" rather than "Filters", because the previous heading described a
@@ -1552,7 +1527,7 @@ final class Sessions extends Controller
            keeps them apart by itself. */
         self::cardOpen(
             'se-facets',
-            '03',
+            '01',
             'Filter by',
             '',
             '<button type="button" class="ghost small facets-fold" id="se-facets-fold"'
@@ -1620,7 +1595,7 @@ final class Sessions extends Controller
            written by the front end once the result count is known, so it stays empty here. */
         self::cardOpen(
             'se-results',
-            '04',
+            '02',
             'Recent visitors',
             '',
             '<span class="job-meta" id="se-count"></span>' . $this->exportTool('sessions')
@@ -1635,8 +1610,12 @@ final class Sessions extends Controller
             /* SIX COLUMNS, AND THE WIDTHS ARE THE CONTRACT. This head is rendered here while the
                rows are built by assets/js/visits.js, so the two have to agree column for column
                — they did not, which is why the cells were landing under the wrong headings. */
-            . '<col style="width:17%"><col style="width:17%"><col style="width:28%">'
-            . '<col style="width:20%"><col style="width:9%"><col style="width:9%">'
+            /* THE BOUNCE COLUMN HOLDS TWO THINGS: a percentage and the chevron that opens the
+               record. At 9% they did not fit side by side, so the chevron wrapped and every row
+               drew two lines tall. The width comes out of Page and Email, both of which
+               truncate gracefully and neither of which wraps. */
+            . '<col style="width:17%"><col style="width:17%"><col style="width:26%">'
+            . '<col style="width:19%"><col style="width:8%"><col style="width:13%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Date</th>'
             . '<th scope="col">IP</th>'

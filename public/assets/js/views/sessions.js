@@ -27,8 +27,7 @@
 'use strict';
 
 import { api, byId, loadCard, noDataYet, num, hideEmpty, pct } from '../core.js';
-import { renderBounce } from '../bounce.js';
-import { activeFilters, renderFacetPanel } from '../facets.js';
+import { renderFacetPanel } from '../facets.js';
 import { renderLinkPager } from '../pager.js';
 import { fillVisits } from '../visits.js';
 
@@ -89,14 +88,21 @@ function loadFacets() {
         const data = await api('sessions', 'facets');
         renderFacets(data);
 
+        /* TWO FACTS, NOTHING ELSE. This used to recite how many filters were active — which the
+           chips at the top of the page already say — and what share of visits carried beacon
+           data, which is a diagnostic about the instrument rather than about the traffic. The
+           caption now answers the two questions somebody scanning a visit list actually has:
+           how many, and how many left immediately.
+
+           THE RATE IS THE ONE THE BOUNCE CARD PUBLISHED, read off the same facet on the same
+           query (Bounce::facets(), measured human visits that loaded a page and ran a beacon),
+           so removing that card did not quietly introduce a second, differently-computed bounce
+           figure beside it. */
         const count = byId('se-count');
         if (count) {
-            const filters = activeFilters().length;
-            count.textContent = num(data.matched) +
-                (filters
-                    ? ' matching the ' + filters + ' active filter' + (filters === 1 ? '' : 's')
-                    : ' sessions in this range') +
-                ' · ' + num(data.beacon_count) + ' with beacon data (' + pct(data.beacon_count, data.matched) + ')';
+            const m = (data.bounce && data.bounce.measured) || { bounced: 0, sessions: 0 };
+            count.textContent = num(data.matched) + ' hits'
+                + (m.sessions ? ' · ' + pct(m.bounced, m.sessions) + ' Bounced' : '');
         }
     });
 }
@@ -192,7 +198,4 @@ export default function init() {
     wireFilterFold();
     loadResults();
     loadFacets();
-    loadCard('se-bounce', 'Measuring engagement on single-page visits', async () => {
-        renderBounce('se-bounce', await api('sessions', 'bounce'));
-    });
 }

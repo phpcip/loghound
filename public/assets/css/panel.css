@@ -447,16 +447,22 @@ main {
    to the next.
    --------------------------------------------------------------------------- */
 
+/* SECTION HEADINGS ARE LABELS, NOT BILLBOARDS. At up to 30px, "Filter by" and "Recent
+   visitors" were set larger than the page's own subtitle and took a third of the screen
+   between the top of a card and its first row of data. The pages carry their own H1 now, so a
+   card heading only has to name the section it sits above — 17px does that — and the space it
+   was spending is returned to the table. The rule below is global on purpose: every view gets
+   the same treatment, so no page is left with headings a size larger than its neighbours. */
 .card-head {
-    display: flex; flex-wrap: wrap; gap: 10px 20px;
+    display: flex; flex-wrap: wrap; gap: 6px 16px;
     align-items: baseline; justify-content: space-between;
-    padding-bottom: 14px;
-    margin-bottom: 26px;
+    padding-bottom: 8px;
+    margin-bottom: 14px;
     border-bottom: 1px solid var(--hairline);
 }
 .card-head > h2 {
     flex: 1 1 auto;
-    font: 700 clamp(23px, 2.5vw, 30px)/1.15 var(--font-ui);
+    font: 700 clamp(15px, 1.15vw, 17px)/1.2 var(--font-ui);
     letter-spacing: -0.02em;
     text-transform: none;
     color: var(--ink);
@@ -466,6 +472,34 @@ main {
     overflow-wrap: anywhere;
 }
 .card-head > h2 > span:not(.card-num) { min-width: 0; }
+
+/* ---------------------------------------------------------------------------
+   THE FILTER COLUMN'S HEAD KEEPS ITS CONTROLS ON THE HEADING'S ROW.
+   `.card-head` wraps by design, and `h2` is `flex: 1 1 auto` at up to 30px — which is right
+   for a full-width card and wrong for the facets column, where the heading alone nearly fills
+   the width. "Hide" was pushed onto a line of its own, directly under the refresh control it
+   belongs beside, costing a whole row of vertical space at the top of the filter list.
+   Here the row is not allowed to wrap, the heading is allowed to shrink instead, and the
+   heading is set at a size that fits a narrow column.
+   --------------------------------------------------------------------------- */
+.facets .card-head {
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding-bottom: 10px;
+    margin-bottom: 14px;
+}
+.facets .card-head > h2 {
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    gap: 8px;
+}
+.facets .card-head > h2 > span:not(.card-num) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.facets .card-head > .facets-fold { flex: none; margin-left: auto; }
 .card-num {
     color: var(--accent);
     font-family: var(--font-mono);
@@ -613,15 +647,18 @@ main {
    characters per column, which is the difference between reading the path and guessing it. */
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
+/* THE HEADER ROW SITS ON THE DATA, NOT A HAND ABOVE IT. Nine pixels of padding under the
+   labels plus the card head's own margin left a visible band of empty page between "DATE" and
+   the first row. Four is enough to separate a label from the rule under it. */
 thead th {
     position: sticky; top: 0; z-index: 1;
     background: var(--page);
     text-align: left;
-    font: 700 12px/1.2 var(--font-ui);
-    letter-spacing: 0.08em;
+    font: 700 11px/1.2 var(--font-ui);
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--faint);
-    padding: 0 14px 9px;
+    padding: 0 10px 4px;
     border-bottom: 1px solid var(--ink);
 
     white-space: nowrap;
@@ -630,7 +667,7 @@ thead th:first-child { padding-left: 0; }
 thead th:last-child { padding-right: 0; }
 
 tbody td, tbody th {
-    padding: 8px 14px;
+    padding: 4px 10px;
     border-bottom: 1px solid var(--hairline);
     vertical-align: top;
     font-weight: 400;
@@ -4709,8 +4746,12 @@ table.visits td.visit-when { white-space: nowrap; overflow: visible; }
 
 /* The verdict cell carries the row's opener at its right-hand end rather than in a sixth
    column: the five-column rule is about what has to be READ, and a chevron is a control. */
+/* A ROW IS ONE LINE, ALWAYS. This cell holds a percentage and the open-record chevron, and at
+   9% of the table the pair did not fit — so the chevron wrapped underneath and every row in
+   the table became two rows tall. The column is wider now and this forbids the break outright:
+   whatever the width, the figure and its control stay on the heading's line. */
 table.visits td.visit-verdict,
-table.visits th.visit-verdict { text-align: left; }
+table.visits th.visit-verdict { text-align: left; white-space: nowrap; }
 table.visits td.visit-verdict > .rowopen { float: right; margin-left: 8px; }
 table.visits td.visit-verdict > .client .clip-line > .rowopen { float: right; margin-left: 8px; }
 
