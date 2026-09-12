@@ -16,6 +16,7 @@ import {
     api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, setPop, tbody, when
 } from '../core.js';
 import { barsHStacked, donut, histogram, tokens } from '../charts.js';
+import { openSubject } from '../dialog.js';
 import { dimRow, dimValue, valueText } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
 
@@ -136,7 +137,10 @@ function renderHistogram(data) {
     hideEmpty('bf-histogram-empty');
     cardChart('bf-histogram', 300);
     const t = tokens();
+    /* EVERY BAR OPENS THE SESSIONS INSIDE IT. The buckets are five points wide, so the band a
+       press asks for is `from` up to the next boundary; the server clamps both ends. */
     histogram('bf-histogram', data.histogram.map((bucket) => ({
+        pick: { band: 'bot_score_f', from: Math.round(bucket.from), to: Math.round(bucket.from) + 5 },
         label: String(Math.round(bucket.from)),
         value: bucket.count,
         from: bucket.from
@@ -145,6 +149,8 @@ function renderHistogram(data) {
         if (row.from >= 60) { return t.pop.declared; }
         if (row.from >= 40) { return t.pop.unknown; }
         return t.pop.human;
+    }, {
+        onPick: (pick) => openSubject('band', pick)
     });
 }
 

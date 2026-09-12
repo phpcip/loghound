@@ -882,6 +882,56 @@ export async function openDimension(field, value) {
     }
 }
 
+/**
+ * Open the visits inside one band of a numeric field — a histogram bucket.
+ *
+ * The score histogram's bars were counts with nothing behind them: "eight sessions scored 95"
+ * with no way to see which eight, which is the only question the bar raises. The server owns
+ * the field list and both bounds, so this passes them through and renders the same visit block
+ * every other dialog uses.
+ *
+ * @param {string} band Numeric field the server allowlists.
+ * @param {number} from Lower bound, inclusive.
+ * @param {number} to   Upper bound, exclusive except at the top of the range.
+ */
+export async function openBand(band, from, to) {
+    let handle = openDialog(dimLabel(band), 'Listing the visits in this band…');
+
+    const fetchPage = (start, rows) => api('sessions', 'visitors', {
+        band: band,
+        from: from,
+        to: to,
+        start: start,
+        rows: rows
+    });
+
+    try {
+        const data = await fetchPage(0);
+        if (!isCurrent(handle.generation)) {
+            return;
+        }
+        if (data.error) {
+            fill(handle.body, [say(data.error)]);
+            return;
+        }
+
+        const total = data.page && data.page.total !== null ? data.page.total : 0;
+        handle = openDialog(
+            String(data.subject || dimLabel(band)),
+            num(total) + ' visit' + (total === 1 ? '' : 's') + ' in this band'
+        );
+        fill(handle.body, [
+            filterNote(data.active),
+            visitBlock(data.visitors, data.page, fetchPage)
+        ]);
+        markSortable(handle.body);
+    } catch (err) {
+        if (isCurrent(handle.generation)) {
+            dialogFail(handle.body, err, () => openBand(band, from, to));
+        }
+    }
+}
+
 /* -------------------------------------------------------------------------
  * The request-plane dialog
  * ---------------------------------------------------------------------- */
@@ -1117,6 +1167,8 @@ export function initDetail() {
     registerOpener('pop', (data) => openPopulation(data.pop || '', data.why || ''));
     registerOpener('hitdim', (data) =>
         openHitDimension(data.field || '', data.value || '', data.view || ''));
+    registerOpener('band', (data) =>
+        openBand(data.band || '', Number(data.from) || 0, Number(data.to) || 0));
 
     const open = new URLSearchParams(window.location.search).get('open');
     if (open) {

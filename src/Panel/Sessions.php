@@ -130,6 +130,20 @@ final class Sessions extends Controller
         return $out;
     }
 
+    /**
+     * Numeric fields a histogram bucket may open, with their bounds and the words for them.
+     *
+     * A list of two rather than "any numeric field", for the reason every allowlist in this
+     * file exists: the value goes into an `fq`, and a range built from a field name a request
+     * chose is a filter naming whatever the caller likes.
+     *
+     * @var array<string,array{0:int,1:int,2:string}>
+     */
+    private const BAND_FIELDS = [
+        'bot_score_f' => [0, 100, 'Bot score'],
+        'hits_i'      => [0, 100000, 'Requests in the visit'],
+    ];
+
     /** Dimensions rendered in a monospace list, because the value is an identifier. */
     private const MONO_FIELDS = ['netname_s', 'fp_hash_s', 'host_s', 'sec_ch_ua_s', 'tls_proto_s',
         'paths_ss', 'entry_path_s', 'exit_path_s'];
@@ -915,7 +929,36 @@ final class Sessions extends Controller
             $subject = ($fields[$field] ?? $field) . ': ' . $value;
         }
 
+        /* A BAND OF A NUMERIC FIELD, which is what a histogram bucket is. The chart draws
+           `bot_score_f` in steps of five and every bar was a count with nothing behind it.
+           The field comes from a list of two, never from the request text, and both bounds are
+           clamped — so the worst a crafted link can do is ask for a band that is empty. The
+           upper bound is exclusive except at the very top, or the sessions sitting exactly on
+           a boundary would be counted in both neighbouring bands. */
         if ($pop === '' && $field === '') {
+            $band = self::param('band', array_keys(self::BAND_FIELDS), '');
+            if ($band !== '') {
+                [$min, $max, $label] = self::BAND_FIELDS[$band];
+                $from = Security::clampInt($_GET['from'] ?? null, $min, $max, $min);
+                $to = Security::clampInt($_GET['to'] ?? null, $min, $max, $max);
+                if ($to < $from) {
+                    $to = $max;
+                }
+                $scope[] = $band . ':[' . $from . ' TO ' . $to . ($to >= $max ? ']' : '}');
+                $subject = $label . ' ' . $from . '–' . $to;
+
+                $page = $this->visitorPage('sessions.band', $scope, Paging::start(), Paging::rows());
+
+                return $this->envelope([
+                    'subject'  => $subject,
+                    'pop'      => '',
+                    'field'    => $band,
+                    'visitors' => $page['rows'],
+                    'page'     => $page['page'],
+                    'active'   => $this->filters,
+                ]);
+            }
+
             return $this->envelope(['error' => 'Nothing was named to list the visits of.']);
         }
 

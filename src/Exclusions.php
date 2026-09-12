@@ -49,6 +49,7 @@ final class Exclusions
         'path'   => 'Request path',
         'ip'     => 'Client address',
         'ua'     => 'User-Agent',
+        'client' => 'Client',
         'method' => 'Method',
         'status' => 'Status',
         'query'  => 'Query string',
@@ -258,6 +259,15 @@ final class Exclusions
             'path'   => (string) ($hit['path_s'] ?? ''),
             'ip'     => (string) ($hit['ip_s'] ?? ''),
             'ua'     => (string) ($hit['ua_s'] ?? ''),
+
+            /* THE PARSED CLIENT, NOT THE RAW STRING. `ua` matches the whole header, which is
+               where a rule has to spell out an entire Chrome User-Agent to name a browser;
+               this is the name the parser already worked out — `curl`, `python-requests`,
+               `GPTBot`, `Chrome` — so `^curl` or `^python` is the whole rule. The refusal runs
+               after Parser::parseLine(), so these fields exist by the time it is consulted;
+               a client the parser could not name yields an empty string and matches nothing,
+               which is the honest outcome rather than a rule that fires on everything. */
+            'client' => (string) ($hit['ua_bot_name_s'] ?? $hit['browser_s'] ?? ''),
             'method' => (string) ($hit['method_s'] ?? ''),
             'status' => isset($hit['status_i']) ? (string) $hit['status_i'] : '',
             'query'  => (string) ($hit['query_s'] ?? ''),

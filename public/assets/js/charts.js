@@ -743,7 +743,13 @@ export function histogram(id, rows, colorFor, opts) {
     const prefix = options.prefix === undefined ? 'Score ' : options.prefix;
     const interval = options.interval === undefined ? 3 : options.interval;
 
-    draw(id, (t) => ({
+    /* A BAR IS A POPULATION, SO IT OPENS. `onPick` is optional and the chart is inert without
+       it, exactly as geoScatter() is: a bucket with no way to see the sessions inside it is a
+       number the reader can only look at. A row carries its own `pick`, so what a press means
+       is decided by the caller and not guessed from the label. */
+    const pickable = typeof options.onPick === 'function';
+
+    const chart = draw(id, (t) => ({
         grid: { top: 12, bottom: 4 },
         tooltip: {
             trigger: 'axis',
@@ -764,9 +770,32 @@ export function histogram(id, rows, colorFor, opts) {
         series: [{
             type: 'bar',
             barCategoryGap: '12%',
-            data: rows.map((r) => ({ value: r.value, itemStyle: { color: colorFor(r) } }))
+            cursor: pickable ? 'pointer' : 'default',
+            emphasis: pickable
+                ? { itemStyle: { borderColor: t.accentInk, borderWidth: 2 } }
+                : undefined,
+            data: rows.map((r) => ({
+                value: r.value,
+                pick: r.pick === undefined ? null : r.pick,
+                itemStyle: { color: colorFor(r) }
+            }))
         }]
     }));
+
+    /* Bound to the instance, not rebuilt with the option: a theme flip or a resize re-runs the
+       factory through setOption on this same chart, and off() first so redrawing the card with
+       fresh data cannot leave two listeners opening the dialog twice on one press. */
+    if (chart) {
+        chart.off('click');
+        if (pickable) {
+            chart.on('click', (p) => {
+                if (p && p.data && p.data.pick) {
+                    options.onPick(p.data.pick, p.data);
+                }
+            });
+        }
+    }
+    return chart;
 }
 
 /**
