@@ -4665,9 +4665,30 @@ final class Settings extends Controller implements JobHost, Sections
             return;
         }
 
-        echo '<form method="post" action="' . Security::esc(Layout::settingsUrl('cache')) . '" class="cacheclear">';
-        self::csrfField();
-        echo '<button type="submit" name="clear_cache" value="1" class="ghost small">Clear cache</button>';
+        echo '<form method="post" action="' . Security::esc(Layout::settingsUrl('cache')) . '"'
+            . ' class="cacheclear" id="lh-cache-clear"></form>';
+    }
+
+    /**
+     * The Clear cache button, in the card's action row beside Save caching.
+     *
+     * SEPARATE FROM ITS OWN FORM, BECAUSE FORMS DO NOT NEST. The button belongs beside Save
+     * caching, which is inside the settings form, while the two are different submissions to
+     * different URLs: one discards a store, the other writes configuration. The `form`
+     * attribute is what HTML gives for exactly this — the button lives in the action row and
+     * submits the empty form clearCacheControl() left in the document, so the POST that leaves
+     * the browser is byte for byte the one this control has always sent.
+     *
+     * @param array<string,mixed> $status Cache::status(), already read by the caller.
+     */
+    private function clearCacheButton(array $status): void
+    {
+        if (empty($status['working'])) {
+            return;
+        }
+
+        echo '<button type="submit" form="lh-cache-clear" name="clear_cache" value="1"'
+            . ' class="ghost small">Clear cache</button>';
 
         $cleared = $_GET['cleared'] ?? null;
         if (is_string($cleared) && ($cleared === 'no' || preg_match('/^\d{1,9}$/D', $cleared) === 1)) {
@@ -4677,8 +4698,6 @@ final class Settings extends Controller implements JobHost, Sections
                 : ($n === 1 ? '1 cached answer discarded.' : number_format($n) . ' cached answers discarded.');
             echo '<span class="job-meta" role="status">' . Security::esc($said) . '</span>';
         }
-
-        echo '</form>';
     }
 
     /**
@@ -5143,7 +5162,10 @@ final class Settings extends Controller implements JobHost, Sections
             . 'field and the object can never disagree about what was saved.</span>';
         echo '</fieldset>';
 
+        echo '<div class="btn-row">';
         echo '<button type="submit" class="primary">Save caching</button>';
+        $this->clearCacheButton($status);
+        echo '</div>';
         echo '</form>';
 
         self::cardEnd();

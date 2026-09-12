@@ -1003,6 +1003,11 @@ button[disabled], button[aria-busy="true"] { opacity: .45; cursor: default; }
 button[disabled]:hover, button[aria-busy="true"]:hover { background: transparent; color: var(--ink); }
 button.primary[disabled]:hover { background: var(--accent); color: var(--on-accent); }
 
+/* A card's actions on one line: the one that commits the form first, then anything else the
+   card can do, then whatever the last press reported. It wraps rather than clips, so a long
+   status line on a narrow window drops below the buttons instead of pushing them off. */
+.btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+
 .toggle { display: inline-flex; gap: 18px; }
 .toggle button {
     border: 0; border-bottom: 2px solid transparent; border-radius: 0;
