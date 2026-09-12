@@ -17,16 +17,20 @@
  * ---------------------------------------------------------------------------------
  * WHAT BOUNDS IT
  * ---------------------------------------------------------------------------------
- * The server ends each connection after its own limit and EventSource reconnects by itself,
- * carrying the cursor as `Last-Event-ID`, so nothing is missed and the reader sees nothing
- * happen. This end does not stop on its own at all.
+ * A connection is held open for as long as it is healthy. EventSource reconnects by itself when
+ * one does end, carrying the cursor as `Last-Event-ID`, so nothing is missed. This end does not
+ * stop on its own at all.
  *
- * IT USED TO, TWICE OVER, AND BOTH WERE WRONG. A fifteen-minute cap ended the stream in a tab
- * somebody was watching, and a `visibilitychange` handler ended it the moment the tab lost
- * focus — so glancing at another window for a second came back to a stopped page. The operator
- * decides: Pause stops it, and navigating away stops it because the document is discarded and
- * the connection with it. Nothing else does. A connection costs one PHP worker for 45 seconds
- * at a time and the server is what bounds it.
+ * IT USED TO, THREE TIMES OVER, AND ALL THREE WERE WRONG. A fifteen-minute cap ended the stream
+ * in a tab somebody was watching; a `visibilitychange` handler ended it the moment the tab lost
+ * focus, so glancing at another window came back to a stopped page; and the server cut every
+ * connection at forty-five seconds, which put "Reconnecting" on a live page every forty-five
+ * seconds forever. The operator decides: Pause stops it, and navigating away stops it because
+ * the document is discarded and the connection with it. Nothing else does.
+ *
+ * A reconnect that the browser completes quickly is therefore not news, and saying so on the
+ * state line taught the operator to distrust a page that was working. The word waits for
+ * RECONNECT_QUIET_MS and is withdrawn the moment an event arrives.
  *
  * EVERY VALUE HERE CAME OFF A LOG LINE, which is attacker-chosen bytes by definition, and it is
  * rendered the moment it arrives with no batch job in between. Nothing is assigned to innerHTML
@@ -49,8 +53,14 @@ import { exportLink } from '../export.js';
 /** Rows kept in the table. Beyond this the oldest are dropped, which the caption says. */
 const MAX_ROWS = 300;
 
+/** How long a reconnect may take before it is worth telling the operator about. */
+const RECONNECT_QUIET_MS = 1500;
+
 /** The open connection, or null. */
 let source = null;
+
+/** Pending "Reconnecting" announcement, cancelled if the stream comes back first. */
+let reconnectTimer = 0;
 
 /** Rows currently in the table, by id, so the dialog can open one without a second fetch. */
 const held = new Map();
@@ -110,6 +120,8 @@ function onHello(event) {
         return;
     }
 
+    arrived();
+
     if (data.open === 0) {
         setState('off', data.sources === 0
             ? 'No log source is configured.'
@@ -136,6 +148,7 @@ function onLines(event) {
     unparsedWhy = String(data.why || '');
     excluded += Number(data.excluded) || 0;
 
+    arrived();
     addRows(Array.isArray(data.rows) ? data.rows : []);
     setState('live', 'Streaming');
     counts();
@@ -149,21 +162,50 @@ function onQuiet(event) {
         unparsed = Number(data.unparsed) || 0;
         unparsedWhy = String(data.why || '');
     }
+    arrived();
     setState('live', 'Streaming');
     counts();
 }
 
 /**
- * The server has reached its own connection limit.
+ * An event arrived, so whatever the connection was doing, it is doing it successfully.
  *
- * Nothing happens here but a word on the state line: the browser reconnects by itself within a
- * few seconds, carrying the cursor, and the reader never knows. This used to refuse the
- * reconnect once the tab had been watching for fifteen minutes, which ended the stream under
- * somebody who was looking at it.
+ * Withdraws a pending "Reconnecting" before it is ever shown. A reconnect the browser finishes
+ * in a few hundred milliseconds is not something the operator needs to be told about, and being
+ * told about it repeatedly is what made a working page look broken.
+ */
+function arrived() {
+    if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = 0;
+    }
+}
+
+/**
+ * The connection is being re-established. Say so only if it takes long enough to matter.
+ *
+ * @param {string} state The dot to show if the word is actually reached.
+ */
+function reconnecting(state) {
+    if (reconnectTimer) {
+        return;
+    }
+    reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = 0;
+        setState(state, 'Reconnecting');
+    }, RECONNECT_QUIET_MS);
+}
+
+/**
+ * The server let go of this connection.
+ *
+ * It does that when the work it has done approaches the PHP pool's execution limit, which on an
+ * ordinary site is hours away, not seconds. The browser reconnects by itself carrying the cursor
+ * and the reader never knows — so nothing is said unless the reconnect is slow.
  */
 function onPause(event) {
     parse(event);
-    setState('live', 'Reconnecting');
+    reconnecting('live');
 }
 
 /** The connection dropped, or was refused. */
@@ -175,7 +217,7 @@ function onError() {
         stop('lost');
         return;
     }
-    setState('wait', 'Reconnecting');
+    reconnecting('wait');
 }
 
 /**
@@ -199,6 +241,7 @@ let resumeFrom = '';
 
 /** Close the connection and say why, with a way back. */
 function stop(reason, cursor) {
+    arrived();
     if (source) {
         source.close();
         source = null;
@@ -1057,9 +1100,9 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
             pruneExcluded();
 
             /* RECONNECT NOW RATHER THAN WHEN THE SERVER NEXT LETS GO. The reader reads the rules
-               when a connection opens, and a connection lives for 45 seconds — so without this a
-               saved rule went on being ignored for most of a minute while the table filled with
-               exactly what it excluded. */
+               when a connection opens, and a connection now lives for as long as it stays healthy
+               — so without this a saved rule would go on being ignored indefinitely while the
+               table filled with exactly what it excluded. */
             const wasRunning = source !== null;
             if (wasRunning) {
                 stop('asked');

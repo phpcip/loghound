@@ -30,11 +30,12 @@
  * arrived in between.
  *
  * A stream holds a PHP-FPM worker for as long as it is open, and the shipped pool has eight of
- * them, so it is bounded twice. The server ends every connection after MAX_SECONDS, which is
- * inside the pool's own execution limit and is invisible to the reader because EventSource
- * reconnects by itself. The browser stops asking altogether after its own watch limit, and
- * says so with a control to resume. A heartbeat goes down the wire whether or not there is
- * traffic, so a connection that has died is noticed rather than sat on.
+ * them, so what bounds a connection matters. It is not a clock: a connection ends when the client
+ * goes away, when the operator pauses it, or when the parsing it has done approaches the pool's
+ * execution limit — CPU_BUDGET_SEC carries why a wall-clock cap was the wrong instrument and what
+ * it cost the page. A heartbeat goes down the wire whether or not there is traffic, so a
+ * connection that has died is noticed rather than sat on, and an abandoned tab gives its worker
+ * back within KEEPALIVE_SEC instead of holding one to the end of a timer.
  *
  * ---------------------------------------------------------------------------------
  * WHICH FILES ARE READ
@@ -71,8 +72,33 @@ final class Live extends Controller implements JobHost
         ['lv-stream', 'Live stream'],
     ];
 
-    /** Seconds one connection is held before the server ends it and the browser reconnects. */
-    private const MAX_SECONDS = 45;
+    /**
+     * CPU seconds one connection may spend before it is ended deliberately.
+     *
+     * NOT A CLOCK, AND THE CLOCK WAS THE BUG. This used to cut every connection at 45 seconds of
+     * wall time to stay inside the pool's `max_execution_time = 60`. The browser then reconnected
+     * after its retry delay, so a page whose whole purpose is to be live spent several percent of
+     * its life showing "Reconnecting", on a loop, forever.
+     *
+     * That wall was never needed. PHP does not count time spent in usleep() towards the execution
+     * limit on Unix, and this loop spends almost its entire life there — a connection held open
+     * for an hour has consumed a fraction of a second of the limit. What the limit does bound is
+     * real work, which here means parsing lines, so that is what is measured.
+     *
+     * The baseline is taken when the stream starts rather than read absolutely, because an FPM
+     * worker serves up to `pm.max_requests` requests and getrusage() reports the whole process.
+     * The budget sits under the pool's limit so that a genuinely busy log ends a connection
+     * cleanly and resumes from its cursor, instead of being killed in the middle of an event.
+     */
+    private const CPU_BUDGET_SEC = 45.0;
+
+    /**
+     * Wall-clock ceiling, used only where getrusage() is unavailable.
+     *
+     * With no way to measure consumed CPU there is no way to tell how near the execution limit
+     * is, so the old conservative behaviour is kept rather than risking a hard kill mid-event.
+     */
+    private const NO_RUSAGE_WALL_SEC = 45.0;
 
     /** Pause between reads of the log files. */
     private const POLL_US = 400000;
@@ -337,8 +363,8 @@ final class Live extends Controller implements JobHost
            stream never starts. Apache talks to PHP over mod_proxy_fcgi, which buffers a
            response until its block fills or the request ends — `flushpackets` is off by
            default and no amount of ob_flush() on this side changes that. So PHP wrote `hello`,
-           Apache held it, the browser sat in "Connecting" until the server hung up at
-           MAX_SECONDS, and EventSource reconnected into the same wall: a live page that was
+           Apache held it, the browser sat in "Connecting" until the server hung up on its own
+           limit, and EventSource reconnected into the same wall: a live page that was
            never live, with three consecutive responses of byte-identical length to prove
            nothing was being streamed at all.
 
@@ -350,22 +376,30 @@ final class Live extends Controller implements JobHost
         echo ': ' . str_repeat(' ', 8192) . "\n\n";
         self::push();
 
-        echo "retry: 3000\n\n";
+        echo "retry: 750\n\n";
         self::event('hello', [
             'watching' => $reader->watching(),
             'open'     => $reader->openCount(),
             'sources'  => $reader->sourceCount(),
             'hosts'    => $this->selectedHosts(),
-            'seconds'  => self::MAX_SECONDS,
+            'seconds'  => 0,
         ], $reader->cursor());
         self::push();
 
-        $deadline = microtime(true) + self::MAX_SECONDS;
+        $measurable = function_exists('getrusage');
+        $cpuStart = $measurable ? self::cpuSeconds() : 0.0;
+        $wall = microtime(true) + self::NO_RUSAGE_WALL_SEC;
         $spoke = microtime(true);
         $wrote = microtime(true);
 
-        while (microtime(true) < $deadline) {
+        while (true) {
             if (connection_aborted() !== 0) {
+                break;
+            }
+            if ($measurable
+                ? self::cpuSeconds() - $cpuStart >= self::CPU_BUDGET_SEC
+                : microtime(true) >= $wall
+            ) {
                 break;
             }
 
@@ -458,6 +492,26 @@ final class Live extends Controller implements JobHost
             @ob_flush();
         }
         @flush();
+    }
+
+    /**
+     * Processor time this worker has burned, user and system together.
+     *
+     * Read as a difference, never as an absolute: an FPM worker serves many requests before it is
+     * recycled, and getrusage() counts the process, not the request. The stream takes a baseline
+     * when it opens and compares against that, which is the only reading that means anything.
+     */
+    private static function cpuSeconds(): float
+    {
+        $usage = @getrusage();
+        if (!is_array($usage)) {
+            return 0.0;
+        }
+
+        return (float) ($usage['ru_utime.tv_sec'] ?? 0)
+            + ((float) ($usage['ru_utime.tv_usec'] ?? 0) / 1000000)
+            + (float) ($usage['ru_stime.tv_sec'] ?? 0)
+            + ((float) ($usage['ru_stime.tv_usec'] ?? 0) / 1000000);
     }
 
     /**
