@@ -216,6 +216,33 @@ export function valueText(field, value) {
  * @param {string} value  The value, exactly as it came back from Solr.
  * @param {Object} [opts] {text, mono, title, count, link, why}
  */
+/**
+ * Is the dashboard already filtered to this exact value?
+ *
+ * ASKED HERE SO EVERY SURFACE ANSWERS THE SAME. A breakdown in a dialog, a table cell and a
+ * facet row all render values through dimValue(), and none of them showed which value was the
+ * one currently in force — so a reader who had filtered to Human saw Human sitting in the list
+ * looking exactly like Bot and Unknown beside it, with no way to tell that the numbers around
+ * it were already narrowed by it.
+ *
+ * `boot.filters.active` is Panel\Facets::flat(): a map of field to the values chosen on it.
+ * Both a list and a bare value are accepted, because a single-valued filter is written either
+ * way depending on how it reached the URL.
+ */
+function isFiltered(field, raw) {
+    const active = (boot.filters || {}).active;
+    if (!active || typeof active !== 'object' || Array.isArray(active)) {
+        return false;
+    }
+    const chosen = active[field];
+    if (chosen === undefined || chosen === null) {
+        return false;
+    }
+    return Array.isArray(chosen)
+        ? chosen.some((v) => String(v) === raw)
+        : String(chosen) === raw;
+}
+
 export function dimValue(field, value, opts) {
     const options = opts || {};
     const raw = value === null || value === undefined ? '' : String(value);
@@ -284,12 +311,20 @@ export function dimValue(field, value, opts) {
         return span;
     }
 
+    const on = isFiltered(field, raw);
+    if (on) {
+        classes.push('is-on');
+    }
+
     const node = el('a', {
         class: classes.join(' '),
         href: toggleUrl(field, raw),
-        title: (spoken && spoken.why)
-            || options.title
-            || ('Filter every view to ' + dimLabel(field) + ': ' + text)
+        'aria-current': on ? 'true' : null,
+        title: on
+            ? 'Filtered to this now — these figures are already narrowed by it. Selecting it again removes the filter.'
+            : ((spoken && spoken.why)
+                || options.title
+                || ('Filter every view to ' + dimLabel(field) + ': ' + text))
     });
     if (mark) {
         node.appendChild(mark);

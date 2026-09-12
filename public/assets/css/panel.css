@@ -2438,6 +2438,12 @@ a.dim:hover,
 a.dim:focus-visible { background: none; color: var(--accent-ink); border-bottom-color: var(--accent); }
 .dim-count { margin-left: 8px; color: var(--faint); font-family: var(--font-mono); font-size: 14px; }
 
+/* THE VALUE THE VIEW IS ALREADY FILTERED TO. Same device the facet list uses for the same
+   meaning — accent ink and weight — so "this one is in force" reads identically wherever a
+   dimension value appears. */
+.dim.is-on { color: var(--accent-ink); font-weight: 700; }
+.dim.is-on .dim-count { color: var(--accent-ink); }
+
 /* --- Flags ---------------------------------------------------------------------------
 
    Composed from the regional-indicator codepoints, so there is no image request and no
