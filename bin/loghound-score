@@ -30,8 +30,11 @@
  * rewritten whenever it has new hits, and REPLACED by the final document when the session
  * closes. Three things make that safe rather than merely fast, and each is documented where it
  * happens: the id is the session id so a close overwrites instead of duplicating
- * (buildSessionDoc); the verdict is deliberately weakened so a provisional session can never
- * claim to be human (Score\Rules::DEFERRED_CODES and PROVISIONAL_FLOOR); and the daily rollups
+ * (buildSessionDoc); the rules that can only be read once a session has ended are silenced and
+ * a verdict resting on their absence is floored at `unknown` (Score\Rules::DEFERRED_CODES and
+ * PROVISIONAL_FLOOR) — a floor that lifts where a plane of evidence has POSITIVELY reported a
+ * person, so an open session can be called human on proof and never on silence
+ * (Score\Rules::provedHumanLive); and the daily rollups
  * exclude provisional documents so a historical total can never absorb a partial one
  * (computeRollup). The cost is bounded by PROVISIONAL_BATCH and by dirty tracking in
  * State::listDirtyOpenSessions().

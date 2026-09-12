@@ -79,6 +79,29 @@ function kv(pairs) {
     return dl;
 }
 
+/**
+ * Where this visit came from, as a fresh element every call.
+ *
+ * A FUNCTION RATHER THAN A VARIABLE, and that is the whole reason it exists. The row is wanted
+ * in two places at once — the identity block at the top, where it answers "who is this" before
+ * anything is unfolded, and "How they arrived", where it belongs to the story of the visit — and
+ * a DOM node placed twice is not copied, it is MOVED. Sharing one element would have silently
+ * emptied whichever block rendered first.
+ *
+ * A referrer is attacker-influenced text. It is rendered as a link only when the server has
+ * already passed it through Security::safeUrl() and got something back; otherwise it is printed
+ * as plain monospaced text, never as an href.
+ */
+function cameFrom(s) {
+    if (!s.referer) {
+        return 'no referrer sent';
+    }
+
+    return s.referer_href && s.referer_href !== '#'
+        ? el('a', { href: s.referer_href, rel: 'noreferrer noopener', text: s.referer })
+        : el('span', { class: 'mono wrap', text: s.referer });
+}
+
 /** A plain sentence, or nothing when there is no sentence to say. */
 function say(text, klass) {
     return text ? el('p', { class: klass || 'muted', text: text }) : null;
@@ -576,7 +599,14 @@ function renderSession(body, data) {
             el('span', { text: dur(stayed.ms) }),
             stayed.source ? el('span', { class: 'sub', text: ' · ' + stayed.source }) : null
         ])],
-        ['Timezone of the address', s.tz, true]
+        ['Timezone of the address', s.tz, true],
+
+        /* REPEATED HERE ON PURPOSE, not moved. Where somebody came from is part of who they
+           are — a visit off a search engine and a visit off an admin page are different
+           visitors before any fold is opened — so it is answered at the top as well as in its
+           own section. cameFrom() builds a new node per call for the reason its docblock
+           gives. */
+        ['Came from', cameFrom(s)]
     ];
 
     const used = [
@@ -614,11 +644,7 @@ function renderSession(body, data) {
     const arrival = [
         ['First page they asked for', s.entry ? pathCell(s.entry, { fallback: s.host }) : null],
         ['Last page the log saw', s.exit ? pathCell(s.exit, { fallback: s.host }) : null],
-        ['Came from', s.referer
-            ? (s.referer_href && s.referer_href !== '#'
-                ? el('a', { href: s.referer_href, rel: 'noreferrer noopener', text: s.referer })
-                : el('span', { class: 'mono wrap', text: s.referer }))
-            : 'no referrer sent'],
+        ['Came from', cameFrom(s)],
         ['Which counts as', s.referer_type ? dimValue('referer_type_s', s.referer_type) : null],
         ['Site they were on', s.host
             ? el('span', { class: 'urlwrap' }, [

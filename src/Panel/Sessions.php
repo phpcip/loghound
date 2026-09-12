@@ -1102,7 +1102,12 @@ final class Sessions extends Controller
             'q'  => '*:*',
             'fq' => $scope,
         ], [
-            'paths' => Paging::terms('paths_ss', $start, $rows, 'count desc', [
+            /* MOST RECENT FIRST, not most visited. A list of the pages one person read is a
+               history, and the question asked of a history is "what were they just looking at" —
+               ordering it by volume puts the page they hit twice a week ago above the one they
+               are on now. Solr orders a terms facet by a sub-facet aggregation, so `last desc`
+               is the same `max(ts_end)` the rows already carry, not a second read. */
+            'paths' => Paging::terms('paths_ss', $start, $rows, 'last desc', [
                 'facet' => [
                     'hits' => 'sum(hits_i)',
                     'last' => 'max(ts_end)',
@@ -1394,7 +1399,15 @@ final class Sessions extends Controller
         $hits = $this->gw->select('sessions.hits', $this->gw->hitsCore(), [
             'q'     => '*:*',
             'fq'    => [Query::term('session_id_s', $id)],
-            'sort'  => 'ts asc',
+
+            /* NEWEST FIRST, AND THE CLIENT ALREADY THOUGHT SO. assets/js/detail.js computes the
+               time spent on each page as the gap to the NEXT request, and its own comment says
+               "the rows arrive newest-first, so the next request in time is the previous row" —
+               it subtracts `rows[i-1]` from `rows[i]`. Sent ascending, that subtraction is
+               negative on every row, the `gapMs > 0` guard rejects it, and the column has been
+               silently blank. Descending is what the reader wants at the top of a long trail and
+               what the renderer was written against. */
+            'sort'  => 'ts desc',
             'rows'  => $rows,
             'start' => $start,
             'fl'    => Query::hitFl(),

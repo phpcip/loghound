@@ -369,7 +369,7 @@ session closes; there is never a second document for the same session.
 | Settled population | `-provisional_b:true`. This is the only correct form: it also matches every session indexed before the field existed. `provisional_b:false` would exclude a site's entire history. |
 | Provisional population | `provisional_b:true` |
 | Counts | `hits_i`, `pages_i`, `assets_i`, `uniq_paths_i`, `bytes_l`, `status_*`, `log_span_ms_l`, `paths_ss` are **partial** — what has been logged so far, not what the session will amount to. |
-| Verdict | Reached with the five absence-based rules **not evaluated** (§7), and **floored at `unknown`**: a provisional verdict may never be `human` or `likely_human`. |
+| Verdict | Reached with the five absence-based rules **not evaluated** (§7), and **floored at `unknown`** — unless a plane of evidence has positively reported a person, in which case the floor lifts. A provisional verdict is never better than `unknown` on silence alone; it may be `human` on proof. Proof is the beacon reporting engaged time past the human floor with at least one interaction, or, where no beacon ran, the log plane saying something positive — client hints consistent with the User-Agent, a sub-resource fetched, or a 304 — over a span past the same floor. A visitor running an ad blocker is not thereby automation. |
 | Rollups | Excluded. Daily rollups count settled sessions only (§4.2 rollup block). |
 
 **`ident_s`, `signed_in_b` — what the measured site said about the visitor.**

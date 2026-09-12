@@ -1076,17 +1076,39 @@ final class Rules
      */
     private static function provedHumanLive(array $s): bool
     {
-        if (empty($s['beacon'])) {
+        if (!empty($s['beacon'])) {
+            $engaged = $s['engaged_ms'] ?? null;
+            $interactions = $s['interactions'] ?? null;
+
+            return $engaged !== null
+                && (int) $engaged >= self::HUMAN_FLOOR_MS
+                && $interactions !== null
+                && (int) $interactions > 0;
+        }
+
+        /* AN ADBLOCKER IS NOT EVIDENCE OF AUTOMATION, and requiring the beacon here made it
+           exactly that. hadTestableEvidence() judges a CLOSED session on four planes and only
+           one of them is the beacon: a consistent Sec-CH-UA against the User-Agent, a client
+           that went back for a stylesheet or an image, a conditional request answered 304.
+           Every one of those is a positive fact about the client, and the engine already trusts
+           them enough to call a settled session human on their strength alone.
+           This refused all three while the session was open, so a reader with uBlock was
+           `unknown` for exactly as long as they were on the site and `human` a half hour after
+           they left — the engine's own multi-plane detection, switched off at the one moment it
+           was being watched.
+           The duration bar is the same thirty seconds, read off the log span because there is no
+           beacon clock to read. Evidence AGAINST the session still scores and still lands: this
+           only declines to apply the floor, exactly as the beacon branch above does. */
+        $span = $s['log_span_ms'] ?? null;
+        if ($span === null || (int) $span < self::HUMAN_FLOOR_MS) {
             return false;
         }
 
-        $engaged = $s['engaged_ms'] ?? null;
-        $interactions = $s['interactions'] ?? null;
-
-        return $engaged !== null
-            && (int) $engaged >= self::HUMAN_FLOOR_MS
-            && $interactions !== null
-            && (int) $interactions > 0;
+        return ($s['secch_mismatch'] ?? null) !== null
+            || ($s['platform_mismatch'] ?? null) !== null
+            || (int) ($s['sub_resources'] ?? 0) > 0
+            || (int) ($s['own_assets'] ?? 0) > 0
+            || !empty($s['got_304']);
     }
 
     /**
