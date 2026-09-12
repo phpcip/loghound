@@ -65,6 +65,9 @@ let lag = 0;
 let unparsed = 0;
 let unparsedWhy = '';
 
+/** Rows the server refused to send because a rule matched them. Reported, never silent. */
+let excluded = 0;
+
 /* -------------------------------------------------------------------------
  * The connection
  * ---------------------------------------------------------------------- */
@@ -274,6 +277,11 @@ function counts() {
     }
     if (unparsed > 0) {
         parts.push(num(unparsed) + ' unparsed' + (unparsedWhy ? ' (' + unparsedWhy + ')' : ''));
+    }
+    /* SAID OUT LOUD, because a stream that is quieter than the site is busy looks broken. The
+       server counts what its rules refused and this is the only place that number surfaces. */
+    if (excluded > 0) {
+        parts.push(num(excluded) + ' hidden by your rules');
     }
     if (held.size >= MAX_ROWS) {
         parts.push('showing the last ' + num(MAX_ROWS));
