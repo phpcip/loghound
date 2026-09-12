@@ -14,10 +14,10 @@
 
 'use strict';
 
-import { api, byId, el, hideEmpty, loadCard, num, pct, setPop, tbody } from '../core.js';
+import { api, byId, el, hideEmpty, loadCard, num, pct, setPop, tbody, when } from '../core.js';
 import { renderBounce } from '../bounce.js';
 import { pagedCard } from '../cardtable.js';
-import { dimRow } from '../identity.js';
+import { dimRow, dimValue } from '../identity.js';
 import { pathCell } from '../url.js';
 
 /**
@@ -104,7 +104,50 @@ function renderPages(data) {
 }
 
 /** Entry point. */
+/**
+ * The signed-in visitors table.
+ *
+ * Every row opens the visits behind that person, because a name with a count next to it and no
+ * way through is the same dead end every other table in this panel stopped being. An
+ * installation whose site never calls identify() gets the empty state and a sentence saying so,
+ * rather than a table with headers and nothing under them.
+ */
+function renderPeople(data) {
+    const rows = data.people || [];
+
+    setPop('an-people', rows.length
+        ? num(data.named) + ' of ' + num(data.total) + ' visits carried an identity, across '
+            + num(data.distinct) + (data.distinct === 1 ? ' person' : ' people')
+            + (data.distinct > rows.length ? ' — the ' + num(rows.length) + ' most frequent are listed' : '')
+        : 'No visit in range carried an identity. Your site declares one by passing it to the '
+            + 'beacon; nothing is guessed, so until it does this stays empty.');
+
+    if (!rows.length) {
+        tbody(byId('an-people-table'), []);
+        return false;
+    }
+    hideEmpty('an-people-empty');
+
+    tbody(byId('an-people-table'), rows.map((row) => ({
+        attrs: dimRow('ident_s', row.ident),
+        cells: [
+            { node: dimValue('ident_s', row.ident), clip: true, title: row.ident, sort: row.ident },
+            { text: num(row.sessions), num: true, sort: row.sessions },
+            { text: num(row.pages), num: true, sort: row.pages },
+            { text: num(row.hits), num: true, sort: row.hits },
+            { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
+            { text: row.last ? when(row.last) : '—', mono: true, nowrap: true, sort: row.last || '' }
+        ]
+    })));
+
+    return true;
+}
+
 export default function init() {
+    loadCard('an-people', 'Counting visits per signed-in visitor', async () => {
+        renderPeople(await api('engagement', 'people'));
+    });
+
     loadCard('an-bounce', 'Measuring engagement on single-page visits', async () => {
         renderBounce('an-bounce', await api('engagement', 'bounce'));
     });

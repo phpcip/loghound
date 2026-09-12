@@ -553,6 +553,14 @@ final class Query
             'entry_path_s'     => 'Landing page',
             'exit_path_s'      => 'Exit page',
             'signed_in_b'      => 'Signed in',
+
+            /* THE NAME THE MEASURED SITE ATTACHED, and a real dimension rather than a field that
+               merely rides along on the document. It was in sessionFl() — returned with every
+               session, visible in a drill-down — but absent from this list, so it could not be
+               faceted, filtered or opened. "Who was here" is the first question anybody asks of
+               a signed-in visit, and it had no answer. Sessions-only by construction: a request
+               carries no identity, the session it belongs to does. */
+            'ident_s'          => 'Signed-in visitor',
             'planes_s'         => 'Planes',
             'search_terms_ss'  => 'Search term',
 
@@ -766,6 +774,7 @@ final class Query
             'entry_path_s',
             'exit_path_s',
             'signed_in_b',
+            'ident_s',
             'planes_s',
         ];
 
