@@ -2032,7 +2032,7 @@ final class Settings extends Controller implements JobHost, Sections
             }
         }
         if ($found === null) {
-            return '?v=settings&err=no_such_source';
+            return '?v=settings&err=no_such_source&s=sources';
         }
 
         $roots = (array) $this->cfg->get('allowed_log_roots', []);
@@ -2066,7 +2066,7 @@ final class Settings extends Controller implements JobHost, Sections
 
         $err = $this->persist();
         if ($err !== null) {
-            return '?v=settings&err=' . $err;
+            return '?v=settings&err=' . $err . '&s=sources';
         }
 
         $this->markConfirmed($path);
@@ -2096,7 +2096,7 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $id = is_string($_POST['source'] ?? null) ? $_POST['source'] : '';
         if (!preg_match('/^[0-9a-f]{16}$/D', $id)) {
-            return '?v=settings&err=no_such_source';
+            return '?v=settings&err=no_such_source&s=sources';
         }
 
         $kept = [];
@@ -2111,14 +2111,14 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         if ($removed === null) {
-            return '?v=settings&err=no_such_source';
+            return '?v=settings&err=no_such_source&s=sources';
         }
 
         $this->cfg->set('sources', array_values($kept));
 
         $err = $this->persist();
         if ($err !== null) {
-            return '?v=settings&err=' . $err;
+            return '?v=settings&err=' . $err . '&s=sources';
         }
 
         $this->markConfirmed($removed, false);
@@ -2215,7 +2215,7 @@ final class Settings extends Controller implements JobHost, Sections
 
         $mode = is_string($_POST['ip_mode'] ?? null) ? $_POST['ip_mode'] : '';
         if (!in_array($mode, Steps::ipModes(), true)) {
-            return '?v=settings&err=bad_ip_mode';
+            return '?v=settings&err=bad_ip_mode&s=privacy';
         }
         $days = Security::clampInt($_POST['retention_days'] ?? null, 0, 3650, 90);
 
@@ -2227,8 +2227,14 @@ final class Settings extends Controller implements JobHost, Sections
         $this->cfg->set('privacy.retention_days', $days);
         $this->cfg->set('privacy.rollup_forever', isset($_POST['rollup_forever']));
 
+        /* A SAVE COMES BACK TO THE PAGE IT WAS MADE ON. Settings is sixteen pages behind one
+           `v=settings`, so a redirect that names no section lands on the first one — a reader
+           who pressed Save on Privacy was answered on Finish setup, with the confirmation
+           attached to a page they were not looking at. */
         $err = $this->persist();
-        return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=privacy_saved';
+        return $err !== null
+            ? '?v=settings&err=' . $err . '&s=privacy'
+            : '?v=settings&ok=privacy_saved&s=privacy';
     }
 
     /**
@@ -2258,7 +2264,7 @@ final class Settings extends Controller implements JobHost, Sections
             $t[$k] = Security::clampInt($_POST['threshold'][$k] ?? null, 0, 100, $default);
         }
         if (!($t['bot'] > $t['likely_bot'] && $t['likely_bot'] > $t['unknown'] && $t['unknown'] > $t['likely_human'])) {
-            return '?v=settings&err=bad_thresholds';
+            return '?v=settings&err=bad_thresholds&s=scoring';
         }
 
         $this->cfg->set('scoring.weights', $weights);
@@ -2266,7 +2272,9 @@ final class Settings extends Controller implements JobHost, Sections
         $this->cfg->set('scoring.rule_version', ((int) $this->cfg->get('scoring.rule_version', 1)) + 1);
 
         $err = $this->persist();
-        return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=scoring_saved';
+        return $err !== null
+            ? '?v=settings&err=' . $err . '&s=scoring'
+            : '?v=settings&ok=scoring_saved&s=scoring';
     }
 
     /**
@@ -2295,11 +2303,13 @@ final class Settings extends Controller implements JobHost, Sections
         $mode = is_string($_POST['auth_mode'] ?? null) ? $_POST['auth_mode'] : '';
 
         if (Steps::applyAuthMode($this->cfg, $mode) !== []) {
-            return '?v=settings&err=bad_auth_mode';
+            return '?v=settings&err=bad_auth_mode&s=auth';
         }
 
         $err = $this->persist();
-        return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=auth_saved';
+        return $err !== null
+            ? '?v=settings&err=' . $err . '&s=auth'
+            : '?v=settings&ok=auth_saved&s=auth';
     }
 
     /**
@@ -2953,7 +2963,7 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $id = is_string($_POST['source'] ?? null) ? $_POST['source'] : '';
         if (!preg_match('/^[0-9a-f]{16}$/D', $id)) {
-            return '?v=settings&err=no_such_source';
+            return '?v=settings&err=no_such_source&s=sources';
         }
 
         $enabled = isset($_POST['source_enabled']);
@@ -2970,14 +2980,14 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         if (!$found) {
-            return '?v=settings&err=no_such_source';
+            return '?v=settings&err=no_such_source&s=sources';
         }
 
         $this->cfg->set('sources', array_values($sources));
 
         $err = $this->persist();
         if ($err !== null) {
-            return '?v=settings&err=' . $err;
+            return '?v=settings&err=' . $err . '&s=sources';
         }
 
         return '?v=settings&ok=' . ($enabled ? 'source_ingesting' : 'source_paused') . '&s=sources';
@@ -2988,11 +2998,13 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $tz = is_string($_POST['timezone'] ?? null) ? $_POST['timezone'] : 'UTC';
         if (!in_array($tz, \DateTimeZone::listIdentifiers(), true)) {
-            return '?v=settings&err=bad_timezone';
+            return '?v=settings&err=bad_timezone&s=display';
         }
         $this->cfg->set('ui.timezone', $tz);
         $err = $this->persist();
-        return $err !== null ? '?v=settings&err=' . $err : '?v=settings&ok=ui_saved';
+        return $err !== null
+            ? '?v=settings&err=' . $err . '&s=display'
+            : '?v=settings&ok=ui_saved&s=display';
     }
 
     /**

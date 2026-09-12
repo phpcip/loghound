@@ -883,6 +883,183 @@ export async function openDimension(field, value) {
 }
 
 /* -------------------------------------------------------------------------
+ * The request-plane dialog
+ * ---------------------------------------------------------------------- */
+
+/**
+ * One row of the request table inside a request-plane dialog.
+ *
+ * Deliberately NOT visitRow(): that renders a VISIT — entry page, verdict, a whole session's
+ * conclusion — and these are individual log lines, which have a method, a status and a byte
+ * count and no verdict of their own. Five columns again, because the count is the contract.
+ */
+function requestRow(r) {
+    const tr = el('tr');
+
+    tr.appendChild(el('td', {
+        class: 'mono nowrap visit-when',
+        text: when(r.ts, true),
+        'data-sort': r.ts || ''
+    }));
+
+    tr.appendChild(el('td', { class: 'mono clip', title: r.ip || 'Address not recorded' }, [
+        r.ip ? dimValue('ip_s', r.ip, { mono: true }) : el('span', { class: 'muted', text: '—' })
+    ]));
+
+    tr.appendChild(el('td', { class: 'clip' }, [
+        r.country
+            ? dimValue('country_s', r.country, { markOnly: true })
+            : el('span', { class: 'muted', text: '—' })
+    ]));
+
+    tr.appendChild(el('td', { class: 'clip urlcell', title: (r.method || '') + ' ' + (r.path || '') }, [
+        el('span', { class: 'mono muted', text: (r.method || '') + ' ' }),
+        r.path ? pathCell(r.path + (r.query ? '?' + r.query : ''), { host: r.host }) : el('span', { text: '—' })
+    ]));
+
+    tr.appendChild(el('td', { class: 'num mono' }, [
+        r.status === null || r.status === undefined
+            ? el('span', { class: 'muted', text: '—' })
+            : dimValue('status_i', r.status, { mono: true })
+    ]));
+
+    return tr;
+}
+
+/** The request table, head and body, in the shape the visit table uses. */
+function requestTable(rows) {
+    const table = el('table', { class: 'table-fixed visits' }, [
+        el('colgroup', {}, [
+            el('col', { style: 'width:23%' }),
+            el('col', { style: 'width:17%' }),
+            el('col', { style: 'width:6%' }),
+            el('col', { style: 'width:44%' }),
+            el('col', { style: 'width:10%' })
+        ]),
+        el('thead', {}, [
+            el('tr', {}, ['Date', 'IP', 'Country', 'Request', 'Status']
+                .map((t) => el('th', { scope: 'col', text: t })))
+        ]),
+        el('tbody', {}, rows.map(requestRow))
+    ]);
+
+    return el('div', { class: 'table-wrap' }, [table]);
+}
+
+/**
+ * Open one value on the REQUEST plane.
+ *
+ * The sibling of openDimension(), for the dimensions that belong to a request rather than to a
+ * visit — a status code, a method, an attack pattern. Those live only on the hits core, so the
+ * visits dialog could only ever have answered zero for them; this asks the plane that holds
+ * the answer and shows the same things every other dialog shows: the headline counts, when it
+ * happened, the rows themselves, and how they break down.
+ *
+ * @param {string} field Solr field name; the server checks it against its own allowlist.
+ * @param {string} value The value, exactly as it was rendered.
+ * @param {string} [view] The view whose API answers this. Defaults to Performance, which is
+ *                        where the status tables live.
+ */
+export async function openHitDimension(field, value, view) {
+    const target = view || 'performance';
+    let handle = openDialog(dimLabel(field), 'Counting the requests behind this…');
+
+    const fetchPage = (start, rows) => api(target, 'hitdim', {
+        field: field,
+        value: value,
+        start: start,
+        rows: rows
+    });
+
+    try {
+        const data = await fetchPage(0);
+        if (!isCurrent(handle.generation)) {
+            return;
+        }
+        if (data.error) {
+            handle = openDialog(dimLabel(field), '');
+            fill(handle.body, [say(data.error)]);
+            return;
+        }
+
+        handle = openDialog(
+            String(data.label) + ': ' + valueText(field, data.value),
+            num(data.requests) + ' request' + (data.requests === 1 ? '' : 's')
+                + ' in ' + (data.range_label || 'the selected range')
+        );
+        renderHitDimension(handle.body, data, fetchPage);
+        markSortable(handle.body);
+    } catch (err) {
+        if (isCurrent(handle.generation)) {
+            dialogFail(handle.body, err, () => openHitDimension(field, value, view));
+        }
+    }
+}
+
+/**
+ * Draw a request-plane dialog.
+ *
+ * Same order as the visits dialog for the same reason: the counts, then when, then the ROWS —
+ * the thing the reader opened it for — and the breakdown last, because eleven dimensions of
+ * percentages above the data is how the rows got missed before.
+ */
+function renderHitDimension(body, data, fetchPage) {
+    const total = data.requests || 0;
+    const mount = el('div', { class: 'pager-mount' });
+    const wrap = requestTable(data.rows || []);
+
+    const show = (state) => {
+        renderPager(mount, state, async (start, rows) => {
+            mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page…' }));
+            try {
+                const next = await fetchPage(start, rows);
+                const table = wrap.querySelector('tbody');
+                table.replaceChildren(...(next.rows || []).map(requestRow));
+                markSortable(wrap);
+                show(next.page);
+            } catch (err) {
+                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                again.addEventListener('click', () => show(state));
+                mount.replaceChildren(
+                    el('p', { class: 'muted', text: 'That page could not be loaded.' }),
+                    el('div', { class: 'card-error-actions' }, [again])
+                );
+            }
+        });
+    };
+
+    fill(body, [
+        el('div', { class: 'stats' }, [
+            statTile('Requests', num(total), 'In range, under the active filters'),
+            statTile('Addresses', num(data.uniq_ips), 'Distinct clients behind them'),
+            statTile('Pages', num(data.uniq_paths), 'Distinct paths asked for'),
+            statTile('Visits', num(data.uniq_sessions), 'Sessions these requests belong to')
+        ]),
+
+        (data.ignored || []).length
+            ? say('Not narrowed by ' + data.ignored.join(', ')
+                + ': those are conclusions about a whole visit, and this counts requests.')
+            : null,
+
+        el('h3', { text: 'When, and how much' }),
+        kv([
+            ['First seen', when(data.first), true],
+            ['Last seen', when(data.last), true],
+            ['Data sent', bytes(data.bytes), true]
+        ]),
+
+        el('h3', { text: 'The requests' }),
+        wrap,
+        mount,
+
+        el('h3', { text: 'How it breaks down' }),
+        el('div', { class: 'fpanel' }, (data.breakdowns || []).map((group) => breakdown(group, total)))
+    ]);
+
+    show(data.page);
+}
+
+/* -------------------------------------------------------------------------
  * The population dialog
  * ---------------------------------------------------------------------- */
 
@@ -938,6 +1115,8 @@ export function initDetail() {
     registerOpener('session', (data) => openSession(data.id || ''));
     registerOpener('dim', (data) => openDimension(data.field || '', data.value || ''));
     registerOpener('pop', (data) => openPopulation(data.pop || '', data.why || ''));
+    registerOpener('hitdim', (data) =>
+        openHitDimension(data.field || '', data.value || '', data.view || ''));
 
     const open = new URLSearchParams(window.location.search).get('open');
     if (open) {

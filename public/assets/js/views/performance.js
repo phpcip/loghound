@@ -21,6 +21,7 @@ import {
     showEmpty, snippet, tbody
 } from '../core.js';
 import { lines, stackedBars, tokens } from '../charts.js';
+import { drillRow } from '../identity.js';
 import { pathCell } from '../url.js';
 
 /** Plain-English meaning for the status codes that actually turn up in web logs. */
@@ -270,7 +271,11 @@ function renderStatus(data) {
     ]);
 
     const total = data.statuses.reduce((sum, row) => sum + row.count, 0);
+    /* THE ROW OPENS. A status code with a count beside it and nothing behind it is a number
+       nobody can act on — the question is always which clients produced it and on what path.
+       It opens on the REQUEST plane, because a status belongs to a request and not to a visit. */
     tbody(byId('pf-status-table'), data.statuses.map((row) => ({
+        attrs: drillRow('hitdim', { field: 'status_i', value: row.status, view: 'performance' }),
         cells: [
             {
                 node: el('span', {

@@ -151,6 +151,9 @@ final class Performance extends Controller
     /**
      * @return array<string,mixed>
      */
+    /** Values per dimension in the request-plane dialog. Enough to act on, short enough to read. */
+    private const HITDIM_BUCKETS = 8;
+
     public function api(string $action): array
     {
         return match ($action) {
@@ -158,6 +161,7 @@ final class Performance extends Controller
             'latency'  => $this->latency(),
             'paths'    => $this->paths(),
             'status'   => $this->status(),
+            'hitdim'   => $this->hitDimension(),
             default    => ['error' => 'Unknown action'],
         };
     }
@@ -451,6 +455,112 @@ final class Performance extends Controller
             'heat_times' => $times,
             'heat'       => $heat,
             'statuses'   => $statuses,
+        ]);
+    }
+
+    /**
+     * One value on the REQUEST plane, opened.
+     *
+     * WHY THIS EXISTS AS ITS OWN ACTION. The dimension dialog everything else opens is a
+     * SESSIONS query, and a status code is not a property of a visit — a session that fetched
+     * forty pages and one missing image has no single status. `status_i` and `status_class_s`
+     * are hits-only for that reason (Query::hitsOnlyFields), so pressing 403 in the status
+     * table could only ever have opened a dialog counting zero visits. This answers the
+     * question the reader is actually asking — who produced these, and on what — from the
+     * plane that holds the answer.
+     *
+     * Everything the reader can act on is here: the addresses, the networks, the paths and the
+     * clients behind the value, plus the requests themselves, paged. The dimensions come from
+     * the HITS facet instance, so a filter already in force narrows this the same way it
+     * narrows the page behind it, and one the hits plane cannot answer is reported rather than
+     * dropped in silence.
+     *
+     * @return array<string,mixed>
+     */
+    private function hitDimension(): array
+    {
+        $fields = Query::hitFilterFields();
+        $field = (string) ($_GET['field'] ?? '');
+        if (!isset($fields[$field])) {
+            return $this->envelope(['error' => 'That is not a dimension the request plane can open.']);
+        }
+
+        $value = (string) ($_GET['value'] ?? '');
+        if ($value === '') {
+            return $this->envelope(['error' => 'That row carries no value to open.']);
+        }
+
+        $start = Paging::start();
+        $rows = Paging::rows();
+
+        $fqs = $this->hitFqs();
+        $fqs[] = Query::term($field, $value);
+
+        /* The opened dimension is not one of its own breakdowns — a column reading "403: 100%"
+           tells the reader what they just pressed. Identifiers are dropped too: a list of the
+           forty session ids behind a status is not a breakdown, it is the raw data again. */
+        $dims = array_values(array_diff(
+            array_keys($fields),
+            [$field, 'session_id_s', 'fp_hash_s', 'search_terms_ss']
+        ));
+
+        $f = $this->gw->facet('perf.hitdim', $this->gw->hitsCore(), [
+            'q'  => '*:*',
+            'fq' => $fqs,
+        ], array_merge([
+            'uniq_ips'      => 'unique(ip_s)',
+            'uniq_paths'    => 'unique(path_s)',
+            'uniq_sessions' => 'unique(session_id_s)',
+            'bytes'         => 'sum(bytes_l)',
+            'first'         => 'min(ts)',
+            'last'          => 'max(ts)',
+        ], $this->hitFacets->termsFacets($dims, self::HITDIM_BUCKETS)));
+
+        $res = $this->gw->select('perf.hitdim.rows', $this->gw->hitsCore(), [
+            'q'     => '*:*',
+            'fq'    => $fqs,
+            'sort'  => 'ts desc',
+            'rows'  => $rows,
+            'start' => $start,
+            'fl'    => Query::hitFl() . ',ip_s,country_s,session_id_s',
+        ]);
+
+        $out = [];
+        foreach ($res['docs'] as $doc) {
+            $out[] = [
+                'ts'      => (string) ($doc['ts'] ?? ''),
+                'ip'      => isset($doc['ip_s']) ? (string) $doc['ip_s'] : null,
+                'country' => isset($doc['country_s']) ? (string) $doc['country_s'] : null,
+                'host'    => isset($doc['host_s']) ? (string) $doc['host_s'] : null,
+                'method'  => (string) ($doc['method_s'] ?? ''),
+                'path'    => (string) ($doc['path_s'] ?? ''),
+                'query'   => isset($doc['query_s']) ? (string) $doc['query_s'] : null,
+                'status'  => isset($doc['status_i']) ? (int) $doc['status_i'] : null,
+                'bytes'   => isset($doc['bytes_l']) ? (int) $doc['bytes_l'] : null,
+                'session' => isset($doc['session_id_s']) ? (string) $doc['session_id_s'] : null,
+            ];
+        }
+
+        return $this->envelope([
+            'field'         => $field,
+            'label'         => $fields[$field],
+            'value'         => $value,
+            'requests'      => (int) ($f['count'] ?? 0),
+            'uniq_ips'      => (int) (self::num($f, 'uniq_ips') ?? 0),
+            'uniq_paths'    => (int) (self::num($f, 'uniq_paths') ?? 0),
+            'uniq_sessions' => (int) (self::num($f, 'uniq_sessions') ?? 0),
+            'bytes'         => (int) (self::num($f, 'bytes') ?? 0),
+            'first'         => is_string($f['first'] ?? null) ? (string) $f['first'] : null,
+            'last'          => is_string($f['last'] ?? null) ? (string) $f['last'] : null,
+            'rows'          => $out,
+            'breakdowns'    => $this->hitFacets->groups(
+                $f,
+                $dims,
+                self::HITDIM_BUCKETS,
+                ['netname_s', 'host_s', 'sec_ch_ua_s', 'tls_proto_s']
+            ),
+            'ignored'       => $this->ignoredHitFilters(),
+            'page'          => Paging::block($start, $rows, (int) $res['numFound'], 'requests', count($out)),
         ]);
     }
 
