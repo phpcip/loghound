@@ -642,6 +642,12 @@ function renderSession(body, data) {
             trailBlock(data.session.id, data, s.host)
         ]),
 
+        /* WHAT THEY DID COMES BEFORE THE VERDICT. The behaviour is the evidence and the verdict
+           is the conclusion drawn from it, so a reader who wants to check the conclusion has to
+           scroll back up past it to find what it was based on. Evidence first, then the finding
+           that rests on it. */
+        foldSection('did', 'What they did', whatTheyDid(s)),
+
         foldSection('verdict', 'What we concluded, and why', [
             kv([
                 ['Verdict', verdictChip(s.verdict)],
@@ -652,9 +658,7 @@ function renderSession(body, data) {
             execution.length
                 ? foldSection('verdict-execution', 'What the browser could actually do', [kv(execution)])
                 : null
-        ]),
-
-        foldSection('did', 'What they did', whatTheyDid(s))
+        ])
     ]);
 }
 

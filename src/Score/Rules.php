@@ -363,6 +363,17 @@ final class Rules
     /** The reason code the floor records, so the verdict is never unexplained. */
     private const SHORT_VISIT_REASON = 'short_visit';
 
+    /**
+     * The reason recorded when a visit never requested a page at all.
+     *
+     * A session made entirely of asset requests — an image, a script, /robots.txt — has not
+     * shown you a person browsing. It may well BE one (a hotlinked image, a bookmark hitting a
+     * favicon), which is why this caps the verdict at `likely_human` instead of accusing
+     * anybody. What it must not do is publish `human`, because that is a positive claim and
+     * nothing here supports it: nobody read anything.
+     */
+    private const NO_PAGE_REASON = 'no_page_requested';
+
     /** @var array<string,int> Verdict thresholds. */
     private array $thresholds;
 
@@ -586,6 +597,13 @@ final class Rules
                 . 'says automation — there is simply not enough of it to call a person a person, so the '
                 . 'verdict stops at likely human.',
         ],
+        self::NO_PAGE_REASON => [
+            'label' => 'No page requested',
+            'severity' => 'low',
+            'why' => 'This visit fetched only assets — an image, a script, /robots.txt — and never asked '
+                . 'for an HTML page. That is not automation on its own, but nobody read anything, so the '
+                . 'verdict stops at likely human.',
+        ],
         self::PROVISIONAL_REASON => [
             'label' => 'Session still open',
             'severity' => 'info',
@@ -645,6 +663,14 @@ final class Rules
                 self::SINGLE_PLANE_REASON,
                 self::UNTESTED_REASON,
                 self::CLEAN_REASON,
+
+                /* THE TWO VERDICT CAPS BELONG HERE TOO. Neither carries a weight, so neither
+                   appears in WEIGHTS, and both are codes the scorer really does write to
+                   `bot_reasons_ss` — leaving them out made this list a promise it did not keep,
+                   and anything validating a code against it (Panel\Vocabulary) called a real
+                   reason unknown. */
+                self::SHORT_VISIT_REASON,
+                self::NO_PAGE_REASON,
             ]
         );
     }
@@ -804,6 +830,26 @@ final class Rules
            the safe direction: this rule only ever weakens a verdict, never strengthens one. A
            visit with no duration at all is left alone — nothing was measured, so there is
            nothing to demote on. */
+        /* NOBODY READ ANYTHING, SO NOBODY IS CALLED A PERSON. A session of nothing but asset
+           requests — a hotlinked image, a crawler pulling /robots.txt, a monitor fetching one
+           file — has shown no browsing at all, and `human` is a positive claim that needs
+           something to rest on. It is capped rather than accused: a real visitor produces this
+           shape too, so the honest answer is `likely_human`, not a bot verdict.
+
+           CHECKED BEFORE THE DURATION FLOOR, because it is the more fundamental fact: a visit
+           with no page has no meaningful duration either, and "they never asked for a page" is
+           the better explanation to publish than "it was brief". Only one of the two records a
+           reason, since the second is gated on the verdict the first has already lowered. */
+        if ($verdict === 'human' && (int) ($s['pages'] ?? 0) < 1) {
+            $verdict = 'likely_human';
+            $reasons[] = self::NO_PAGE_REASON;
+            $detail[self::NO_PAGE_REASON] = [
+                'weight' => 0,
+                'why'    => 'This visit requested no HTML page at all — only assets — so there is no '
+                    . 'reading, no navigation and nothing on which to base a claim that it was a person.',
+            ];
+        }
+
         if ($verdict === 'human') {
             $engaged = $s['engaged_ms'] ?? null;
             $best = $engaged !== null && (int) $engaged > 0
