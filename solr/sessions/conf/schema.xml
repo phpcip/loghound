@@ -563,6 +563,24 @@
          work without _version_ plus an updateLog. -->
     <field name="_version_" type="plong" indexed="false" stored="false" docValues="true"/>
 
+    <!--
+      ALSO REQUIRED FOR ATOMIC UPDATES, AND ITS ABSENCE FAILED THEM OUTRIGHT.
+
+      Solr 9 refuses any update whose document could carry children unless the schema defines
+      BOTH a uniqueKey and `_root_`, "using the exact same fieldType" — and an atomic update
+      arrives as a nested map, which is enough to put it on that path. Without this field every
+      partial update was rejected with exactly that message, at the indexer, before any of it
+      reached the document. It was reproduced by hand straight against Solr, with the update
+      chain overridden, so it is the schema and nothing above it.
+
+      `string`, to match `id` above, because the error is specific about the two agreeing.
+
+      NOTHING HERE WRITES CHILD DOCUMENTS and this does not invite any: it is a marker Solr
+      manages itself, indexed and stored off like _version_, present so the indexer's own
+      precondition is satisfied.
+    -->
+    <field name="_root_" type="string" indexed="false" stored="false" docValues="false"/>
+
     <!-- Same catch-all as the hits core: unknown fields are dropped rather than failing a
          batch. See solr/hits/conf/managed-schema.xml for the full tradeoff. -->
     <dynamicField name="*" type="ignored" multiValued="true"/>

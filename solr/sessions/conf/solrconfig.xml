@@ -244,18 +244,16 @@
         </processor>
 
         <!--
-          THIS IS WHAT MAKES AN ATOMIC UPDATE ATOMIC, and naming a custom chain default is what
-          removed it. The implicit chain Solr builds contains this processor; the moment a
-          solrconfig declares its own, it gets exactly the processors it lists. Without it
-          nothing merges {"field":{"set":...}} against the stored document, so the nested map
-          survives to the indexer, which reads it as a child document and refuses the update
-          with "the schema must include definitions for both a uniqueKey field and '_root_'".
+          Named explicitly because this chain is `default="true"`, and declaring a chain
+          replaces the implicit one Solr would otherwise build. It must sit before
+          RunUpdateProcessorFactory, which is the processor that writes.
 
-          The updateLog above is necessary but NOT sufficient: it supplies the read half of the
-          read-modify-write, this supplies the merge. Both, or partial updates do not work.
-
-          It must sit before RunUpdateProcessorFactory, which is the processor that actually
-          writes the document — anything that needs to alter a document has to run first.
+          IT IS NOT WHAT FIXED ATOMIC UPDATES, and the note that used to stand here saying so
+          was wrong. With this processor present and the core reloaded, a partial update still
+          failed; the same request reproduced by hand against Solr, with the chain overridden,
+          failed identically. The missing piece was the `_root_` field in schema.xml, which is
+          what the error message named all along. This stays because an explicit chain should
+          list what it depends on rather than inherit it.
         -->
         <processor class="solr.DistributedUpdateProcessorFactory"/>
         <processor class="solr.RunUpdateProcessorFactory"/>

@@ -609,6 +609,15 @@
     -->
     <field name="_version_" type="plong" indexed="false" stored="false" docValues="true"/>
 
+    <!--
+      Solr 9 rejects an update whose document could carry children unless the schema defines
+      both a uniqueKey and `_root_` of the same fieldType, and an atomic update arrives as a
+      nested map, which is enough to put it on that path. Without this, every partial update
+      failed at the indexer with that message. `string`, matching `id`. Nothing in Loghound
+      writes child documents; this satisfies the indexer's precondition and nothing more.
+    -->
+    <field name="_root_" type="string" indexed="false" stored="false" docValues="false"/>
+
 
     <!--
       ========================================================================
