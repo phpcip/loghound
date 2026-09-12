@@ -301,10 +301,14 @@ function renderMembers(inner, data, fp) {
 
     const mount = el('div', { class: 'pager-mount' });
     const show = (state) => {
-        renderPager(mount, state, async (start) => {
+        renderPager(mount, state, async (start, rows) => {
             mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page\u2026' }));
             try {
-                const next = await api('fingerprints', 'members', { fp: fp, start: start, rows: state.rows });
+                const next = await api('fingerprints', 'members', {
+                    fp: fp,
+                    start: start,
+                    rows: rows || state.rows
+                });
                 paint(next.rows);
                 show(next.page);
             } catch (e) {

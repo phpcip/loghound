@@ -165,7 +165,7 @@ export default function init() {
         id: 'an-entry',
         label: 'Faceting entry pages',
         empty: 'entry pages',
-        fetch: (start) => api('pages', 'entry', { start: start, scope: scope['an-entry'] }),
+        fetch: (start, rows) => api('pages', 'entry', { start: start, rows: rows, scope: scope['an-entry'] }),
         render: renderEntry
     });
 
@@ -173,7 +173,7 @@ export default function init() {
         id: 'an-exit',
         label: 'Faceting exit pages',
         empty: 'exit pages',
-        fetch: (start) => api('pages', 'exit', { start: start, scope: scope['an-exit'] }),
+        fetch: (start, rows) => api('pages', 'exit', { start: start, rows: rows, scope: scope['an-exit'] }),
         render: renderExit
     });
 
@@ -181,7 +181,7 @@ export default function init() {
         id: 'an-trend',
         label: 'Comparing this period against the one before',
         empty: 'paths with any movement',
-        fetch: (start) => api('pages', 'trending', { start: start }),
+        fetch: (start, rows) => api('pages', 'trending', { start: start, rows: rows }),
         render: renderTrend
     });
 

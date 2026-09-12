@@ -179,6 +179,60 @@ function jumpBox(page, go) {
 }
 
 /**
+ * The page-size control, which is the difference between reading a long table and paging it.
+ *
+ * IT RESETS TO THE FIRST PAGE. Changing the size while on page seven of twenty would land the
+ * reader at an offset that means something different under the new size — row 120 of a 20-row
+ * paging is page one of a 300-row paging — so the only honest destination is the start of the
+ * set, and that is where it goes.
+ *
+ * Absent when there is nothing to page: a set that fits inside the smallest size on the ladder
+ * has no second page under any of them, and a control whose every option produces the same
+ * screen is noise.
+ *
+ * The ladder is passed in by the server (Panel\Paging::SIZES) rather than written here, so the
+ * sizes the control offers and the ceiling the server clamps to cannot drift apart.
+ *
+ * @param {Object} page
+ * @param {Function} onSize (rows) => void
+ * @returns {HTMLElement|null}
+ */
+function sizeBox(page, onSize) {
+    const g = geometry(page);
+    const sizes = Array.isArray(page && page.sizes) && page.sizes.length ? page.sizes : [20, 50, 100, 300, 500];
+    const smallest = Math.min.apply(null, sizes);
+
+    if (g.total !== null && g.total <= smallest) {
+        return null;
+    }
+
+    const select = el('select', { class: 'pager-size-input', 'aria-label': 'Rows per page' });
+    const offered = sizes.slice();
+    if (!offered.includes(g.rows)) {
+        offered.push(g.rows);
+        offered.sort((a, b) => a - b);
+    }
+
+    for (const size of offered) {
+        const option = el('option', { value: String(size), text: num(size) });
+        if (size === g.rows) {
+            option.selected = true;
+        }
+        select.appendChild(option);
+    }
+
+    select.addEventListener('change', () => {
+        const wanted = Math.max(1, Number(select.value) || g.rows);
+        onSize(wanted);
+    });
+
+    return el('label', { class: 'pager-size' }, [
+        el('span', { text: 'Per page' }),
+        select
+    ]);
+}
+
+/**
  * Render a callback-driven pager into a container, replacing whatever was there.
  *
  * Used by every card and every dialog table: the press re-runs the card's own loader with a new
@@ -192,9 +246,9 @@ export function renderPager(mount, page, onPage) {
     if (!mount) {
         return;
     }
-    const go = (start) => {
+    const go = (start, rows) => {
         if (typeof onPage === 'function') {
-            onPage(start);
+            onPage(start, rows);
         }
     };
 
@@ -213,7 +267,10 @@ export function renderPager(mount, page, onPage) {
         return button;
     };
 
-    mount.replaceChildren(build(page, make, [jumpBox(page, go)]));
+    mount.replaceChildren(build(page, make, [
+        jumpBox(page, go),
+        sizeBox(page, (rows) => go(0, rows))
+    ]));
 }
 
 /**
@@ -248,5 +305,14 @@ export function renderLinkPager(mount, page, param) {
         window.location.assign(href(start));
     };
 
-    mount.replaceChildren(build(page, make, [jumpBox(page, go)]));
+    /* A size change is a navigation like any other page turn here, and it goes back to the first
+       page for the reason sizeBox() states: an offset means a different row under a new size. */
+    const resize = (rows) => {
+        const params = new URLSearchParams(window.location.search);
+        params.set('rows', String(rows));
+        params.set(key, '0');
+        window.location.assign('?' + params.toString());
+    };
+
+    mount.replaceChildren(build(page, make, [jumpBox(page, go), sizeBox(page, resize)]));
 }

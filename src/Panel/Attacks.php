@@ -606,7 +606,14 @@ final class Attacks extends Controller implements Sections
             'requests'  => $out,
             'total'     => (int) $res['numFound'],
             'limit'     => $rows,
-            'page'      => Paging::block($start, $rows, (int) $res['numFound'], 'requests', count($out)),
+            'page'      => Paging::block(
+                $start,
+                $rows,
+                (int) $res['numFound'],
+                'requests',
+                count($out),
+                Paging::sizesUpTo(self::MAX_REQUESTS)
+            ),
         ]);
     }
 

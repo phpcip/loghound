@@ -678,14 +678,14 @@ function readingBlock(row) {
  * those sessions have settled, and an address with no history at all says so in words rather
  * than rendering an empty table that reads like a failure.
  */
-async function loadKnown(ip, generation, start) {
+async function loadKnown(ip, generation, start, rows) {
     const mount = byId('lv-known');
     if (!mount) {
         return;
     }
 
     try {
-        const data = await api('live', 'client', { ip: ip, start: start });
+        const data = await api('live', 'client', { ip: ip, start: start, rows: rows });
         if (!isCurrent(generation)) {
             return;
         }
@@ -738,7 +738,7 @@ function renderKnown(mount, ip, data, generation) {
 
     const wrap = visitTable(data.visits || []);
     const pager = el('div', { class: 'pager-mount' });
-    renderPager(pager, data.page, (next) => loadKnown(ip, generation, next));
+    renderPager(pager, data.page, (next, rows) => loadKnown(ip, generation, next, rows));
 
     fill(mount, [
         summary,

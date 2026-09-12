@@ -25,7 +25,9 @@ import { renderPager } from './pager.js';
  * @param {string} spec.id      Card base id, matching Controller::cardOpen().
  * @param {string} spec.label   What is happening, in words, for the progress line.
  * @param {string} spec.empty   PLURAL NOUN naming the population, for the empty state.
- * @param {Function} spec.fetch (start) => Promise<Object> — must resolve a payload with `page`.
+ * @param {Function} spec.fetch (start, rows) => Promise<Object> — must resolve a payload with
+ *                   `page`. `rows` is undefined until the reader picks a page size, so a card
+ *                   that passes it straight through keeps the server's default until then.
  * @param {Function} spec.render (data) => true|false|'own' — fills the table. `false` asks for the
  *                   standard empty state; `'own'` means the renderer has already written one of
  *                   its own, which is what a card that can distinguish "not configured" from "no
@@ -36,8 +38,16 @@ import { renderPager } from './pager.js';
 export function pagedCard(spec) {
     const pagerMount = () => byId(spec.id + '-pager');
 
-    const load = (start) => loadCard(spec.id, spec.label, async () => {
-        const data = await spec.fetch(start || 0);
+    /* The chosen page size outlives a page turn: the pager hands it over only when the reader
+       changes it, so it is remembered here and replayed on every subsequent fetch. Without that,
+       pressing Next after picking 300 would quietly drop back to the server's twenty. */
+    let size;
+
+    const load = (start, rows) => loadCard(spec.id, spec.label, async () => {
+        if (rows) {
+            size = rows;
+        }
+        const data = await spec.fetch(start || 0, size);
         const outcome = spec.render(data);
 
         if (outcome === false || outcome === 'own') {

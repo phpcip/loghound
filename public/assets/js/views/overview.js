@@ -392,7 +392,7 @@ export default function init() {
         id: 'ov-pages',
         label: 'Counting requests by path',
         empty: 'page requests',
-        fetch: (start) => api('overview', 'toppages', { pop: scope, start: start }),
+        fetch: (start, rows) => api('overview', 'toppages', { pop: scope, start: start, rows: rows }),
         render: renderPages
     });
 
@@ -400,7 +400,7 @@ export default function init() {
         id: 'ov-searches',
         label: 'Faceting search terms',
         empty: 'search terms',
-        fetch: (start) => api('overview', 'searches', { start: start }),
+        fetch: (start, rows) => api('overview', 'searches', { start: start, rows: rows }),
         render: renderSearches
     });
 }

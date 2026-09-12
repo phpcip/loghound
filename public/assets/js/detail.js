@@ -129,11 +129,11 @@ function visitBlock(rows, page, fetchPage) {
     const caption = el('p', { class: 'faint', text: visitCaption(page) });
 
     const show = (state) => {
-        renderPager(mount, state, async (start) => {
+        renderPager(mount, state, async (start, rows) => {
             const busy = el('p', { class: 'muted', text: 'Loading page…' });
             mount.replaceChildren(busy);
             try {
-                const next = await fetchPage(start);
+                const next = await fetchPage(start, rows);
                 fillVisits(table, next.visitors || []);
                 markSortable(wrap);
                 show(next.page);
@@ -271,10 +271,14 @@ function trailBlock(id, data, host) {
     };
 
     const show = (state) => {
-        renderPager(mount, state, async (start) => {
+        renderPager(mount, state, async (start, rows) => {
             mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page…' }));
             try {
-                const next = await api('sessions', 'trail', { id: id, start: start, rows: state.rows });
+                const next = await api('sessions', 'trail', {
+                    id: id,
+                    start: start,
+                    rows: rows || state.rows
+                });
                 paint(next.timeline);
                 show(next.page);
             } catch (err) {
@@ -825,11 +829,11 @@ function renderDimension(body, data) {
            the thing a reader opened this dialog to look at — sat below a screen and a half of
            percentages and were routinely missed. Summary first, then the long tail. */
         el('h3', { text: 'The visits' }),
-        visitBlock(data.visitors, data.page, (start) => api('sessions', 'visitors', {
+        visitBlock(data.visitors, data.page, (start, rows) => api('sessions', 'visitors', {
             field: data.field,
             value: data.value,
             start: start,
-            rows: data.page.rows
+            rows: rows || data.page.rows
         })),
 
         el('h3', { text: 'How it breaks down' }),
@@ -910,10 +914,10 @@ export async function openPopulation(key, why) {
         fill(handle.body, [
             say(why, 'muted'),
             filterNote(data.active),
-            visitBlock(data.visitors, data.page, (start) => api('sessions', 'visitors', {
+            visitBlock(data.visitors, data.page, (start, rows) => api('sessions', 'visitors', {
                 pop: key,
                 start: start,
-                rows: data.page.rows
+                rows: rows || data.page.rows
             }))
         ]);
         markSortable(handle.body);

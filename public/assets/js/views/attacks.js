@@ -535,7 +535,7 @@ export default function init() {
         id: 'atk-requests',
         label: 'Reading the answered requests',
         empty: 'answered matched requests',
-        fetch: (start) => api('attacks', 'requests', { start: start }),
+        fetch: (start, rows) => api('attacks', 'requests', { start: start, rows: rows }),
         render: renderRequests
     });
     loadCard('atk-who', 'Faceting addresses and networks', async () => {

@@ -1178,7 +1178,14 @@ final class Sessions extends Controller
 
         return [
             'rows' => $timeline,
-            'page' => Paging::block($start, $rows, (int) $hits['numFound'], 'requests', count($timeline)),
+            'page' => Paging::block(
+                $start,
+                $rows,
+                (int) $hits['numFound'],
+                'requests',
+                count($timeline),
+                Paging::sizesUpTo(self::MAX_TIMELINE)
+            ),
         ];
     }
 

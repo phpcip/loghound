@@ -107,7 +107,7 @@ export default function init() {
         id: 'an-terms',
         label: 'Faceting search terms',
         empty: 'search terms',
-        fetch: (start) => api('searches', 'terms', { start: start }),
+        fetch: (start, rows) => api('searches', 'terms', { start: start, rows: rows }),
         render: renderTerms
     });
 
@@ -115,7 +115,7 @@ export default function init() {
         id: 'an-termtrend',
         label: 'Comparing this period against the one before',
         empty: 'search terms with any movement',
-        fetch: (start) => api('searches', 'trending', { start: start }),
+        fetch: (start, rows) => api('searches', 'trending', { start: start, rows: rows }),
         render: renderTrend
     });
 }

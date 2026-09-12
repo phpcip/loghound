@@ -4394,6 +4394,11 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 .pager-jump-label { display: flex; gap: 8px; align-items: center; }
 .pager-jump-input { width: 5.5em; padding: 2px 6px; font: inherit; }
 
+/* The rows-per-page control. Sits with the jump box at the right-hand end of the pager and
+   borrows its metrics, so the two read as one group rather than as two unrelated widgets. */
+.pager-size { display: flex; gap: 8px; align-items: center; }
+.pager-size-input { padding: 2px 6px; font: inherit; }
+
 /* The slot a dialog's or a card's pager is rendered into, so an empty one takes no room. */
 .pager-mount:empty { display: none; }
 

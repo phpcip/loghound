@@ -113,7 +113,7 @@ export default function init() {
         id: 'an-bouncepages',
         label: 'Measuring engagement per landing page',
         empty: 'landing pages',
-        fetch: (start) => api('engagement', 'pages', { start: start }),
+        fetch: (start, rows) => api('engagement', 'pages', { start: start, rows: rows }),
         render: renderPages
     });
 }

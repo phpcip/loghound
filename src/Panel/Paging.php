@@ -35,10 +35,23 @@ final class Paging
     /**
      * The largest page a caller may ask for.
      *
-     * Higher than PAGE so an export or a wide screen can ask for more, and far below
+     * Higher than PAGE so an export or a wide screen can ask for more, and never above
      * Security::MAX_ROWS so a URL cannot turn one card into a full-index read.
      */
-    public const MAX_PAGE = 100;
+    public const MAX_PAGE = 500;
+
+    /**
+     * The page sizes the control below every table offers.
+     *
+     * A fixed ladder rather than a free number box: the sizes are what the pager renders as
+     * options, and a reader who wants a size that is not on it can still put `rows` in the URL
+     * and get it, clamped to MAX_PAGE. Every entry must be <= MAX_PAGE or the control would
+     * offer a size the server then silently refuses, which is the one outcome a size selector
+     * must never produce.
+     *
+     * @var array<int,int>
+     */
+    public const SIZES = [20, 50, 100, 300, 500];
 
     /**
      * The offset a request asked for, clamped.
@@ -108,16 +121,44 @@ final class Paging
      * terms" — because the pager prints "1–20 of 1,890 visits" and a pager that says only
      * "1–20 of 1,890" leaves the reader to guess what the denominator counts.
      *
+     * `sizes` is the ladder the page-size control offers. It is sent with every paged payload
+     * rather than written into the browser, so a card with a lower ceiling of its own can send
+     * a shorter ladder and the control cannot offer a size the server would refuse.
+     *
+     * @param array<int,int>|null $sizes Page sizes to offer, or null for the product-wide ladder.
      * @return array<string,mixed>
      */
-    public static function block(int $start, int $rows, ?int $total, string $unit, int $shown): array
-    {
+    public static function block(
+        int $start,
+        int $rows,
+        ?int $total,
+        string $unit,
+        int $shown,
+        ?array $sizes = null
+    ): array {
         return [
             'start' => $start,
             'rows'  => $rows,
             'total' => $total,
             'unit'  => $unit,
             'shown' => $shown,
+            'sizes' => $sizes ?? self::SIZES,
         ];
+    }
+
+    /**
+     * The ladder trimmed to a card that cannot serve the whole of it.
+     *
+     * A card with its own ceiling — the answered-requests table reads documents and caps itself
+     * far below MAX_PAGE — must not offer sizes above that cap, or the reader picks 500, the
+     * server clamps to 200, and the control silently disagrees with the table beneath it.
+     *
+     * @return array<int,int>
+     */
+    public static function sizesUpTo(int $cap): array
+    {
+        $sizes = array_values(array_filter(self::SIZES, static fn(int $s): bool => $s <= $cap));
+
+        return $sizes === [] ? [$cap] : $sizes;
     }
 }

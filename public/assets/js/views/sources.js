@@ -117,7 +117,7 @@ export default function init() {
         id: 'an-referrers',
         label: 'Faceting referring sites',
         empty: 'referring sites',
-        fetch: (start) => api('sources', 'referrers', { start: start, pop: population }),
+        fetch: (start, rows) => api('sources', 'referrers', { start: start, rows: rows, pop: population }),
         render: renderReferrers
     });
 }
