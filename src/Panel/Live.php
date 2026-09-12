@@ -278,6 +278,23 @@ final class Live extends Controller implements JobHost
         header('X-Accel-Buffering: no');
         header('Connection: keep-alive');
 
+        /* THE FIRST EIGHT KILOBYTES BUY THE CONNECTION ITS OWN FLUSH, and without them this
+           stream never starts. Apache talks to PHP over mod_proxy_fcgi, which buffers a
+           response until its block fills or the request ends — `flushpackets` is off by
+           default and no amount of ob_flush() on this side changes that. So PHP wrote `hello`,
+           Apache held it, the browser sat in "Connecting" until the server hung up at
+           MAX_SECONDS, and EventSource reconnected into the same wall: a live page that was
+           never live, with three consecutive responses of byte-identical length to prove
+           nothing was being streamed at all.
+
+           A comment line is the SSE no-op — a frame beginning with a colon is defined to be
+           ignored — so this is padding the protocol already knows how to throw away. It costs
+           eight kilobytes once per connection and it makes the transport work on a stock
+           Apache, which is what an installer can rely on; `ProxySet flushpackets=on` is the
+           tidier fix and this does not fight it. */
+        echo ': ' . str_repeat(' ', 8192) . "\n\n";
+        self::push();
+
         echo "retry: 3000\n\n";
         self::event('hello', [
             'watching' => $reader->watching(),

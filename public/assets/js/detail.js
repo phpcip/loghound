@@ -903,6 +903,47 @@ export async function openDimension(field, value) {
 }
 
 /**
+ * Open the full value list of one dimension.
+ *
+ * What a "distinct" count is pointing at. "Distinct IPs: 3" and "Distinct ASNs: 3" are counts
+ * of VALUES, not of visits, so a list of sessions answers the wrong question — the reader wants
+ * to know which three. Every row is the same value control as everywhere else, so any of them
+ * filters the whole dashboard to itself.
+ *
+ * @param {string} field Solr field name; the server checks it against its own allowlist.
+ */
+export async function openDimList(field) {
+    let handle = openDialog(dimLabel(field), 'Counting every value…');
+
+    try {
+        const data = await api('sessions', 'values', { field: field });
+        if (!isCurrent(handle.generation)) {
+            return;
+        }
+        if (data.error || !data.group) {
+            fill(handle.body, [say(data.error || 'That dimension has no values in range.')]);
+            return;
+        }
+
+        const buckets = Array.isArray(data.group.buckets) ? data.group.buckets : [];
+        const shown = data.group.numBuckets === undefined || data.group.numBuckets === null
+            ? num(buckets.length) + ' value' + (buckets.length === 1 ? '' : 's')
+            : num(buckets.length) + ' of ' + num(data.group.numBuckets);
+
+        handle = openDialog(dimLabel(field), shown + ', across ' + num(data.matched) + ' visits');
+        fill(handle.body, [
+            filterNote(data.active),
+            el('div', { class: 'fpanel' }, [breakdown(data.group, data.matched || 0)])
+        ]);
+        markSortable(handle.body);
+    } catch (err) {
+        if (isCurrent(handle.generation)) {
+            dialogFail(handle.body, err, () => openDimList(field));
+        }
+    }
+}
+
+/**
  * Open the visits inside one band of a numeric field — a histogram bucket.
  *
  * The score histogram's bars were counts with nothing behind them: "eight sessions scored 95"
@@ -1239,6 +1280,7 @@ export function initDetail() {
         openBand(data.band || '', Number(data.from) || 0, Number(data.to) || 0));
     registerOpener('hitband', (data) =>
         openHitBand(data.band || '', Number(data.from) || 0, data.view || '', data.label || ''));
+    registerOpener('dimlist', (data) => openDimList(data.dim || ''));
 
     const open = new URLSearchParams(window.location.search).get('open');
     if (open) {

@@ -472,7 +472,12 @@ final class Layout
             echo '<button type="button" class="tb-filters" id="lh-tb-filters"'
                 . ($applied === 0 ? ' hidden' : '')
                 . ' aria-haspopup="dialog">'
+                /* TWO WORDINGS, ONE CONTROL. On a phone the bar has to fit the filter button,
+                   the duration and the resources mark on one line, and "Applied filters" eats
+                   the room the other two need. The stylesheet shows one and hides the other;
+                   both are in the markup so no script is needed and neither can drift. */
                 . '<span class="tb-filters-label">Applied filters</span>'
+                . '<span class="tb-filters-short">Filters</span>'
                 . '<span class="tb-badge" id="lh-tb-badge">' . Security::esc((string) $applied) . '</span>'
                 . '</button>';
         }

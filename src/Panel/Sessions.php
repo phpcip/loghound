@@ -144,6 +144,31 @@ final class Sessions extends Controller
         'hits_i'      => [0, 100000, 'Requests in the visit'],
     ];
 
+    /**
+     * Dimensions a caller may ask for a full value list of.
+     *
+     * WIDER THAN browseFields() BY EXACTLY TWO, and the difference is the whole point. The
+     * filter rail leaves `ip_s` out because "the twelve busiest addresses" is not a
+     * distribution anybody browses by, and a terms facet over addresses is a bucket per
+     * visitor. But a tile that says "Distinct IPs: 3" is a question with one answer — WHICH
+     * three — and refusing to list them there is refusing to answer the only thing the number
+     * raises. Asked explicitly, for one dimension, bounded by the same cap every other list
+     * uses; not offered as a permanent column in the rail.
+     *
+     * @return array<string,string>
+     */
+    private static function listableFields(): array
+    {
+        $out = self::browseFields();
+        $all = Query::filterFields();
+        foreach (['ip_s', 'asn_i'] as $field) {
+            if (isset($all[$field])) {
+                $out[$field] = $all[$field];
+            }
+        }
+        return $out;
+    }
+
     /** Dimensions rendered in a monospace list, because the value is an identifier. */
     private const MONO_FIELDS = ['netname_s', 'fp_hash_s', 'host_s', 'sec_ch_ua_s', 'tls_proto_s',
         'paths_ss', 'entry_path_s', 'exit_path_s'];
@@ -531,7 +556,7 @@ final class Sessions extends Controller
      */
     private function values(): array
     {
-        $fields = self::browseFields();
+        $fields = self::listableFields();
         $field = self::param('field', array_keys($fields), '');
         if ($field === '') {
             return $this->envelope(['error' => 'That is not a dimension this panel can list.']);

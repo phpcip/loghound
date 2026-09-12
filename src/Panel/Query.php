@@ -194,6 +194,15 @@ final class Query
             'declared' => self::POP_DECLARED,
             'ai'       => self::POP_AI,
             'evasive'  => self::POP_EVASIVE,
+
+            /* TWO MORE THAT ARE NOT VERDICTS, and they are here because the headline tiles on
+               the Networks page name them. `all` is the whole scope with nothing added, which is
+               what "Sessions: 3" is a count of; without it a tile that names every visit had no
+               way to show one. `datacentre` is the pair of network types that tile counts —
+               hosting and VPN — and it has to be one clause, because a dimension filter can
+               carry a single value and this population is two. */
+            'all'        => '*:*',
+            'datacentre' => 'as_type_s:(hosting OR vpn)',
         ];
     }
 
@@ -251,8 +260,9 @@ final class Query
             'declared' => 'Declared crawlers',
             'ai'       => 'AI crawlers',
             'evasive'  => 'Evasive bots',
-            'all'      => 'All sessions',
-            'beacon'   => 'Sessions with beacon data',
+            'all'        => 'All sessions',
+            'beacon'     => 'Sessions with beacon data',
+            'datacentre' => 'Visits from hosting or VPN networks',
         ];
     }
 

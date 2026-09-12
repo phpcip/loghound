@@ -428,16 +428,34 @@ final class Networks extends Controller
         self::cardOpen('net-stats', '01', 'Network totals', 'All sessions in the selected range.');
         self::skeleton('net-stats', 'stats', 0, 'Counting distinct addresses and networks');
 
+        /* EVERY ONE OF THESE OPENS, and they do not all open the same kind of thing. Two are
+           populations of VISITS — every session in scope, and the ones answering from hosting
+           or VPN address space — so they open the visit list. The other two are counts of
+           DISTINCT VALUES, and the question "distinct IPs: 3" asks is which three; a list of
+           visits would not answer it, so those open the value list for their dimension. */
         echo '<div class="stats">';
         foreach ([
-            ['sessions',  'Sessions',         'In the selected range'],
-            ['uniq_ips',  'Distinct IPs',     'Approximate above ~100 (Solr unique())'],
-            ['uniq_asns', 'Distinct ASNs',    'Autonomous systems seen'],
-            ['hosting',   'From datacentres', 'Sessions on hosting or VPN networks'],
-        ] as [$key, $label, $hint]) {
-            echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
+            ['sessions',  'Sessions',         'In the selected range',
+                ['pop', 'pop', 'all'], 'Every visit in the selected range and filters.'],
+            ['uniq_ips',  'Distinct IPs',     'Approximate above ~100 (Solr unique())',
+                ['dimlist', 'dim', 'ip_s'], ''],
+            ['uniq_asns', 'Distinct ASNs',    'Autonomous systems seen',
+                ['dimlist', 'dim', 'asn_i'], ''],
+            ['hosting',   'From datacentres', 'Sessions on hosting or VPN networks',
+                ['pop', 'pop', 'datacentre'],
+                'Visits answering from hosting or VPN address space, which is where automation lives.'],
+        ] as [$key, $label, $hint, $open, $why]) {
+            [$kind, $attr, $value] = $open;
+            echo '<button type="button" class="stat stat-open"'
+                . ' data-lh-open="' . Security::esc($kind) . '"'
+                . ' data-' . Security::esc($attr) . '="' . Security::esc($value) . '"'
+                . ($why === '' ? '' : ' data-why="' . Security::esc($why) . '"')
+                . ' aria-label="' . Security::esc('Open ' . $label) . '">';
+            echo '<span class="stat-label">' . Security::esc($label) . '</span>';
             echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
-            echo '<span class="stat-hint">' . Security::esc($hint) . '</span></div>';
+            echo '<span class="stat-hint">' . Security::esc($hint) . '</span>';
+            echo '<span class="stat-go" aria-hidden="true">&#8250;</span>';
+            echo '</button>';
         }
         echo '</div>';
 

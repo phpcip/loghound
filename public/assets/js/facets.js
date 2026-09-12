@@ -135,6 +135,14 @@ function rememberPanel(shown) {
 function labelToggle(toggle, shown) {
     toggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
     toggle.textContent = shown ? 'Hide filters' : 'Filter by…';
+
+    /* NOT ON A PAGE THAT ALREADY HAS A FILTER RAIL. The session explorer carries its own rail
+       with its own show/hide control, so this bar put a SECOND button for the same job three
+       inches above the first — two controls, two labels, one thing. The rail wins there
+       because it is the one with the counts in it. */
+    if (document.getElementById('se-explorer')) {
+        toggle.hidden = true;
+    }
 }
 
 /**
