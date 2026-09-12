@@ -423,6 +423,34 @@ if ($beaconMerger !== null && $beaconMerger->allowedHosts() !== []) {
 
     $idleSeconds = \Loghound\Security::clampInt($cfg->get('ingest.session_idle_sec'), 60, 86400, 1800);
 
+    /* BUILT ONCE FOR THE WHOLE RUN, not once per session: both enrichers cache through State,
+       so an address seen twice costs one lookup, and the batch is bounded by
+       PROVISIONAL_BATCH. Constructed exactly as Pipeline::initEnrichers() does, so the two
+       planes derive geography the same way rather than by two similar-looking routes. */
+    $enrichCfg = (array) $cfg->get('enrich', []);
+    $standaloneGeo = null;
+    $standaloneAsn = null;
+    $standaloneRdns = (bool) $cfg->get('enrich.rdns_enabled', true);
+
+    if (class_exists('\\Loghound\\Enrich\\Geo')) {
+        try {
+            $standaloneGeo = new \Loghound\Enrich\Geo(
+                $enrichCfg,
+                $state,
+                (array) $cfg->get('opensolr', [])
+            );
+        } catch (\Throwable $e) {
+            $log('standalone: geo enrichment unavailable: ' . $e->getMessage());
+        }
+    }
+    if (class_exists('\\Loghound\\Enrich\\Asn')) {
+        try {
+            $standaloneAsn = new \Loghound\Enrich\Asn($enrichCfg, $state);
+        } catch (\Throwable $e) {
+            $log('standalone: ASN enrichment unavailable: ' . $e->getMessage());
+        }
+    }
+
     try {
         $groups = $state->unmergedBeaconGroups(PROVISIONAL_BATCH);
     } catch (\Throwable $e) {
@@ -465,7 +493,7 @@ if ($beaconMerger !== null && $beaconMerger->allowedHosts() !== []) {
         $provisional = ((int) $group['last_ts']) > ($now - $idleSeconds);
 
         try {
-            $doc = buildStandaloneDoc($rows, $clientKey, $host, $sid);
+            $doc = buildStandaloneDoc($rows, $clientKey, $host, $sid, $standaloneGeo, $standaloneAsn, $standaloneRdns);
             $doc = $beaconMerger->mergeIntoSession($doc, $rows);
         } catch (\Throwable $e) {
             $log('standalone: building ' . $sid . ' failed: ' . $e->getMessage());
@@ -842,8 +870,15 @@ function buildSessionDoc(array $session, bool $provisional = false): array
  * @param string                         $host      The hostname, already validated by the collector.
  * @return array<string,mixed>
  */
-function buildStandaloneDoc(array $rows, string $clientKey, string $host, string $sessionId): array
-{
+function buildStandaloneDoc(
+    array $rows,
+    string $clientKey,
+    string $host,
+    string $sessionId,
+    ?object $geo = null,
+    ?object $asn = null,
+    bool $rdns = false
+): array {
     $first = [];
     $last  = [];
     foreach ($rows as $row) {
@@ -870,6 +905,34 @@ function buildStandaloneDoc(array $rows, string $clientKey, string $host, string
     $ip = (string) ($first['ip'] ?? '');
     if ($ip !== '') {
         $doc['ip_s'] = $ip;
+
+        /* ENRICHED HERE TOO, OR A BEACON-ONLY SITE HAS NO GEOGRAPHY AT ALL. The log pipeline
+           enriches every hit in Pipeline::process(); this path never did, so a site measured by
+           the beacon alone was published with an address and nothing derived from it — absent
+           from the map, from the countries table, from every network dimension, and showing a
+           bare dash where every other session shows a flag. The address was there the whole
+           time; only the lookup was missing.
+
+           Failures are silent and leave the field absent, exactly as on the log path: geography
+           is an enrichment, and a session is still a session without it. */
+        foreach ([[$geo, 'lookup'], [$asn, 'lookup'], [$rdns ? $asn : null, 'rdns']] as [$source, $method]) {
+            if ($source === null) {
+                continue;
+            }
+            try {
+                $fields = $source->{$method}($ip);
+            } catch (\Throwable $e) {
+                continue;
+            }
+            if (!is_array($fields)) {
+                continue;
+            }
+            foreach ($fields as $field => $value) {
+                if ($value !== null && $value !== '' && !isset($doc[$field])) {
+                    $doc[$field] = $value;
+                }
+            }
+        }
     }
 
     $net = strstr($clientKey, '|', true);
