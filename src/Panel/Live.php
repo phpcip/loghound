@@ -215,6 +215,14 @@ final class Live extends Controller implements JobHost
             \json_out(['error' => 'The rules could not be written to the configuration file.'], 500);
         }
 
+        /* THE FILE IS PHP, SO THE OPCODE CACHE HAS TO BE TOLD. Settings::persist() does this and
+           this path did not: the rules reached the disk and the next worker went on serving the
+           previous ones out of OPcache until it revalidated, which is up to a minute of a saved
+           rule visibly doing nothing. */
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($this->cfg->path(), true);
+        }
+
         \json_out([
             'ok'     => true,
             'rules'  => $clean,

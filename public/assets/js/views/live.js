@@ -134,6 +134,7 @@ function onLines(event) {
     lag = Number(data.lag) || 0;
     unparsed = Number(data.unparsed) || 0;
     unparsedWhy = String(data.why || '');
+    excluded += Number(data.excluded) || 0;
 
     addRows(Array.isArray(data.rows) ? data.rows : []);
     setState('live', 'Streaming');
@@ -783,6 +784,56 @@ function hideIfFiltered(tr) {
     tr.hidden = !matchesFind(tr);
 }
 
+/**
+ * Drop the rows already on screen that a rule now matches.
+ *
+ * WITHOUT THIS A SAVED RULE LOOKS BROKEN. The server stops sending matching requests from the
+ * next connection onwards, but everything already in the table stays — so an operator excludes
+ * `HEAD` and goes on looking at a screen full of HEAD requests, with the card telling them six
+ * rules are hiding things. The rules are evaluated here against the row objects the table was
+ * built from, which is the same data the server matched on.
+ *
+ * A pattern the browser will not compile is skipped rather than thrown: the server has already
+ * accepted this list, and one unusable rule must not stop the other five from being applied.
+ */
+function pruneExcluded() {
+    const table = byId('lv-table');
+    const body = table ? table.tBodies[0] : null;
+    if (!body) {
+        return;
+    }
+
+    const live = [];
+    for (const rule of rules) {
+        if (rule.enabled === false) {
+            continue;
+        }
+        try {
+            live.push({ field: rule.field, re: new RegExp(rule.pattern, 'i') });
+        } catch (err) {
+            continue;
+        }
+    }
+    if (!live.length) {
+        return;
+    }
+
+    for (const tr of Array.prototype.slice.call(body.children)) {
+        const row = held.get(tr.dataset ? tr.dataset.id : null);
+        if (!row) {
+            continue;
+        }
+        for (const rule of live) {
+            const value = row[rule.field];
+            if (value !== null && value !== undefined && rule.re.test(String(value))) {
+                held.delete(tr.dataset.id);
+                body.removeChild(tr);
+                break;
+            }
+        }
+    }
+}
+
 /** Re-apply the find text to every row now in the table. */
 function applyFind() {
     const table = byId('lv-table');
@@ -971,6 +1022,7 @@ function renderExclusions(mount, generation, draft) {
             const data = await post({ action: 'live_exclusions', rules: JSON.stringify(draft) });
             rules = Array.isArray(data.rules) ? data.rules : [];
             noteRules();
+            pruneExcluded();
             status.textContent = 'Saved. The stream picks them up when it next reconnects.';
             renderExclusions(mount, generation, rules.map((rule) => ({ ...rule })));
         } catch (err) {
