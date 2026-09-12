@@ -220,8 +220,8 @@ function howLong(s) {
  * screen, and one press.
  *
  * THE STATE IS REMEMBERED PER BLOCK, NOT PER VISIT, which is the same rule the panel's other
- * folds follow: somebody who opens "Everything they asked for" wants request trails, not that
- * one visitor's in particular, so the next dialog opens with the trail already unfolded. It
+ * folds follow: somebody who opens "Pages Visited" wants request trails, not that one
+ * visitor's in particular, so the next dialog opens with the trail already unfolded. It
  * rides on the existing `details.fold.lh-keep[data-keep]` mechanism in responsive.js — the
  * toggle listener is delegated from the document, so it binds to dialogs that did not exist at
  * load, and refresh() re-applies the stored state after each render.
@@ -638,7 +638,7 @@ function renderSession(body, data) {
            verdict, the execution evidence and four blocks of counters — so the one thing a
            reader opens a visit to see, WHERE THEY WENT, was a scroll and a half below the
            fold. It belongs beside how they arrived: first page, then every page after it. */
-        foldSection('trail', 'Everything they asked for, in order', [
+        foldSection('trail', 'Pages Visited', [
             trailBlock(data.session.id, data, s.host)
         ]),
 
