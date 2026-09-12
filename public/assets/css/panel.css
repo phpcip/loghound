@@ -4235,6 +4235,43 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 .fold-note { margin-left: auto; font-weight: 400; font-size: 14px; color: var(--faint); }
 .fold > :not(summary) { margin-bottom: 14px; }
 
+/* ---------------------------------------------------------------------------
+ * A DIALOG'S SECTIONS FOLD, AND THE SUMMARY IS THE HEADING IT REPLACED.
+ *
+ * Every block in a visit, dimension or request dialog is a `details.dlg-fold` now, shut until
+ * asked for, so the dialog opens as a short list of headings instead of several screens the
+ * reader has to scroll past to reach the one block they wanted. That only works if a summary
+ * still reads as a section heading, so these take the type `.lh-dialog-body h3` had —
+ * uppercase, letter-spaced, faint — rather than the sentence-case bold that `.fold` gives a
+ * disclosure inside a card, and the rule moves to the BOTTOM edge because these sit in a
+ * stack where each heading introduces what follows it.
+ *
+ * A nested one — "What led to that" under the verdict — drops the uppercase treatment, so the
+ * two levels are told apart by their type rather than by indentation alone.
+ * ------------------------------------------------------------------------ */
+.dlg-fold {
+    margin: 0;
+    border-top: 0;
+    border-bottom: 1px solid var(--hairline);
+}
+.dlg-fold > summary {
+    padding: 11px 0;
+    font: 600 13px/1.3 var(--font-ui);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--faint);
+}
+.dlg-fold > summary:hover,
+.dlg-fold[open] > summary { color: var(--ink); }
+.dlg-fold > :not(summary) { margin-bottom: 16px; }
+
+.dlg-fold .dlg-fold { border-bottom: 0; margin-left: 2px; }
+.dlg-fold .dlg-fold > summary {
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
     .fold > summary::before { transition: none; }
 }

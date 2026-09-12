@@ -175,12 +175,11 @@ function howLong(s) {
 
     if (oneRequest && !s.beacon) {
         return [
-            el('h3', { text: 'How long they were here' }),
             say('One request, at ' + when(s.ts_start) + ', and no beacon: nothing measured a duration.')
         ];
     }
 
-    const parts = [el('h3', { text: 'How long they were here' })];
+    const parts = [];
 
     if (s.beacon) {
         const grid = el('div', { class: 'timing-grid' });
@@ -208,6 +207,44 @@ function howLong(s) {
         + 'stayed is unknown rather than zero.'));
 
     return parts;
+}
+
+/**
+ * One collapsible section of a dialog: shut by default, and remembered once opened.
+ *
+ * EVERY SECTION FOLDS, AND THEY ALL START SHUT. A visit dialog carries eight blocks — who was
+ * here, what they used, the clocks, how they arrived, every request in order, the verdict and
+ * its evidence, what they did — and a reader opens it for one of them. Printed in full it is
+ * several screens deep, so the block somebody actually wanted was reached by scrolling past
+ * seven they did not. Shut by default turns that into a list of eight headings that fits on one
+ * screen, and one press.
+ *
+ * THE STATE IS REMEMBERED PER BLOCK, NOT PER VISIT, which is the same rule the panel's other
+ * folds follow: somebody who opens "Everything they asked for" wants request trails, not that
+ * one visitor's in particular, so the next dialog opens with the trail already unfolded. It
+ * rides on the existing `details.fold.lh-keep[data-keep]` mechanism in responsive.js — the
+ * toggle listener is delegated from the document, so it binds to dialogs that did not exist at
+ * load, and refresh() re-applies the stored state after each render.
+ *
+ * The identity strip is deliberately NOT one of these: an email address is the one fact worth
+ * a line of its own, and burying it behind a press is what made it unreachable in the first
+ * place.
+ *
+ * @param {string} key      Stable slug; the storage key, so it must not change between renders.
+ * @param {string} title    The heading, which becomes the summary.
+ * @param {Array<Node>|Node} children
+ * @returns {HTMLElement|null} Null when there is nothing inside, so an empty block draws nothing.
+ */
+function foldSection(key, title, children) {
+    const kids = (Array.isArray(children) ? children : [children]).filter(Boolean);
+    if (kids.length === 0) {
+        return null;
+    }
+
+    return el('details', {
+        class: 'fold lh-keep dlg-fold',
+        dataset: { keep: 'dlg.' + key }
+    }, [el('summary', { text: title })].concat(kids));
 }
 
 /** The rules that fired, each with the plain-English description of what it means. */
@@ -513,7 +550,7 @@ function whatTheyDid(s) {
         notes.push('Never asked whether anything had changed since last time, which a browser cache does.');
     }
 
-    return [el('h3', { text: 'What they did' }), facts].concat(notes.map((n) => say(n)));
+    return [facts].concat(notes.map((n) => say(n)));
 }
 
 /**
@@ -589,40 +626,35 @@ function renderSession(body, data) {
         identStrip(s),
 
         el('div', { class: 'grid-2' }, [
-            el('div', {}, [el('h3', { text: 'Who was here' }), kv(who), say(rdns)]),
-            el('div', {}, [
-                el('h3', { text: 'What they used' }),
-                kv(used),
-                say(signature),
-                rawAgent(s)
-            ])
+            foldSection('who', 'Who was here', [kv(who), say(rdns)]),
+            foldSection('used', 'What they used', [kv(used), say(signature), rawAgent(s)])
         ]),
 
-        ...howLong(s),
+        foldSection('howlong', 'How long they were here', howLong(s)),
 
-        el('h3', { text: 'How they arrived' }),
-        kv(arrival),
+        foldSection('arrival', 'How they arrived', [kv(arrival)]),
 
         /* THE CIRCUIT COMES BEFORE THE CONCLUSION. This sat at the very bottom, under the
            verdict, the execution evidence and four blocks of counters — so the one thing a
            reader opens a visit to see, WHERE THEY WENT, was a scroll and a half below the
            fold. It belongs beside how they arrived: first page, then every page after it. */
-        el('h3', { text: 'Everything they asked for, in order' }),
-        trailBlock(data.session.id, data, s.host),
-
-        el('h3', { text: 'What we concluded, and why' }),
-        kv([
-            ['Verdict', verdictChip(s.verdict)],
-            ['Bot score', s.score === null ? null : dec(s.score, 0) + ' / 100', true],
-            ['Kind of client', s.class ? dimValue('bot_class_s', s.class) : null]
+        foldSection('trail', 'Everything they asked for, in order', [
+            trailBlock(data.session.id, data, s.host)
         ]),
-        el('h4', { text: 'What led to that' }),
-        firedRules(s, data.reasons),
 
-        execution.length ? el('h4', { text: 'What the browser could actually do' }) : null,
-        execution.length ? kv(execution) : null,
+        foldSection('verdict', 'What we concluded, and why', [
+            kv([
+                ['Verdict', verdictChip(s.verdict)],
+                ['Bot score', s.score === null ? null : dec(s.score, 0) + ' / 100', true],
+                ['Kind of client', s.class ? dimValue('bot_class_s', s.class) : null]
+            ]),
+            foldSection('verdict-rules', 'What led to that', [firedRules(s, data.reasons)]),
+            execution.length
+                ? foldSection('verdict-execution', 'What the browser could actually do', [kv(execution)])
+                : null
+        ]),
 
-        ...whatTheyDid(s)
+        foldSection('did', 'What they did', whatTheyDid(s))
     ]);
 }
 
@@ -702,8 +734,7 @@ function requestProfile(req) {
         el('span', { class: 'faint', text: num(row.count) + ' · ' + pct(row.count, req.hits) })
     ]));
 
-    return el('div', {}, [
-        el('h3', { text: 'What the server actually returned' }),
+    return foldSection('request-profile', 'What the server actually returned', [
         kv([
             ['Times it was requested', num(req.hits), true],
             ['Data sent', bytes(req.bytes), true],
@@ -816,16 +847,17 @@ function renderDimension(body, data) {
            in the panel gets — flag, icon, filter link — rather than as bare text. */
         atAGlance(data),
 
-        el('h3', { text: 'What kind of traffic this is' }),
-        mixBar(data.mix, total),
-        kv(ORDER.map((key) => [
-            data.labels[key] || key,
-            num(data.mix[key] || 0) + ' · ' + pct(data.mix[key] || 0, total || 1),
-            true
-        ])),
+        foldSection('dim-kind', 'What kind of traffic this is', [
+            mixBar(data.mix, total),
+            kv(ORDER.map((key) => [
+                data.labels[key] || key,
+                num(data.mix[key] || 0) + ' · ' + pct(data.mix[key] || 0, total || 1),
+                true
+            ]))
+        ]),
 
-        el('h3', { text: 'When, and for how long' }),
-        kv([
+        foldSection('dim-when', 'When, and for how long', [
+            kv([
             ['First seen', when(data.first), true],
             ['Last seen', when(data.last), true],
             ['Typical time spent requesting', data.log_span_p50 === null ? null : dur(data.log_span_p50), true],
@@ -836,28 +868,31 @@ function renderDimension(body, data) {
             ['Typical time the page was open', data.beacon.sessions
                 ? (data.beacon.wall_p50 === null ? null : dur(data.beacon.wall_p50))
                 : null, true],
-            ['Average bot score', data.score === null ? null : dec(data.score, 0) + ' out of 100', true],
-            ['Data sent', bytes(data.bytes), true]
+                ['Average bot score', data.score === null ? null : dec(data.score, 0) + ' out of 100', true],
+                ['Data sent', bytes(data.bytes), true]
+            ]),
+            data.beacon.sessions === 0
+                ? say('No beacon on any of these visits, so the measured clocks are unknown rather than zero.')
+                : null
         ]),
-        data.beacon.sessions === 0
-            ? say('No beacon on any of these visits, so the measured clocks are unknown rather than zero.')
-            : null,
 
         requestProfile(data.requests),
 
         /* THE VISITS COME FIRST. The breakdown is eleven dimensions deep, so the actual rows —
            the thing a reader opened this dialog to look at — sat below a screen and a half of
            percentages and were routinely missed. Summary first, then the long tail. */
-        el('h3', { text: 'The visits' }),
-        visitBlock(data.visitors, data.page, (start, rows) => api('sessions', 'visitors', {
-            field: data.field,
-            value: data.value,
-            start: start,
-            rows: rows || data.page.rows
-        })),
+        foldSection('dim-visits', 'The visits', [
+            visitBlock(data.visitors, data.page, (start, rows) => api('sessions', 'visitors', {
+                field: data.field,
+                value: data.value,
+                start: start,
+                rows: rows || data.page.rows
+            }))
+        ]),
 
-        el('h3', { text: 'How it breaks down' }),
-        el('div', { class: 'fpanel' }, data.breakdowns.map((group) => breakdown(group, total))),
+        foldSection('dim-breakdown', 'How it breaks down', [
+            el('div', { class: 'fpanel' }, data.breakdowns.map((group) => breakdown(group, total)))
+        ]),
 
         data.filterable
             ? el('p', {}, [
@@ -1200,19 +1235,19 @@ function renderHitDimension(body, data, fetchPage) {
                 + ': those are conclusions about a whole visit, and this counts requests.')
             : null,
 
-        el('h3', { text: 'When, and how much' }),
-        kv([
-            ['First seen', when(data.first), true],
-            ['Last seen', when(data.last), true],
-            ['Data sent', bytes(data.bytes), true]
+        foldSection('req-when', 'When, and how much', [
+            kv([
+                ['First seen', when(data.first), true],
+                ['Last seen', when(data.last), true],
+                ['Data sent', bytes(data.bytes), true]
+            ])
         ]),
 
-        el('h3', { text: 'The requests' }),
-        wrap,
-        mount,
+        foldSection('req-list', 'The requests', [wrap, mount]),
 
-        el('h3', { text: 'How it breaks down' }),
-        el('div', { class: 'fpanel' }, (data.breakdowns || []).map((group) => breakdown(group, total)))
+        foldSection('req-breakdown', 'How it breaks down', [
+            el('div', { class: 'fpanel' }, (data.breakdowns || []).map((group) => breakdown(group, total)))
+        ])
     ]);
 
     show(data.page);

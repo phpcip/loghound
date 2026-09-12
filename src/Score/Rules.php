@@ -822,7 +822,7 @@ final class Rules
             }
         }
 
-        if (!empty($ctx['provisional']) && self::isBetterThanFloor($verdict)) {
+        if (!empty($ctx['provisional']) && self::isBetterThanFloor($verdict) && !self::provedHumanLive($s)) {
             $verdict = self::PROVISIONAL_FLOOR;
             $reasons[] = self::PROVISIONAL_REASON;
             $detail[self::PROVISIONAL_REASON] = [
@@ -893,6 +893,50 @@ final class Rules
      * @var string[]
      */
     private const VERDICT_ORDER = ['human', 'likely_human', 'unknown', 'likely_bot', 'bot'];
+
+    /**
+     * Has the beacon already PROVED a person, on a session that has not ended?
+     *
+     * ------------------------------------------------------------------------------------
+     * THE HOLE THIS CLOSES: A SIGNED-IN READER, INVISIBLE FOR HALF AN HOUR
+     * ------------------------------------------------------------------------------------
+     * PROVISIONAL_FLOOR exists because a score of 0 on an open session means "the rules that
+     * need an ending have not run yet", and publishing that as `human` would let the verdict
+     * flip from exonerated to accused as the visit continued. That reasoning is sound and it
+     * is about ABSENCE — nothing fired.
+     *
+     * It stops being sound the moment the beacon has measured something positive. A visitor
+     * with fifty-six pageviews, three and a half minutes of engaged time and eight recorded
+     * interactions has not merely failed to trip a rule: a plane of evidence has actively
+     * reported a person, and no continuation of the session can turn that measurement into
+     * automation. Flooring it to `unknown` anyway had a consequence nobody would defend out
+     * loud: the operator's own signed-in session — the one carrying their email address —
+     * was hidden from any view filtered to humans for as long as they kept browsing, which
+     * is exactly as long as they were there to look.
+     *
+     * SO THE EXCEPTION IS AS NARROW AS THE EVIDENCE. All three must hold: the beacon actually
+     * ran, engaged time is at or above the same HUMAN_FLOOR_MS the closed-session rule uses,
+     * and at least one real interaction was recorded. Engaged time alone is not enough — it
+     * is derived from a clock a script could in principle drive — and interactions alone are
+     * not either. Any rule that fired still scores and still counts: this only declines to
+     * apply the floor, so a provisional session with evidence AGAINST it lands wherever that
+     * evidence puts it, exactly as before. The floor still applies in full to every session
+     * with no beacon, a silent beacon, or under half a minute of engagement.
+     */
+    private static function provedHumanLive(array $s): bool
+    {
+        if (empty($s['beacon'])) {
+            return false;
+        }
+
+        $engaged = $s['engaged_ms'] ?? null;
+        $interactions = $s['interactions'] ?? null;
+
+        return $engaged !== null
+            && (int) $engaged >= self::HUMAN_FLOOR_MS
+            && $interactions !== null
+            && (int) $interactions > 0;
+    }
 
     /**
      * Is this verdict a stronger claim of humanity than a provisional session is allowed to make?
