@@ -182,10 +182,13 @@ function bounceMark(v) {
             title: 'Did not bounce: more than one page, or measured engagement on the one page.'
         });
     }
+    /* DEFENSIVE ONLY. Panel\Sessions::bouncedOf() is total now — every visit gets true or false —
+       so this branch is unreachable for a session document and exists to keep a malformed
+       payload from rendering the word "undefined" in a column of percentages. */
     return el('span', {
         class: 'muted',
-        text: '—',
-        title: 'Not known: no beacon ran, so there is no engagement to judge a single-page visit by.'
+        text: '100%',
+        title: 'No page count on this record, so it is treated as a bounce.'
     });
 }
 

@@ -826,6 +826,14 @@ function buildSessionDoc(array $session, bool $provisional = false): array
     if (!isset($doc['entry_path_s']) && !empty($doc['paths_ss'])) {
         $doc['entry_path_s'] = (string) $doc['paths_ss'][0];
     }
+
+    /* AND IF EVEN THAT IS EMPTY, the session touched nothing the path list tracks — an
+       asset-only visit, which is the last case that could still print a dash. The sessionizer
+       now keeps the first path of ANY kind for exactly this, so the column can always name
+       what was asked for. */
+    if (!isset($doc['entry_path_s']) && ($session['first_path'] ?? null) !== null) {
+        $doc['entry_path_s'] = (string) $session['first_path'];
+    }
     if (!empty($session['terms'])) {
         $doc['search_terms_ss'] = array_values($session['terms']);
     }

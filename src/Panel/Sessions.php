@@ -1172,24 +1172,32 @@ final class Sessions extends Controller
     }
 
     /**
-     * Did this one visit bounce, under the product's definition rather than the conventional one?
+     * Did this one visit bounce?
      *
-     * One page AND under the engagement threshold. NULL when it cannot be judged — no beacon
-     * means no engaged clock, and a single-page visit with no measurement is exactly the case
-     * the conventional bounce rate gets wrong by assuming the worst. Three states, and the
-     * table prints all three.
+     * TOTAL, AND THAT IS THE POINT. This used to return null whenever no beacon had run, and the
+     * column printed a dash — which asks the reader to know that a dash means "no engagement
+     * clock existed, so we declined to judge a single-page visit". Nobody reads a dash that way.
+     * They read it as missing data, or as a bug.
+     *
+     * So every visit gets an answer, on the best basis available, and the cell says which basis
+     * it used:
+     *
+     *   * WITH A BEACON the product's own definition applies — one page AND under the engagement
+     *     threshold. A reader who spent four minutes on the one article they came for is not a
+     *     bounce, which is exactly what the conventional metric gets wrong.
+     *   * WITHOUT ONE the conventional definition is all that is left: one page is a bounce, more
+     *     than one is not. It is a weaker statement, not an absent one.
+     *   * NO PAGE AT ALL — a crawler that fetched robots.txt and left — counts as a bounce. It
+     *     asked for nothing and read nothing; calling that anything else would flatter it.
      */
-    private static function bouncedOf(array $d): ?bool
+    private static function bouncedOf(array $d): bool
     {
-        $pages = isset($d['pages_i']) ? (int) $d['pages_i'] : null;
-        if ($pages === null || $pages < 1) {
-            return null;
-        }
+        $pages = isset($d['pages_i']) ? (int) $d['pages_i'] : 0;
         if ($pages > 1) {
             return false;
         }
         if (!isset($d['engaged_ms_l'])) {
-            return null;
+            return true;
         }
 
         return (int) $d['engaged_ms_l'] < Bounce::ENGAGED_MS;
