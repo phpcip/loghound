@@ -386,15 +386,20 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
    and on a wide screen the cap left a third of the window empty while the Date column was
    truncating mid-hour. Prose is still protected where prose lives: `.explain p` and the card
    descriptions carry their own max-width, so widening here does not produce 200-character lines. */
+/* 18px of top padding, down from 40. With the page title gone there is nothing between the
+   control bar and the first card that needs separating by more than a breath. */
 main {
     margin-left: var(--side-w);
-    padding: 40px 32px 80px;
+    padding: 18px 32px 60px;
 }
 
-/* Page head. Nothing sits above the H1 — no badge, no kicker, no eyebrow. */
+/* Page head. The title is `.sr-only` now (Layout::header) and the lead is gone, so this
+   element occupies no space at all: no margin, and nothing for `.view`'s gap to push against.
+   The rules for h1 and .sub stay defined because other surfaces — the setup wizard, the error
+   pages — still draw a real page head. */
 
-.head { margin-bottom: 34px; }
-.head h1 { margin-bottom: 12px; }
+.head { margin-bottom: 0; }
+.head h1:not(.sr-only) { margin-bottom: 12px; }
 .head .sub { font-size: 17px; line-height: 1.5; color: var(--muted); max-width: 720px; margin: 0; }
 
 /* Notices. Error is an accent left rule; anything affirmative is an ink one. */
@@ -416,7 +421,10 @@ main {
 
 /* Sections. Hairline-ruled, numbered 01 / 02 / 03, label in 14px uppercase. */
 
-.view { display: flex; flex-direction: column; gap: 56px; }
+/* 28px between cards, down from 56. Half a hundred pixels of air between every section was
+   sized for a page that opened with a 38px title and a lead paragraph; with those gone it read
+   as the page having lost something. It is a dense instrument, not an article. */
+.view { display: flex; flex-direction: column; gap: 28px; }
 
 .card { position: relative; }
 

@@ -830,17 +830,24 @@ final class Layout
     }
 
     /**
-     * The page head: H1 and lead. The controls are in the bar above it.
+     * The page head, which is now for screen readers and the browser tab only.
      *
-     * Nothing sits above the H1 in the content column — no kicker, no badge, no breadcrumb.
-     * That is rule 5 of the editorial system and it is not negotiable per page. The top bar is
-     * page chrome in the same class as the left sidebar, not an eyebrow on the article.
+     * THE TITLE AND LEAD ARE NO LONGER DRAWN. Between the 38px H1, the 17px lead, the head's
+     * own bottom margin and the gap `.view` puts before the first card, the top of every page
+     * spent roughly a fifth of a laptop screen restating the name of the page the operator had
+     * just clicked in the sidebar, above the data they came for. The sidebar already says which
+     * view this is, and it says it while you scroll.
+     *
+     * THE H1 STAYS IN THE MARKUP, VISUALLY HIDDEN. A document with no heading at all is a
+     * genuine accessibility regression: a screen reader's heading list is how a non-visual
+     * reader knows which page they are on and jumps into it, and `.sr-only` costs zero pixels.
+     * The lead is dropped outright — it is decorative prose, not structure, and the card
+     * headings below carry the same information where it is actually needed.
      */
     private static function header(Controller $view): void
     {
         echo '<header class="head">' . "\n";
-        echo '<h1>' . Security::esc($view->title()) . '</h1>';
-        echo '<p class="sub">' . Security::esc($view->subtitle()) . '</p>';
+        echo '<h1 class="sr-only">' . Security::esc($view->title()) . '</h1>';
         echo "</header>\n";
     }
 
