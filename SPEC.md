@@ -248,6 +248,8 @@ the index and nothing uses it.
 | `src_s` | string | ✓ | ✓ | | which log file this came from |
 
 **Network**
+| Field | Type | I | DV | S | Notes |
+|---|---|---|---|---|---|
 | `ip_s` | string | ✓ | ✓ | ✓ | subject to privacy mode |
 | `ip_ver_i` | pint | | ✓ | | 4 or 6 |
 | `ip_net_s` | string | ✓ | ✓ | | /24 or /48 — cluster key |
@@ -262,6 +264,8 @@ the index and nothing uses it.
 | `tz_s` | string | ✓ | ✓ | | IANA tz. From the geolocation service when it names one, otherwise **derived from `country_s`** for the 216 territories that have exactly one IANA zone. Absent for a multi-zone country (US, RU, CA, AU, BR, DE, …) unless the service named a zone — guessing one would make `tz_mismatch` fire on innocent traffic. |
 
 **Request**
+| Field | Type | I | DV | S | Notes |
+|---|---|---|---|---|---|
 | `method_s` | string | ✓ | ✓ | | |
 | `path_s` | string | ✓ | ✓ | ✓ | exact path, no query |
 | `path_depth_i` | pint | | ✓ | | |
@@ -274,6 +278,8 @@ the index and nothing uses it.
 | `asset_kind_s` | string | ✓ | ✓ | | `js`\|`css`\|`img`\|`font`\|`media` |
 
 **Client**
+| Field | Type | I | DV | S | Notes |
+|---|---|---|---|---|---|
 | `ua_s` | string | ✓ | ✓ | ✓ | raw UA |
 | `ua_hash_s` | string | ✓ | ✓ | | sha1 of raw UA |
 | `browser_s` `browser_ver_i` `os_s` `device_s` | | ✓ | ✓ | | `device_s`: `desktop`\|`mobile`\|`tablet`\|`bot`\|`unknown` |
@@ -283,6 +289,8 @@ the index and nothing uses it.
 | `ai_crawler_b` | boolean | ✓ | ✓ | | GPTBot, ClaudeBot, PerplexityBot, Bytespider, Amazonbot, meta-externalagent, Applebot-Extended, CCBot, Diffbot, Omgili, cohere-ai, ImagesiftBot, YouBot, Timpibot, Webzio |
 
 **Headers (present only when the operator logs them — ABSENT, never empty-string, if not)**
+| Field | Type | I | DV | S | Notes |
+|---|---|---|---|---|---|
 | `referer_s` | string | ✓ | ✓ | ✓ | |
 | `referer_host_s` | string | ✓ | ✓ | | |
 | `referer_type_s` | string | ✓ | ✓ | | `direct`\|`search`\|`social`\|`ai`\|`internal`\|`link`\|`ad` |
@@ -295,15 +303,21 @@ the index and nothing uses it.
 | `ja4_s` | string | ✓ | ✓ | | v2, HAProxy-sourced; leave the field defined |
 
 **Fingerprints & session**
+| Field | Type | I | DV | S | Notes |
+|---|---|---|---|---|---|
 | `fp_hash_s` | string | ✓ | ✓ | | **THE cluster key.** sha1 of the normalized header tuple: ua + accept + accept_lang + accept_enc + sec_ch_ua + sec_ch_platform + sec_fetch_* + proto. Excludes IP by design — that is the point. |
 | `session_id_s` | string | ✓ | ✓ | ✓ | assigned at ingest |
 | `session_seq_i` | pint | | ✓ | | 1-based position within session |
 | `visitor_s` | string | ✓ | ✓ | | stable-ish visitor hash (ip_net + ua_hash + accept_lang), daily-salted in `hash` privacy mode |
 
 **Provisional verdict (final verdict lives on the session doc)**
+| Field | Type | I | DV | S | Notes |
+|---|---|---|---|---|---|
 | `hit_flags_ss` | strings | ✓ | ✓ | ✓ | multi-valued signal codes fired by this single hit |
 
 **Raw**
+| Field | Type | I | DV | S | Notes |
+|---|---|---|---|---|---|
 | `raw_s` | string | | | ✓ | STORED, **NOT INDEXED**. Enables retroactive rescoring. Config toggle `keep_raw` (default true) — document that it roughly doubles index size. |
 
 **Catchall** — `text_all`, `indexed=true, stored=false`, fed by copyField from `path_s`,
@@ -320,6 +334,8 @@ Rollup: `ts_start` (pdate), `ts_end` (pdate), `hits_i`, `pages_i`, `assets_i`, `
 `paths_ss` (capped at 50), plus every identity/network/client field copied from the first hit.
 
 **Timing — the differentiator. Four distinct numbers, never conflated:**
+| Field | What it measures |
+|---|---|
 | `log_span_ms_l` | last request minus first request. What log-only tools call "time on site". |
 | `wall_ms_l` | beacon: page open wall-clock, summed across pageviews. What Clicky/GA report. |
 | `visible_ms_l` | beacon: time `document.visibilityState === 'visible'` **and** the window focused. |
