@@ -2838,6 +2838,14 @@ a.dim:focus-visible { background: none; color: var(--accent-ink); border-bottom-
     padding: 18px 0 4px;
     border-top: 1px solid var(--hairline);
 }
+
+/* A CLOSED PANEL TAKES NO ROOM. Only `.fpanel-groups` carries `hidden` when the panel is
+   folded, so the wrapper kept its padding and its rule and drew an empty banded strip under
+   the toolbar on every page that has filters — plus one `.view` gap under it. Keyed on the
+   child's own state rather than a second class, so nothing in assets/js/facets.js changes: the
+   toggle removes `hidden` and the panel comes back. The dialog copy is untouched, because
+   there `.fpanel`'s children ARE the groups and there is no `.fpanel-groups` to match. */
+.fpanel:has(> .fpanel-groups[hidden]) { display: none; }
 .lh-dialog-body .fpanel {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px;
 }
