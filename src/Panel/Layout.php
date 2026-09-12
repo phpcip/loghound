@@ -608,12 +608,17 @@ final class Layout
         /* THE FILTER PANEL'S ONE CONTROL, WHERE THE HOSTNAME SELECTOR USED TO BE (2026-09-12).
            That selector wrote `f[host_s][]`, which is the WEBSITE facet's own parameter — it was
            a second interface onto a filter the panel already offers, and the two could disagree
-           about what was in force. One control, one panel, on every view that has filters.
+           about what was in force. One control, one panel, on every view that DECLARES
+           SCOPE_FACETS — the same declaration assets/js/app.js gates initFilterPanel() on, so the
+           button is drawn exactly where there is a panel for it to open. The applied-filters
+           badge above is gated more widely on purpose: assets/js/topbar.js wires that one on
+           every view and its dialog covers the `lf[…]` request-log plane too, so the Opensolr
+           views keep a bar that can say their numbers are narrowed.
 
            Rendered here rather than built by assets/js/facets.js so it exists before any script
            runs and cannot arrive late beside a bar that is already drawn. Its label and its
            aria-expanded are set by that script once it knows whether the panel is open. */
-        if ($filters) {
+        if ($view->honours(Controller::SCOPE_FACETS)) {
             echo '<button type="button" class="tb-field-btn" id="lh-facets-toggle"'
                 . ' aria-controls="lh-facets-groups" aria-expanded="false">Show filters</button>';
         }

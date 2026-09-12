@@ -303,12 +303,18 @@ function refresh() {
 }
 
 /**
- * Entry point. Absent when the installation has no Opensolr credentials, because the view
- * renders an explanation instead of cards and there is nothing to load.
+ * Entry point.
+ *
+ * NO GUARD, BECAUSE loadCard() IS THE GUARD. It skips any card that is not in the DOM, which is
+ * what turns sections into pages on the front end, so refresh() may list the whole view and only
+ * the section on screen issues a request. An installation with no Opensolr credentials renders
+ * an explanation instead of cards and every loadCard() call is a no-op for the same reason.
+ *
+ * This used to return early unless `ix-filters-card` was present. That card is the Slice section,
+ * and once each section became its own page it existed on exactly one of the five — so on the
+ * other four this returned before refresh(), not one card ever asked for data, and the page sat
+ * on its skeletons with the index picker frozen on "Loading…".
  */
 export default function init() {
-    if (!byId('ix-filters-card')) {
-        return;
-    }
     refresh();
 }
