@@ -120,6 +120,20 @@ foreach (array_slice($argv, 1) as $arg) {
     }
 }
 
+/* RUNNING THIS AS ROOT USED TO COST YOU THE DAEMON. --apply records the release into the
+   config, and before Config::save() preserved ownership that rewrote the file as root:root,
+   leaving the service account unable to read its own configuration until somebody chowned it
+   back. The save is safe now; the warning stays because a config the service account does not
+   own is worth knowing about either way, and this command is documented with sudo in front. */
+if (function_exists('posix_geteuid') && posix_geteuid() === 0 && is_file($configPath)) {
+    $owner = @fileowner($configPath);
+    if ($owner !== false && $owner !== 0) {
+        fwrite(STDERR, "Note: running as root against a config owned by uid " . $owner
+            . ". Ownership is preserved, but the service account is the safer way to run this:\n"
+            . "  sudo -u <service user> php " . __FILE__ . " " . implode(' ', array_slice($argv, 1)) . "\n\n");
+    }
+}
+
 $cfg = Config::load($configPath);
 $errors = $cfg->validate();
 if ($errors !== []) {

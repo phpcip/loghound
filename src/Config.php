@@ -721,6 +721,25 @@ final class Config
         $dir = dirname($this->path);
         self::sweepStaleTemps($dir);
 
+        /*
+         * WHO OWNS THE FILE AFTERWARDS MUST NOT DEPEND ON WHO WROTE IT.
+         *
+         * This writes a temp and renames it, and a rename gives the result the TEMP's ownership
+         * — that is, the writing process's. The config is owned by the service account and mode
+         * 0640, so any write performed as root silently re-owned it to root:root, and the next
+         * daemon restart died with "configuration is not usable": every value read back as
+         * missing, because the file could no longer be opened at all.
+         *
+         * That is not a hypothetical. `bin/loghound-schema --force` calls Schema::apply(), which
+         * calls recordRelease(), which lands here — and the Settings page tells operators to run
+         * that command with sudo. Following our own documented instructions took ingest down.
+         *
+         * So the previous owner is captured before the write and restored after it. A file that
+         * does not exist yet (a fresh install, legitimately running as root) has no owner to
+         * preserve and keeps the writer's, which is correct.
+         */
+        $prev = @stat($this->path);
+
         $tmp = $dir . '/.loghound.' . bin2hex(random_bytes(6)) . '.tmp';
 
         $fh = @fopen($tmp, 'xb');
@@ -747,6 +766,15 @@ final class Config
         if (!rename($tmp, $this->path)) {
             @unlink($tmp);
             throw new \RuntimeException('Unable to move config into place: ' . $this->path);
+        }
+
+        /* Restore the ownership and mode the file had before this write. Best-effort by design:
+           a non-root writer cannot chown, and it does not need to — it can only have written
+           the file if it already owned it. This matters when the writer IS root. */
+        if (is_array($prev)) {
+            @chown($this->path, $prev['uid']);
+            @chgrp($this->path, $prev['gid']);
+            @chmod($this->path, $prev['mode'] & 0777);
         }
     }
 
