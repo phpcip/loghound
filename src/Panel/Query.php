@@ -700,6 +700,7 @@ final class Query
             'referer_type_s',
             'referer_host_s',
             'paths_ss',
+            'status_codes_is',
             'country_s',
             'region_s',
             'city_s',

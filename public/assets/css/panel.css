@@ -47,10 +47,17 @@
     --accent-ink:    #9e340f;
     --on-accent:     #ffffff;
 
-    /* THE ONE PLACE THIS PALETTE ALLOWS A SECOND HUE. Everything else in the panel is the
-       accent plus a grey ramp, deliberately. A human verdict is the exception the operator
-       asked for: it is the thing being looked FOR, and a green so desaturated it reads as
-       tinted paper says "this one is a person" without turning the table into a heatmap. */
+    /* VERDICT HUES. The panel is otherwise the accent plus a grey ramp, deliberately, and
+       these are the documented exception: in a visit table the verdict is the question the
+       operator came to answer, and telling five of them apart by weight of grey does not
+       work at a glance. One hue per verdict, all desaturated far enough that they read as
+       tinted paper rather than as fills, so the text on them keeps full contrast.
+
+       Red is NOT the accent. #c05520 is the brand orange and appears on every control in
+       the panel, so a row wearing it reads as ordinary, not as automated. The bot hue is
+       pulled towards red and darkened until it is unmistakably a different statement. */
+    --c-bot:      #a8322c;
+    --c-likely:   #94701a;
     --c-human:    #3f7d55;
     --c-unknown:  #b9b3a9;
     --c-declared: #8a8279;
@@ -93,6 +100,8 @@
         --accent-ink:    #e0763f;
         --on-accent:     #ffffff;
 
+        --c-bot:      #d0655f;
+        --c-likely:   #c9a94a;
         --c-human:    #55926c;
         --c-unknown:  #57514a;
         --c-declared: #7d766d;
@@ -122,6 +131,8 @@
     --accent-ink:    #e0763f;
     --on-accent:     #ffffff;
 
+    --c-bot:      #d0655f;
+    --c-likely:   #c9a94a;
     --c-human:    #55926c;
     --c-unknown:  #57514a;
     --c-declared: #7d766d;
@@ -1280,10 +1291,15 @@ tr.members > td { padding: 0; background: var(--band); }
    rows carry `data-verdict` gets this, so the visit list, the dialogs and the live
    tail all say the same thing the same way.
 
-   IN THIS PALETTE, NOT IN RED AND GREEN. The panel has one accent and a grey ramp —
-   the same tokens the population charts and the verdict chips already use — so a
-   coloured row agrees with the chart above it instead of introducing a second colour
-   language. Bots take the accent, people take clean paper, unknown stays grey.
+   ONE HUE PER VERDICT (2026-09-12). This block used to put everything on the accent
+   plus a grey ramp, on the reasoning that a second colour language would disagree with
+   the charts. In a table of two hundred visits that failed at the only job it had: the
+   accent is the brand orange, it is already on every control in the panel, so a bot row
+   wearing it read as ordinary rather than as automated, and `likely_human` in grey was
+   indistinguishable from `unknown`. The verdict is the question the operator opened the
+   table to answer, so it gets a hue: red for automation, green for a person, amber for
+   the uncertain middle, grey for unjudged. Each is desaturated far enough to read as
+   tinted paper, so the text on it keeps full contrast in both themes.
 
    A LEFT EDGE RATHER THAN A WASH. A full-strength background behind a whole row
    fights the text on it and turns a table into a heatmap; a 3px edge and a breath of
@@ -1299,26 +1315,31 @@ tr.members > td { padding: 0; background: var(--band); }
 tbody tr[data-verdict] > td:first-child { box-shadow: inset 2px 0 0 transparent; padding-left: 10px; }
 table.visits thead th:first-child { padding-left: 10px; }
 
-tbody tr[data-verdict="bot"] > td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
-tbody tr[data-verdict="bot"] > td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+/* Automation. The certain verdict gets the full hue on its edge and the stronger tint; the
+   hedged one gets the same hue at half strength, so the two read as the same statement said
+   with different confidence rather than as two unrelated colours. */
+tbody tr[data-verdict="bot"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-bot); }
+tbody tr[data-verdict="bot"] > td { background: color-mix(in srgb, var(--c-bot) 7%, transparent); }
 
 tbody tr[data-verdict="likely_bot"] > td:first-child {
-    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c-bot) 55%, transparent);
 }
-tbody tr[data-verdict="likely_bot"] > td { background: color-mix(in srgb, var(--accent) 3%, transparent); }
+tbody tr[data-verdict="likely_bot"] > td { background: color-mix(in srgb, var(--c-bot) 4%, transparent); }
 
-/* A PERSON IS THE ONLY ROW THAT READS AS GOOD NEWS. Green at 8% is a tint, not a fill: enough
-   that a human visit is findable by eye down a table of two hundred, faint enough that the text
-   on it keeps full contrast in both themes. */
+/* A person. The row the operator is looking FOR, so it is the one hue that is allowed to be
+   slightly stronger than the rest: findable by eye down a table of two hundred. */
 tbody tr[data-verdict="human"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-human); }
 tbody tr[data-verdict="human"] > td { background: color-mix(in srgb, var(--c-human) 8%, transparent); }
 
-/* AND EVERY VERDICT THAT IS NOT A PERSON CARRIES A MARK OF ITS OWN. `unknown` and
-   `likely_human` had an edge and no tint, and `--c-unknown` against paper is close enough to
-   invisible that those rows looked unjudged rather than judged-as-uncertain. */
-tbody tr[data-verdict="likely_human"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-declared); }
-tbody tr[data-verdict="likely_human"] > td { background: color-mix(in srgb, var(--c-declared) 6%, transparent); }
+/* The uncertain middle, in amber. It used to share the grey ramp with `unknown`, which made
+   "probably a person" and "we could not tell" look like the same answer. They are not: one is
+   a judgement, the other is the absence of one. */
+tbody tr[data-verdict="likely_human"] > td:first-child {
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c-likely) 75%, transparent);
+}
+tbody tr[data-verdict="likely_human"] > td { background: color-mix(in srgb, var(--c-likely) 6%, transparent); }
 
+/* Unjudged stays grey, deliberately: no hue means no claim. */
 tbody tr[data-verdict="unknown"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-axis); }
 tbody tr[data-verdict="unknown"] > td { background: color-mix(in srgb, var(--c-unknown) 16%, transparent); }
 
@@ -3109,7 +3130,11 @@ table .sub,
 }
 
 .facet-opt.is-on { border-color: var(--accent); background: var(--band); color: var(--ink); font-weight: 600; }
-.facet-opt.is-on .facet-fill { background: var(--c-human); }
+/* The proportion bar behind a SELECTED value. It was on --c-human, which made every
+   selected facet green regardless of what it filtered — the token that means "this visit
+   is a person" turned into "this box is ticked". Selection is the accent, like every other
+   selected control in the panel; the verdict hues belong to verdicts only. */
+.facet-opt.is-on .facet-fill { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .facet-opt.is-on .facet-n { background: none; color: var(--ink); }
 
 .facet-more {
