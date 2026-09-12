@@ -7,7 +7,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [1.0.0] — unreleased
+## [1.0.0] — 2026-09-13
 
 First public release.
 
@@ -200,6 +200,14 @@ First public release.
   different fact entirely.
 - The daily rollup is **recomputed** from one facet query rather than incremented. An
   atomic `inc` would double-count whenever a retried request's first response was lost.
+- **An ad blocker is not evidence of automation.** A session that has not ended is held at
+  `unknown` rather than exonerated, because the rules that need an ending have not run — but
+  that floor lifts the moment a plane of evidence reports a person POSITIVELY. The beacon does
+  that with engaged time and a real interaction; so does the log alone, with client hints
+  consistent with the User-Agent, a fetched sub-resource, or a conditional request answered
+  `304`, over the same thirty-second span. Without this a reader running uBlock was `unknown`
+  for exactly as long as they were on the site and `human` half an hour after they left.
+  `rule_version_i` is 3.
 
 **The beacon**
 
@@ -387,6 +395,20 @@ First public release.
 - Opt-in demo mode (`LOGHOUND_DEMO=1`) with a fixed-seed synthetic world, banner-labelled
   on every page. A Solr that is merely unreachable produces an error banner and empty
   states — never fabricated data.
+- **Who is here, not who turned up.** The session window and the visitor list are bounded and
+  ordered by LAST ACTIVITY rather than by arrival. A visitor who came ten hours ago and is
+  reading a page this second was previously not low down the list but absent from it, because
+  the range filter had already removed them; no ordering could recover that. The column says
+  "Last seen" and dates each row by its most recent hit.
+- **Ready-made exclusions on the live page.** Four switches — sub-resources, crawl files,
+  machine endpoints, the beacon — each matching the classification the parser already made, so
+  one rule covers every image, script, stylesheet, font and media file and keeps covering the
+  next format that appears. All off by default, evaluated before the operator's own rules, and
+  never in place of them. Both rule lists, here and in Settings, export as CSV.
+- **Every dialog leads with what it was opened for.** A visit opens on the pages it visited; a
+  dimension opens on the visits behind it, with that value's full page history beside them,
+  paged from its own endpoint rather than capped inside a breakdown. Where a visitor came from
+  is answered in the identity block as well as under "How they arrived".
 
 **Analytics over your own Opensolr search indexes**
 

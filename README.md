@@ -231,7 +231,9 @@ panel's Settings → Beacon card renders the full option table with a column say
 installation will actually keep; the same table, with the platform snippets, is
 **[docs/BEACON.md §1.1](docs/BEACON.md)**.
 
-No Composer. No npm. No build step. `git clone` and `install.sh` on a bare box.
+No Composer dependencies. No `vendor/`. No npm. No build step. `git clone` and `install.sh`
+on a bare box — or `composer create-project opensolr/loghound`, which downloads the same tree
+and installs nothing else.
 
 Full details, including the `LogFormat` block that makes detection substantially
 stronger: **[docs/INSTALL.md](docs/INSTALL.md)**.
@@ -302,7 +304,7 @@ people one of them is the right answer.
 | Cross-IP fingerprint clustering | yes — the primary signal | no | no | no | no |
 | Time-on-site | 4 distinct numbers incl. engaged time and the last page | request span only | tab-open time | tab-open time | tab-open time |
 | Storage | Opensolr (managed Solr 9) | in-memory / on-disk report | MySQL/MariaDB | ClickHouse | Google |
-| Install | `git clone` + `install.sh`, no Composer/npm | one binary, apt/dnf | PHP app + DB, or cloud | Docker/Postgres, or cloud | none |
+| Install | `git clone` or `composer create-project` + `install.sh`, no dependencies | one binary, apt/dnf | PHP app + DB, or cloud | Docker/Postgres, or cloud | none |
 | Real-time | yes (softCommit, ~5s) | yes, genuinely instant | near | near | delayed |
 | Cost | free, MIT | free, MIT | free self-hosted, paid cloud | paid cloud, free self-hosted | free |
 
@@ -336,7 +338,9 @@ beacon is independent of whatever other analytics you run.
 
 ## Requirements
 
-- PHP 8.1 or newer with `curl`, `json`, `pcre`, `sqlite3`, `mbstring`. **No Composer.**
+- PHP 8.1 or newer with `curl`, `json`, `pcre`, `sqlite3`, `mbstring`. **No Composer packages** —
+  the manifest declares the PHP version and those extensions and nothing else, so there is no
+  `vendor/` directory and nothing to build.
 - An [Opensolr](https://opensolr.com) account, and it is a hard requirement. Loghound
   provisions and manages its own two indexes there — it creates them, uploads their
   configsets, reloads the cores and verifies them — and it cannot do that on a Solr it does

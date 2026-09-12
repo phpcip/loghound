@@ -40,7 +40,10 @@ documents to land before telling you it worked.
 
 Requirements: PHP 8.1+ with `curl`, `json`, `pcre`, `sqlite3` and `mbstring`; an Opensolr
 account, whose API provisions and holds the two indexes Loghound writes to; systemd (or
-cron, with one caveat — see below). No Composer, no npm, no build step.
+cron, with one caveat — see below). No Composer packages, no npm, no build step: the manifest
+requires the PHP version and five extensions and nothing else, so there is no `vendor/` to
+install. `composer create-project opensolr/loghound` is an alternative to `git clone` and
+fetches exactly the same tree.
 
 ### A word about running an installer as root
 

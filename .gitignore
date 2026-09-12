@@ -126,8 +126,11 @@ nbproject/
 # Dependencies this project deliberately does not use
 # ===========================================================================
 # Loghound has no Composer or npm dependencies on purpose: `git clone` plus
-# install.sh must work on a bare box with no toolchain. These entries exist so
-# a stray local experiment cannot be committed and imply otherwise.
+# install.sh must work on a bare box with no toolchain. `composer.json` exists so the
+# project can be published and fetched with `composer create-project`, and it declares the
+# PHP version and five extensions — no packages. So there is nothing to resolve, nothing to
+# lock and nothing to vendor, and these entries exist so a stray local experiment cannot be
+# committed and imply otherwise.
 vendor/
 node_modules/
 composer.lock

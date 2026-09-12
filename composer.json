@@ -1,0 +1,59 @@
+{
+    "name": "opensolr/loghound",
+    "description": "Solr-based traffic analytics and bot forensics for Apache, nginx and Caddy logs. Correlates access logs with a JavaScript beacon across three planes of evidence to tell real visitors from headless browsers on residential proxies.",
+    "type": "project",
+    "keywords": [
+        "analytics",
+        "bot-detection",
+        "log-analysis",
+        "solr",
+        "apache",
+        "nginx",
+        "caddy",
+        "web-analytics",
+        "scraper-detection",
+        "self-hosted"
+    ],
+    "homepage": "https://opensolr.com/loghound",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Ciprian Dimofte",
+            "email": "cip@opensolr.com",
+            "homepage": "https://opensolr.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/phpcip/loghound/issues",
+        "source": "https://github.com/phpcip/loghound",
+        "docs": "https://opensolr.com/opensolr-platform-user-documentation/loghound"
+    },
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "ext-pcre": "*",
+        "ext-sqlite3": "*",
+        "ext-mbstring": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "Loghound\\": "src/"
+        }
+    },
+    "bin": [
+        "bin/loghound-tail",
+        "bin/loghound-score",
+        "bin/loghound-retention",
+        "bin/loghound-schema",
+        "bin/loghound-setup"
+    ],
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "post-create-project-cmd": [
+            "@php -r \"echo PHP_EOL, 'Loghound is unpacked. Run: sudo ./install/install.sh --dry-run', PHP_EOL, PHP_EOL;\""
+        ]
+    }
+}

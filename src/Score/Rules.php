@@ -71,8 +71,16 @@ final class Rules
      * `hostile_probe` and `probe_sweep` are new rules, and the `fp_cluster_proxy_fleet` mobile
      * exemption was narrowed from "any client on a mobile ASN" to "a client that is actually a
      * handset". A rescoring pass over anything judged under version 1 has real work to do.
+     *
+     * BUMPED TO 3. The provisional floor now lifts on log-plane evidence as well as on the
+     * beacon: an open session with consistent client hints, a fetched sub-resource or a 304,
+     * over the same thirty-second span, is allowed to read `human` instead of being held at
+     * `unknown`. A visitor running an ad blocker was previously `unknown` for exactly as long as
+     * they were on the site. Only OPEN sessions are affected — a settled verdict is identical
+     * under 2 and 3 — but the condition this field records is "would a past session score
+     * differently today", and a provisional one would.
      */
-    public const RULE_VERSION = 2;
+    public const RULE_VERSION = 3;
 
     /**
      * Rules that may not be evaluated until the session has ENDED.
