@@ -136,13 +136,6 @@ function labelToggle(toggle, shown) {
     toggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
     toggle.textContent = shown ? 'Hide filters' : 'Filter by…';
 
-    /* NOT ON A PAGE THAT ALREADY HAS A FILTER RAIL. The session explorer carries its own rail
-       with its own show/hide control, so this bar put a SECOND button for the same job three
-       inches above the first — two controls, two labels, one thing. The rail wins there
-       because it is the one with the counts in it. */
-    if (document.getElementById('se-explorer')) {
-        toggle.hidden = true;
-    }
 }
 
 /**
@@ -459,23 +452,24 @@ function mount() {
     if (existing) {
         return existing;
     }
+
     const view = document.querySelector('.view');
     if (!view) {
         return null;
     }
 
+    /* THE CONTROL IS IN THE PAGE BAR, NOT IN THE PANEL (2026-09-12). It is rendered by
+       Panel\Layout::topBar() where the hostname selector used to be, so it is on screen before
+       any script runs and it is the same control on every view. A page without it — one whose
+       view does not declare facets — gets no panel either, which is the correct pair. */
+    const toggle = byId('lh-facets-toggle');
+    if (!toggle) {
+        return null;
+    }
+
     const shown = panelShown();
-    const toggle = el('button', {
-        type: 'button',
-        class: 'ghost small',
-        id: 'lh-facets-toggle',
-        'aria-controls': 'lh-facets-groups'
-    });
     const groups = el('div', { class: 'fpanel-groups', id: 'lh-facets-groups', hidden: !shown });
-    const panel = el('div', { class: 'fpanel', id: 'lh-facets-panel' }, [
-        el('div', { class: 'fpanel-head' }, [toggle]),
-        groups
-    ]);
+    const panel = el('div', { class: 'fpanel', id: 'lh-facets-panel' }, [groups]);
 
     labelToggle(toggle, shown);
     view.insertBefore(panel, view.firstChild);

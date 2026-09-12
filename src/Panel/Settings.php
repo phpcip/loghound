@@ -952,6 +952,12 @@ final class Settings extends Controller implements JobHost, Sections
             case 'exclusions':
                 return $this->saveExclusions();
 
+            case 'beacon_hosts':
+                return $this->saveBeaconHosts();
+
+            case 'beacon_params':
+                return $this->saveBeaconParams();
+
             case 'add_source':
                 return $this->addSource();
 
@@ -3069,8 +3075,20 @@ final class Settings extends Controller implements JobHost, Sections
             'exclusions_saved' => 'Exclusions saved. The beacon collector applies them from the very '
                 . 'next request; the reader picks them up when it is next reloaded, not mid-file. '
                 . 'Anything already indexed is untouched — this decides what is recorded from now on.',
+            'hosts_saved'      => 'Measured sites saved. The collector applies the list on its very next '
+                . 'request, so a site added now can create visits immediately. Beacons already staged '
+                . 'from a host that was not listed are not reprocessed.',
+            'params_saved'     => 'Search parameters saved. The collector applies them immediately; the '
+                . 'reader picks them up when it is next reloaded. Terms are kept from the next visit '
+                . 'onwards — nothing is recovered retrospectively.',
         ];
         $err = [
+            'host_refused'    => 'Some hostnames were not saved, because they are not hostnames. A '
+                . 'hostname is letters, digits and hyphens in dot-separated labels — no scheme, no path, '
+                . 'no port. Everything valid was kept: the rows missing from the list are the refused ones.',
+            'param_refused'   => 'Some parameter names were not saved. A query-string name here may hold '
+                . 'letters, digits, underscore, hyphen, dot and square brackets, and nothing else. '
+                . 'Everything valid was kept.',
             'exclusion_refused' => 'Some rules were not saved, because a pattern is not a regular '
                 . 'expression PCRE will accept or a hostname is not a hostname. Everything valid was '
                 . 'kept: the rows missing from the list below are the ones that were refused.',
@@ -3191,6 +3209,7 @@ final class Settings extends Controller implements JobHost, Sections
         ['set-solr', 'Solr', 'solrSection'],
         ['set-cache', 'Cached queries', 'cacheSection'],
         ['set-beacon', 'Beacon', 'beaconSection'],
+        ['set-sites', 'Measured sites', 'sitesSection'],
         ['set-privacy', 'Privacy', 'privacySection'],
         ['set-retention', 'Data kept', 'retentionSection'],
         ['set-scoring', 'Scoring', 'scoringSection'],
@@ -3672,10 +3691,9 @@ final class Settings extends Controller implements JobHost, Sections
 
         if ($allowed === []) {
             echo '<div class="banner banner-warn"><strong>No hostnames are listed.</strong> '
-                . '<code class="mono">beacon.allowed_hosts</code> is empty in '
-                . '<code>config/loghound.php</code>, so a beacon from a host with no log source here '
-                . 'stages a row and nothing more: no session is created and no search term is kept. '
-                . 'Add the hostnames you own to measure them.</div>';
+                . 'A beacon from a host with no log source here stages a row and nothing more: no '
+                . 'session is created and no search term is kept. Add the hostnames you own on the '
+                . '<a href="?v=settings&amp;s=sites">Measured sites</a> page.</div>';
         } else {
             echo '<p class="muted">Listed now: ';
             $parts = [];
@@ -3690,10 +3708,10 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<h3>Search terms</h3>';
 
         if ($collected === []) {
-            echo '<p class="muted">Off on this installation. '
-                . '<code class="mono">beacon.query_params</code> is empty, so no URL parameter is collected '
-                . 'from anywhere — not by the beacon and not by the log parser. Naming the parameters your '
-                . 'search box uses turns them into a facet you can count and filter on.</p>';
+            echo '<p class="muted">Off on this installation. No URL parameter is collected from anywhere '
+                . '— not by the beacon and not by the log parser. Naming the parameters your search box '
+                . 'uses, on the <a href="?v=settings&amp;s=sites">Measured sites</a> page, turns them '
+                . 'into a facet you can count and filter on.</p>';
         } else {
             $parts = [];
             foreach ($collected as $name) {
@@ -4869,6 +4887,212 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         return '?v=settings&ok=exclusions_saved' . $back;
+    }
+
+    /**
+     * The sites this installation measures, and the parameters it keeps as search terms.
+     *
+     * ITS OWN PAGE, BECAUSE BOTH OF THESE DECIDE WHETHER DATA EXISTS AT ALL. They were readable
+     * on the Beacon card and editable nowhere: the card printed the current values and told the
+     * operator to edit `config/loghound.php` — a file that lives outside the document root at
+     * mode 0640, on the server, which is not something an interface may ask of anybody. The
+     * consequence was not theoretical. Both values went missing from this installation's config
+     * and nothing in the panel could put them back or even show that they had changed; search
+     * terms stopped being collected and the empty state pointed at a file.
+     *
+     * TWO FORMS, NOT ONE. They fail independently and mean different things: a hostname decides
+     * whether a beacon may create a visit at all, a parameter name decides whether what somebody
+     * typed is kept. Saving one must not rewrite the other.
+     *
+     * THE WHOLE LIST IS POSTED AND REWRITTEN, as the exclusions card does, so a row's identity is
+     * its position in one submission and never an index carried across requests — which is what
+     * stops a concurrent edit from removing the wrong entry.
+     */
+    private function sitesSection(): void
+    {
+        $allowed = (array) $this->cfg->get('beacon.allowed_hosts', []);
+        $collected = \Loghound\Beacon::normaliseParamNames((array) $this->cfg->get('beacon.query_params', []));
+
+        self::cardOpen(
+            'set-sites',
+            self::sectionNum('set-sites'),
+            'Measured sites',
+            'Which hostnames the beacon may create visits for, and which URL parameters are kept as search terms.'
+        );
+
+        /* SAID PLAINLY, BECAUSE THE INTERFACE MUST NOT MAKE THE CLAIM THE PRODUCT ARGUES AGAINST.
+           The allowlist is a permission, not authentication: Origin binds browsers only, so
+           anything that can reach the collector can fabricate a visit attributed to a listed
+           hostname. That is why such a session is published marked single-plane. */
+        echo '<div class="note"><p><strong>This list is a permission, not a proof of identity.</strong> '
+            . 'A listed hostname may create visits from the beacon alone, with no log line behind them — '
+            . 'and anything that can reach the collector can claim to be that hostname. Sessions with no '
+            . 'log behind them are marked single-plane wherever they are counted. List the sites you own; '
+            . 'do not list a site as a way of trusting it.</p></div>';
+
+        echo '<h3>Hostnames that may create visits</h3>';
+        echo '<p class="muted">A site whose access log this installation already reads needs no entry here '
+            . '&mdash; it is measured from the log. This list is for sites on OTHER servers, where the '
+            . 'beacon is the only thing that reaches us.</p>';
+
+        echo '<form method="post" action="?v=settings">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="beacon_hosts">';
+
+        echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
+            . '<col style="width:80%"><col style="width:20%"></colgroup><thead><tr>'
+            . '<th scope="col">Hostname</th>'
+            . '<th scope="col">Remove</th>'
+            . '</tr></thead><tbody>';
+
+        $i = 0;
+        foreach ($allowed as $host) {
+            if (is_string($host) && $host !== '') {
+                self::siteRow($i, $host);
+                $i++;
+            }
+        }
+        self::siteRow($i, '');
+
+        echo '</tbody></table></div>';
+
+        echo '<p class="muted">Hostname only: no scheme, no path, no port. <code class="mono">'
+            . 'shop.example.com</code>, not <code class="mono">https://shop.example.com/</code>. '
+            . 'Subdomains are not implied &mdash; list each one you measure.</p>';
+
+        echo '<p><button type="submit" class="small">Save measured sites</button> '
+            . '<span class="muted">' . Security::esc((string) count($allowed))
+            . ' listed now.</span></p>';
+        echo '</form>';
+
+        echo '<h3>Search terms</h3>';
+
+        /* THE ONE SETTING THAT MAKES THIS PRODUCT STORE SOMETHING A PERSON TYPED, and the form
+           says so. Everything else in the index is a measurement or a hashed identifier. A URL
+           carries reset codes, invite tokens and email addresses in its parameters, which is why
+           this is a whitelist of NAMES and never "keep the query string". */
+        echo '<p class="muted">Name the query-string parameters your own search box uses. Their values are '
+            . 'kept as search terms, from the access log and from the beacon alike. <strong>This is the one '
+            . 'setting that stores something a visitor typed</strong>, so it is a list of names and never '
+            . '&ldquo;keep the whole query string&rdquo;: a URL also carries reset codes and invite tokens.</p>';
+
+        echo '<form method="post" action="?v=settings">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="beacon_params">';
+        echo '<label for="set-params">Parameter names</label> ';
+        echo '<input type="text" id="set-params" class="mono" name="params" value="'
+            . Security::esc(implode(', ', $collected)) . '" placeholder="q, s, search" '
+            . 'autocomplete="off" spellcheck="false" size="40"> ';
+        echo '<button type="submit" class="small">Save search parameters</button>';
+        echo '<p class="muted">Separate them with commas or spaces. Leave it empty to collect nothing, which '
+            . 'is what a new installation does. Terms are kept from the next visit onwards &mdash; naming a '
+            . 'parameter does not recover anything already seen.</p>';
+        echo '</form>';
+
+        self::cardEnd();
+    }
+
+    /**
+     * One editable hostname.
+     *
+     * By index rather than by identity, because the whole list is posted and rewritten in one
+     * submission: an index that meant anything across requests would let a stale form remove a
+     * row somebody else had added.
+     */
+    private static function siteRow(int $i, string $host): void
+    {
+        $name = 'hosts[' . $i . ']';
+        $label = $host === '' ? 'the empty row' : $host;
+
+        echo '<tr>';
+        echo '<td><input type="text" class="mono" name="' . Security::esc($name) . '[name]" value="'
+            . Security::esc($host) . '" placeholder="shop.example.com" autocomplete="off" '
+            . 'spellcheck="false"></td>';
+        echo '<td><label class="check"><input type="checkbox" name="' . Security::esc($name)
+            . '[remove]" value="1"> <span class="sr-only">Remove '
+            . Security::esc($label) . '</span></label></td>';
+        echo '</tr>';
+    }
+
+    /**
+     * Save the hostname allowlist.
+     *
+     * REFUSED ENTRIES ARE DROPPED AND REPORTED, never silently accepted. This field grants the
+     * right to create visits, so a value that is not a hostname must not reach it: a stray URL
+     * pasted in whole would otherwise sit in the list looking configured and matching nothing,
+     * which is the failure that is hardest to see from the outside.
+     *
+     * Beacon::normaliseHost() is the same gate the collector applies to the hostname a payload
+     * claims, so what is stored here and what is compared at runtime cannot disagree.
+     */
+    private function saveBeaconHosts(): string
+    {
+        $back = '&s=sites';
+        $posted = is_array($_POST['hosts'] ?? null) ? $_POST['hosts'] : [];
+
+        $clean = [];
+        $refused = 0;
+
+        foreach ($posted as $row) {
+            if (!is_array($row) || !empty($row['remove'])) {
+                continue;
+            }
+            $raw = is_string($row['name'] ?? null) ? trim($row['name']) : '';
+            if ($raw === '') {
+                continue;
+            }
+            $host = \Loghound\Beacon::normaliseHost($raw);
+            if ($host === '') {
+                $refused++;
+                continue;
+            }
+            $clean[$host] = true;
+        }
+
+        $list = array_keys($clean);
+        sort($list);
+        $this->cfg->set('beacon.allowed_hosts', $list);
+
+        $err = $this->persist();
+        if ($err !== null) {
+            return '?v=settings&err=' . $err . $back;
+        }
+        if ($refused > 0) {
+            return '?v=settings&err=host_refused' . $back;
+        }
+        return '?v=settings&ok=hosts_saved' . $back;
+    }
+
+    /**
+     * Save the query-string parameter names kept as search terms.
+     *
+     * Split on commas and whitespace so both habits work, then put through the same normaliser
+     * the collector and the log parser read the configured list with — lower-cased, de-duplicated
+     * and restricted to what a query-string key can sensibly hold. A name that does not survive
+     * that is reported rather than dropped in silence, because a typo here does not fail loudly:
+     * it simply collects nothing, for months.
+     */
+    private function saveBeaconParams(): string
+    {
+        $back = '&s=sites';
+        $raw = is_string($_POST['params'] ?? null) ? trim($_POST['params']) : '';
+
+        $parts = $raw === '' ? [] : (array) preg_split('/[\s,]+/', $raw);
+        $parts = array_values(array_filter($parts, static fn ($p): bool => is_string($p) && $p !== ''));
+
+        $clean = \Loghound\Beacon::normaliseParamNames($parts);
+        $this->cfg->set('beacon.query_params', $clean);
+
+        $err = $this->persist();
+        if ($err !== null) {
+            return '?v=settings&err=' . $err . $back;
+        }
+
+        $offered = count(array_unique(array_map('strtolower', $parts)));
+        if (count($clean) < $offered) {
+            return '?v=settings&err=param_refused' . $back;
+        }
+        return '?v=settings&ok=params_saved' . $back;
     }
 
     private function cacheSection(): void

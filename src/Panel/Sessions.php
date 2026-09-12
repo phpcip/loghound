@@ -1498,12 +1498,14 @@ final class Sessions extends Controller
             . Security::esc(self::param('sort', array_keys(Query::sorts()), 'recent')) . '">';
         echo '</form>';
 
-        echo '<div class="explorer" id="se-explorer">';
-        echo '<button type="button" class="ghost small facets-show" id="se-facets-show">'
-            . 'Show filters</button>';
-        $this->facetsCard();
+        /* ONE FILTER PANEL, AND IT IS THE SHARED ONE (2026-09-12). This view used to carry a
+           rail of its own beside the table — the same renderFacetPanel() the shared panel uses,
+           filled from its own endpoint, folded by its own pair of buttons. Two implementations
+           of one thing: they drew side by side whenever the shared panel's remembered state was
+           open, and they could disagree about what was in force. The shared panel is the one
+           that every other view already has, so it is the one that stays; this view keeps only
+           the table it exists to show. */
         $this->resultsCard();
-        echo '</div>';
     }
 
     /**
@@ -1528,36 +1530,6 @@ final class Sessions extends Controller
         echo '<div id="' . Security::esc($id) . '-detail"></div>';
 
         self::cardClose($id);
-    }
-
-    /**
-     * The facet sidebar, loaded separately from the results.
-     *
-     * Headed "Filter by" rather than "Filters", because the previous heading described a
-     * category of thing rather than an action and the list under it was not recognised as
-     * something that could be pressed at all.
-     */
-    private function facetsCard(): void
-    {
-        echo '<aside class="facets" aria-label="Filter the dashboard">';
-
-        /* IN THE HEAD'S TOOL SLOT, NOT FLOATING OVER IT. Positioned absolutely at the card's
-           top right, this landed on top of the refresh control that lives in the same corner —
-           two controls in one place, on every screen size. cardOpen() has a slot for exactly
-           this, beside the heading and before the refresh, so it goes there and the layout
-           keeps them apart by itself. */
-        self::cardOpen(
-            'se-facets',
-            '01',
-            'Filter by',
-            '',
-            '<button type="button" class="ghost small facets-fold" id="se-facets-fold"'
-                . ' aria-controls="se-explorer">Hide</button>'
-        );
-        self::skeleton('se-facets', 'rows', 0, 'Counting facet values');
-        echo '<div id="se-facet-list"></div>';
-        self::cardClose('se-facets');
-        echo '</aside>';
     }
 
     /**

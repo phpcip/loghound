@@ -521,7 +521,6 @@ final class Layout
     private static function topBar(Controller $view, array $boot, string $slug, string $section): void
     {
         $range = $view->honours(Controller::SCOPE_RANGE);
-        $host = $view->honours(Controller::SCOPE_HOST);
         $filters = $view->honours(Controller::SCOPE_FACETS) || $view instanceof OpensolrView;
         $applied = self::appliedCount($boot);
 
@@ -550,9 +549,9 @@ final class Layout
            nothing is scoped by anything, so there is no duration and no hostname — and an empty
            form with a submit button in it would be a control that answers a press by doing
            nothing, which is the one thing Controller::toolbar() exists to prevent. */
-        if ($range || $host) {
+        if ($range) {
             echo '<form class="tb-scope" method="get" action="" id="lh-scope-form">';
-            self::hiddenState(['v' => $slug, 's' => Controller::sectionSlug($section)], $range, $host);
+            self::hiddenState(['v' => $slug, 's' => Controller::sectionSlug($section)], $range, false);
 
             if ($range) {
                 $current = Query::range(isset($_GET['range']) && is_string($_GET['range']) ? $_GET['range'] : null);
@@ -567,38 +566,25 @@ final class Layout
                 echo '</select></span>';
             }
 
-            if ($host) {
-                /* THE LIST ARRIVES LATER, THE CHOICE IS HERE NOW. Populating this server-side
-                   would make every page render wait on a Solr facet, which is the one thing this
-                   panel does not do. The selected value is rendered so the form round-trips
-                   correctly and so the current scope is on screen before any fetch lands;
-                   assets/js/topbar.js fills in the rest of the hosts when the facet answers. */
-                $chosen = self::chosenHost();
-                echo '<span class="tb-field" id="lh-hostfield">';
-                echo '<label for="lh-host">Hostname</label>';
-                echo '<select id="lh-host" name="f[host_s][]" data-smart="Hostname">';
-                echo '<option value=""' . ($chosen === '' ? ' selected' : '') . '>All hosts</option>';
-                if ($chosen !== '') {
-                    echo '<option value="' . Security::esc($chosen) . '" selected>'
-                        . Security::esc($chosen) . '</option>';
-                }
-                echo '</select></span>';
-
-                /* AN EMPTY HOST HAS TO BE ABLE TO MEAN "ALL HOSTS", AND A SILENT URL MEANS
-                   "WHATEVER I HAD". Panel\Scope restores a remembered host into a request that
-                   says nothing about one, so choosing "All hosts" — which submits an empty value
-                   the facet reader drops — would otherwise be undone on the next page load by the
-                   host that was just cleared. `fx` is how the URL states an empty filter set out
-                   loud; assets/js/topbar.js sets it on submit when nothing is selected. */
-                echo '<input type="hidden" name="fx" id="lh-scope-fx" value="" disabled>';
-            }
-
             /* THE ONLY CONTROL HERE THAT SUBMITS ITSELF. With script running, changing a select
                submits the form and this is never needed, so the stylesheet takes it off screen
                the moment `lh-js` lands on the root element. With script off it is the whole
                mechanism. */
             echo '<button type="submit" class="tb-go">Apply</button>';
             echo '</form>';
+        }
+
+        /* THE FILTER PANEL'S ONE CONTROL, WHERE THE HOSTNAME SELECTOR USED TO BE (2026-09-12).
+           That selector wrote `f[host_s][]`, which is the WEBSITE facet's own parameter — it was
+           a second interface onto a filter the panel already offers, and the two could disagree
+           about what was in force. One control, one panel, on every view that has filters.
+
+           Rendered here rather than built by assets/js/facets.js so it exists before any script
+           runs and cannot arrive late beside a bar that is already drawn. Its label and its
+           aria-expanded are set by that script once it knows whether the panel is open. */
+        if ($filters) {
+            echo '<button type="button" class="tb-field-btn" id="lh-facets-toggle"'
+                . ' aria-controls="lh-facets-groups" aria-expanded="false">Show filters</button>';
         }
 
         echo '<button type="button" class="tb-res" id="lh-tb-resources" aria-haspopup="dialog"'
@@ -649,13 +635,6 @@ final class Layout
             }
         }
         return $count;
-    }
-
-    /** The virtual host currently selected, or '' for all of them. */
-    private static function chosenHost(): string
-    {
-        $values = Facets::all($_GET)->values(Query::HOST_FIELD);
-        return $values === [] ? '' : (string) $values[0];
     }
 
     /**
