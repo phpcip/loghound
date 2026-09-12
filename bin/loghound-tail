@@ -856,7 +856,11 @@ function printStatus(string $file, bool $human): int
     ));
     fwrite(STDOUT, sprintf(
         "  rate %s lines/s   lag %s   pending %d doc(s)\n",
-        $doc['lines_per_sec'] === null ? 'n/a' : (string) $doc['lines_per_sec'],
+        /* ?? RATHER THAN ===, because the key is absent and not null on a status file written
+           before the first rate was computed — a freshly restarted daemon, which is exactly when
+           somebody runs --status. The identity test emitted a PHP warning into the operator's
+           own output, above the numbers they came to read. */
+        ($doc['lines_per_sec'] ?? null) === null ? 'n/a' : (string) $doc['lines_per_sec'],
         formatBytes((int) ($doc['lag_bytes'] ?? 0)),
         (int) ($doc['pending_docs'] ?? 0)
     ));

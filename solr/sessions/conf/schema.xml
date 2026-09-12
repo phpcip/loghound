@@ -561,7 +561,7 @@
          Required by the update log. The sessions core uses ATOMIC UPDATES (the scorer may
          revise a verdict without rewriting the whole document), and an atomic update cannot
          work without _version_ plus an updateLog. -->
-    <field name="_version_" type="plong" indexed="false" stored="false" docValues="true"/>
+    <field name="_version_" type="plong" indexed="false" stored="true" docValues="true"/>
 
     <!--
       ALSO REQUIRED FOR ATOMIC UPDATES, AND ITS ABSENCE FAILED THEM OUTRIGHT.
@@ -585,7 +585,7 @@
       NOTHING HERE WRITES CHILD DOCUMENTS and this does not invite any: it is a marker Solr
       manages itself, present so the indexer's own precondition is satisfied.
     -->
-    <field name="_root_" type="string" indexed="true" stored="false" docValues="false"/>
+    <field name="_root_" type="string" indexed="true" stored="true" docValues="false"/>
 
     <!-- Same catch-all as the hits core: unknown fields are dropped rather than failing a
          batch. See solr/hits/conf/managed-schema.xml for the full tradeoff. -->
