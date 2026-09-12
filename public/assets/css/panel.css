@@ -1251,8 +1251,18 @@ tr.members > td { padding: 0; background: var(--band); }
 .facets-fold { margin-left: auto; }
 
 /* The way back. Only on screen while the rail is folded, and it sits in the grid's first row so
-   it does not push the table down. */
-.facets-show { display: none; justify-self: start; margin-bottom: -16px; }
+   it does not push the table down.
+
+   IT NEEDS CLEARANCE FROM THE STICKY BAR, AND IT IS NOT FREE. `.topbar` is sticky at z-index 30
+   and carries a -40px top margin that lifts it and everything after it, so this button — the
+   first thing in the grid — came to rest with its top edge under the bar and was drawn over.
+   Stacking is not the fix: content is SUPPOSED to pass under a sticky bar on scroll. What was
+   missing is room at rest.
+
+   The 10px it gains at the top is taken back out of the bottom, -16px to -26px, so the button
+   moves down and the table does not: the two margins cancel and the row below stays exactly
+   where it was. Change one of these numbers and the other has to move with it. */
+.facets-show { display: none; justify-self: start; margin-top: 10px; margin-bottom: -26px; }
 .explorer.is-folded > .facets-show { display: inline-flex; }
 /* The facet rail's heading is a numbered section heading like every other card's, and it was
    being held at label size by this rule — equal specificity to `.card-head > h2` and further
