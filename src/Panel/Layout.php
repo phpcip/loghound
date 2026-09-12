@@ -75,7 +75,6 @@ final class Layout
             'sessions'     => Sessions::class,
             'performance'  => Performance::class,
             'hosts'        => Hosts::class,
-            'indexes'      => Indexes::class,
             'usage'        => Usage::class,
             'settings'     => Settings::class,
         ];
@@ -128,7 +127,6 @@ final class Layout
             ['slug' => 'networks',     'label' => 'Networks',     'hint' => 'ASN, netname and geography'],
             ['slug' => 'performance',  'label' => 'Performance',  'hint' => 'Latency percentiles and status codes'],
             ['slug' => 'hosts',        'label' => 'Websites',    'hint' => 'Every site on this machine, side by side'],
-            ['slug' => 'indexes',      'label' => 'Solr',         'hint' => 'What your Opensolr search indexes are being asked'],
             ['slug' => 'usage',        'label' => 'Storage & bandwidth', 'hint' => 'How much history your plan holds, and what is left'],
             ['slug' => 'settings',     'label' => 'Settings',     'hint' => 'Log sources, privacy, scoring, beacon'],
         ];
