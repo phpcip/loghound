@@ -4324,7 +4324,9 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 @media (max-width: 620px) {
     .res-row { grid-template-columns: minmax(0, 1fr); }
     .ss-button { max-width: none; width: 100%; }
-    .ss-pop { max-width: none; right: 0; }
+    /* `right: 0` fought the `left` the script now sets: with the panel fixed, pinning both
+       edges stretched it across the whole screen. Bounded to the viewport instead. */
+    .ss-pop { max-width: calc(100vw - 24px); }
 }
 
 

@@ -775,9 +775,9 @@ function renderDimension(body, data) {
 
         requestProfile(data.requests),
 
-        el('h3', { text: 'How it breaks down' }),
-        el('div', { class: 'fpanel' }, data.breakdowns.map((group) => breakdown(group, total))),
-
+        /* THE VISITS COME FIRST. The breakdown is eleven dimensions deep, so the actual rows —
+           the thing a reader opened this dialog to look at — sat below a screen and a half of
+           percentages and were routinely missed. Summary first, then the long tail. */
         el('h3', { text: 'The visits' }),
         visitBlock(data.visitors, data.page, (start) => api('sessions', 'visitors', {
             field: data.field,
@@ -785,6 +785,9 @@ function renderDimension(body, data) {
             start: start,
             rows: data.page.rows
         })),
+
+        el('h3', { text: 'How it breaks down' }),
+        el('div', { class: 'fpanel' }, data.breakdowns.map((group) => breakdown(group, total))),
 
         data.filterable
             ? el('p', {}, [
