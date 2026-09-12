@@ -190,7 +190,7 @@ function besideCursor(point, params, dom, rect, size) {
  * erases its subject is wrong on every chart and a per-chart fix is one the next chart does not
  * get.
  */
-function shadowPointer(t) {
+export function shadowPointer(t) {
     return { type: 'shadow', shadowStyle: { color: t.band, opacity: 0.35 } };
 }
 

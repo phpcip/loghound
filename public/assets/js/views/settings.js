@@ -407,6 +407,39 @@ function loadRegions() {
 }
 
 /**
+ * Fill every hostname select on the exclusions card from what has actually been recorded.
+ *
+ * One fetch for the whole card however many rules are on it, because the answer is the same for
+ * all of them. Options are appended rather than replaced, so the value a rule already carries
+ * survives even when that host has since stopped appearing in the index.
+ *
+ * Silent on failure, and deliberately: the selects are `data-free`, so no list means the
+ * operator types the hostname exactly as they would have anyway. A red line under a control
+ * that still works would be reporting a problem that is not one.
+ */
+function loadExclusionHosts() {
+    const selects = document.querySelectorAll('select[data-lh-hosts]');
+    if (!selects.length) {
+        return;
+    }
+
+    api('settings', 'hosts').then((data) => {
+        const hosts = Array.isArray(data.hosts) ? data.hosts : [];
+        if (!hosts.length) {
+            return;
+        }
+        for (const select of selects) {
+            const known = new Set(Array.prototype.map.call(select.options, (option) => option.value));
+            for (const host of hosts) {
+                if (!known.has(host)) {
+                    select.appendChild(el('option', { value: host, text: host }));
+                }
+            }
+        }
+    }).catch(() => {});
+}
+
+/**
  * Entry point.
  */
 export default function init() {
@@ -417,4 +450,5 @@ export default function init() {
     initUninstall();
     loadBeaconStatus();
     loadRegions();
+    loadExclusionHosts();
 }

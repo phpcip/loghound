@@ -42,10 +42,14 @@ final class Rules
      * will never be there. `status` is compared as text because a rule wants `^4` to mean
      * "any 4xx" far more often than it wants an integer comparison.
      */
+    /* THE PATH IS FIRST BECAUSE IT IS THE ANSWER ALMOST EVERY TIME. The order here is the order
+       the dialog offers, and the first entry is what an operator gets if they do not look — so
+       the first entry has to be the one they meant. With the hostname there, a rule typed as
+       `/callback` was silently a hostname rule that could never match anything. */
     public const FIELDS = [
+        'path'    => 'Request path',
         'host'    => 'Hostname',
         'ip'      => 'Client address',
-        'path'    => 'Request path',
         'query'   => 'Query string',
         'method'  => 'Method',
         'status'  => 'Status',

@@ -2492,6 +2492,12 @@ html.lh-dialog-open { overflow: hidden; }
     margin: auto;
     width: min(1100px, calc(100% - 32px));
     max-height: calc(100% - 48px);
+    /* AND A FLOOR, NOT ONLY A CEILING. The panel sized itself to its contents, so a dialog whose
+       body is one row of controls came out a few hundred pixels tall — and anything that opens
+       downward inside it, a smart select's list most of all, was cut off by the panel edge
+       rather than by the window. It stays short on a short screen because the floor is a min()
+       against the same space the ceiling uses. */
+    min-height: min(680px, calc(100% - 48px));
     display: flex; flex-direction: column;
     background: var(--page);
     border: 1px solid var(--hairline);

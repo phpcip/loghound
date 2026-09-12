@@ -178,8 +178,51 @@ final class Settings extends Controller implements JobHost, Sections
             'beacon'     => $this->envelope(['beacon' => $this->beaconStatus()]),
             'job_latest' => $this->latestJob(),
             'regions'    => $this->regions(),
+            'hosts'      => $this->hostChoices(),
             default      => ['error' => 'Unknown action'],
         };
+    }
+
+    /**
+     * The virtual hosts this installation has actually recorded.
+     *
+     * FOR THE EXCLUSIONS CARD, and asked for rather than rendered, for the same reason the
+     * region list is: a Settings page that ran a Solr facet before it emitted a byte would make
+     * every visit to it wait on the search backend, and would fail to render at all when the
+     * backend is the thing that is broken.
+     *
+     * A FAILURE IS AN EMPTY LIST, NEVER A THROW. The select is `data-free`, so an operator with
+     * no list types the hostname exactly as they would have before — degraded, not broken.
+     *
+     * @return array<string,mixed>
+     */
+    private function hostChoices(): array
+    {
+        try {
+            $f = $this->gw->facet('settings.hosts', $this->gw->sessionsCore(), [
+                'q'  => '*:*',
+                'fq' => [self::FQ_SESSION_DOCS],
+            ], [
+                'hosts' => [
+                    'type'     => 'terms',
+                    'field'    => Query::HOST_FIELD,
+                    'limit'    => 200,
+                    'mincount' => 1,
+                ],
+            ]);
+        } catch (\Throwable $e) {
+            return ['hosts' => []];
+        }
+
+        $out = [];
+        foreach (self::buckets($f, 'hosts') as $bucket) {
+            $host = (string) ($bucket['val'] ?? '');
+            if ($host !== '') {
+                $out[] = $host;
+            }
+        }
+
+        return ['hosts' => $out];
     }
 
     /**
@@ -4717,10 +4760,19 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $name = 'rules[' . $i . ']';
 
+        /* A HOSTNAME IS A CHOICE FROM WHAT THIS INSTALLATION HAS SEEN, not a spelling test. The
+           list is filled over fetch() like every other list in this panel, so the card does not
+           wait on a Solr facet to render — and `data-free` keeps it typeable, because a host you
+           are about to add is one this installation has never recorded. */
         echo '<tr>';
-        echo '<td><input type="text" name="' . $name . '[host]" value="'
-            . Security::esc($rule['host']) . '" placeholder="every host" autocomplete="off"'
-            . ' spellcheck="false" class="live-find"></td>';
+        echo '<td><select name="' . $name . '[host]" data-smart="Hostname" data-free="1"'
+            . ' data-lh-hosts="1">';
+        echo '<option value=""' . ($rule['host'] === '' ? ' selected' : '') . '>every host</option>';
+        if ($rule['host'] !== '') {
+            echo '<option value="' . Security::esc($rule['host']) . '" selected>'
+                . Security::esc($rule['host']) . '</option>';
+        }
+        echo '</select></td>';
 
         echo '<td><select name="' . $name . '[field]">';
         foreach (Exclusions::FIELDS as $slug => $label) {

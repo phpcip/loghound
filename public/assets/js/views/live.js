@@ -32,7 +32,7 @@
 'use strict';
 
 import { api, boot, byId, el, fill, post, tip, bytes, durUs, num, timeOnly, when } from '../core.js';
-import { draw } from '../charts.js';
+import { draw, shadowPointer } from '../charts.js';
 import { dimValue, drillRow, flagNode, openButton, valueText, valueWords } from '../identity.js';
 import { hostCell } from '../hostcolor.js';
 import { pathCell } from '../url.js';
@@ -826,7 +826,7 @@ function renderChart() {
         grid: { top: 8, bottom: 4, left: 4, right: 4, containLabel: true },
         tooltip: {
             trigger: 'axis',
-            axisPointer: { type: 'shadow', shadowStyle: { color: theme.sunken } },
+            axisPointer: shadowPointer(theme),
             formatter: (params) => {
                 const p = params[0];
                 return tip`${p.name}<br><strong>${num(p.value)}</strong> requests`;
