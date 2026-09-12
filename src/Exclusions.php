@@ -46,10 +46,23 @@ final class Exclusions
      * traffic is the asymmetry this class exists to avoid.
      */
     public const FIELDS = [
-        'path' => 'Request path',
-        'ip'   => 'Client address',
-        'ua'   => 'User-Agent',
+        'path'   => 'Request path',
+        'ip'     => 'Client address',
+        'ua'     => 'User-Agent',
+        'method' => 'Method',
+        'status' => 'Status',
+        'query'  => 'Query string',
     ];
+
+    /**
+     * Fields a beacon payload cannot carry, so a rule on one of them is log-only.
+     *
+     * A beacon is always a POST to the collector and never has a status of its own, so a rule
+     * on either would quietly do nothing to a host measured by the beacon alone. That is worth
+     * having — most traffic has a log behind it — but it is not worth having SILENTLY, so the
+     * settings card names them and this list is what it names them from.
+     */
+    public const LOG_ONLY_FIELDS = ['method', 'status'];
 
     /** Where the rules live in the configuration file. */
     public const CONFIG_KEY = 'exclusions';
@@ -192,18 +205,26 @@ final class Exclusions
      * Should this request be refused?
      *
      * The single entry point both planes use, so the log side and the beacon side cannot
-     * disagree about what a rule means. Every argument is optional except the hostname,
-     * because a beacon payload carries no status and a log line may carry no User-Agent.
+     * disagree about what a rule means. The observed values arrive as a map rather than as
+     * positional arguments, because the two planes carry different subsets of them: a log line
+     * has a method and a status, a beacon payload has neither, and a caller should be able to
+     * state what it knows without counting out empty strings in the right order.
+     *
+     * A FIELD THE CALLER DID NOT SUPPLY CANNOT MATCH. An absent value is skipped rather than
+     * tested as an empty string, so a rule on `method` is inert on the beacon path instead of
+     * being accidentally true there — which is the difference between a rule that does nothing
+     * on one plane and a rule that refuses everything on it.
+     *
+     * @param string               $host   The virtual host the request was for.
+     * @param array<string,string> $values Field slug (see FIELDS) to the value observed.
      */
-    public function excludes(string $host, string $path = '', string $ip = '', string $ua = ''): bool
+    public function excludes(string $host, array $values = []): bool
     {
         $host = strtolower(trim($host));
 
         if ($host !== '' && isset($this->whole[$host])) {
             return true;
         }
-
-        $values = ['path' => $path, 'ip' => $ip, 'ua' => $ua];
 
         foreach ([$host, ''] as $scope) {
             if ($scope === '' && $host === '') {
@@ -233,12 +254,14 @@ final class Exclusions
      */
     public function excludesHit(array $hit): bool
     {
-        return $this->excludes(
-            (string) ($hit['host_s'] ?? ''),
-            (string) ($hit['path_s'] ?? ''),
-            (string) ($hit['ip_s'] ?? ''),
-            (string) ($hit['ua_s'] ?? '')
-        );
+        return $this->excludes((string) ($hit['host_s'] ?? ''), [
+            'path'   => (string) ($hit['path_s'] ?? ''),
+            'ip'     => (string) ($hit['ip_s'] ?? ''),
+            'ua'     => (string) ($hit['ua_s'] ?? ''),
+            'method' => (string) ($hit['method_s'] ?? ''),
+            'status' => isset($hit['status_i']) ? (string) $hit['status_i'] : '',
+            'query'  => (string) ($hit['query_s'] ?? ''),
+        ]);
     }
 
     /**

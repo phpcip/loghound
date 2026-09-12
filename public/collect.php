@@ -306,8 +306,11 @@ if ($site !== '' && $state !== null) {
    as every other outcome, because the collector never tells a visitor's browser what this
    installation does or does not keep. */
 $exclusions = Exclusions::fromConfig($config);
-if (!$exclusions->isEmpty()
-    && $exclusions->excludes($site, (string) ($payload['path'] ?? ''), $ip, $ua)) {
+if (!$exclusions->isEmpty() && $exclusions->excludes($site, [
+    'path' => (string) ($payload['path'] ?? ''),
+    'ip'   => $ip,
+    'ua'   => $ua,
+])) {
     lh_end();
 }
 

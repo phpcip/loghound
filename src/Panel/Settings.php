@@ -4730,6 +4730,15 @@ final class Settings extends Controller implements JobHost, Sections
             . 'case. The single pattern <code class="mono">*</code> on <em>Request path</em> excludes '
             . 'that hostname entirely, and it is the only place a bare star means anything.</p>';
 
+        $logOnly = [];
+        foreach (Exclusions::LOG_ONLY_FIELDS as $slug) {
+            $logOnly[] = Exclusions::FIELDS[$slug] ?? $slug;
+        }
+        echo '<p class="muted"><strong>' . Security::esc(implode(' and ', $logOnly)) . '</strong> apply to '
+            . 'traffic read from your access logs only. A beacon payload is always a POST to the collector '
+            . 'and carries no status of its own, so a rule on either cannot match a host measured by the '
+            . 'beacon alone &mdash; it is not ignored quietly, it simply has nothing to test.</p>';
+
         echo '<p class="muted"><strong>The reader picks these up when it is next reloaded</strong>, not '
             . 'mid-file, so a rule added now applies from the next restart or reload of the ingest '
             . 'daemon. The beacon collector applies them immediately, because it reads the '
