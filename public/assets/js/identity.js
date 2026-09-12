@@ -301,13 +301,13 @@ export function dimValue(field, value, opts) {
 
     if (!isFilterable(field) || options.link === false) {
         const span = el('span', {
-            class: mono ? 'mono' : null,
+            class: 'dim' + (mono ? ' mono' : ''),
             title: options.title || (spoken && spoken.why ? spoken.why : (spoken ? '' : raw))
         });
         if (mark) {
             span.appendChild(mark);
         }
-        span.appendChild(document.createTextNode(shown));
+        span.appendChild(el('span', { class: 'dim-val', text: shown }));
         return span;
     }
 
@@ -329,7 +329,12 @@ export function dimValue(field, value, opts) {
     if (mark) {
         node.appendChild(mark);
     }
-    node.appendChild(document.createTextNode(shown));
+    /* THE TEXT IS WRAPPED so the tooltip can quote the value and nothing else. The clipping
+       happens on this anchor — it is the flex row's first child — but the anchor also carries
+       the count, and a tooltip reading "/img/opensolr-logo-simple.webp 12" would be quoting a
+       number that is already on screen beside it. responsive.js measures the anchor and reads
+       this span. */
+    node.appendChild(el('span', { class: 'dim-val', text: shown }));
     if (options.count !== undefined && options.count !== null) {
         node.appendChild(el('span', { class: 'dim-count', text: num(options.count) }));
     }

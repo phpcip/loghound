@@ -808,7 +808,13 @@ function setUpControlTips() {
  * would otherwise be a second copy of the same logic.
  */
 const VALUE_TIP_PARTS = [
-    { marker: '.facet-opt', value: '.facet-val' }
+    { marker: '.facet-opt', value: '.facet-val' },
+
+    /* A DIMENSION VALUE ANYWHERE: a breakdown column, a table cell, a detail dialog. The
+       ellipsis is on the anchor itself — it is the flex row's first child — so that is what is
+       measured; but the anchor also holds the count, so the words come from the inner span.
+       `text` is the third role: measure here, quote from there. */
+    { marker: '.fgroup .dim, .lh-dialog-body .dim', value: '.dim', text: '.dim-val' }
 ];
 
 /**
@@ -856,13 +862,17 @@ function markValueTips() {
     const seen = [];
     for (const part of VALUE_TIP_PARTS) {
         for (const marker of document.querySelectorAll(part.marker)) {
-            const value = marker.querySelector(part.value);
+            const value = marker.matches(part.value) ? marker : marker.querySelector(part.value);
             if (!value) {
                 continue;
             }
+            /* MEASURED ON ONE ELEMENT, QUOTED FROM ANOTHER when a part says so. The anchor is
+               what the ellipsis is on, but it also carries the count, and the tooltip must say
+               the value and only the value. */
+            const words = part.text ? marker.querySelector(part.text) : value;
             seen.push({
                 marker: marker,
-                full: (value.textContent || '').trim(),
+                full: ((words || value).textContent || '').trim(),
                 cut: value.scrollWidth > value.clientWidth
             });
         }

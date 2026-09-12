@@ -2145,7 +2145,8 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 
 .card-refresh[data-lh-tip]::after,
 .rowopen[data-lh-tip]::after,
-.facet-opt[data-lh-tip]::after {
+.facet-opt[data-lh-tip]::after,
+.dim[data-lh-tip]::after {
     content: attr(data-full);
     position: fixed;
     z-index: 40;
@@ -2168,12 +2169,14 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 
 .card-refresh[data-lh-tip]:focus-visible::after,
 .rowopen[data-lh-tip]:focus-visible::after,
-.facet-opt[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+.facet-opt[data-lh-tip]:focus-visible::after,
+.dim[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
 
 @media (hover: hover) and (pointer: fine) {
     .card-refresh[data-lh-tip]:hover::after,
     .rowopen[data-lh-tip]:hover::after,
-    .facet-opt[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
+    .facet-opt[data-lh-tip]:hover::after,
+    .dim[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
 }
 
 /* A card still clears the bar.
