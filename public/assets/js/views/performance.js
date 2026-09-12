@@ -82,6 +82,28 @@ function renderHeadline(data) {
     set('p99', durUs(data.overall.p99));
     set('avg', durUs(data.overall.avg));
 
+    /* THE THRESHOLD IS ONLY KNOWN NOW. The tiles are buttons rendered by PHP, but what a press
+       means — "requests at least this slow" — depends on the figure that just arrived, so the
+       microsecond value and the words for it are stamped on here. A percentile that came back
+       empty leaves its tile inert rather than opening a dialog for a threshold of zero. */
+    for (const [key, label] of [['p50', 'p50 latency'], ['p95', 'p95 latency'], ['p99', 'p99 latency']]) {
+        /* Matched on the CLASS, not on data-lh-open: this loop removes that attribute when a
+           percentile comes back empty, so keying on it would make the tile unfindable — and
+           permanently inert — the moment the figures returned. */
+        const node = scope ? scope.querySelector('.stat-open[aria-label*="' + label + '"]') : null;
+        if (!node) {
+            continue;
+        }
+        const us = Number(data.overall[key]);
+        if (!Number.isFinite(us) || us <= 0) {
+            node.removeAttribute('data-lh-open');
+            continue;
+        }
+        node.dataset.lhOpen = 'hitband';
+        node.dataset.from = String(Math.round(us));
+        node.dataset.label = label;
+    }
+
     setPop('pf-headline',
         num(data.requests) + ' ' + (KIND_LABEL[data.kind] || 'requests') +
         (data.who === 'human' ? ', from sessions scored human' : '') + ' in this range. ' +

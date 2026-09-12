@@ -1047,6 +1047,54 @@ export async function openHitDimension(field, value, view) {
 }
 
 /**
+ * Open every request at or above a threshold — what a percentile tile is pointing at.
+ *
+ * "p95 is 749 ms" is a fact with one obvious follow-up, and the tile used to answer none of it.
+ * The threshold travels as a number the server clamps; everything else is the request dialog
+ * already built above, so the slow requests arrive with their addresses, paths and breakdowns
+ * exactly as any other opened value does.
+ *
+ * @param {string} band  Numeric request field the server allowlists.
+ * @param {number} from  Lower bound, inclusive.
+ * @param {string} [view] View whose API answers this.
+ * @param {string} [label] What the tile called the threshold, for the dialog's subtitle.
+ */
+export async function openHitBand(band, from, view, label) {
+    const target = view || 'performance';
+    let handle = openDialog(label || dimLabel(band), 'Counting the requests above this…');
+
+    const fetchPage = (start, rows) => api(target, 'hitdim', {
+        band: band,
+        from: from,
+        start: start,
+        rows: rows
+    });
+
+    try {
+        const data = await fetchPage(0);
+        if (!isCurrent(handle.generation)) {
+            return;
+        }
+        if (data.error) {
+            fill(handle.body, [say(data.error)]);
+            return;
+        }
+
+        handle = openDialog(
+            (label || String(data.label)) + ' and slower',
+            num(data.requests) + ' request' + (data.requests === 1 ? '' : 's')
+                + ' in ' + (data.range_label || 'the selected range')
+        );
+        renderHitDimension(handle.body, data, fetchPage);
+        markSortable(handle.body);
+    } catch (err) {
+        if (isCurrent(handle.generation)) {
+            dialogFail(handle.body, err, () => openHitBand(band, from, view, label));
+        }
+    }
+}
+
+/**
  * Draw a request-plane dialog.
  *
  * Same order as the visits dialog for the same reason: the counts, then when, then the ROWS —
@@ -1169,6 +1217,8 @@ export function initDetail() {
         openHitDimension(data.field || '', data.value || '', data.view || ''));
     registerOpener('band', (data) =>
         openBand(data.band || '', Number(data.from) || 0, Number(data.to) || 0));
+    registerOpener('hitband', (data) =>
+        openHitBand(data.band || '', Number(data.from) || 0, data.view || '', data.label || ''));
 
     const open = new URLSearchParams(window.location.search).get('open');
     if (open) {

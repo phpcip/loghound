@@ -154,6 +154,22 @@ final class Performance extends Controller
     /** Values per dimension in the request-plane dialog. Enough to act on, short enough to read. */
     private const HITDIM_BUCKETS = 8;
 
+    /**
+     * Numeric request fields a threshold may open, with their bounds and the words for them.
+     *
+     * SEPARATE FROM hitFilterFields() ON PURPOSE. That list is what the sidebar can filter by,
+     * and a duration does not belong there — nobody picks "exactly 749300 microseconds" from a
+     * facet. This is the list of fields a RANGE may be built over, which is a different
+     * question, and keeping it separate means adding one here cannot quietly add a sidebar
+     * dimension nobody designed.
+     *
+     * @var array<string,array{0:int,1:int,2:string}>
+     */
+    private const HIT_BAND_FIELDS = [
+        'dur_us_l' => [0, 3600000000, 'Request duration'],
+        'bytes_l'  => [0, 1099511627776, 'Response size'],
+    ];
+
     public function api(string $action): array
     {
         return match ($action) {
@@ -480,21 +496,38 @@ final class Performance extends Controller
     private function hitDimension(): array
     {
         $fields = Query::hitFilterFields();
-        $field = (string) ($_GET['field'] ?? '');
-        if (!isset($fields[$field])) {
-            return $this->envelope(['error' => 'That is not a dimension the request plane can open.']);
-        }
-
-        $value = (string) ($_GET['value'] ?? '');
-        if ($value === '') {
-            return $this->envelope(['error' => 'That row carries no value to open.']);
-        }
-
         $start = Paging::start();
         $rows = Paging::rows();
-
         $fqs = $this->hitFqs();
-        $fqs[] = Query::term($field, $value);
+
+        /* A THRESHOLD RATHER THAN A VALUE, which is what a percentile tile hands over: "the
+           requests at least this slow". The field comes from a list of two and both bounds are
+           clamped, so a crafted link can only ask for an empty band. */
+        $band = self::param('band', array_keys(self::HIT_BAND_FIELDS), '');
+        if ($band !== '') {
+            [$min, $max, $bandLabel] = self::HIT_BAND_FIELDS[$band];
+            $from = Security::clampInt($_GET['from'] ?? null, $min, $max, $min);
+            $to = Security::clampInt($_GET['to'] ?? null, $min, $max, $max);
+            if ($to < $from) {
+                $to = $max;
+            }
+            $fqs[] = $band . ':[' . $from . ' TO ' . $to . ']';
+            $field = $band;
+            $value = $bandLabel;
+            $fields = [$band => $bandLabel] + $fields;
+        } else {
+            $field = (string) ($_GET['field'] ?? '');
+            if (!isset($fields[$field])) {
+                return $this->envelope(['error' => 'That is not a dimension the request plane can open.']);
+            }
+
+            $value = (string) ($_GET['value'] ?? '');
+            if ($value === '') {
+                return $this->envelope(['error' => 'That row carries no value to open.']);
+            }
+
+            $fqs[] = Query::term($field, $value);
+        }
 
         /* The opened dimension is not one of its own breakdowns — a column reading "403: 100%"
            tells the reader what they just pressed. Identifiers are dropped too: a list of the
@@ -602,16 +635,32 @@ final class Performance extends Controller
         self::cardOpen('pf-headline', '01', 'What to measure', '', $tools);
         self::skeleton('pf-headline', 'stats', 0, 'Computing latency percentiles');
 
+        /* A PERCENTILE IS A DOORWAY, NOT A DECORATION. "p95 is 749 ms" raises exactly one
+           question — which requests were the slow ones — and the tile answered none of it.
+           Each is a button now, in the same delegated shape the Overview's population tiles
+           use; the threshold itself is only known once the figures arrive, so views/
+           performance.js stamps it on when it fills the value. The mean is NOT a doorway: it
+           is not a threshold and "requests slower than the mean" is not a population anyone
+           asked for, so it stays a plain figure. */
         echo '<div class="stats">';
         foreach ([
-            ['p50', 'p50 latency',  'Half of requests were faster than this'],
-            ['p95', 'p95 latency',  'One request in twenty was slower'],
-            ['p99', 'p99 latency',  'The worst one percent — where timeouts live'],
-            ['avg', 'Mean latency', 'Shown for contrast; a long tail drags it away from p50'],
-        ] as [$key, $label, $hint]) {
-            echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
+            ['p50', 'p50 latency',  'Half of requests were faster than this', true],
+            ['p95', 'p95 latency',  'One request in twenty was slower', true],
+            ['p99', 'p99 latency',  'The worst one percent — where timeouts live', true],
+            ['avg', 'Mean latency', 'Shown for contrast; a long tail drags it away from p50', false],
+        ] as [$key, $label, $hint, $openable]) {
+            $tag = $openable ? 'button' : 'div';
+            echo '<' . $tag . ($openable ? ' type="button" class="stat stat-open" data-lh-open="hitband"'
+                . ' data-band="dur_us_l" data-view="performance"'
+                . ' aria-label="' . Security::esc('Open the requests slower than ' . $label) . '"'
+                : ' class="stat"') . '>';
+            echo '<span class="stat-label">' . Security::esc($label) . '</span>';
             echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
-            echo '<span class="stat-hint">' . Security::esc($hint) . '</span></div>';
+            echo '<span class="stat-hint">' . Security::esc($hint) . '</span>';
+            if ($openable) {
+                echo '<span class="stat-go" aria-hidden="true">&#8250;</span>';
+            }
+            echo '</' . $tag . '>';
         }
         echo '</div>';
 
