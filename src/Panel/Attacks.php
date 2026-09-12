@@ -991,8 +991,11 @@ final class Attacks extends Controller implements Sections
            which pattern matched are one judgement about one request, which is what a verdict is
            here, and they share the fifth column. */
         echo '<div class="table-wrap"><table id="atk-requests-table" class="table-fixed visits"><colgroup>'
-            . '<col style="width:17%"><col style="width:15%"><col style="width:14%">'
-            . '<col style="width:33%"><col style="width:21%">'
+            /* Same cut as the session explorer's table, for the same reason: the timestamp is
+               nineteen fixed-width characters and must survive, so Country gives up the room it
+               no longer needs now that it draws the flag alone. */
+            . '<col style="width:23%"><col style="width:15%"><col style="width:6%">'
+            . '<col style="width:35%"><col style="width:21%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Date</th>'
             . '<th scope="col">IP</th>'

@@ -4477,7 +4477,13 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
  * so it never wraps and the widths are cut so it does not have to.
  * ---------------------------------------------------------------------------------------- */
 
-table.visits td.visit-when { white-space: nowrap; }
+/* The timestamp is never clipped: table-fixed puts `overflow:hidden` on every cell, so nowrap
+   alone still ended the value in an ellipsis when the column was a pixel short. */
+table.visits td.visit-when { white-space: nowrap; overflow: visible; }
+
+/* A dimension value drawn as its mark alone — the flag in a visit table's country column.
+   No text node, so the anchor shrinks to the glyph and the column can be narrow. */
+.dim-markonly { display: inline-flex; align-items: center; }
 
 /* The verdict cell carries the row's opener at its right-hand end rather than in a sixth
    column: the five-column rule is about what has to be READ, and a chevron is a control. */

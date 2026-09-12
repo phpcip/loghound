@@ -98,7 +98,13 @@ export function visitRow(v) {
         title: [v.city, v.region, v.country].filter(Boolean).join(', ') || 'Not geolocated',
         'data-sort': [v.country, v.city].filter(Boolean).join(' ')
     }, [
-        v.country ? countryNode(v.country) : el('span', { class: 'muted', text: '—' })
+        /* THE FLAG ALONE. The country NAME was taking a third of this row's width from the
+           timestamp beside it, which is the one column a reader compares straight down and the
+           one that must never truncate. The name is still there on hover and for a screen
+           reader; the glyph is what identifies a country at a glance anyway. */
+        v.country
+            ? countryNode(v.country, { flagOnly: true })
+            : el('span', { class: 'muted', text: '—' })
     ]));
 
     tr.appendChild(el('td', {

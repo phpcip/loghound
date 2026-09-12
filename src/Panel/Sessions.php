@@ -1477,8 +1477,12 @@ final class Sessions extends Controller
         self::skeleton('se-results', 'rows', 0, 'Searching sessions');
 
         echo '<div class="table-wrap"><table id="se-table" class="table-fixed visits"><colgroup>'
-            . '<col style="width:17%"><col style="width:15%"><col style="width:14%">'
-            . '<col style="width:39%"><col style="width:15%">'
+            /* THE DATE COLUMN NEVER TRUNCATES. `mm/dd/yyyy hh:mm:ss` is nineteen monospace
+               characters, and at 17% of a column already narrowed by the filter sidebar it was
+               being cut mid-hour — "09/12/2026 03:1…" — which is the one value on the row a
+               reader scans down. The width comes out of Country, which now draws the flag only. */
+            . '<col style="width:23%"><col style="width:16%"><col style="width:6%">'
+            . '<col style="width:40%"><col style="width:15%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col">Date</th>'
             . '<th scope="col">IP</th>'

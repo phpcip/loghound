@@ -333,8 +333,19 @@ export function dimValue(field, value, opts) {
        happens on this anchor — it is the flex row's first child — but the anchor also carries
        the count, and a tooltip reading "/img/opensolr-logo-simple.webp 12" would be quoting a
        number that is already on screen beside it. responsive.js measures the anchor and reads
-       this span. */
-    node.appendChild(el('span', { class: 'dim-val', text: shown }));
+       this span.
+
+       `markOnly` drops the words and keeps the mark, for a column too narrow to carry both —
+       the flag alone in a visit table, where the name was eating the width the timestamp needed.
+       The name does not disappear: it stays in the title, which is what the hover reads, and in
+       aria-label, which is what a screen reader reads. A mark with no accessible name would be
+       a country column that says nothing at all to anyone not looking at it. */
+    if (options.markOnly && mark) {
+        node.setAttribute('aria-label', shown);
+        node.classList.add('dim-markonly');
+    } else {
+        node.appendChild(el('span', { class: 'dim-val', text: shown }));
+    }
     if (options.count !== undefined && options.count !== null) {
         node.appendChild(el('span', { class: 'dim-count', text: num(options.count) }));
     }
@@ -392,7 +403,10 @@ export function countryNode(code, opts) {
     const name = countryName(cc) || cc;
     const label = dimValue('country_s', cc, {
         text: name,
-        title: 'Filter every view to ' + name + ' (' + cc + ')'
+        markOnly: (opts || {}).flagOnly === true,
+        title: (opts || {}).flagOnly === true
+            ? name + ' (' + cc + ') — select to filter every view to it'
+            : 'Filter every view to ' + name + ' (' + cc + ')'
     });
     return el('span', { class: 'geo' }, [label]);
 }
