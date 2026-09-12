@@ -575,11 +575,17 @@
 
       `string`, to match `id` above, because the error is specific about the two agreeing.
 
+      INDEXED, STORED OFF. Declared with all three off at first, which satisfied the schema
+      check and then failed the write with "[doc=null] missing required field: id": the atomic
+      path writes this field internally, and a field with no index, no store and no docValues
+      has nowhere to put a value. It is indexed here for the same reason `id` is. A plain
+      full-document write succeeded throughout, which is what isolated the fault to this field
+      rather than to the core, the chain or the handler.
+
       NOTHING HERE WRITES CHILD DOCUMENTS and this does not invite any: it is a marker Solr
-      manages itself, indexed and stored off like _version_, present so the indexer's own
-      precondition is satisfied.
+      manages itself, present so the indexer's own precondition is satisfied.
     -->
-    <field name="_root_" type="string" indexed="false" stored="false" docValues="false"/>
+    <field name="_root_" type="string" indexed="true" stored="false" docValues="false"/>
 
     <!-- Same catch-all as the hits core: unknown fields are dropped rather than failing a
          batch. See solr/hits/conf/managed-schema.xml for the full tradeoff. -->

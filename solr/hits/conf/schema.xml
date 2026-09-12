@@ -616,7 +616,7 @@
       failed at the indexer with that message. `string`, matching `id`. Nothing in Loghound
       writes child documents; this satisfies the indexer's precondition and nothing more.
     -->
-    <field name="_root_" type="string" indexed="false" stored="false" docValues="false"/>
+    <field name="_root_" type="string" indexed="true" stored="false" docValues="false"/>
 
 
     <!--
