@@ -1182,7 +1182,9 @@ tr.row-link:focus-visible > td { background: var(--band); color: var(--ink); }
 .timeline { list-style: none; margin: 0; padding: 0; }
 .timeline li {
     display: grid;
-    grid-template-columns: 92px 56px minmax(0, 1fr) 60px 88px;
+    /* Seven columns: time, method, path, status, bytes, server time, and the gap to the next
+       request — which is the closest thing a log can give to time spent on the page. */
+    grid-template-columns: 92px 56px minmax(0, 1fr) 60px 88px 74px 72px;
     gap: 14px;
     padding: 7px 0;
     border-bottom: 1px solid var(--hairline);
@@ -1469,7 +1471,7 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
     .stat-value { font-size: 28px; }
     .timing-value { font-size: 26px; }
     .timeline li { grid-template-columns: 76px minmax(0, 1fr) 46px; }
-    .timeline .t-method, .timeline .t-bytes { display: none; }
+    .timeline .t-method, .timeline .t-bytes, .timeline .t-gap { display: none; }
     td.clip { max-width: 22ch; }
     .searchbar { gap: 8px; }
     .searchbar input[type="search"] { flex: 1 1 100%; }
@@ -2624,7 +2626,10 @@ html.lh-dialog-open { overflow: hidden; }
 
 /* The trail carries a sixth column — how long the server took — so it needs its own grid
    rather than the five-column one the old inline panel used. */
-.lh-dialog .timeline li { grid-template-columns: 78px 50px minmax(0, 1fr) 44px 74px 66px; gap: 12px; }
+.lh-dialog .timeline li { grid-template-columns: 78px 50px minmax(0, 1fr) 44px 74px 66px 68px; gap: 12px; }
+/* The gap column is the one number in the row that is about the VISITOR rather than the server,
+   so it is inked rather than muted — it is what the reader is scanning the trail for. */
+.lh-dialog .timeline .t-gap { color: var(--ink); }
 
 /* What the measured site declared about who this was. Flagged with the accent because it is
    the one fact in the dialog that Loghound did not derive for itself. */
@@ -2647,6 +2652,7 @@ html.lh-dialog-open { overflow: hidden; }
     .lh-dialog .timeline li { grid-template-columns: 66px minmax(0, 1fr) 44px; }
     .lh-dialog .timeline .t-method,
     .lh-dialog .timeline .t-bytes,
+    .lh-dialog .timeline .t-gap,
     .lh-dialog .timeline .t-dur { display: none; }
 }
 

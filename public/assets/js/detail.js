@@ -247,8 +247,19 @@ function trailBlock(id, data, host) {
 
     const paint = (hits) => {
         list.replaceChildren();
-        for (const hit of (hits || [])) {
+        const rows = hits || [];
+        for (let i = 0; i < rows.length; i++) {
+            const hit = rows[i];
             const statusClass = 't-status-' + String(hit.status === null ? '' : hit.status).charAt(0);
+
+            /* HOW LONG THEY STAYED ON IT, which is the gap to whatever they asked for next.
+               It is the only "time on page" a log can honestly give: the server sees requests,
+               not attention, so the last row has no gap at all rather than a made-up one — and
+               where the beacon ran, the engaged clock above is the number that means presence.
+               The rows arrive newest-first, so the NEXT request in time is the previous row. */
+            const prev = i > 0 ? rows[i - 1] : null;
+            const gapMs = prev ? Date.parse(prev.ts) - Date.parse(hit.ts) : NaN;
+            const gap = Number.isFinite(gapMs) && gapMs > 0 ? dur(gapMs) : '';
             list.appendChild(el('li', {}, [
                 el('span', { class: 'muted mono', text: when(hit.ts).split(' ')[1] || '' }),
                 el('span', { class: 't-method muted', text: hit.method || '' }),
@@ -265,6 +276,11 @@ function trailBlock(id, data, host) {
                     class: 't-dur muted mono',
                     text: hit.dur_us === null ? '' : durUs(hit.dur_us),
                     title: hit.dur_us === null ? '' : 'Time the server took to answer'
+                }),
+                el('span', {
+                    class: 't-gap muted mono',
+                    text: gap,
+                    title: gap === '' ? '' : 'They asked for nothing else for this long'
                 })
             ]));
         }
@@ -587,6 +603,13 @@ function renderSession(body, data) {
         el('h3', { text: 'How they arrived' }),
         kv(arrival),
 
+        /* THE CIRCUIT COMES BEFORE THE CONCLUSION. This sat at the very bottom, under the
+           verdict, the execution evidence and four blocks of counters — so the one thing a
+           reader opens a visit to see, WHERE THEY WENT, was a scroll and a half below the
+           fold. It belongs beside how they arrived: first page, then every page after it. */
+        el('h3', { text: 'Everything they asked for, in order' }),
+        trailBlock(data.session.id, data, s.host),
+
         el('h3', { text: 'What we concluded, and why' }),
         kv([
             ['Verdict', verdictChip(s.verdict)],
@@ -599,10 +622,7 @@ function renderSession(body, data) {
         execution.length ? el('h4', { text: 'What the browser could actually do' }) : null,
         execution.length ? kv(execution) : null,
 
-        ...whatTheyDid(s),
-
-        el('h3', { text: 'Everything they asked for, in order' }),
-        trailBlock(data.session.id, data, s.host)
+        ...whatTheyDid(s)
     ]);
 }
 
