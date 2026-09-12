@@ -211,21 +211,22 @@ final class Beacon
     }
 
     /**
-     * Does this installation store the identity string the measured site attaches?
+     * Is an identity the measured site attaches kept?
      *
-     * OFF BY DEFAULT, and that is the one default in this file that is a policy decision rather
-     * than a safety one. Everything else the beacon collects is a measurement of a browser; this
-     * is a name, usually an email address, and it turns a session document into personal data
-     * that appears in the panel, in the Solr index and in every backup of it. An operator has to
-     * say yes to that, and `beacon.store_identity` in config/loghound.php is where they say it.
+     * YES, ALWAYS, AND THERE IS NO LONGER A SWITCH. This was off by default and gated on
+     * `beacon.store_identity`, which produced the one outcome a measurement tool must never
+     * produce: a site that called `identify()` with a real email had it silently discarded by
+     * the collector, the panel showed nothing, and there was no error anywhere to explain it.
+     * The switch was protecting the operator from a decision they had already made — nobody
+     * writes `identify(user.email)` into their own template by accident.
      *
-     * The gate is applied in normalise(), which is before anything is written anywhere: with it
-     * off the string does not reach the SQLite staging table, let alone Solr, so switching it off
-     * stops collection rather than merely hiding what was collected.
+     * Loghound still never GUESSES an identity: no cookie is read, no form is scraped, no meta
+     * tag is looked for. If the site declares one, it is kept; if it does not, there is none.
+     * That is the whole policy now, and it is expressible without configuration.
      */
     public function storesIdentity(): bool
     {
-        return (bool) ($this->cfg['store_identity'] ?? false);
+        return true;
     }
 
     /**
@@ -1027,7 +1028,7 @@ final class Beacon
      * "anonymous". A boolean that defaults to false here would invent an anonymous population
      * out of every site that has not adopted the feature, and the signed-in/anonymous split —
      * the reason the field exists — would be a fabrication. `ident_s` is likewise absent rather
-     * than empty when nothing was sent or when `beacon.store_identity` is off.
+     * than empty when nothing was sent.
      *
      * THE HOSTNAME IS FOLDED ON ONLY WHEN THE DOCUMENT HAS NONE, which is the log-wins-on-facts
      * rule of SPEC §6.4 applied to the one field where the two planes can both have an opinion.

@@ -164,7 +164,7 @@ final class Doc
                 'limits'  => 'Free text, truncated to ' . \Loghound\Beacon::MAX_IDENT . ' bytes. Control '
                     . 'characters stripped, invalid UTF-8 repaired.',
                 'example' => 'data-ident="<?= htmlspecialchars($user->email, ENT_QUOTES) ?>"',
-                'switch'  => 'beacon.store_identity',
+                'switch'  => null,
             ],
             [
                 'name'    => 'data-signed-in',
@@ -201,7 +201,7 @@ final class Doc
                 'limits'  => 'A string. Must be set **before** b.js executes — with `defer` that means '
                     . 'anywhere in the document. The attribute wins if both are present.',
                 'example' => '<script>window.LoghoundIdent = "ada@example.com";</script>',
-                'switch'  => 'beacon.store_identity',
+                'switch'  => null,
             ],
             [
                 'name'    => 'window.LoghoundSignedIn',
@@ -224,7 +224,7 @@ final class Doc
                     . 'the values ride the heartbeat that is already scheduled. Safe to call with '
                     . 'anything — it cannot throw into your code.',
                 'example' => 'window.loghound.identify(user.email, true);',
-                'switch'  => 'beacon.store_identity / beacon.store_signed_in',
+                'switch'  => 'beacon.store_signed_in',
             ],
         ];
     }
@@ -284,10 +284,10 @@ final class Doc
     /**
      * The paragraphs every surface has to carry, in the order somebody reads them.
      *
-     * Four subjects, and none of them is comfortable enough to leave out of a surface: what
-     * `beacon.store_identity` being off by default means for a pasted snippet, what `data-params`
-     * is and what the server-side half of it does, what the hostname allowlist protects against
-     * and what it does not, and the two CSP directives with the symptom of missing the second.
+     * Four subjects, and none of them is comfortable enough to leave out of a surface: what an
+     * identity actually costs once it is stored, what `data-params` is and what the server-side
+     * half of it does, what the hostname allowlist protects against and what it does not, and
+     * the two CSP directives with the symptom of missing the second.
      *
      * @return array<int,array{key:string,title:string,paras:array<string,string>}>
      */
@@ -298,11 +298,11 @@ final class Doc
                 'key'   => 'storage',
                 'title' => 'What is stored, and what is quietly thrown away',
                 'paras' => [
-                    'default' => '`beacon.store_identity` is `false` in a new installation. Paste a snippet carrying '
-                        . '`data-ident` before you change it and the address is dropped by the collector '
-                        . 'before anything is written: the tag loads, the collector answers `204`, the '
-                        . 'panel shows nothing, and there is no error anywhere to explain it. Set it to '
-                        . '`true` first, or leave the attribute out.',
+                    'default' => 'An identity your site declares is **kept**, with no setting to turn on first. '
+                        . 'There used to be one, `beacon.store_identity`, and it defaulted to off — so a '
+                        . 'site that pasted `data-ident` had the address dropped by the collector, saw '
+                        . 'nothing in the panel, and got no error explaining why. Loghound still never '
+                        . 'guesses an identity: leave the attribute out and there is none.',
                     'independent' => '`beacon.store_signed_in` is on in a new installation, so the signed-in split works '
                         . 'as soon as a page declares it. The two switches are independent on purpose: '
                         . 'the boolean identifies nobody and splits engaged time, paths and bot verdicts '
@@ -450,8 +450,8 @@ final class Doc
             . 'it splits engaged time, paths and bot verdicts between signed-in and anonymous '
             . 'traffic. The identity string is personal data — it is written to the session '
             . 'document, shows in the panel, lives in the search index and is in every backup of '
-            . 'it until retention deletes the session — so beacon.store_identity is false until '
-            . 'you set it to true, and the two switches are independent. The same two values can '
+            . 'it until retention deletes the session — and it is kept whenever your site sends '
+            . 'one, because asking for it in your own template is the decision. The same two values can '
             . 'come from window.LoghoundIdent and window.LoghoundSignedIn, set before b.js runs, '
             . 'or from window.loghound.identify(ident, signedIn) when somebody signs in after the '
             . 'page loaded; identify() sends nothing of its own, the values ride the heartbeat '
@@ -503,11 +503,12 @@ final class Doc
      * Whether THIS installation will keep what an option sends.
      *
      * The reason the reference is worth rendering inside the application at all rather than only
-     * in a document. A reference that lists `data-ident` without saying that `beacon.store_identity`
-     * is off HERE sends an operator away to paste a snippet, see nothing, and have no way to find
-     * out why. The document cannot know; a running installation can.
+     * in a document. An option whose value THIS installation would throw away says so here,
+     * instead of being discovered by pasting a snippet and seeing nothing appear. The document
+     * cannot know; a running installation can.
      *
-     * Four answers. `always` is an option nothing can discard, because the script uses it itself.
+     * Four answers. `always` is an option no setting gates — the script's own inputs, and the
+     * identity, which is kept whenever the site sends one.
      * `yes` names the switch that is on, so the operator knows which line in the config file is
      * doing it. `discarded` says so in as many words, because the failure it warns about is
      * completely silent. `partly` is for the one option governed by both switches, and it reports
@@ -519,7 +520,7 @@ final class Doc
     public static function optionState(?string $switch, Config $cfg): array
     {
         if ($switch === null) {
-            return ['state' => 'always', 'detail' => 'used by the script itself'];
+            return ['state' => 'always', 'detail' => 'no setting gates this'];
         }
 
         if ($switch === 'beacon.query_params') {
@@ -538,8 +539,9 @@ final class Doc
             return ['state' => 'yes', 'detail' => 'accepting ' . implode(', ', $names)];
         }
 
+        /* `beacon.store_identity` is not here because it no longer exists: an identity the site
+           declares is always kept. Only the signed-in flag is still a setting. */
         $state = [
-            'beacon.store_identity'  => (bool) $cfg->get('beacon.store_identity', false),
             'beacon.store_signed_in' => (bool) $cfg->get('beacon.store_signed_in', true),
         ];
 

@@ -268,7 +268,6 @@ final class Config
                 'token_max_age'    => 43200,
                 'rate_per_min'     => 120,
                 'max_payload'      => 8192,
-                'store_identity'   => false,
                 'store_signed_in'  => true,
 
                 'allowed_hosts'     => [],

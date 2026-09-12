@@ -3310,9 +3310,8 @@ final class Settings extends Controller implements JobHost, Sections
                 echo '<p class="muted">The two values come out of the user object your template already '
                     . 'has, never out of a literal, because they change per request — a page cache that '
                     . 'stored the rendered tag would otherwise serve the first visitor&rsquo;s identity to '
-                    . 'everybody. <code class="mono">beacon.store_identity</code> is off in a new '
-                    . 'installation, so paste this only after turning it on; the Beacon card below says '
-                    . 'what this installation stores right now.</p>';
+                    . 'everybody. An identity you send is kept, with nothing to switch on first; the '
+                    . 'Beacon card below says what this installation stores right now.</p>';
             }
             if ($key === 'beacon-csp') {
                 echo '<p class="muted">Only if the measured site sends a Content-Security-Policy. '
@@ -3491,14 +3490,14 @@ final class Settings extends Controller implements JobHost, Sections
      * anybody installing a snippet opens.
      *
      * And a card that describes the attributes without saying whether THIS installation will
-     * store what they carry sets a trap: `beacon.store_identity` is false by default, so a site
-     * that pastes the identity snippet has its emails discarded server-side, the panel shows
-     * nothing, and there is no error anywhere to explain it. The snippet and the switch are one
-     * story or they are a bug report waiting to happen.
+     * store what they carry sets a trap. That trap used to be the identity itself: it was gated
+     * on a setting that defaulted to off, so a site pasting the snippet had its emails discarded
+     * server-side with no error anywhere. The gate is gone — a declared identity is kept — but
+     * the principle stands for everything still conditional here, the query-parameter allowlist
+     * above all: the snippet and what the server does with it are one story.
      */
     private function beaconIdentityBlock(): void
     {
-        $storesIdentity = (bool) $this->cfg->get('beacon.store_identity', false);
         $storesSignedIn = (bool) $this->cfg->get('beacon.store_signed_in', true);
 
         echo '<h3>Telling Loghound who the visitor is</h3>';
@@ -3506,20 +3505,16 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '<h4>On this installation, right now</h4>';
 
-        echo '<div class="banner ' . ($storesIdentity ? 'banner-good' : 'banner-warn') . '">';
-        if ($storesIdentity) {
-            echo '<strong><code class="mono">data-ident</code> is stored.</strong> '
-                . '<code class="mono">beacon.store_identity</code> is on, so an identity your site sends is '
-                . 'written to the session document, is searchable and facetable in the panel, and stays in '
-                . 'the index and in every backup of it until retention deletes the session.';
-        } else {
-            echo '<strong><code class="mono">data-ident</code> is DISCARDED.</strong> '
-                . '<code class="mono">beacon.store_identity</code> is <code>false</code> in '
-                . '<code>config/loghound.php</code> — the default — so if you paste the snippets above as they '
-                . 'are, the address is dropped by the collector before anything is written and no identity will '
-                . 'ever appear in the panel. Nothing will look broken and there will be no error to find. Set it '
-                . 'to <code>true</code> first, or leave <code>data-ident</code> out of the snippet.';
-        }
+        /* ONE STATE, BECAUSE THERE IS ONE OUTCOME. This used to be two banners for two settings
+           of a switch that no longer exists: a site that sends an identity has it kept. What is
+           worth saying is what that means afterwards — it is personal data, it is searchable,
+           and it lives as long as the session does. */
+        echo '<div class="banner banner-good">';
+        echo '<strong><code class="mono">data-ident</code> is stored.</strong> '
+            . 'An identity your site sends is written to the session document, is searchable and '
+            . 'facetable in the panel, and stays in the index and in every backup of it until retention '
+            . 'deletes the session. Loghound never guesses one: leave the attribute out and there is '
+            . 'no identity at all.';
         echo '</div>';
 
         echo '<div class="banner ' . ($storesSignedIn ? 'banner-good' : 'banner-warn') . '">';
@@ -3592,9 +3587,10 @@ final class Settings extends Controller implements JobHost, Sections
      * two short facts are a list of cards, which also reflows on a phone instead of scrolling.
      *
      * The live state is the reason this reference is worth having in the application at all
-     * rather than only in `docs/BEACON.md`. A reference that lists `data-ident` without saying that
-     * `beacon.store_identity` is off HERE sends an operator away to paste a snippet, see
-     * nothing, and have no way to find out why. The document cannot know; this page can.
+     * rather than only in `docs/BEACON.md`. An option this installation would throw away — a
+     * query parameter that is not on the allowlist, say — says so beside its own name, instead
+     * of being discovered by pasting a snippet and seeing nothing. The document cannot know;
+     * this page can.
      */
     private function beaconOptionsList(): void
     {

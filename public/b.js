@@ -82,10 +82,11 @@
  * for the session — an email, a customer number — and whether the visitor was signed
  * in, through the two data- attributes documented at the top of section 2. Nothing
  * here guesses either: no cookie is read, no form is scraped, no meta tag is looked
- * for. If the site does not say, the fields are absent. The identity is off by
- * default on the server as well (`beacon.store_identity`), and the two can be
- * switched independently, because a split between signed-in and anonymous traffic is
- * worth having without storing anybody's address.
+ * for. If the site does not say, the fields are absent — and if it does say, the
+ * server keeps what it was told, with no setting to turn on first: writing the
+ * attribute into your own template IS the decision. The signed-in flag remains
+ * separately switchable (`beacon.store_signed_in`), because a split between
+ * signed-in and anonymous traffic is worth having without storing anybody's address.
  *
  * ============================================================================
  * GRACEFUL DEGRADATION
