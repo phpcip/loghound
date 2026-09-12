@@ -138,10 +138,6 @@ final class Live extends Controller implements JobHost
         return 'Live';
     }
 
-    public function subtitle(): string
-    {
-        return 'The access log as it is written, translated on the way past.';
-    }
 
     /**
      * @return array<string,mixed>

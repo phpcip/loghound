@@ -47,7 +47,11 @@
     --accent-ink:    #9e340f;
     --on-accent:     #ffffff;
 
-    --c-human:    #d9d4cc;
+    /* THE ONE PLACE THIS PALETTE ALLOWS A SECOND HUE. Everything else in the panel is the
+       accent plus a grey ramp, deliberately. A human verdict is the exception the operator
+       asked for: it is the thing being looked FOR, and a green so desaturated it reads as
+       tinted paper says "this one is a person" without turning the table into a heatmap. */
+    --c-human:    #3f7d55;
     --c-unknown:  #b9b3a9;
     --c-declared: #8a8279;
     --c-ai:       #4a4540;
@@ -89,7 +93,7 @@
         --accent-ink:    #e0763f;
         --on-accent:     #ffffff;
 
-        --c-human:    #3a3631;
+        --c-human:    #55926c;
         --c-unknown:  #57514a;
         --c-declared: #7d766d;
         --c-ai:       #a7a099;
@@ -118,7 +122,7 @@
     --accent-ink:    #e0763f;
     --on-accent:     #ffffff;
 
-    --c-human:    #3a3631;
+    --c-human:    #55926c;
     --c-unknown:  #57514a;
     --c-declared: #7d766d;
     --c-ai:       #a7a099;
@@ -390,7 +394,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
    control bar and the first card that needs separating by more than a breath. */
 main {
     margin-left: var(--side-w);
-    padding: 18px 32px 60px;
+    padding: 6px 32px 60px;
 }
 
 /* Page head. The title is `.sr-only` now (Layout::header) and the lead is gone, so this
@@ -461,9 +465,13 @@ main {
    card heading only has to name the section it sits above — 17px does that — and the space it
    was spending is returned to the table. The rule below is global on purpose: every view gets
    the same treatment, so no page is left with headings a size larger than its neighbours. */
+/* CENTRED, NOT BASELINED. The heading is text and the controls beside it — refresh, Hide, CSV —
+   are icon buttons with no text of their own, so a baseline row hung them off the heading's
+   baseline and every one of them sat visibly low. Centring aligns the optical middles, which is
+   what the eye reads as "on the same row". */
 .card-head {
     display: flex; flex-wrap: wrap; gap: 6px 16px;
-    align-items: baseline; justify-content: space-between;
+    align-items: center; justify-content: space-between;
     padding-bottom: 8px;
     margin-bottom: 14px;
     border-bottom: 1px solid var(--hairline);
@@ -1299,9 +1307,20 @@ tbody tr[data-verdict="likely_bot"] > td:first-child {
 }
 tbody tr[data-verdict="likely_bot"] > td { background: color-mix(in srgb, var(--accent) 3%, transparent); }
 
-tbody tr[data-verdict="human"] > td:first-child { box-shadow: inset 2px 0 0 var(--ink); }
+/* A PERSON IS THE ONLY ROW THAT READS AS GOOD NEWS. Green at 8% is a tint, not a fill: enough
+   that a human visit is findable by eye down a table of two hundred, faint enough that the text
+   on it keeps full contrast in both themes. */
+tbody tr[data-verdict="human"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-human); }
+tbody tr[data-verdict="human"] > td { background: color-mix(in srgb, var(--c-human) 8%, transparent); }
+
+/* AND EVERY VERDICT THAT IS NOT A PERSON CARRIES A MARK OF ITS OWN. `unknown` and
+   `likely_human` had an edge and no tint, and `--c-unknown` against paper is close enough to
+   invisible that those rows looked unjudged rather than judged-as-uncertain. */
 tbody tr[data-verdict="likely_human"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-declared); }
-tbody tr[data-verdict="unknown"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-unknown); }
+tbody tr[data-verdict="likely_human"] > td { background: color-mix(in srgb, var(--c-declared) 6%, transparent); }
+
+tbody tr[data-verdict="unknown"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-axis); }
+tbody tr[data-verdict="unknown"] > td { background: color-mix(in srgb, var(--c-unknown) 16%, transparent); }
 
 /* The engaged clock is the measured one, so it is inked; the log-span fallback stays muted. */
 table.visits td.visit-engaged { color: var(--ink); }
@@ -2173,7 +2192,10 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
     position: sticky;
     top: var(--lh-topbar-h, 0px);
     z-index: 30;
-    margin: calc(var(--nav-pull) * -1) calc(var(--nav-gutter) * -1) 28px;
+    /* 10px, NOT 28. The band under this bar was the last of the space the page head used to
+       take: the bar ends in a hairline, and 28px of nothing under a hairline reads as a gap
+       somebody forgot to close rather than as separation. */
+    margin: calc(var(--nav-pull) * -1) calc(var(--nav-gutter) * -1) 10px;
     padding: 10px var(--nav-gutter);
     background: var(--page);
     border-bottom: 1px solid var(--hairline);

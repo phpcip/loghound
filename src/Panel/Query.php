@@ -596,6 +596,15 @@ final class Query
             'status_class_s'   => 'Status class',
             'status_i'         => 'Status code',
 
+            /* THE SAME QUESTION, ASKED OF A VISIT. `status_codes_is` is the set of codes one
+               session received, so "only the visits that were answered 200" — which an operator
+               asks constantly and which the two fields above cannot answer on this plane — is a
+               plain term filter. It is SESSIONS-ONLY (see the $sessionOnly list in
+               hitFilterFields) for the mirror of the reason those two are hits-only, and it
+               carries the same label as `status_i` on purpose: each plane offers exactly one of
+               the two, so the operator sees one "Status code" filter wherever they are. */
+            'status_codes_is'  => 'Status code',
+
             /* Present on BOTH cores at different grains: on a hit it is what that request
                matched, on a session it is the union across its requests. Same vocabulary, so one
                name (Score\Attacks). */
@@ -655,7 +664,7 @@ final class Query
      */
     public static function multiValuedFilterFields(): array
     {
-        return ['paths_ss', 'bot_reasons_ss', 'search_terms_ss', 'hit_flags_ss'];
+        return ['paths_ss', 'bot_reasons_ss', 'search_terms_ss', 'hit_flags_ss', 'status_codes_is'];
     }
 
     /**
@@ -677,6 +686,7 @@ final class Query
         return [
             'asn_i'       => 'int',
             'status_i'    => 'int',
+            'status_codes_is' => 'int',
             'signed_in_b' => 'bool',
         ];
     }
@@ -785,6 +795,7 @@ final class Query
     public static function hitFilterFields(): array
     {
         $sessionOnly = [
+            'status_codes_is',
             'bot_verdict_s',
             'bot_class_s',
             'bot_reasons_ss',

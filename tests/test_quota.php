@@ -133,10 +133,6 @@ final class LhFilterView extends Controller
         return 'Test';
     }
 
-    public function subtitle(): string
-    {
-        return 'Test';
-    }
 
     public function body(): void
     {

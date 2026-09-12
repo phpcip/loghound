@@ -87,10 +87,6 @@ final class Pages extends Controller
         return 'Pages';
     }
 
-    public function subtitle(): string
-    {
-        return 'Where people arrive, where the log last saw them, and what is moving.';
-    }
 
     /**
      * The three tables, as CSV.

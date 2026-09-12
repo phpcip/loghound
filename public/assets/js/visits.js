@@ -105,7 +105,7 @@ export function visitRow(v) {
         v.country
             ? countryNode(v.country, { flagOnly: true })
             : el('span', { class: 'muted visit-noflag', text: '·' }),
-        v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: '—' })
+        v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })
     ]));
 
     tr.appendChild(el('td', {
@@ -139,9 +139,14 @@ export function visitRow(v) {
     const measured = engaged !== null && engaged > 0;
     const shown = measured ? engaged : span;
 
+    /* WORDS WHERE THERE IS NO NUMBER. A dash in a duration column reads as zero seconds, which
+       is a measurement; "not measured" is the actual fact and is the reason the verdict for such
+       a visit is capped below human. */
+    const unmeasured = shown === null || shown <= 0;
+
     tr.appendChild(el('td', {
-        class: 'mono nowrap' + (measured ? ' visit-engaged' : ' muted'),
-        text: shown === null || shown <= 0 ? '—' : dur(shown),
+        class: unmeasured ? 'nowrap muted' : 'mono nowrap' + (measured ? ' visit-engaged' : ' muted'),
+        text: unmeasured ? 'not measured' : dur(shown),
         title: shown === null || shown <= 0
             ? 'Nothing measured a duration for this visit'
             : (measured

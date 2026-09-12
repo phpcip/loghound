@@ -235,11 +235,6 @@ final class Sessions extends Controller
         return 'Session explorer';
     }
 
-    public function subtitle(): string
-    {
-        return 'Search every session, then open one and watch it happen request by request.';
-    }
-
     /**
      * The two datasets on this view.
      *
@@ -390,7 +385,6 @@ final class Sessions extends Controller
     {
         return match ($action) {
             'list'       => $this->list(),
-            'bounce'     => $this->bounce(),
             'facets'     => $this->facets(),
             'detail'     => $this->detail(),
             'trail'      => $this->trail(),
@@ -400,6 +394,36 @@ final class Sessions extends Controller
             'values'     => $this->values(),
             default      => ['error' => 'Unknown action'],
         };
+    }
+
+    /** A visit that reached at least one HTML page. */
+    private const FQ_REACHED_A_PAGE = 'pages_i:[1 TO *]';
+
+    /**
+     * sessionFqs(), narrowed to visits that actually asked for a page.
+     *
+     * THIS VIEW IS CALLED "RECENT VISITORS" AND A HOTLINKED FAVICON IS NOT A VISITOR. A session
+     * of nothing but asset requests — one image someone else's page embedded, a monitor pulling
+     * /robots.txt, a stray /favicon.ico — has no entry page to name, no path to open and nothing
+     * to watch happen request by request, which is the entire proposition of this screen. They
+     * were filling the table with rows whose page column could only say "no page".
+     *
+     * OVERRIDDEN HERE RATHER THAN FILTERED IN list(), so the whole view moves together: the
+     * table, the facet sidebar's counts, the results caption and the CSV export all read their
+     * scope from this one method. Narrowing only the table would have left the sidebar counting
+     * visits the table refuses to show, which is how two numbers on one page start disagreeing.
+     *
+     * NOTHING IS LOST FROM THE PRODUCT. Asset-only traffic still counts everywhere it is the
+     * subject rather than the noise — Overview's totals, Pages, Bot forensics, the attack
+     * planes — and those views keep the unnarrowed sessionFqs().
+     *
+     * @return array<int,string>
+     */
+    protected function sessionFqs(): array
+    {
+        $fqs = parent::sessionFqs();
+        $fqs[] = self::FQ_REACHED_A_PAGE;
+        return $fqs;
     }
 
     /**
@@ -481,27 +505,6 @@ final class Sessions extends Controller
             'total'   => (int) ($payload['numFound'] ?? 0),
             'payload' => $payload,
         ];
-    }
-
-    /**
-     * The bounce rate for whatever is on screen.
-     *
-     * SETTLED SESSIONS ONLY. A session that is still open has a page count that is still moving,
-     * so a visitor who is on their first page right now would be counted as a one-page visit —
-     * which would make the rate a measurement of how recently people arrived. Panel\Bounce owns
-     * the definition and the threshold; this owns the scope, which is the same range, host and
-     * filters as every other number on the page.
-     *
-     * @return array<string,mixed>
-     */
-    private function bounce(): array
-    {
-        $f = $this->gw->facet('sessions.bounce', $this->gw->sessionsCore(), [
-            'q'  => '*:*',
-            'fq' => $this->settledSessionFqs(),
-        ], Bounce::facets());
-
-        return $this->envelope(['bounce' => Bounce::read($f)]);
     }
 
     /**

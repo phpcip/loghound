@@ -73,6 +73,8 @@ final class Bots extends Controller
             'single_page_10s'        => ['label' => 'Single page, under 10s', 'severity' => 'low', 'why' => 'One page, gone in under ten seconds. Very weak on its own; a bounce looks the same.'],
             'short_visit'            => ['label' => 'Too short to call human', 'severity' => 'low', 'why' => 'The visit lasted under thirty seconds. Nothing in it says automation — there is simply not enough of it to call a person a person, so the verdict stops at likely human.'],
             'no_page_requested'      => ['label' => 'No page requested', 'severity' => 'low', 'why' => 'This visit fetched only assets — an image, a script, /robots.txt — and never asked for an HTML page. Not automation on its own, but nobody read anything, so the verdict stops at likely human.'],
+            'short_visit_no_beacon'  => ['label' => 'Under 30s and no beacon', 'severity' => 'high', 'why' => 'The visit lasted under thirty seconds AND no beacon ever ran. Neither fact convicts alone; together there is no engagement, no interaction and no dwell to show a browser was ever driven by a person.'],
+            'no_duration_measured'   => ['label' => 'Nothing measured a duration', 'severity' => 'low', 'why' => 'No clock on any plane timed this visit: the log span is zero, which is what a single request produces, and no beacon reported engagement. There is no evidence of a person spending time here, so the verdict is held at unknown.'],
             'no_assets'              => ['label' => 'No sub-resources', 'severity' => 'med', 'why' => 'HTML was fetched and not a single stylesheet, script, font or image followed it.'],
             'beacon_forged'          => ['label' => 'Forged beacon timing', 'severity' => 'high', 'why' => 'The claimed dwell time is impossible against the issue time of its own token. The lie is recorded rather than discarded, because the lie is the evidence.'],
             'ua_declared_bot'        => ['label' => 'Declared crawler', 'severity' => 'info', 'why' => 'It said it was a bot and it was telling the truth. Verdict bot, threat none.'],
@@ -101,10 +103,6 @@ final class Bots extends Controller
         return 'Bot forensics';
     }
 
-    public function subtitle(): string
-    {
-        return 'Every verdict, and the evidence behind it.';
-    }
 
     /**
      * The three tables on this view worth taking out as CSV.

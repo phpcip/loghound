@@ -41,7 +41,9 @@ return [
                 '',
             ]));
 
-            // A continuation line, because the LogFormat this project recommends uses them.
+            // A continuation line. The format this project recommends is deliberately ONE line
+            // with no continuations, but an operator's existing vhosts are full of them, so
+            // discovery still has to join them before it can read the format.
             file_put_contents($root . '/sites-enabled/000-site.conf', implode("\n", [
                 '<VirtualHost *:443>',
                 '    ServerName shop.example.com:443',

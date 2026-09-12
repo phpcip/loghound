@@ -101,7 +101,10 @@ function loadFacets() {
         const count = byId('se-count');
         if (count) {
             const m = (data.bounce && data.bounce.measured) || { bounced: 0, sessions: 0 };
-            count.textContent = num(data.matched) + ' hits'
+            /* VISITS, BECAUSE THAT IS WHAT IS BEING COUNTED. `matched` is a count of sessions
+               from the sessions core; calling it "hits" named the other plane entirely and put
+               a request count beside a bounce rate computed over visits. */
+            count.textContent = num(data.matched) + (Number(data.matched) === 1 ? ' visit' : ' visits')
                 + (m.sessions ? ' · ' + pct(m.bounced, m.sessions) + ' Bounced' : '');
         }
     });

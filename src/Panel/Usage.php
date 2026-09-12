@@ -94,10 +94,6 @@ final class Usage extends Controller
         return 'Plan usage';
     }
 
-    public function subtitle(): string
-    {
-        return 'Bandwidth against your plan, and how far back the data goes.';
-    }
 
     /**
      * One dataset: everything this page knows, per index.

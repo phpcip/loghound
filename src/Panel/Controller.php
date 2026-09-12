@@ -290,9 +290,6 @@ abstract class Controller
     /** Human title shown in the header and the <title> tag. */
     abstract public function title(): string;
 
-    /** One line under the title explaining what the view answers. */
-    abstract public function subtitle(): string;
-
     /** Static HTML for the view. Echoes; returns nothing. */
     abstract public function body(): void;
 

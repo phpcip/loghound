@@ -79,10 +79,6 @@ final class Rhythm extends Controller
         return 'When they come';
     }
 
-    public function subtitle(): string
-    {
-        return 'Hour of day against day of week — where a schedule shows up and a person does not.';
-    }
 
     /**
      * The grid, as one record per cell.

@@ -139,10 +139,6 @@ final class Attacks extends Controller implements Sections
         return 'Attacks';
     }
 
-    public function subtitle(): string
-    {
-        return 'What was attempted against this site, and what the server answered.';
-    }
 
     /**
      * The card number for one card id, from the single ordered list above.

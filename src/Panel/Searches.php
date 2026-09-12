@@ -74,10 +74,6 @@ final class Searches extends Controller
         return 'Site search';
     }
 
-    public function subtitle(): string
-    {
-        return 'What visitors typed into your own search box, and what is moving.';
-    }
 
     /**
      * @return array<string,array<string,mixed>>

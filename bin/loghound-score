@@ -801,6 +801,7 @@ function buildSessionDoc(array $session, bool $provisional = false): array
         'status_3xx_i' => (int) $session['st3'],
         'status_4xx_i' => (int) $session['st4'],
         'status_5xx_i' => (int) $session['st5'],
+        'status_codes_is' => array_values(array_map('intval', (array) ($session['status_codes'] ?? []))),
         'got_304_b'    => (bool) $session['got_304'],
 
         'log_span_ms_l'   => (int) $session['log_span_ms'],

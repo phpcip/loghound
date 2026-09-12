@@ -540,6 +540,11 @@ final class Sessionizer
                 'st4'        => 0,
                 'st5'        => 0,
 
+                /* THE DISTINCT CODES THIS VISIT COLLECTED, keyed by code so the set dedupes
+                   itself: a visit that took forty 200s carries one entry, not forty. The four
+                   counters above are for summing; this is for asking. */
+                'codes'      => [],
+
                 /* THE TWO REFUSAL FACTS THE STATUS CLASSES CANNOT EXPRESS, both aggregate-only
                    and neither one a document field — exactly like `own_hits` and `own_assets`,
                    and for the same reason: they are inputs to a scoring rule rather than facts
@@ -717,6 +722,10 @@ final class Sessionizer
 
         if ($status > 0 && ($agg['first_status'] ?? null) === null) {
             $agg['first_status'] = $status;
+        }
+
+        if ($status > 0) {
+            $agg['codes'][$status] = true;
         }
 
         if ($status >= 200 && $status < 300) {
@@ -935,6 +944,7 @@ final class Sessionizer
             'st3'          => (int) ($agg['st3'] ?? 0),
             'st4'          => (int) ($agg['st4'] ?? 0),
             'st5'          => (int) ($agg['st5'] ?? 0),
+            'status_codes' => array_map('intval', array_keys($agg['codes'] ?? [])),
             'got_304'      => (bool) ($agg['got_304'] ?? false),
             'html_200'     => (bool) ($agg['html_200'] ?? false),
 

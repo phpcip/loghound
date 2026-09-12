@@ -511,8 +511,21 @@ export function pathCell(path, opts) {
     const shown = options.text === undefined || options.text === null ? raw : String(options.text);
     const classes = 'urlpath' + (options.mono === false ? '' : ' mono');
 
+    /* THE WHOLE PATH IS ALWAYS READABLE, IN EVERY TABLE. A path is the most frequently truncated
+       value in the product — the column is narrow and the paths are long — and the reader could
+       see that something had been cut with no way to read it. Every table renders its page cell
+       through here, so attaching the panel's own tooltip at this one point covers all of them at
+       once. `data-full` carries the untruncated path, `data-lh-tip` opts the element into the
+       tooltip the rest of the panel uses; the native `title` is deliberately not used, because it
+       is slow to appear and cannot be styled or read on a touch device. */
+    const cell = el('span', { class: classes, text: shown === '' ? 'no path' : shown });
+    if (raw !== '') {
+        cell.setAttribute('data-lh-tip', '1');
+        cell.setAttribute('data-full', raw + (options.query ? '?' + options.query : ''));
+    }
+
     return el('span', { class: 'urlwrap' }, [
-        el('span', { class: classes, text: shown === '' ? '—' : shown }),
+        cell,
         urlMark(raw, options)
     ]);
 }

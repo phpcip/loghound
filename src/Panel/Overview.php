@@ -71,10 +71,6 @@ final class Overview extends Controller
         return 'Overview';
     }
 
-    public function subtitle(): string
-    {
-        return 'Who reached the site, and how long they were actually there.';
-    }
 
     /**
      * The three tables on this view worth taking out as CSV.

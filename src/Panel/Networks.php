@@ -68,10 +68,6 @@ final class Networks extends Controller
         return 'Networks';
     }
 
-    public function subtitle(): string
-    {
-        return 'Autonomous systems, leased netblocks, and where in the world they answer from.';
-    }
 
     /**
      * The three tables on this view, plus the cross-tab.

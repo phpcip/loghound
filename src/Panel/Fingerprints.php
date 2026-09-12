@@ -95,10 +95,6 @@ final class Fingerprints extends Controller
         return 'Fingerprint clusters';
     }
 
-    public function subtitle(): string
-    {
-        return 'One header signature across many addresses is a proxy fleet wearing one client.';
-    }
 
     /**
      * The cluster table, as CSV.

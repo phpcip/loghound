@@ -148,6 +148,13 @@
     <field name="status_4xx_i" type="pint" indexed="true" stored="false" docValues="true"/>
     <field name="status_5xx_i" type="pint" indexed="true" stored="false" docValues="true"/>
 
+    <!-- WHICH codes this visit actually received, as a set. The four counters above say how MANY
+         of each class and cannot answer "show me only the visits that were served a 200" — a
+         question about a visit, not about a request, and until now askable on the hits plane
+         alone. Multi-valued because a visit routinely collects several: a 200, a 304 and a 404
+         is an ordinary afternoon. -->
+    <field name="status_codes_is" type="pint" indexed="true" stored="false" docValues="true" multiValued="true"/>
+
     <!-- Did this session ever receive a 304? Indexed because the no_304_on_repeat rule and
          the forensics view both filter on it. A real browser with a warm cache sends
          conditional requests; most scripted clients never do. -->

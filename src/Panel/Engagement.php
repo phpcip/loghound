@@ -66,10 +66,6 @@ final class Engagement extends Controller
         return 'Engagement';
     }
 
-    public function subtitle(): string
-    {
-        return 'Bounce rate measured on what people did, not on how many pages they happened to load.';
-    }
 
     /**
      * @return array<string,array<string,mixed>>

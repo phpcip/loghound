@@ -476,13 +476,12 @@ textarea {
     .tb-field .ss { flex: 1 1 auto; min-width: 0; }
 
     /*
-     * The page head. The H1 clamp already scales; the lead was still set at 19px against a
-     * 375px measure, which is 32 characters a line. 17px reads better and stays well clear
-     * of the floor.
+     * The page head draws nothing on any screen now — the H1 is visually hidden and the lead
+     * is gone — so the phone override that used to size the lead and reserve 24px under the
+     * head has been removed with them. Leaving the margin here would have quietly put the gap
+     * back at 900px and under, which is the one width where the space is worth most.
      */
 
-    .head { margin-bottom: 24px; }
-    .head .sub { font-size: 17px; }
     .head-tools { gap: 10px 16px; margin-top: 18px; }
 
     /* A card heading and its tools stop competing for one line. */

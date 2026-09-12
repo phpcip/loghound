@@ -70,10 +70,6 @@ final class Sources extends Controller
         return 'Where they came from';
     }
 
-    public function subtitle(): string
-    {
-        return 'What kind of thing sent each visit, and which site actually did.';
-    }
 
     /**
      * @return array<string,array<string,mixed>>

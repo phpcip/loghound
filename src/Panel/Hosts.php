@@ -84,10 +84,6 @@ final class Hosts extends Controller
         return 'Virtual hosts';
     }
 
-    public function subtitle(): string
-    {
-        return 'Which of the sites on this machine gets what kind of traffic.';
-    }
 
     /**
      * The comparison table, as CSV.

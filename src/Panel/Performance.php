@@ -67,10 +67,6 @@ final class Performance extends Controller
         return 'Performance';
     }
 
-    public function subtitle(): string
-    {
-        return 'Latency percentiles per path, and what the server was answering with.';
-    }
 
     /**
      * The two tables on this view.

@@ -77,10 +77,6 @@ final class Indexes extends OpensolrView
         return 'Index analytics';
     }
 
-    public function subtitle(): string
-    {
-        return 'What your Opensolr search indexes are being asked, and how well they answer.';
-    }
 
     /**
      * The facet tables on this view.

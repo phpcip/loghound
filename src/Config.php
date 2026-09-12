@@ -287,7 +287,7 @@ final class Config
             ],
 
             'scoring' => [
-                'rule_version' => 1,
+                'rule_version' => \Loghound\Score\Rules::RULE_VERSION,
                 'weights'      => [],
                 'thresholds'   => [
                     'bot'          => 80,

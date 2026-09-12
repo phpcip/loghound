@@ -42,10 +42,6 @@ final class LhFilterProbe extends Controller
         return 'Probe';
     }
 
-    public function subtitle(): string
-    {
-        return 'Test double';
-    }
 
     public function body(): void
     {

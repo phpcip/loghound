@@ -374,6 +374,43 @@ final class Rules
      */
     private const NO_PAGE_REASON = 'no_page_requested';
 
+    /**
+     * The verdict a visit nothing ever timed is capped at.
+     *
+     * NOT `likely_human`, WHICH IS STILL A CLAIM ABOUT A PERSON. A single request has a log span
+     * of zero and, with no beacon, there is no second clock — so nothing on any plane measured
+     * how long this visitor was here. That is not a short visit, which is a measurement; it is
+     * the absence of one, and the honest name for a visitor with no duration, no engagement and
+     * nothing that could have exculpated them is a bot of undetermined nature.
+     *
+     * The cap is `unknown` rather than a bot verdict because nothing here ACCUSES either: a
+     * person who opens one page and closes the tab before the beacon reports produces exactly
+     * this shape. Unknown is the verdict that says so.
+     */
+    private const NO_DURATION_FLOOR = 'unknown';
+
+    /** The reason recorded when no clock on any plane measured this visit. */
+    private const NO_DURATION_REASON = 'no_duration_measured';
+
+    /**
+     * The reason recorded when a visit was both brief and unwitnessed.
+     *
+     * TWO CONDITIONS, AND BOTH MUST HOLD. Under thirty seconds on the best clock available, AND
+     * no beacon ran at all. Either one alone is ordinary — a person can read a page in twenty
+     * seconds, and a person can block scripts — but together there is nothing left that says a
+     * browser was ever driven by a human: no engagement, no interaction, no dwell, and a log
+     * span too short to be a visit.
+     *
+     * THIS ONE CONVICTS RATHER THAN CAPS. The other two floors in this file lower a verdict to
+     * `likely_human` or `unknown`, which is the right treatment for a visit that merely lacks
+     * evidence. This is the operator's rule and it is deliberately harder: on a site carrying
+     * the beacon, a real visitor produces beacon data within seconds, so a short visit with no
+     * beacon at all is automation. On a site NOT carrying the beacon the second condition is
+     * permanently true and every short visit lands here — which is why installing the snippet
+     * is what makes this rule discriminate rather than convict wholesale.
+     */
+    private const SHORT_NO_BEACON_REASON = 'short_visit_no_beacon';
+
     /** @var array<string,int> Verdict thresholds. */
     private array $thresholds;
 
@@ -604,6 +641,20 @@ final class Rules
                 . 'for an HTML page. That is not automation on its own, but nobody read anything, so the '
                 . 'verdict stops at likely human.',
         ],
+        self::SHORT_NO_BEACON_REASON => [
+            'label' => 'Under 30s and no beacon',
+            'severity' => 'high',
+            'why' => 'The visit lasted under ' . (self::HUMAN_FLOOR_MS / 1000) . ' seconds AND no beacon '
+                . 'ever ran. Neither fact convicts alone; together there is no engagement, no '
+                . 'interaction and no dwell to show a browser was ever driven by a person.',
+        ],
+        self::NO_DURATION_REASON => [
+            'label' => 'Nothing measured a duration',
+            'severity' => 'low',
+            'why' => 'No clock on any plane timed this visit: the log span is zero, which is what a '
+                . 'single request produces, and no beacon reported engagement. There is no evidence '
+                . 'of a person spending time here, so the verdict is held at unknown.',
+        ],
         self::PROVISIONAL_REASON => [
             'label' => 'Session still open',
             'severity' => 'info',
@@ -671,6 +722,8 @@ final class Rules
                    reason unknown. */
                 self::SHORT_VISIT_REASON,
                 self::NO_PAGE_REASON,
+                self::NO_DURATION_REASON,
+                self::SHORT_NO_BEACON_REASON,
             ]
         );
     }
@@ -868,6 +921,43 @@ final class Rules
             }
         }
 
+        /* BRIEF AND UNWITNESSED IS AUTOMATION. Both conditions together, never either alone: the
+           best clock available says under HUMAN_FLOOR_MS, and no beacon ran at all. This is the
+           only rule in this block that CONVICTS instead of capping, because the two facts
+           together leave nothing that could have shown a person: no engagement, no interaction,
+           no dwell, and a span too short to be a visit. A verdict already at `bot` is left
+           alone rather than given a second reason for the same conclusion. */
+        if ($verdict !== 'bot' && empty($s['beacon']) && !self::stayedLongEnough($s)) {
+            $verdict = 'bot';
+            $reasons[] = self::SHORT_NO_BEACON_REASON;
+            $detail[self::SHORT_NO_BEACON_REASON] = [
+                'weight' => 0,
+                'why'    => 'Under ' . (self::HUMAN_FLOOR_MS / 1000) . ' seconds on the best clock '
+                    . 'available, and no beacon ran at all. Either alone would be ordinary; together '
+                    . 'there is nothing left that says a person was ever driving this browser.',
+            ];
+        }
+
+        /* NOBODY TIMED THIS VISIT, SO NOBODY CALLS IT A PERSON. The rule above demotes a visit
+           that was measured and found brief; this one catches the visit that was never measured
+           at all — one request, a log span of zero, no beacon. `likely_human` is still a claim
+           that it was probably a person, and there is nothing here to support even that, so the
+           cap is `unknown`: a visitor of undetermined nature.
+
+           APPLIED TO `likely_human` TOO, which is why it tests the rank rather than the string.
+           A visit that the no-page rule has already lowered to `likely_human` and that nothing
+           timed either has not earned the friendlier of the two verdicts. */
+        if (self::isBetterThanFloor($verdict) && !self::measuredAnyDuration($s)) {
+            $verdict = self::NO_DURATION_FLOOR;
+            $reasons[] = self::NO_DURATION_REASON;
+            $detail[self::NO_DURATION_REASON] = [
+                'weight' => 0,
+                'why'    => 'Nothing measured how long this visit lasted: the log span is zero — the '
+                    . 'shape a single request always has — and no beacon reported any engagement. '
+                    . 'Time on site is the evidence a human verdict rests on, and there is none.',
+            ];
+        }
+
         if (!empty($ctx['provisional']) && self::isBetterThanFloor($verdict) && !self::provedHumanLive($s)) {
             $verdict = self::PROVISIONAL_FLOOR;
             $reasons[] = self::PROVISIONAL_REASON;
@@ -982,6 +1072,45 @@ final class Rules
             && (int) $engaged >= self::HUMAN_FLOOR_MS
             && $interactions !== null
             && (int) $interactions > 0;
+    }
+
+    /**
+     * Did this visit last at least as long as a visit has to last to be called human?
+     *
+     * Measured on the best clock available: the beacon's engaged time where it ran, the log span
+     * otherwise. An unmeasured visit answers false — nothing timed it, so it cannot have cleared
+     * a floor — which is what makes the no-beacon rule catch the one-request session as well as
+     * the twenty-second one.
+     *
+     * @param array<string,mixed> $s
+     */
+    private static function stayedLongEnough(array $s): bool
+    {
+        $engaged = $s['engaged_ms'] ?? null;
+        $best = $engaged !== null && (int) $engaged > 0
+            ? (int) $engaged
+            : (int) ($s['log_span_ms'] ?? 0);
+
+        return $best >= self::HUMAN_FLOOR_MS;
+    }
+
+    /**
+     * Did any clock, on any plane, measure how long this visit lasted?
+     *
+     * TWO CLOCKS AND BOTH MUST BE SILENT. The engaged clock exists only where the beacon ran and
+     * is the honest one; the log span is first request to last and is all there is otherwise. A
+     * session of one request has a span of exactly zero, so zero is treated as "not measured"
+     * rather than as a duration of no time — the distinction the whole cap rests on.
+     *
+     * @param array<string,mixed> $s
+     */
+    private static function measuredAnyDuration(array $s): bool
+    {
+        $engaged = $s['engaged_ms'] ?? null;
+        $span    = $s['log_span_ms'] ?? null;
+
+        return ($engaged !== null && (int) $engaged > 0)
+            || ($span !== null && (int) $span > 0);
     }
 
     /**

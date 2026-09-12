@@ -1053,23 +1053,25 @@ function requestRow(r) {
     }));
 
     tr.appendChild(el('td', { class: 'mono clip', title: r.ip || 'Address not recorded' }, [
-        r.ip ? dimValue('ip_s', r.ip, { mono: true }) : el('span', { class: 'muted', text: '—' })
+        r.ip ? dimValue('ip_s', r.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })
     ]));
 
     tr.appendChild(el('td', { class: 'clip' }, [
         r.country
             ? dimValue('country_s', r.country, { markOnly: true })
-            : el('span', { class: 'muted', text: '—' })
+            : el('span', { class: 'muted', text: 'unknown' })
     ]));
 
     tr.appendChild(el('td', { class: 'clip urlcell', title: (r.method || '') + ' ' + (r.path || '') }, [
         el('span', { class: 'mono muted', text: (r.method || '') + ' ' }),
-        r.path ? pathCell(r.path + (r.query ? '?' + r.query : ''), { host: r.host }) : el('span', { text: '—' })
+        r.path
+            ? pathCell(r.path + (r.query ? '?' + r.query : ''), { host: r.host })
+            : el('span', { class: 'muted', text: 'no path logged' })
     ]));
 
     tr.appendChild(el('td', { class: 'num mono' }, [
         r.status === null || r.status === undefined
-            ? el('span', { class: 'muted', text: '—' })
+            ? el('span', { class: 'muted', text: 'none' })
             : dimValue('status_i', r.status, { mono: true })
     ]));
 

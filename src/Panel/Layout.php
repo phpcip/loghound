@@ -846,9 +846,7 @@ final class Layout
      */
     private static function header(Controller $view): void
     {
-        echo '<header class="head">' . "\n";
-        echo '<h1 class="sr-only">' . Security::esc($view->title()) . '</h1>';
-        echo "</header>\n";
+        echo '<h1 class="sr-only">' . Security::esc($view->title()) . '</h1>' . "\n";
     }
 
     /**

@@ -158,10 +158,6 @@ final class Settings extends Controller implements JobHost, Sections
         return 'Settings';
     }
 
-    public function subtitle(): string
-    {
-        return 'Log sources, storage, privacy, scoring and the beacon snippet.';
-    }
 
     /**
      * Read-only JSON actions.
