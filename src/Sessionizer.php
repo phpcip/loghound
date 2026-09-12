@@ -564,14 +564,6 @@ final class Sessionizer
                 'got_304'    => false,
                 'html_200'   => false,
                 'entry_path' => null,
-
-                /* THE FIRST THING IT ASKED FOR, WHATEVER KIND IT WAS. `entry_path` is the landing
-                   PAGE and is only set for an html hit, so a session that fetched nothing but
-                   /robots.txt, /sitemap.xml or a single image had no path on it at all and every
-                   visit table printed a dash — which reads as lost data rather than as "they
-                   never asked for a page". This is the fallback that keeps that column honest
-                   without widening what `entry_path` means to the Pages and Engagement views. */
-                'first_path' => null,
                 'exit_path'  => null,
                 'paths'      => [],
                 'paths_bytes' => 0,
@@ -703,10 +695,6 @@ final class Sessionizer
         $kind   = (string) ($hit['kind_s'] ?? 'other');
         $status = (int) ($hit['status_i'] ?? 0);
         $path   = (string) ($hit['path_s'] ?? '');
-
-        if ($path !== '' && ($agg['first_path'] ?? null) === null) {
-            $agg['first_path'] = $path;
-        }
 
         if ($kind === 'html') {
             $agg['pages']++;
@@ -959,7 +947,6 @@ final class Sessionizer
                 : null,
 
             'entry_path'   => $agg['entry_path'] ?? null,
-            'first_path'   => $agg['first_path'] ?? null,
             'exit_path'    => $agg['exit_path'] ?? null,
             'uniq_paths'   => count($paths),
             'paths_saturated' => (bool) ($agg['paths_saturated'] ?? false),

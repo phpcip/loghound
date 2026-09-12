@@ -1058,10 +1058,39 @@ final class Parser
             return ['robots', null];
         }
 
+        /*
+         * A DOT IN A PRETTY URL IS NOT A FILE EXTENSION.
+         *
+         * This took everything after the last dot and treated it as one, which is right for
+         * `/style.css` and catastrophic for a slug that happens to contain a dot. On this
+         * installation the victims were the entire `/learn/` library, because those titles are
+         * full of dots — `…query-parser.-how-it-works-and-how-it-helps` yielded an "extension"
+         * of `-how-it-works-and-how-it-helps`, `…solr.fastlrucache-cache-class-removed-in-solr-9`
+         * yielded one 42 characters long, and `my-schema.xml-doesnt-take-effect` yielded
+         * `xml-doesnt-take-effect`.
+         *
+         * None matched an asset kind, an api extension or HTML_EXTS, so each fell through to
+         * `other` — and `other` is not a page. The consequences ran through every layer above:
+         * `pages` never incremented, so real readers arrived as sessions with `pages_i: 0`;
+         * `entry_path_s` and `exit_path_s` were never set, so the page column had nothing to
+         * show; the Pages view undercounted its own articles; and the cap that keeps a
+         * page-less visit at `likely_human` was demoting people who had read an article.
+         *
+         * A REAL EXTENSION IS SHORT AND ALPHANUMERIC, which is the whole test. Anything else is
+         * part of the slug and the path has no extension at all — which the block below already
+         * treats as a page, exactly as this method's own docblock says it should. Eight
+         * characters covers `woff2`, `xhtml` and `m3u8` with room to spare, and the character
+         * class excludes every hyphenated tail above. `.pdf`, `.apk` and `.webp` still read as
+         * extensions and still classify as downloads and assets, so nothing that is not a page
+         * is swept into the pageview count to buy this.
+         */
         $ext = '';
         $dot = strrpos($base, '.');
         if ($dot !== false && $dot < strlen($base) - 1) {
-            $ext = substr($base, $dot + 1);
+            $candidate = substr($base, $dot + 1);
+            if (preg_match('~^[a-z0-9]{1,8}$~D', $candidate) === 1) {
+                $ext = $candidate;
+            }
         }
 
         if ($ext !== '' && isset(self::ASSET_KINDS[$ext])) {
