@@ -82,7 +82,7 @@ final class Fingerprints extends Controller
      */
     public function toolbar(): array
     {
-        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+        return [self::SCOPE_RANGE, self::SCOPE_FACETS, self::SCOPE_CACHE];
     }
 
     public function slug(): string

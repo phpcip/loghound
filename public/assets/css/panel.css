@@ -526,7 +526,6 @@ main {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.facets .card-head > .facets-fold { flex: none; margin-left: auto; }
 .card-num {
     color: var(--accent);
     font-family: var(--font-mono);
@@ -1235,25 +1234,11 @@ tr.members > td { padding: 0; background: var(--band); }
 .searchbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
 .searchbar input[type="search"] { flex: 1 1 340px; min-width: 0; }
 
-.explorer { display: grid; grid-template-columns: 292px minmax(0, 1fr); gap: 32px; align-items: start; }
-
-/* THE FILTER RAIL FOLDS AWAY. It is 292px of permanent furniture in front of the table that is
-   the actual page, and once a reader has picked their filters they want the rows, not the
-   picker. Hidden rather than removed: the state is one class on the grid, so nothing re-renders
-   and the counts are still there when it comes back. */
-.explorer.is-folded { grid-template-columns: minmax(0, 1fr); }
-.explorer.is-folded > .facets { display: none; }
-
-.facets { position: relative; }
-
-/* Sits in the card head's tool row, so the head's own spacing keeps it clear of the refresh
-   control instead of both being pinned to the same corner. */
-.facets-fold { margin-left: auto; }
-
-/* The way back. Only on screen while the rail is folded, and it sits in the grid's first row so
-   it does not push the table down. */
-.facets-show { display: none; justify-self: start; margin-bottom: -16px; }
-.explorer.is-folded > .facets-show { display: inline-flex; }
+/* THE SESSION EXPLORER'S OWN RAIL IS GONE (2026-09-12). It was a second implementation of the
+   shared filter panel — same renderFacetPanel(), its own endpoint, its own fold buttons — so the
+   two drew side by side whenever the shared panel was open and could disagree about what was in
+   force. One panel now, opened from the page bar, on every view that has filters. The grid, the
+   fold class and the two buttons it needed went with it. */
 /* The facet rail's heading is a numbered section heading like every other card's, and it was
    being held at label size by this rule — equal specificity to `.card-head > h2` and further
    down the file, so it won and card 02 alone stayed small, taking its accent number down to
@@ -1661,7 +1646,6 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
     .side .navsub-link.on { border-left-color: var(--accent); }
     .theme-toggle { margin: 0; }
     main { margin-left: 0; padding: 32px 20px 64px; }
-    .explorer { grid-template-columns: minmax(0, 1fr); gap: 32px; }
     .view { gap: 36px; }
     .grid-2 { gap: 36px; }
 }
@@ -2340,6 +2324,28 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
     font: 600 14px/1 var(--font-ui);
     cursor: pointer;
 }
+
+/* THE FILTER PANEL'S CONTROL, WHERE THE HOSTNAME SELECTOR USED TO BE (2026-09-12). Sized like
+   the selects beside it so the bar reads as one row of controls rather than a row with a button
+   dropped into it. Not inside the scope form: it opens a panel, it does not submit a query. */
+.tb-field-btn {
+    flex: none;
+    min-height: 36px;
+    padding: 0 14px;
+    font: 600 14px/1 var(--font-ui);
+    color: var(--ink);
+    background: var(--page);
+    border: 1px solid var(--field-border);
+    border-radius: 2px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.tb-field-btn:hover, .tb-field-btn:focus-visible {
+    background: var(--page);
+    color: var(--ink);
+    border-color: var(--accent);
+}
+.tb-field-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 :root.lh-js .tb-go { display: none; }
 
 .topbar .job-meta { margin-left: auto; }
@@ -3171,10 +3177,8 @@ table .sub,
 
 /* A real boundary between the sidebar and the results, so the page reads as two regions
    rather than as one column of stray text. */
-.explorer .facets { border-right: 1px solid var(--hairline); padding-right: 24px; }
 
 @media (max-width: 900px) {
-    .explorer .facets { border-right: 0; padding-right: 0; border-bottom: 1px solid var(--hairline); }
     .fpanel .facet-groups { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -3194,8 +3198,6 @@ table .sub,
  */
 
 @media (max-width: 1120px) {
-    .explorer { grid-template-columns: minmax(0, 1fr); gap: 28px; }
-    .explorer .facets { border-right: 0; padding-right: 0; }
 }
 
 /* ---------------------------------------------------------------------------

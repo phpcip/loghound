@@ -126,7 +126,7 @@ final class Attacks extends Controller implements Sections
      */
     public function toolbar(): array
     {
-        return [self::SCOPE_RANGE, self::SCOPE_HOST, self::SCOPE_FACETS, self::SCOPE_CACHE];
+        return [self::SCOPE_RANGE, self::SCOPE_FACETS, self::SCOPE_CACHE];
     }
 
     public function slug(): string

@@ -521,6 +521,7 @@ final class Layout
     private static function topBar(Controller $view, array $boot, string $slug, string $section): void
     {
         $range = $view->honours(Controller::SCOPE_RANGE);
+        $host = $view->honours(Controller::SCOPE_HOST);
         $filters = $view->honours(Controller::SCOPE_FACETS) || $view instanceof OpensolrView;
         $applied = self::appliedCount($boot);
 
@@ -549,9 +550,9 @@ final class Layout
            nothing is scoped by anything, so there is no duration and no hostname — and an empty
            form with a submit button in it would be a control that answers a press by doing
            nothing, which is the one thing Controller::toolbar() exists to prevent. */
-        if ($range) {
+        if ($range || $host) {
             echo '<form class="tb-scope" method="get" action="" id="lh-scope-form">';
-            self::hiddenState(['v' => $slug, 's' => Controller::sectionSlug($section)], $range, false);
+            self::hiddenState(['v' => $slug, 's' => Controller::sectionSlug($section)], $range, $host);
 
             if ($range) {
                 $current = Query::range(isset($_GET['range']) && is_string($_GET['range']) ? $_GET['range'] : null);
@@ -564,6 +565,36 @@ final class Layout
                         . Security::esc((string) $def['short']) . '</option>';
                 }
                 echo '</select></span>';
+            }
+
+            if ($host) {
+                /* THE ONE VIEW THAT STILL HAS THIS, AND WHY (2026-09-12). Everywhere else the
+                   hostname selector was a second interface onto `f[host_s][]`, which is the
+                   WEBSITE facet's own parameter — so it went, and the filter panel's control
+                   took its place. Live keeps it: its rows are individual requests rather than
+                   scored sessions, so the panel's dimensions are conclusions that cannot be
+                   applied to a line that arrived a second ago, and host is the only scope it
+                   can honour. Only a view that declares SCOPE_HOST draws this.
+
+                   The list arrives later. Populating it server-side would make every page
+                   render wait on a Solr facet; assets/js/topbar.js fills it when the facet
+                   answers, and the selected value is rendered now so the form round-trips. */
+                $chosen = self::chosenHost();
+                echo '<span class="tb-field" id="lh-hostfield">';
+                echo '<label for="lh-host">Hostname</label>';
+                echo '<select id="lh-host" name="f[host_s][]" data-smart="Hostname">';
+                echo '<option value=""' . ($chosen === '' ? ' selected' : '') . '>All hosts</option>';
+                if ($chosen !== '') {
+                    echo '<option value="' . Security::esc($chosen) . '" selected>'
+                        . Security::esc($chosen) . '</option>';
+                }
+                echo '</select></span>';
+
+                /* AN EMPTY HOST HAS TO BE ABLE TO MEAN "ALL HOSTS", AND A SILENT URL MEANS
+                   "WHATEVER I HAD". Panel\Scope restores a remembered host into a request that
+                   says nothing about one, so choosing "All hosts" would otherwise be undone on
+                   the next load. `fx` is how the URL states an empty filter set out loud. */
+                echo '<input type="hidden" name="fx" id="lh-scope-fx" value="" disabled>';
             }
 
             /* THE ONLY CONTROL HERE THAT SUBMITS ITSELF. With script running, changing a select
@@ -635,6 +666,13 @@ final class Layout
             }
         }
         return $count;
+    }
+
+    /** The virtual host currently selected, or '' for all of them. */
+    private static function chosenHost(): string
+    {
+        $values = Facets::all($_GET)->values(Query::HOST_FIELD);
+        return $values === [] ? '' : (string) $values[0];
     }
 
     /**

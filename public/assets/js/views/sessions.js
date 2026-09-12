@@ -27,36 +27,8 @@
 'use strict';
 
 import { api, byId, loadCard, noDataYet, num, hideEmpty, pct } from '../core.js';
-import { renderFacetPanel } from '../facets.js';
 import { renderLinkPager } from '../pager.js';
 import { fillVisits } from '../visits.js';
-
-/**
- * The facet sidebar, rendered by the SHARED control.
- *
- * It used to have its own renderer, and that renderer was the one nobody recognised as a filter:
- * five lists of `label   count` in body text with no affordance, no selected state and no
- * alignment. There is one facet renderer now (assets/js/facets.js) and the sidebar, the
- * page-wide bar and the detail dialog all use it, so none of them can drift into being the
- * unrecognisable one again.
- */
-function renderFacets(data) {
-    const holder = byId('se-facet-list');
-    if (holder) {
-        renderFacetPanel(holder, data.facets, data.multi, SIDEBAR_VALUES);
-    }
-}
-
-/**
- * Values shown per dimension in the narrow sidebar before "show all".
- *
- * Nineteen dimensions at twelve values each is a two-hundred-row column nobody reads to the
- * bottom of. Six is enough to see which value dominates, which is the question a facet list
- * answers, and the rest are one press away. A value that is currently SELECTED is always shown
- * regardless of where it falls in the order — a filter you cannot see is a filter you cannot
- * remove.
- */
-const SIDEBAR_VALUES = 6;
 
 /**
  * Fill the table, or say why it is empty.
@@ -77,40 +49,6 @@ function renderRows(data) {
 }
 
 /**
- * Load the facet sidebar, and say whether the headline count is a filtered one.
- *
- * "117 matching" reads as a total unless it says otherwise, and on a filtered page it is not one.
- * The count line names how many filters produced it, which is the least it can do given the
- * chips are in a strip at the top of the page rather than next to this number.
- */
-function loadFacets() {
-    return loadCard('se-facets', 'Counting facet values', async () => {
-        const data = await api('sessions', 'facets');
-        renderFacets(data);
-
-        /* TWO FACTS, NOTHING ELSE. This used to recite how many filters were active — which the
-           chips at the top of the page already say — and what share of visits carried beacon
-           data, which is a diagnostic about the instrument rather than about the traffic. The
-           caption now answers the two questions somebody scanning a visit list actually has:
-           how many, and how many left immediately.
-
-           THE RATE IS THE ONE THE BOUNCE CARD PUBLISHED, read off the same facet on the same
-           query (Bounce::facets(), measured human visits that loaded a page and ran a beacon),
-           so removing that card did not quietly introduce a second, differently-computed bounce
-           figure beside it. */
-        const count = byId('se-count');
-        if (count) {
-            const m = (data.bounce && data.bounce.measured) || { bounced: 0, sessions: 0 };
-            /* VISITS, BECAUSE THAT IS WHAT IS BEING COUNTED. `matched` is a count of sessions
-               from the sessions core; calling it "hits" named the other plane entirely and put
-               a request count beside a bounce rate computed over visits. */
-            count.textContent = num(data.matched) + (Number(data.matched) === 1 ? ' visit' : ' visits')
-                + (m.sessions ? ' · ' + pct(m.bounced, m.sessions) + ' Bounced' : '');
-        }
-    });
-}
-
-/**
  * Load a page of results.
  *
  * `start` is read from the URL by the server, so the pager below the table is a set of real
@@ -125,80 +63,6 @@ function loadResults() {
     });
 }
 
-/**
- * Entry point.
- *
- * The table and the sidebar are separate requests: the rows appear as soon as the documents are
- * back rather than waiting on eight terms facets. The `?open=` deep link is handled by
- * detail.js, which app.js wires on every view.
- */
-/** Where the folded/unfolded state of the filter rail is remembered, per viewer. */
-const FOLD_KEY = 'lh.explorer.filters.folded';
-
-/**
- * Read the remembered state.
- *
- * Wrapped because the accessor itself throws in a browser with site data blocked, and a filter
- * rail that cannot remember its state must still open — an unreadable preference is "not folded",
- * never an exception that takes the rest of the view's wiring down with it.
- */
-function readFolded() {
-    try {
-        return window.localStorage.getItem(FOLD_KEY) === '1';
-    } catch (err) {
-        return false;
-    }
-}
-
-/** Remember it, or carry on without remembering. */
-function writeFolded(folded) {
-    try {
-        window.localStorage.setItem(FOLD_KEY, folded ? '1' : '0');
-    } catch (err) {
-        /* Nothing to do: the toggle still works for this page view. */
-    }
-}
-
-/**
- * Fold the filter rail away and bring it back.
- *
- * The rail is 292px of permanent furniture in front of the table that IS this page, and once the
- * filters are picked the reader wants the rows. Nothing is re-fetched either way — the state is
- * one class on the grid — so the counts are exactly as they were when it comes back.
- *
- * Focus moves to whichever control replaced the one just pressed, because the pressed button is
- * the one that disappears and leaving focus on a hidden element strands keyboard navigation.
- */
-function wireFilterFold() {
-    const grid = byId('se-explorer');
-    const hide = byId('se-facets-fold');
-    const show = byId('se-facets-show');
-    if (!grid || !hide || !show) {
-        return;
-    }
-
-    const apply = (folded) => {
-        grid.classList.toggle('is-folded', folded);
-        hide.setAttribute('aria-expanded', folded ? 'false' : 'true');
-    };
-
-    apply(readFolded());
-
-    hide.addEventListener('click', () => {
-        apply(true);
-        writeFolded(true);
-        show.focus();
-    });
-
-    show.addEventListener('click', () => {
-        apply(false);
-        writeFolded(false);
-        hide.focus();
-    });
-}
-
 export default function init() {
-    wireFilterFold();
     loadResults();
-    loadFacets();
 }
