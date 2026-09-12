@@ -667,6 +667,15 @@ td.mono, th.mono, table .mono { font-family: var(--font-mono); font-size: 13px; 
     color: var(--faint);
 }
 .nobeacon > svg { flex: none; }
+
+/* A VISIT THAT REQUESTED NO PAGE. Set in the faint tone the other "nothing to show here"
+   markers use, italic so it reads as a statement about the row rather than as a value in the
+   column, and with the help cursor that says the tooltip is worth reaching for. */
+.nopage {
+    color: var(--faint);
+    font-style: italic;
+    cursor: help;
+}
 td.nowrap, th.nowrap { white-space: nowrap; }
 
 td.clip { max-width: 46ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

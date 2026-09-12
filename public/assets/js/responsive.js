@@ -783,7 +783,7 @@ const CONTROL_TIP_SELECTOR = '.card-refresh[data-lh-tip], .rowopen[data-lh-tip]'
    drawn by one function (pathCell in url.js), so marking that one wrapper puts the full path
    under the pointer in every table at once. */
 const VALUE_TIP_SELECTOR = '.facet-opt[data-lh-tip], .dim[data-lh-tip], .urlwrap[data-lh-tip], '
-    + '.nobeacon[data-lh-tip]';
+    + '.nobeacon[data-lh-tip], .nopage[data-lh-tip]';
 
 /**
  * Everything one delegated listener has to recognise, composed rather than written out again.

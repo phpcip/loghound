@@ -110,12 +110,11 @@ export function visitRow(v) {
 
     tr.appendChild(el('td', {
         class: 'clip urlcell',
-        title: v.entry || 'No entry page recorded',
         'data-sort': v.entry || ''
     }, [
         v.entry
             ? pathCell(v.entry, { host: v.host })
-            : el('span', { class: 'muted', text: '—' })
+            : noPageMark()
     ]));
 
     /* THE NAME THE SITE GAVE US, and a filter like any other value: pressing it narrows the
@@ -198,6 +197,31 @@ function bounceMark(v) {
         noBeaconMark(),
         el('span', { class: 'muted', text: pct })
     ]);
+}
+
+/**
+ * A visit that asked for no page at all, said in words instead of as a dash.
+ *
+ * WHAT IT ACTUALLY MEANS. The client fetched only non-page resources — an image, a script, a
+ * stylesheet, /robots.txt — and never requested an HTML page. That is a real and common
+ * shape: a hotlinked image, a crawler checking robots, a monitor pulling one asset. A dash
+ * asked the reader to infer all of that from a punctuation mark, and it reads as lost data.
+ *
+ * IT IS ALSO UNRECOVERABLE FOR OLD VISITS, which is why this says so rather than leaving the
+ * column blank pending a backfill. Asset requests are not indexed into the hits core unless
+ * `ingest.index_assets` is on, so for a session recorded before the sessionizer began keeping
+ * the first path of any kind, the path exists in no index to recover. New visits name what
+ * they fetched; these cannot be repaired, only explained.
+ */
+function noPageMark() {
+    return el('span', {
+        class: 'nopage',
+        text: 'no page',
+        'data-lh-tip': '1',
+        'data-full': 'This visit never requested an HTML page — it fetched only assets, such as '
+            + 'an image, a script or /robots.txt. Visits recorded before this was tracked cannot '
+            + 'name the asset, because asset requests are not indexed by default.'
+    });
 }
 
 /** Where the mark below is drawn. */
