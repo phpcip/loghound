@@ -4719,6 +4719,31 @@ button.stat:hover .stat-go { color: var(--accent); }
 .live-find:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .live-excl-note { font-size: 13px; }
 
+/* A RULE READS AS TEXT AND EDITS AS A FIELD, with nothing to click first. Transparent until
+   pointed at, so the list stays a list; outlined on hover so it is discoverable; and properly a
+   field once focused. */
+.rule-pattern,
+.rule-field {
+    width: 100%;
+    padding: 4px 6px;
+    font: inherit;
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+}
+
+.rule-pattern.mono { font-family: var(--font-mono); }
+.rule-pattern:hover,
+.rule-field:hover { border-color: var(--field-border); }
+
+.rule-pattern:focus,
+.rule-field:focus {
+    background: var(--page);
+    border-color: var(--accent);
+    outline: none;
+}
+
 /* ECHARTS MEASURES ITS CONTAINER, so the height has to come from here: a div with no height
    renders nothing at all and looks like a chart that failed rather than one never sized. */
 .live-chart { height: 120px; margin: 0 0 16px; }

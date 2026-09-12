@@ -1060,9 +1060,32 @@ function ruleRow(rule, index, mount, generation, draft) {
         renderExclusions(mount, generation, draft);
     });
 
+    /* EDITED IN PLACE, because a rule that is one character wrong is the common case and
+       remove-and-retype is a poor answer to it. These are real inputs that render as plain text
+       until they are hovered or focused: no click-to-swap, so the value is always selectable,
+       always keyboard-reachable, and there is no second state to get stuck in. */
+    const field = el('select', { class: 'rule-field' },
+        Object.keys(ruleFields).map((slug) => el('option', { value: slug, text: ruleFields[slug] })));
+    field.value = rule.field;
+    field.addEventListener('change', () => {
+        draft[index].field = field.value;
+    });
+
+    const pattern = el('input', {
+        type: 'text',
+        class: 'rule-pattern mono',
+        value: rule.pattern,
+        autocomplete: 'off',
+        spellcheck: 'false',
+        'aria-label': 'Pattern'
+    });
+    pattern.addEventListener('input', () => {
+        draft[index].pattern = pattern.value;
+    });
+
     return el('tr', {}, [
-        el('td', { text: ruleFields[rule.field] || rule.field }),
-        el('td', { class: 'mono clip', title: rule.pattern, text: rule.pattern }),
+        el('td', {}, [field]),
+        el('td', {}, [pattern]),
         el('td', {}, [toggle]),
         el('td', {}, [remove])
     ]);
