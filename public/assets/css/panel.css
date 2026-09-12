@@ -4140,12 +4140,13 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 /* The popup. `position: absolute` against `.ss`, which is the control's own box, so it opens
    under the control wherever the control happens to be — including inside the sticky top bar,
    whose z-index it has to clear. */
+/* FIXED, AND PLACED BY smartselect.js. Absolute made the panel a child of whatever scrolled —
+   the dialog body, a table's own scroller — and it was clipped at that edge instead of the
+   window's. The offsets come from the script because a fixed box has no anchor of its own. */
 .ss-pop {
-    position: absolute;
+    position: fixed;
     z-index: 42;
-    top: calc(100% + 4px);
-    left: 0;
-    min-width: 100%;
+    overflow-y: auto;
     max-width: 340px;
     padding: 8px;
     background: var(--page);
@@ -4165,8 +4166,9 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
     border-radius: var(--radius);
 }
 
+/* No plateau of its own: smartselect.js sizes the panel to the room it actually has, and a
+   second ceiling here would cap the list at 280px inside a panel with far more space. */
 .ss-list {
-    max-height: 280px;
     margin: 0;
     padding: 0;
     overflow-y: auto;

@@ -108,6 +108,11 @@ final class Ua
         ['googlebot-news',        'Googlebot-News',      'search',   false],
         ['storebot-google',       'StoreBot-Google',     'search',   false],
         ['google-inspectiontool', 'Google-InspectionTool', 'search', false],
+        /* GoogleOther is Google's own crawler for everything that is not web search, and it
+           says so in as many words. It was missing here, so a request that announced itself
+           plainly came out unclassified — an unknown verdict sitting in a list of Googlebot
+           hits from the same address, which is the one place a reader is sure to notice. */
+        ['googleother',           'GoogleOther',         'search',   false],
         ['adsbot-google',         'AdsBot-Google',       'search',   false],
         ['mediapartners-google',  'Mediapartners-Google', 'search',  false],
         ['googlebot',             'Googlebot',           'search',   false],

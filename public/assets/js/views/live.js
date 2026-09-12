@@ -487,7 +487,15 @@ async function openLine(id) {
             ['When', when(row.ts)],
             ['Virtual host', row.host ? hostCell(row.host) : null],
             ['Method', row.method, true],
-            ['Path', pathCell(row.path, { host: row.host, query: row.query })],
+            /* SHOWN WITH ITS QUERY STRING. The link always carried it — siteUrl() composes path
+               and query — but the cell printed the bare path, so the row looked like it would
+               open something other than the request it describes. The query cannot be folded
+               into the path argument: `?` is not a path character and would be encoded. */
+            ['Path', pathCell(row.path, {
+                host: row.host,
+                query: row.query,
+                text: row.path + (row.query ? '?' + row.query : '')
+            })],
             ['Query string', row.query || null, true],
             ['Protocol', row.proto, true],
             ['Answered with', statusNode(row)],

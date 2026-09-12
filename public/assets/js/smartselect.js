@@ -169,6 +169,44 @@ function sync(state) {
     }
 }
 
+/**
+ * Put the popup against its button, in viewport coordinates.
+ *
+ * WHY FIXED RATHER THAN ABSOLUTE. An absolutely positioned panel is clipped by any ancestor
+ * that scrolls, and the panel has two of them: a dialog body and a horizontally scrolling
+ * table. Inside the exclusions dialog that meant the list opened, was cut off at the dialog
+ * edge, and looked like a search box with no options under it at all.
+ *
+ * IT FLIPS WHEN THERE IS NO ROOM BELOW. A list that opens downward off the bottom of the
+ * window is the same defect in a different direction, and a control near the foot of a dialog
+ * is exactly where the last rule sits.
+ */
+function place(state) {
+    const box = state.button.getBoundingClientRect();
+    const room = document.documentElement.clientHeight - box.bottom;
+    const pop = state.pop;
+
+    pop.style.left = box.left + 'px';
+    pop.style.minWidth = box.width + 'px';
+
+    if (room < 260 && box.top > room) {
+        pop.style.top = '';
+        pop.style.bottom = (document.documentElement.clientHeight - box.top + 4) + 'px';
+        pop.style.maxHeight = (box.top - 12) + 'px';
+    } else {
+        pop.style.bottom = '';
+        pop.style.top = (box.bottom + 4) + 'px';
+        pop.style.maxHeight = (room - 12) + 'px';
+    }
+}
+
+/** Keep an open popup against its button while the page moves under it. */
+function follow() {
+    if (openOne) {
+        place(openOne);
+    }
+}
+
 /** Open the popup with the whole list, whatever was typed last time. */
 function open(state) {
     if (openOne && openOne !== state) {
@@ -179,6 +217,9 @@ function open(state) {
     state.pop.hidden = false;
     state.button.setAttribute('aria-expanded', 'true');
     paint(state);
+    place(state);
+    window.addEventListener('scroll', follow, true);
+    window.addEventListener('resize', follow);
     state.search.focus();
 }
 
@@ -188,6 +229,8 @@ function close(state, refocus) {
     state.button.setAttribute('aria-expanded', 'false');
     if (openOne === state) {
         openOne = null;
+        window.removeEventListener('scroll', follow, true);
+        window.removeEventListener('resize', follow);
     }
     if (refocus !== false) {
         state.button.focus();
