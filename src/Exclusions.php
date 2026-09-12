@@ -63,7 +63,7 @@ final class Exclusions
      * having — most traffic has a log behind it — but it is not worth having SILENTLY, so the
      * settings card names them and this list is what it names them from.
      */
-    public const LOG_ONLY_FIELDS = ['method', 'status'];
+    public const LOG_ONLY_FIELDS = ['method', 'status', 'client'];
 
     /** Where the rules live in the configuration file. */
     public const CONFIG_KEY = 'exclusions';
