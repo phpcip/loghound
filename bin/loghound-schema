@@ -91,11 +91,18 @@ $configPath = getenv('LOGHOUND_CONFIG') ?: $root . '/config/loghound.php';
 
 $apply = false;
 $quiet = false;
+$force = false;
 
 foreach (array_slice($argv, 1) as $arg) {
     switch ($arg) {
         case '--apply':
             $apply = true;
+            break;
+        /* FORCE IMPLIES APPLY. Asking for --force alone and being told nothing happened, because
+           the flag that does the uploading was also required, is a trap with no upside. */
+        case '--force':
+            $apply = true;
+            $force = true;
             break;
         case '--check':
             break;
@@ -152,10 +159,15 @@ if (!$apply) {
     exit(Schema::exitCode((string) $report['state']));
 }
 
-if ($report['state'] === Schema::CURRENT) {
+/* CURRENT MEANS THE FIELDS MATCH, AND NOTHING MORE. It is not a statement about solrconfig, so
+   a release that changes an update chain, a processor or a handler leaves every index reporting
+   CURRENT while the change never reaches one. --force is how an operator uploads anyway. */
+if ($report['state'] === Schema::CURRENT && !$force) {
     $saved = Schema::writeCache($cfg, $report);
     lh_schema_verdict($report, $root, $saved, false);
-    fwrite(STDOUT, "Nothing to apply.\n");
+    fwrite(STDOUT, "Nothing to apply. The fields already match on both indexes.\n"
+        . "That compares FIELDS only — it cannot see a solrconfig change. To upload this\n"
+        . "release's configsets anyway: " . Schema::command($root) . " --force\n");
     exit(LH_SCHEMA_OK);
 }
 
@@ -163,7 +175,7 @@ $say('');
 $say('Applying this release\'s configsets.');
 
 try {
-    $result = Schema::apply($cfg, $root, $report, null, $say);
+    $result = Schema::apply($cfg, $root, $report, null, $say, $force);
 } catch (\Throwable $e) {
     fwrite(STDERR, 'Loghound: the push failed: ' . $e->getMessage() . "\n");
     exit(LH_SCHEMA_FAILED);
@@ -251,8 +263,20 @@ loghound-schema — check, and fix, the schema your live indexes are running.
   loghound-schema                compare this release against both live schemas, change nothing
   loghound-schema --check        the same, spelled out
   loghound-schema --apply        upload this release's configsets where fields are missing
+  loghound-schema --force        upload them even where the fields already match, and reload
   loghound-schema --quiet        print only what is wrong
   loghound-schema --help         this
+
+--apply looks at FIELDS. It uploads to an index that is missing one, and skips an index whose
+fields already agree. That is the right default and it has one blind spot: solrconfig.xml. An
+update chain, a processor, a request handler or an updateLog can change without a single field
+changing, and every index will report "up to date" while the new configset never leaves this
+checkout. --force is for exactly that case: it uploads the whole configset to both indexes
+whatever the field comparison says, and the platform reloads each core behind it.
+
+--force does NOT override the refusal to push to an index whose live schema could not be read.
+That refusal exists so a push never overwrites a schema nobody has looked at, and forcing does
+not make that safe.
 
 Exit codes:
   0  up to date

@@ -457,13 +457,33 @@ final class Schema
      * costs a re-run when the control plane answers again; pushing blind costs data. Setup's
      * reuse path makes the same choice for the same reason.
      *
-     * An index already current is skipped, not re-pushed. There is nothing to gain from a core
-     * reload on a live index that is already right.
+     * An index already current is skipped, not re-pushed — UNLESS $force says otherwise.
+     *
+     * ------------------------------------------------------------------------------------
+     * WHY $force EXISTS, AND WHAT "CURRENT" ACTUALLY MEANS
+     * ------------------------------------------------------------------------------------
+     * CURRENT means THE FIELDS MATCH. It is computed by comparing the field names this release
+     * writes against the field names the live schema declares, and it says nothing whatever
+     * about solrconfig.xml — not the update chain, not a processor, not a request handler, not
+     * an updateLog.
+     *
+     * So a release that changes only solrconfig, or that adds a field Solr manages rather than
+     * one Loghound writes, is invisible to the check: every index reports CURRENT, this method
+     * skips all of them, and the operator is told "nothing to apply" while the thing they are
+     * trying to fix never leaves the repository. That is exactly how `_root_` and the update
+     * chain sat correct in git and absent from two live cores while atomic updates failed.
+     *
+     * $force therefore pushes the configset regardless of field state. It does NOT weaken the
+     * refusal above it: an index whose live schema could not be read is still refused, because
+     * that refusal is about not overwriting a schema nobody has looked at, which force does not
+     * make safe. Force says "the fields already agreeing is not a reason to skip", nothing more.
      *
      * @param array{indexes:array<int,array<string,mixed>>} $report From inspect(), so that this
      *                                                              never pushes without having
      *                                                              read what is there.
      * @param callable|null $say Progress sink, one line at a time.
+     * @param bool $force Push even to an index whose fields already match, for a configset
+     *                    change the field comparison cannot see.
      * @return array{state:string,changed:int,indexes:array<int,array<string,mixed>>}
      */
     public static function apply(
@@ -471,7 +491,8 @@ final class Schema
         string $root,
         array $report,
         ?callable $transport = null,
-        ?callable $say = null
+        ?callable $say = null,
+        bool $force = false
     ): array {
         $note = $say ?? static function (string $line): void {
         };
@@ -486,13 +507,15 @@ final class Schema
             $core = (string) ($found['core'] ?? '');
             $state = (string) ($found['state'] ?? self::UNREADABLE);
 
-            if ($state === self::CURRENT) {
+            if ($state === self::CURRENT && !$force) {
                 $rows[] = [
                     'role'    => $role,
                     'core'    => $core,
                     'state'   => 'skipped',
                     'files'   => [],
-                    'message' => $core . ' already has every field this release writes; nothing was uploaded.',
+                    'message' => $core . ' already has every field this release writes; nothing was uploaded. '
+                        . 'That compares FIELDS only — a solrconfig change is invisible to it, so use --force '
+                        . 'to upload this release\'s configset anyway.',
                 ];
                 continue;
             }

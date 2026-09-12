@@ -4391,17 +4391,25 @@ final class Settings extends Controller implements JobHost, Sections
         $state = (string) $notice['state'];
         $fixable = $state === Schema::BEHIND || $state === Schema::MANAGED;
 
+        /* --force IS OFFERED IN EVERY STATE, INCLUDING THE HEALTHY ONE, and that is the whole
+           point of it. This card used to print the read-only check command to anyone whose
+           fields already matched, which is every correctly installed site — so the one command
+           that uploads a changed solrconfig was shown only to installations that happened to be
+           missing a field. An operator whose indexes are "up to date" and whose update chain is
+           a release behind had no route from this page to fixing it. */
         $lines = [Schema::command(self::root())];
         if ($fixable) {
             $lines[] = Schema::command(self::root()) . ' --apply';
         }
+        $lines[] = Schema::command(self::root()) . ' --force';
+
         self::commandBlock('set-solr-schema', [
             'key'     => 'schema',
             'title'   => $state === Schema::MANAGED
                 ? 'Check it, then migrate the index off the managed schema factory'
                 : ($fixable
                     ? 'Check it, then push this release\'s configsets'
-                    : 'Check it from a shell'),
+                    : 'Check it, or re-upload this release\'s configsets'),
             'lines'   => $lines,
             'problem' => '',
         ]);
@@ -4412,6 +4420,14 @@ final class Settings extends Controller implements JobHost, Sections
             . '<code class="mono">--apply</code> is additive: it uploads the configsets and '
             . 'reloads the cores, and it does not touch a document already in the index. Run it after '
             . 'every upgrade.</p>';
+        echo '<p class="muted"><strong>Up to date here means the FIELDS match.</strong> It is not a '
+            . 'statement about <code class="mono">solrconfig.xml</code>: an update chain, a request '
+            . 'handler or an updateLog can change with no field changing at all, and both indexes will '
+            . 'still report up to date while the new configset never reaches them. '
+            . '<code class="mono">--force</code> uploads this release\'s <code class="mono">schema.xml</code>, '
+            . '<code class="mono">solrconfig.xml</code> and the mapping file to both indexes whatever the '
+            . 'field comparison says, and the platform reloads each core behind it. It is the command to '
+            . 'run when a release changes Solr configuration rather than Solr fields.</p>';
 
         if ($this->gw->isDemo()) {
             echo '<p class="muted">Checking is switched off while the panel is showing demo data.</p>';
