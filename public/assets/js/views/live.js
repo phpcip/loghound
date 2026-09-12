@@ -19,9 +19,14 @@
  * ---------------------------------------------------------------------------------
  * The server ends each connection after its own limit and EventSource reconnects by itself,
  * carrying the cursor as `Last-Event-ID`, so nothing is missed and the reader sees nothing
- * happen. This end stops asking altogether once the tab has been watching for WATCH_MS, or as
- * soon as the tab is hidden — a stream nobody is looking at is the one that runs for a week.
- * Both land in the same state: stopped, with a control that says Resume and a line saying why.
+ * happen. This end does not stop on its own at all.
+ *
+ * IT USED TO, TWICE OVER, AND BOTH WERE WRONG. A fifteen-minute cap ended the stream in a tab
+ * somebody was watching, and a `visibilitychange` handler ended it the moment the tab lost
+ * focus — so glancing at another window for a second came back to a stopped page. The operator
+ * decides: Pause stops it, and navigating away stops it because the document is discarded and
+ * the connection with it. Nothing else does. A connection costs one PHP worker for 45 seconds
+ * at a time and the server is what bounds it.
  *
  * EVERY VALUE HERE CAME OFF A LOG LINE, which is attacker-chosen bytes by definition, and it is
  * rendered the moment it arrives with no batch job in between. Nothing is assigned to innerHTML
@@ -44,17 +49,11 @@ import { exportLink } from '../export.js';
 /** Rows kept in the table. Beyond this the oldest are dropped, which the caption says. */
 const MAX_ROWS = 300;
 
-/** How long one tab keeps a stream open before it stops asking and offers to resume. */
-const WATCH_MS = 15 * 60 * 1000;
-
 /** The open connection, or null. */
 let source = null;
 
 /** Rows currently in the table, by id, so the dialog can open one without a second fetch. */
 const held = new Map();
-
-/** When this watch began, for the limit above. */
-let watchStarted = 0;
 
 /** Requests shown since the page was opened. */
 let seen = 0;
@@ -157,17 +156,13 @@ function onQuiet(event) {
 /**
  * The server has reached its own connection limit.
  *
- * Ordinarily nothing happens here: the browser reconnects by itself within a few seconds and
- * the reader never knows. Once this tab has been watching longer than WATCH_MS the reconnect is
- * refused instead, because a live page left open in a forgotten tab is a connection held for
- * as long as the machine is up.
+ * Nothing happens here but a word on the state line: the browser reconnects by itself within a
+ * few seconds, carrying the cursor, and the reader never knows. This used to refuse the
+ * reconnect once the tab had been watching for fifteen minutes, which ended the stream under
+ * somebody who was looking at it.
  */
 function onPause(event) {
-    const data = parse(event);
-    if (Date.now() - watchStarted >= WATCH_MS) {
-        stop('limit', data && data.cursor ? String(data.cursor) : '');
-        return;
-    }
+    parse(event);
     setState('live', 'Reconnecting');
 }
 
@@ -210,8 +205,6 @@ function stop(reason, cursor) {
     }
 
     const words = {
-        limit: 'Stopped after fifteen minutes. Nothing was lost; resuming picks up from here.',
-        hidden: 'Stopped because this tab went to the background.',
         lost: 'The connection dropped and could not be re-established.',
         asked: 'Paused.',
         nosource: 'There is nothing to read. Settings is where log sources are configured.'
@@ -228,7 +221,6 @@ function begin() {
     if (source) {
         return;
     }
-    watchStarted = Date.now();
     setState('wait', 'Connecting');
     toggleLabel('Pause');
     connect(resumeFrom);
@@ -1236,12 +1228,6 @@ export default function init() {
             }
         });
     }
-
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden && source) {
-            stop('hidden');
-        }
-    });
 
     if (typeof window.EventSource !== 'function') {
         setState('off', 'This browser cannot hold a stream open, so there is nothing to show here.');

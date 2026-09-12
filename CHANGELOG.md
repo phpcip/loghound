@@ -7,6 +7,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.0.1] — 2026-09-13
+
+### Changed
+
+- **The live stream stops when you stop it, and not before.** Two things ended it on their own
+  and neither should have. A `visibilitychange` handler closed the connection the moment the tab
+  lost focus, so glancing at another window for a second came back to a stopped page; and a
+  fifteen-minute cap refused the reconnect under somebody who was watching. Both are gone. The
+  stream now ends on Pause, on navigating away — the document is discarded and the connection
+  with it — or when the connection genuinely drops and cannot be re-established. The server
+  still ends each connection after 45 seconds and the browser still reconnects by itself,
+  carrying the cursor, which is what bounds the cost.
+
+---
+
 ## [1.0.0] — 2026-09-13
 
 First public release.
@@ -885,4 +900,5 @@ Recorded rather than quietly carried, per the project's own honesty rule.
 
 ---
 
+[1.0.1]: https://github.com/phpcip/loghound/releases/tag/v1.0.1
 [1.0.0]: https://github.com/phpcip/loghound/releases/tag/v1.0.0
