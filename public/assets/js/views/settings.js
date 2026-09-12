@@ -173,7 +173,15 @@ async function loadBeaconStatus() {
     const box = byId('beacon-status');
     const label = byId('beacon-status-label');
     const detail = byId('beacon-status-detail');
-    if (!box || !label || !detail) {
+
+    /* TWO PAGES ASK THIS QUESTION, AND ONLY ONE OF THEM WAS ALLOWED TO. Settings is split into
+       sections that render one at a time, so the Beacon section's three elements do not exist
+       while Finish setup is on screen — and this guard demanded all three before doing anything.
+       On Finish setup it returned immediately, paintFinishBeacon() was never reached, and the
+       card sat on the "Beacon: checking" that PHP had written into it, permanently, on the one
+       page whose entire job is to say whether setup is done. Either set is enough now. */
+    const finish = byId('finish-beacon');
+    if ((!box || !label || !detail) && !finish) {
         return;
     }
 
@@ -184,19 +192,33 @@ async function loadBeaconStatus() {
         /* A RETRY, because page-reload was the only way back. This box is not inside a
            loadCard(), so nothing else on the page offers one for it — and "status unknown" with
            a Solr message under it is precisely the state an operator wants to try again from. */
-        box.className = 'beacon-status beacon-none';
-        label.textContent = 'Beacon: status unknown';
-        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
-        again.addEventListener('click', () => {
-            again.disabled = true;
-            label.textContent = 'Beacon: asking\u2026';
-            loadBeaconStatus();
-        });
-        detail.replaceChildren(
-            document.createTextNode('Could not ask the sessions core: '
-                + (err && err.message ? err.message : err) + ' '),
-            again
-        );
+        /* Whichever of the two boxes is on this page gets the failure and the retry; the other
+           one is not in the document and is skipped rather than thrown at. */
+        const failLabel = label || byId('finish-beacon-label');
+        const failDetail = detail || byId('finish-beacon-detail');
+        const failBox = box || finish;
+
+        if (failBox) {
+            failBox.className = box ? 'beacon-status beacon-none' : 'finish-state finish-bad';
+        }
+        if (failLabel) {
+            failLabel.textContent = 'Beacon: status unknown';
+        }
+        if (failDetail) {
+            const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+            again.addEventListener('click', () => {
+                again.disabled = true;
+                if (failLabel) {
+                    failLabel.textContent = 'Beacon: asking\u2026';
+                }
+                loadBeaconStatus();
+            });
+            failDetail.replaceChildren(
+                document.createTextNode('Could not ask the sessions core: '
+                    + (err && err.message ? err.message : err) + ' '),
+                again
+            );
+        }
         return;
     }
 
@@ -204,15 +226,25 @@ async function loadBeaconStatus() {
     const live = status.hour > 0;
     const everSeen = status.ever > 0;
 
-    box.className = 'beacon-status ' + (live ? 'beacon-live' : (everSeen ? 'beacon-stale' : 'beacon-none'));
-    label.textContent = beaconLabel(live, everSeen);
+    /* GUARDED FOR THE SAME REASON THE GUARD ABOVE WAS RELAXED. On Finish setup these three do
+       not exist — only the finish-* set does — and writing to them unconditionally would throw
+       before paintFinishBeacon() ever ran, which is the failure this whole change exists to
+       remove. Each page paints the box it has. */
+    if (box) {
+        box.className = 'beacon-status ' + (live ? 'beacon-live' : (everSeen ? 'beacon-stale' : 'beacon-none'));
+    }
+    if (label) {
+        label.textContent = beaconLabel(live, everSeen);
+    }
 
-    detail.replaceChildren(...(everSeen
-        ? beaconDetail(status)
-        : [document.createTextNode(
-            'No session in the last 30 days has carried beacon data. If you have just added the snippet, load a ' +
-            'page on your site and refresh this view.'
-        )]));
+    if (detail) {
+        detail.replaceChildren(...(everSeen
+            ? beaconDetail(status)
+            : [document.createTextNode(
+                'No session in the last 30 days has carried beacon data. If you have just added the snippet, '
+                + 'load a page on your site and refresh this view.'
+            )]));
+    }
 
     paintFinishBeacon(status, live, everSeen);
 }
