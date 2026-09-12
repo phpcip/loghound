@@ -4653,15 +4653,22 @@ final class Settings extends Controller implements JobHost, Sections
      * cannot clear twice and the outcome arrives as a validated query parameter rather than as a
      * rendered POST.
      *
-     * NOT OFFERED WHEN THERE IS NOTHING TO CLEAR. An installation with caching off, or with a
-     * cache that is not answering, gets the state above and no button: a control that discards
-     * nothing and reports success is a wrong answer.
+     * OFFERED WHENEVER CACHING IS SWITCHED ON, and gated on that rather than on the cache
+     * answering right now. A cache server that stops answering is an ordinary, frequent event —
+     * it restarts whenever the box it shares is deployed to — and a control that disappears from
+     * the page every time it happens is worse than one that answers honestly: the operator is
+     * left looking for a button that was there an hour ago. Pressing it against a cache that is
+     * not answering already reports "Nothing was cleared — the cache did not answer", which is
+     * the truthful outcome this gate used to be protecting, without hiding the control to get it.
+     *
+     * An installation with caching off still gets no button, because then there is genuinely no
+     * store to discard.
      *
      * @param array<string,mixed> $status Cache::status(), already read by the caller.
      */
     private function clearCacheControl(array $status): void
     {
-        if (empty($status['working'])) {
+        if (empty($status['configured'])) {
             return;
         }
 
@@ -4683,7 +4690,7 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function clearCacheButton(array $status): void
     {
-        if (empty($status['working'])) {
+        if (empty($status['configured'])) {
             return;
         }
 
