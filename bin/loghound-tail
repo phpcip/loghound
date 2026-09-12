@@ -203,6 +203,12 @@ $counters = [
     'enrich_skipped' => 0,
     'badlines_kept'  => 0,
 
+    /* Lines this installation was TOLD to drop: an exclusion rule matched, or the client was a
+       loopback or private address. Counted apart from parse_errors because they are the
+       configuration working, not the parser failing, and lumping them together made a healthy
+       ingest look broken. */
+    'refused'        => 0,
+
     /* Sub-resource requests that were counted into their session and then not indexed, per
        Pipeline::indexes(). Reported rather than silent: a number that differs from `lines`
        minus `docs_indexed` by an unexplained amount is how an operator discovers that ingestion
@@ -354,6 +360,16 @@ do {
                 $doc = $pipeline->process($line, $offset, $src, $meta);
 
                 if ($doc === null) {
+                    /* A REFUSAL IS NOT A PARSE ERROR. Both return null, and counting them
+                       together made the operator's own exclusion rules and the loopback filter
+                       read as a broken parser — and filled badlines.log with lines that parsed
+                       perfectly and were then deliberately dropped, pushing the genuine
+                       failures out past the sample cap. */
+                    if ($pipeline->refusedLast()) {
+                        $counters['refused']++;
+                        return;
+                    }
+
                     $counters['parse_errors']++;
                     if ($badSampler->record($src, $offset, $line)) {
                         $counters['badlines_kept']++;
@@ -797,6 +813,7 @@ function writeStatus(
             'lines'          => $counters['lines'],
             'docs_indexed'   => $counters['docs_indexed'],
             'assets_dropped' => $counters['assets_dropped'],
+            'refused'        => $counters['refused'],
             'parse_errors'   => $counters['parse_errors'],
             'badlines_kept'  => $counters['badlines_kept'],
             'batches'        => $counters['batches'],
@@ -865,10 +882,12 @@ function printStatus(string $file, bool $human): int
         (int) ($doc['pending_docs'] ?? 0)
     ));
     fwrite(STDOUT, sprintf(
-        "  lines %d   indexed %d   sub-resources not stored %d   parse errors %d   solr errors %d\n",
+        "  lines %d   indexed %d   sub-resources not stored %d   refused %d   parse errors %d"
+            . "   solr errors %d\n",
         (int) ($t['lines'] ?? 0),
         (int) ($t['docs_indexed'] ?? 0),
         (int) ($t['assets_dropped'] ?? 0),
+        (int) ($t['refused'] ?? 0),
         (int) ($t['parse_errors'] ?? 0),
         (int) ($t['solr_errors'] ?? 0)
     ));
@@ -1491,8 +1510,28 @@ final class Pipeline
         return $kind !== 'asset' && $kind !== 'favicon';
     }
 
+    /**
+     * Did the LAST process() call return null because the line was REFUSED rather than unparsed?
+     *
+     * A refusal and a parse failure both return null, and for a long time both were counted as
+     * `parse_errors` and sampled into badlines.log. That made the exclusion rules and the
+     * loopback filter look like a parsing fault: on this installation a third of all lines are
+     * 127.0.0.1, so the counter read "677 parse errors" while the format was working perfectly
+     * and the operator's own filters were doing exactly what they were told. A number that
+     * indicts the parser for the operator's own configuration is worse than no number.
+     */
+    public function refusedLast(): bool
+    {
+        return $this->refused;
+    }
+
+    /** Set by process() when it refuses a line; read by refusedLast(). */
+    private bool $refused = false;
+
     public function process(string $line, int $offset, string $src, array $meta): ?array
     {
+        $this->refused = false;
+
         $fmt = $this->format((string) ($meta['format'] ?? 'apache_combined'));
         if ($fmt === null) {
             return null;
@@ -1526,10 +1565,12 @@ final class Pipeline
            line takes, which is exactly right: as far as everything downstream is concerned,
            this line was never read. */
         if (!$this->exclusions->isEmpty() && $this->exclusions->excludesHit($hit)) {
+            $this->refused = true;
             return null;
         }
 
         if (Security::isPrivateAddress((string) ($hit['ip_net_s'] ?? ($hit['ip_s'] ?? '')))) {
+            $this->refused = true;
             return null;
         }
 

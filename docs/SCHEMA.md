@@ -581,10 +581,16 @@ that kills an entire 500-document batch and stalls the tailer. The cost is that 
 field name is silent. **If you are developing new fields, comment that line out** and let
 Solr reject them loudly until you are done.
 
-**`geo_p` is indexed-only.** It answers bounding-box and heatmap facet queries, which is what
-the map needs, and costs only the BKD points. It cannot be *retrieved* or sorted by distance
-as shipped. Set `docValues="true"` if you need either — that is +16 bytes per document
-(~16 MB per million) and requires a reindex.
+**`geo_p` carries docValues.** It answers bounding-box and heatmap facet queries, and the
+docValues let the point be *retrieved* and sorted by distance. This section previously said the
+field was indexed-only and told you to switch docValues on yourself — while the table above had
+described the switch as already made. The file has now caught up with the table.
+
+There is a second reason beyond retrieval, and it is the one that forced the issue: an atomic
+update rebuilds the whole document from what can be read back, so a field that is indexed and
+neither stored nor docValues is **silently dropped** by any partial update. `geo_p` was the only
+field in either schema in that state which is not a copyField target (Solr refills those from
+their sources), so it was the only one that would have quietly lost data.
 
 **No `<lib/>` directives in either solrconfig.** The stock configset loads contrib jars
 (Tika/extraction, clustering, langid, velocity, DIH). Every one is an unauthenticated code

@@ -302,7 +302,11 @@
       and you must reindex. The map in v1 is built from country_s/city_s aggregates and
       does not need it.
     -->
-    <field name="geo_p" type="location" indexed="true" stored="false" docValues="false"/>
+    <!-- docValues ON: docs/SCHEMA.md has described this as done since the Attacks release while
+         the file still said false. It buys retrieval and distance sort (8 B/doc), and it makes
+         the field reconstructable by an atomic update — a field that is indexed and neither
+         stored nor docValues is silently dropped when a partial update rebuilds the document. -->
+    <field name="geo_p" type="location" indexed="true" stored="false" docValues="true"/>
 
     <!-- IANA timezone derived from geo. Compared against the browser's own
          Intl timezone by the tz_mismatch rule. -->

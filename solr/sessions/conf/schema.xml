@@ -202,7 +202,13 @@
     <field name="country_s" type="string" indexed="true" stored="false" docValues="true"/>
     <field name="region_s"  type="string" indexed="true" stored="false" docValues="true"/>
     <field name="city_s"    type="string" indexed="true" stored="false" docValues="true"/>
-    <field name="geo_p"     type="location" indexed="true" stored="false" docValues="false"/>
+    <!-- docValues ON, which docs/SCHEMA.md already claimed and the file never did. Two reasons,
+         and the second is the one that made it urgent: the point can be returned and sorted by
+         distance (8 B/doc), and an ATOMIC UPDATE can reconstruct it. A field that is indexed but
+         neither stored nor docValues cannot be rebuilt from the index, so a partial update to
+         any document carrying one silently drops it. `geo_p` was the only such field here that
+         is not a copyField target — the eight `*_txt` ones Solr refills from their sources. -->
+    <field name="geo_p"     type="location" indexed="true" stored="false" docValues="true"/>
     <field name="tz_s"      type="string" indexed="true" stored="false" docValues="true"/>
 
     <field name="proto_s" type="string" indexed="true" stored="false" docValues="true"/>

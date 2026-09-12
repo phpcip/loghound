@@ -11,12 +11,13 @@
  *    catches a leased range: the ASN says "Amazon", the netname says which customer.
  *  - **Country** — a coarse map, drawn from `country_s`.
  *
- * A note on the map: SPEC §4.1 defines `geo_p` as an indexed `location` field with no
- * docValues, which means it can be searched but not faceted or returned. The map is
- * therefore built from `country_s` counts plotted at country centroids that ship with
- * the panel — no basemap download, no CDN, works air-gapped. It is labelled as
- * country-level so nobody reads a dot as a street address. See docs/PANEL.md for the
- * schema change that would make this city-accurate.
+ * A note on the map: `geo_p` is a `LatLonPointSpatialField`, and one of those can never be a
+ * facet bucket — a point is not a term — whatever its flags. It now carries docValues, so it
+ * can be returned and sorted by distance, but the aggregate still cannot come from it. The map
+ * is therefore built from `country_s` counts plotted at country centroids that ship with the
+ * panel — no basemap download, no CDN, works air-gapped. It is labelled as country-level so
+ * nobody reads a dot as a street address. See docs/PANEL.md for the change that would make
+ * this city-accurate.
  *
  * @package Loghound
  * @license MIT
