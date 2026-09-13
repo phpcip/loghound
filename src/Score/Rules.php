@@ -375,7 +375,14 @@ final class Rules
     private const IDENTITY_EXEMPT = [
         'automation_marker',
         'beacon_forged',
+        /* A CLIENT THAT SAYS IT IS A BOT IS A BOT. Nothing below overrules that, including a
+           click: a declared crawler running a headless browser can press things, and taking its
+           word for what it is costs nothing and is right every time. */
+        'ua_declared_bot',
     ];
+
+    /** Scroll depth, in percent, that counts as a person reading rather than a fetch. */
+    private const HUMAN_SCROLL_PCT = 25;
 
     /** The reason recorded when that ceiling is applied, so the softening is never silent. */
     public const HUMAN_EVIDENCE_REASON = 'strong_human_evidence';
@@ -628,13 +635,15 @@ final class Rules
      */
     public const REASONS = [
         'site_identified_visitor' => [
-            'label' => 'The site identified this visitor',
+            'label' => 'A person was here',
             'severity' => 'info',
-            'why' => 'Your own application declared this visitor — signed in, and in most cases by name — '
-                . 'through the beacon, on a hostname you listed. That is a statement of fact from the site '
-                . 'that authenticated them, not something inferred from headers, and nothing assembled from '
-                . 'inference overrules it. Whatever else fired is still recorded and still counted on the '
-                . 'other views; it simply does not decide who this is.',
+            'why' => 'Either your own application declared this visitor — signed in, usually by name — or '
+                . 'somebody actually did something on the page: a click, a key, a quarter of it scrolled. '
+                . 'Both come through the beacon, on a hostname you listed. A declaration and an action are '
+                . 'facts, not inferences, and nothing assembled from headers and timing overrules them. '
+                . 'A client that says it is a crawler is still a crawler, and a driver artefact or a forged '
+                . 'clock still convicts. Everything else that fired is recorded and counted as usual; it '
+                . 'simply does not decide who this is.',
         ],
         'strong_human_evidence' => [
             'label' => 'Measured as a person',
@@ -1283,7 +1292,30 @@ final class Rules
      */
     private static function declaredPerson(array $s): bool
     {
-        return !empty($s['signed_in']) || (string) ($s['ident'] ?? '') !== '';
+        if (!empty($s['signed_in']) || (string) ($s['ident'] ?? '') !== '') {
+            return true;
+        }
+
+        /* SOMEBODY DID SOMETHING ON THE PAGE. A click, a key, a quarter of a page scrolled —
+           reported by the beacon, which only runs where the operator put the snippet and only
+           counts for a host they listed.
+           THE TRADE IS DELIBERATE AND IT IS THE OPERATOR'S. Yes, a driven browser can fake a
+           click; writing that takes real effort, and the organisations with the budget for it
+           declare their crawlers anyway — which the exemption above still catches. Missing a
+           real person who read your site is the expensive error here; one or two bots that
+           mimicked a reader is the cheap one. This errs on the side of the reader.
+           Timezone agreement is deliberately NOT in this list: a client sets its own clock to
+           whatever it likes, so it proves nothing about who is behind it. */
+        if (!empty($s['beacon'])) {
+            if ((int) ($s['interactions'] ?? 0) > 0) {
+                return true;
+            }
+            if ((int) ($s['max_scroll_pct'] ?? 0) >= self::HUMAN_SCROLL_PCT) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function provedHumanStrongly(array $s): bool
@@ -1335,11 +1367,15 @@ final class Rules
             return false;
         }
 
+        /* A CONDITIONAL REQUEST IS NOT EVIDENCE OF A PERSON, and it used to be counted as one
+           here. Measured on a real index: of the sessions that revalidated from cache, every
+           one was a self-declared crawler — modern crawlers keep caches, and plenty of people
+           browse with them emptied or disabled. It stays a fact about the client; it is no
+           longer a reason to call the client human. */
         return ($s['secch_mismatch'] ?? null) !== null
             || ($s['platform_mismatch'] ?? null) !== null
             || (int) ($s['sub_resources'] ?? 0) > 0
-            || (int) ($s['own_assets'] ?? 0) > 0
-            || !empty($s['got_304']);
+            || (int) ($s['own_assets'] ?? 0) > 0;
     }
 
     /**
@@ -1461,9 +1497,9 @@ final class Rules
         if ((int) ($s['sub_resources'] ?? 0) > 0 || (int) ($s['own_assets'] ?? 0) > 0) {
             return true;
         }
-        if (!empty($s['got_304'])) {
-            return true;
-        }
+        /* Deliberately not a conditional request: see provedHumanLive() above. It says something
+           was observable about this client, but every session in a real index that had one was a
+           declared crawler, so it cannot stand alone as the thing that made a session testable. */
 
         return false;
     }
