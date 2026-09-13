@@ -123,6 +123,11 @@ final class Layout
                found — a signed-in visitor is the strongest thing this panel knows about anyone. */
             ['slug' => 'engagement',   'label' => 'Signed-in visitors', 'group' => 'visitors',
              'section' => 'an-people', 'hint' => 'Everyone your own site named through the beacon'],
+            /* WHERE THEY CAME FROM, ON A MAP. Same device as the entry above: a link to one card
+               of Networks, which keeps its own entry further down. The map answers a question
+               about people rather than about netblocks, so it belongs where people are. */
+            ['slug' => 'networks',     'label' => 'Map',          'group' => 'visitors',
+             'section' => 'net-map',   'hint' => 'Every session placed at the country it came from'],
             ['slug' => 'sources',      'label' => 'Where they came from', 'group' => 'visitors', 'hint' => 'What kind of thing sent each visit, and which site actually did'],
             ['slug' => 'pages',        'label' => 'Pages',        'group' => 'visitors', 'hint' => 'Where people arrive, where the log last saw them, and what is moving'],
             ['slug' => 'searches',     'label' => 'Site search',   'group' => 'visitors', 'hint' => 'What visitors typed into your own search box'],

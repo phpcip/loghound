@@ -261,7 +261,10 @@ async function renderMap(data) {
         return;
     }
     hideEmpty('net-map-empty');
-    cardChart('net-map', 340);
+    /* A WORLD MAP IS TWICE AS WIDE AS IT IS TALL. At 340px in a card well over a thousand wide,
+       the projection was squashed flat — continents wide and stunted, and the bubbles that carry
+       the actual number squeezed into a band. This gives it the room the shape asks for. */
+    cardChart('net-map', 560);
     await loadWorld('');
 
     /* A BUBBLE OPENS THE COUNTRY. The map was the one place in the panel where the obvious
