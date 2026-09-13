@@ -462,6 +462,10 @@ final class Signals
            product — an application that has authenticated somebody — and until now the scorer
            could not see it at all. */
         $s['signed_in']      = array_key_exists('signed_in_b', $beacon) ? (bool) $beacon['signed_in_b'] : null;
+        /* THE NAME THE SITE GAVE US. Declared by the operator's own template through identify(),
+           never derived, and only stored at all when the beacon was attributed to a host the
+           operator listed. An application does not hand out its users' addresses to strangers. */
+        $s['ident']          = isset($beacon['ident_s']) ? (string) $beacon['ident_s'] : '';
         $s['js']             = array_key_exists('js_b', $beacon) ? (bool) $beacon['js_b'] : null;
         $s['headless']       = array_key_exists('headless_b', $beacon) ? (bool) $beacon['headless_b'] : null;
         $s['ua_claim_ok']    = array_key_exists('ua_claim_ok_b', $beacon) ? (bool) $beacon['ua_claim_ok_b'] : null;

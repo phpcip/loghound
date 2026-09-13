@@ -330,6 +330,53 @@ final class Rules
      */
     public const HUMAN_EVIDENCE_CEILING = 'unknown';
 
+    /**
+     * The verdict a visitor the SITE ITSELF has identified is given, whatever else fired.
+     *
+     * ------------------------------------------------------------------------------------
+     * A DECLARATION IS NOT A HEURISTIC, AND IT OUTRANKS EVERY ONE OF THEM
+     * ------------------------------------------------------------------------------------
+     * Every other signal in this file is something inferred about a stranger: the shape of a
+     * header, the rhythm of a request, a WebGL string. This one is the operator's own
+     * application saying "I authenticated this person and their address is X". There is no
+     * stronger statement available anywhere in the product, and nothing assembled from
+     * guesswork has any business overruling it.
+     *
+     * It went wrong in exactly that way: a signed-in administrator, whose email the site had
+     * declared, was published as `bot` because one request in 1,758 carried backticks. The
+     * verdict was assembled from inferences while the ground truth sat unread two fields away —
+     * the scorer could not even see `signed_in_b` until this change.
+     *
+     * NOT A CEILING BUT A FLOOR AT THE TOP. `human`, not `unknown`: holding an identified
+     * visitor at "we cannot say" would still hide them from every view filtered to people,
+     * which is the whole complaint. The rules that fired are still recorded and still counted,
+     * and the Attacks view still shows the request — what changes is that the person is not
+     * called a robot on their own dashboard.
+     *
+     * TRUST COMES FROM THE ALLOWLIST, NOT FROM THE PAYLOAD. Identity is stored only when
+     * Beacon attributed the report to a host the operator listed, and a beacon that cannot be
+     * attributed contributes no codes in either direction. A stranger's page cannot name
+     * somebody else's visitor.
+     */
+    public const IDENTIFIED_VERDICT = 'human';
+
+    /** The reason recorded when a declared identity settles the verdict. */
+    public const IDENTIFIED_REASON = 'site_identified_visitor';
+
+    /**
+     * The only two findings a declared identity does not overrule.
+     *
+     * Both are the client contradicting itself rather than us doubting it. `automation_marker`
+     * means a driver artefact was actually present — someone IS scripting this browser, and a
+     * scripted session that happens to be logged in is precisely what an operator needs to see.
+     * `beacon_forged` means the payload lied about its own clock, which makes everything else
+     * it said, identity included, worth nothing.
+     */
+    private const IDENTITY_EXEMPT = [
+        'automation_marker',
+        'beacon_forged',
+    ];
+
     /** The reason recorded when that ceiling is applied, so the softening is never silent. */
     public const HUMAN_EVIDENCE_REASON = 'strong_human_evidence';
 
@@ -580,6 +627,15 @@ final class Rules
      * @var array<string,array{label:string,why:string,severity:string}>
      */
     public const REASONS = [
+        'site_identified_visitor' => [
+            'label' => 'The site identified this visitor',
+            'severity' => 'info',
+            'why' => 'Your own application declared this visitor — signed in, and in most cases by name — '
+                . 'through the beacon, on a hostname you listed. That is a statement of fact from the site '
+                . 'that authenticated them, not something inferred from headers, and nothing assembled from '
+                . 'inference overrules it. Whatever else fired is still recorded and still counted on the '
+                . 'other views; it simply does not decide who this is.',
+        ],
         'strong_human_evidence' => [
             'label' => 'Measured as a person',
             'severity' => 'info',
@@ -1070,6 +1126,27 @@ final class Rules
             ];
         }
 
+        /* THE SITE SAID WHO THIS IS. Checked before the weaker ceiling below and applied to any
+           verdict worse than human, because a declaration outranks everything inferred. See
+           IDENTIFIED_VERDICT for why this is a floor at the top rather than a cap. */
+        if (self::declaredPerson($s)
+            && array_intersect($reasons, self::IDENTITY_EXEMPT) === []
+            && self::worseThan(self::IDENTIFIED_VERDICT, $verdict)
+        ) {
+            $was = $verdict;
+            $verdict = self::IDENTIFIED_VERDICT;
+            $reasons[] = self::IDENTIFIED_REASON;
+            $detail[self::IDENTIFIED_REASON] = [
+                'weight' => 0,
+                'why'    => 'The site itself identified this visitor'
+                    . (($s['ident'] ?? '') !== '' ? ' by name, through its own template' : '')
+                    . ', which is a declaration rather than an inference and outranks every signal '
+                    . 'assembled from headers and timing. The findings below are still recorded and '
+                    . 'still counted; they no longer decide the verdict, which would otherwise have '
+                    . 'been published as ' . $was . '.',
+            ];
+        }
+
         /* POSITIVE EVIDENCE OUTRANKS A SINGLE ACCUSATION. Applied last of the adjustments, so it
            sees the verdict every rule and every floor has already produced. See
            HUMAN_EVIDENCE_CEILING for what this is for and what it deliberately does not do. */
@@ -1197,6 +1274,18 @@ final class Rules
      * replacement for the beacon: an application that has authenticated somebody has said more
      * about who this is than any heuristic in this file can.
      */
+    /**
+     * Has the operator's own application told us who this visitor is?
+     *
+     * Either half is enough. A site may declare the session signed in without passing a name, or
+     * pass a name without a flag; both are the same act — the application asserting that it knows
+     * this person — and neither is something a detector should second-guess.
+     */
+    private static function declaredPerson(array $s): bool
+    {
+        return !empty($s['signed_in']) || (string) ($s['ident'] ?? '') !== '';
+    }
+
     private static function provedHumanStrongly(array $s): bool
     {
         if (empty($s['beacon'])) {
