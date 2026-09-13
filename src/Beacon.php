@@ -232,12 +232,9 @@ final class Beacon
     /**
      * Does this installation store whether the visitor was signed in?
      *
-     * ON by default, and independent of storesIdentity() on purpose. "Was this person logged
-     * in" is a boolean about a session with nothing in it that identifies anybody, and the split
-     * it enables — engaged time, paths, bounce and bot verdict for signed-in versus anonymous
-     * traffic — is one of the most useful things the product can show and one that only the
-     * measured site knows. An operator may well want that split while storing no emails at all,
-     * so the two switches are separate and either can be off.
+     * ON by default. Signed in is true ONLY when the site sent a valid email address; a flag
+     * without one is recorded as not signed in. Turning this off drops the boolean, never the
+     * email.
      */
     public function storesSignedIn(): bool
     {
@@ -728,8 +725,8 @@ final class Beacon
             'webgl'        => $this->text($in['gl'] ?? '', self::MAX_STR),
             'path'         => $this->text($in['u'] ?? '', self::MAX_PATH),
 
-            'ident'        => $this->storesIdentity() ? $this->text($in['xi'] ?? '', self::MAX_IDENT) : '',
-            'signed_in'    => $this->storesSignedIn() ? $this->tri($in['xs'] ?? null) : null,
+            'ident'        => $this->storesIdentity() ? self::email($in['xi'] ?? '') : '',
+            'signed_in'    => $this->storesSignedIn() ? $this->signedInOf($in['xi'] ?? '', $in['xs'] ?? null) : null,
 
             'hostname'     => self::normaliseHost($in['hn'] ?? ''),
             'terms'        => $this->termsOf($in['qp'] ?? null),
@@ -1031,12 +1028,10 @@ final class Beacon
      * geo data has neither passed nor failed.
      *
      * THE OPERATOR-SUPPLIED IDENTITY IS A THIRD, and the most important one to get right.
-     * `signed_in_b` is written ONLY when a payload actually said one or the other; a site that
-     * never sends it leaves the field absent, so "we were not told" cannot be read as
-     * "anonymous". A boolean that defaults to false here would invent an anonymous population
-     * out of every site that has not adopted the feature, and the signed-in/anonymous split —
-     * the reason the field exists — would be a fabrication. `ident_s` is likewise absent rather
-     * than empty when nothing was sent.
+     * `ident_s` is written only for a valid email address, and `signed_in_b` is true ONLY when
+     * such an email was sent — no other signal makes a visitor signed in. A payload that said
+     * "no", or claimed "yes" without an email, writes false; a site that sends nothing leaves
+     * both fields absent, so "we were not told" cannot be read as "anonymous".
      *
      * THE HOSTNAME IS FOLDED ON ONLY WHEN THE DOCUMENT HAS NONE, which is the log-wins-on-facts
      * rule of SPEC §6.4 applied to the one field where the two planes can both have an opinion.
@@ -1150,15 +1145,19 @@ final class Beacon
                 }
             }
 
-            if (isset($row['ident']) && is_string($row['ident']) && $row['ident'] !== '') {
-                $ident = mb_substr($row['ident'], 0, self::MAX_IDENT);
+            $rowIdent = self::email($row['ident'] ?? '');
+            if ($rowIdent !== '') {
+                $ident = $rowIdent;
             }
             $claimedSignedIn = $this->tri($row['signed_in'] ?? null);
-            if ($claimedSignedIn === true) {
+            if ($claimedSignedIn === true && $rowIdent !== '') {
                 $signedIn = true;
-            } elseif ($claimedSignedIn === false && $signedIn === null) {
+            } elseif ($claimedSignedIn !== null && $signedIn === null) {
                 $signedIn = false;
             }
+        }
+        if ($ident !== '' && $this->storesSignedIn()) {
+            $signedIn = true;
         }
 
         $wall = $visible = $engaged = $interactions = $maxScroll = 0;
@@ -1357,6 +1356,45 @@ final class Beacon
             return false;
         }
         return null;
+    }
+
+    /**
+     * The identity a site declares, kept only when it is a valid email address.
+     *
+     * An email is the one and only thing that makes a visitor signed in. Anything else a
+     * template sends — a customer number, a display name, a stray `{{ user.id }}` — is
+     * dropped here and never reaches the session document, the signed-in list or the scorer.
+     *
+     * @param mixed $v
+     * @return string The address, or '' when it is not a valid email.
+     */
+    public static function email($v): string
+    {
+        if (!is_string($v)) {
+            return '';
+        }
+        $v = trim($v);
+        if ($v === '' || strlen($v) > self::MAX_IDENT) {
+            return '';
+        }
+        return filter_var($v, FILTER_VALIDATE_EMAIL) !== false ? $v : '';
+    }
+
+    /**
+     * Signed-in state of one payload: true only with a valid email.
+     *
+     * A payload that claims signed in without a valid email is recorded as not signed in; a
+     * payload that sends neither an email nor a flag stays not reported.
+     *
+     * @param mixed $ident The `xi` field.
+     * @param mixed $flag  The `xs` field.
+     */
+    private function signedInOf($ident, $flag): ?bool
+    {
+        if (self::email($ident) !== '') {
+            return true;
+        }
+        return $this->tri($flag) === null ? null : false;
     }
 
     /**

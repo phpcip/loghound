@@ -385,9 +385,6 @@ final class Rules
         'ua_not_a_browser',
     ];
 
-    /** Scroll depth, in percent, that counts as a person reading rather than a fetch. */
-    private const HUMAN_SCROLL_PCT = 25;
-
     /**
      * Points taken off the score for arriving from somewhere real.
      *
@@ -675,15 +672,13 @@ final class Rules
                 . 'that strip the header all look identical to a crawler that never had one.',
         ],
         'site_identified_visitor' => [
-            'label' => 'A person was here',
+            'label' => 'Signed in',
             'severity' => 'info',
-            'why' => 'Either your own application declared this visitor — signed in, usually by name — or '
-                . 'somebody actually did something on the page: a click, a key, a quarter of it scrolled. '
-                . 'Both come through the beacon, on a hostname you listed. A declaration and an action are '
-                . 'facts, not inferences, and nothing assembled from headers and timing overrules them. '
-                . 'A client that says it is a crawler is still a crawler, and a driver artefact or a forged '
-                . 'clock still convicts. Everything else that fired is recorded and counted as usual; it '
-                . 'simply does not decide who this is.',
+            'why' => 'Your own site sent a valid email address for this visitor through the beacon, on a '
+                . 'hostname you listed. That is the only thing that makes a visitor signed in. A client '
+                . 'that says it is a crawler is still a crawler, and a driver artefact or a forged clock '
+                . 'still convicts. Everything else that fired is recorded and counted as usual; it simply '
+                . 'does not decide who this is.',
         ],
         'strong_human_evidence' => [
             'label' => 'Measured as a person',
@@ -1240,8 +1235,7 @@ final class Rules
             $reasons[] = self::IDENTIFIED_REASON;
             $detail[self::IDENTIFIED_REASON] = [
                 'weight' => 0,
-                'why'    => 'The site itself identified this visitor'
-                    . (($s['ident'] ?? '') !== '' ? ' by name, through its own template' : '')
+                'why'    => 'The site itself sent a valid email address for this visitor'
                     . ', which is a declaration rather than an inference and outranks every signal '
                     . 'assembled from headers and timing. The findings below are still recorded and '
                     . 'still counted; they no longer decide the verdict, which would otherwise have '
@@ -1372,45 +1366,9 @@ final class Rules
      * alone is a clock a script could drive; interaction alone can be synthesised; the pair of
      * them at this scale is a person reading a site.
      *
-     * Being signed in is accepted as an alternative to the engagement threshold, not as a
-     * replacement for the beacon: an application that has authenticated somebody has said more
-     * about who this is than any heuristic in this file can.
+     * Being signed in (a valid email sent by the site) is accepted as an alternative to the
+     * engagement threshold, not as a replacement for the beacon.
      */
-    /**
-     * Has the operator's own application told us who this visitor is?
-     *
-     * Either half is enough. A site may declare the session signed in without passing a name, or
-     * pass a name without a flag; both are the same act — the application asserting that it knows
-     * this person — and neither is something a detector should second-guess.
-     */
-    private static function declaredPerson(array $s): bool
-    {
-        if (!empty($s['signed_in']) || (string) ($s['ident'] ?? '') !== '') {
-            return true;
-        }
-
-        /* SOMEBODY DID SOMETHING ON THE PAGE. A click, a key, a quarter of a page scrolled —
-           reported by the beacon, which only runs where the operator put the snippet and only
-           counts for a host they listed.
-           THE TRADE IS DELIBERATE AND IT IS THE OPERATOR'S. Yes, a driven browser can fake a
-           click; writing that takes real effort, and the organisations with the budget for it
-           declare their crawlers anyway — which the exemption above still catches. Missing a
-           real person who read your site is the expensive error here; one or two bots that
-           mimicked a reader is the cheap one. This errs on the side of the reader.
-           Timezone agreement is deliberately NOT in this list: a client sets its own clock to
-           whatever it likes, so it proves nothing about who is behind it. */
-        if (!empty($s['beacon'])) {
-            if ((int) ($s['interactions'] ?? 0) > 0) {
-                return true;
-            }
-            if ((int) ($s['max_scroll_pct'] ?? 0) >= self::HUMAN_SCROLL_PCT) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static function provedHumanStrongly(array $s): bool
     {
         if (empty($s['beacon'])) {
@@ -1427,7 +1385,18 @@ final class Rules
             return true;
         }
 
-        return !empty($s['signed_in']);
+        return self::declaredPerson($s);
+    }
+
+    /**
+     * Is this visitor signed in?
+     *
+     * Signed in means exactly one thing: the site sent a valid email address. No other signal —
+     * a bare signed-in flag, a click, a scroll, engaged time — ever counts.
+     */
+    private static function declaredPerson(array $s): bool
+    {
+        return \Loghound\Beacon::email($s['ident'] ?? '') !== '';
     }
 
     private static function provedHumanLive(array $s): bool

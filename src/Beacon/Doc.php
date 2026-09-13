@@ -158,19 +158,19 @@ final class Doc
             [
                 'name'    => 'data-ident',
                 'kind'    => 'attribute',
-                'what'    => 'An identity **your site** attaches to the session — an email address, a '
-                    . 'customer number, whatever you call the person. Never guessed.',
+                'what'    => 'The email address of the signed-in visitor. **A valid email is the only thing '
+                    . 'that makes a visitor signed in.** Never guessed.',
                 'default' => 'absent, and absent is not empty',
-                'limits'  => 'Free text, truncated to ' . \Loghound\Beacon::MAX_IDENT . ' bytes. Control '
-                    . 'characters stripped, invalid UTF-8 repaired.',
+                'limits'  => 'Must be a valid email address of at most ' . \Loghound\Beacon::MAX_IDENT
+                    . ' bytes. Anything else is discarded.',
                 'example' => 'data-ident="<?= htmlspecialchars($user->email, ENT_QUOTES) ?>"',
                 'switch'  => null,
             ],
             [
                 'name'    => 'data-signed-in',
                 'kind'    => 'attribute',
-                'what'    => 'Whether the visitor was signed in. Splits every number in the panel into '
-                    . 'signed-in and anonymous.',
+                'what'    => 'Lets a page say the visitor is **not** signed in. Signed in is true only when '
+                    . '`data-ident` carries a valid email; this flag alone never marks anybody signed in.',
                 'default' => 'absent — which means **not reported**, never “no”. An attribute that is '
                     . 'present but empty is an answer, and the answer is **no**',
                 'limits'  => '`1`/`0` or `true`/`false`. An empty attribute — the usual shape of a '
@@ -220,7 +220,7 @@ final class Doc
                     . 'application that signs somebody in without a navigation, which no attribute can '
                     . 'express.',
                 'default' => 'never called',
-                'limits'  => 'Both arguments optional and independent. **Makes no request of its own:** '
+                'limits'  => 'Both arguments optional; signed in requires a valid email as `ident`. **Makes no request of its own:** '
                     . 'the values ride the heartbeat that is already scheduled. Safe to call with '
                     . 'anything — it cannot throw into your code.',
                 'example' => 'window.loghound.identify(user.email, true);',
@@ -303,13 +303,11 @@ final class Doc
                         . 'site that pasted `data-ident` had the address dropped by the collector, saw '
                         . 'nothing in the panel, and got no error explaining why. Loghound still never '
                         . 'guesses an identity: leave the attribute out and there is none.',
-                    'independent' => '`beacon.store_signed_in` is on in a new installation, so the signed-in split works '
-                        . 'as soon as a page declares it. The two switches are independent on purpose: '
-                        . 'the boolean identifies nobody and splits engaged time, paths and bot verdicts '
-                        . 'between signed-in and anonymous traffic, while the identity string is personal '
-                        . 'data that lands on the session document, shows in the panel, lives in the '
-                        . 'search index and sits in every backup of it until retention deletes the '
-                        . 'session. Plenty of sites want the first and not the second.',
+                    'independent' => '`beacon.store_signed_in` is on in a new installation. A visitor is signed in '
+                        . 'only when the page sends a valid email address; no flag and no other signal ever '
+                        . 'marks anybody signed in. The email is personal data that lands on the session '
+                        . 'document, shows in the panel, lives in the search index and sits in every backup '
+                        . 'of it until retention deletes the session.',
                     'third_state' => 'A site that says nothing is **not reported**, which is a third state and not '
                         . '“anonymous”. `signed_in_b` is written only when a page actually said one or '
                         . 'the other, so a site that has not adopted the attribute cannot be read as a '

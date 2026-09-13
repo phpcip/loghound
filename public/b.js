@@ -271,15 +271,13 @@
      * ============================================================================
      * IDENTITY THE SITE SUPPLIES — the one thing in this file we do not measure
      * ============================================================================
-     * Two facts only the measured site knows, both optional and INDEPENDENT of each
-     * other:
+     * Two facts only the measured site knows, both optional:
      *
-     *   xi  an identity string of the site's own choosing — an email address, a
-     *       customer number, an account id. Whatever it calls the person.
-     *   xs  whether the visitor was signed in: 1 yes, 0 no, OMITTED when the site
-     *       did not say. Omitted is not "no". A site may pass an identity without
-     *       the visitor being authenticated, and may want the signed-in split
-     *       recorded without handing over who it was, so neither implies the other.
+     *   xi  the visitor's email address. The server keeps it only when it is a
+     *       valid email, and a valid email is the ONLY thing that makes a visitor
+     *       signed in.
+     *   xs  1 yes, 0 no, OMITTED when the site did not say. On its own it never
+     *       marks anybody signed in; without a valid xi the server records "no".
      *
      * HOW A SITE SUPPLIES THEM, and why this shape. The primary channel is two
      * attributes on the script tag, because the site's own template renders that tag

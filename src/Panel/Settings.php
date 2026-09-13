@@ -3551,10 +3551,10 @@ final class Settings extends Controller implements JobHost, Sections
            and it lives as long as the session does. */
         echo '<div class="banner banner-good">';
         echo '<strong><code class="mono">data-ident</code> is stored.</strong> '
-            . 'An identity your site sends is written to the session document, is searchable and '
+            . 'A valid email address your site sends is written to the session document, is searchable and '
             . 'facetable in the panel, and stays in the index and in every backup of it until retention '
-            . 'deletes the session. Loghound never guesses one: leave the attribute out and there is '
-            . 'no identity at all.';
+            . 'deletes the session. Anything that is not a valid email is discarded. A valid email is the '
+            . 'only thing that makes a visitor signed in.';
         echo '</div>';
 
         echo '<div class="banner ' . ($storesSignedIn ? 'banner-good' : 'banner-warn') . '">';
