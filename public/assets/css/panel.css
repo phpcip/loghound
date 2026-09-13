@@ -3480,6 +3480,26 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     }
     :root.lh-rail-collapsed .side .navsub-link { padding: 6px 14px; }
 
+    /* A ROW INSIDE THE FLYOUT IS A ROW, NOT A RAIL ICON. `.side .navlink` is centred with its
+       words taken away, which is what the 60px column needs and the opposite of what the panel
+       opening out of it needs: the Visitors group renders its views as `.navlink`s with their
+       labels restored, so all eight were centred inside a 230px box. The indent then tracked
+       the length of the label — "Map" pushed halfway across, "Where they came from" barely at
+       all — and it was the one flyout that did not read as a list.
+
+       Same padding as the section rows above, so a view row and a section row start in one
+       column whichever kind of list a flyout holds. The gap is stated rather than inherited
+       because nothing in this stylesheet puts space between a mark and its label: the only
+       `.vicon` rule is `flex: none`, and what separation the expanded rail appears to have is
+       the glyph sitting inset in its own 16px box. */
+    :root.lh-rail-collapsed .side .navsub .navlink {
+        justify-content: flex-start;
+        gap: 8px;
+        min-height: 32px;
+        padding: 6px 14px;
+        font-size: 14px;
+    }
+
     /* A SECOND-LEVEL PANEL OPENS BESIDE THE FIRST, NOT ON TOP OF IT. Every `.navsub` above is
        placed at the rail's own edge, which is right for the panel a rail icon opens and wrong
        for the one a row INSIDE that panel opens — it landed at the same coordinate and buried
