@@ -5504,6 +5504,7 @@ button.stat:hover .stat-go { color: var(--accent); }
 .seo-dual-before { font-size: 14px; color: var(--muted); }
 .seo-dual-change { font-size: 14px; }
 .seo-table tr.seo-total td { border-bottom: 2px solid var(--hairline); }
+.seo-pairchart { margin: 0 0 20px; }
 
 @media (max-width: 640px) {
     .seo-period-row, .seo-dates { flex-direction: column; align-items: stretch; }

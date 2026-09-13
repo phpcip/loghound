@@ -139,11 +139,15 @@ export function compareLines(id, spec) {
  * labels so a name is shortened at its end, never clipped at its start.
  *
  * @param {string} id
- * @param {Array<{label:string, a:number, b:number}>} rows
+ * @param {Array<{label:string, a:number|null, b:number|null}>} rows
  * @param {string} nameA
  * @param {string} nameB
+ * @param {{format?:Function, rowPx?:number}} [opts] Value formatter, and pixels per category row.
  */
-export function compareBars(id, rows, nameA, nameB) {
+export function compareBars(id, rows, nameA, nameB, opts) {
+    const options = opts || {};
+    const format = options.format || num;
+    const say = (value) => (value === null || value === undefined ? 'not measured' : format(value));
     const node = document.getElementById(id);
     const labels = rows.map((r) => r.label).reverse();
     const width = (node && node.clientWidth) || 480;
@@ -151,7 +155,7 @@ export function compareBars(id, rows, nameA, nameB) {
     const room = Math.max(60, Math.min(Math.ceil(longest * 8.1) + 4, Math.max(88, Math.floor(width * 0.42))));
 
     if (node) {
-        node.style.height = Math.max(180, rows.length * 44 + 60) + 'px';
+        node.style.height = Math.max(160, rows.length * (options.rowPx || 44) + 70) + 'px';
     }
 
     const chart = draw(id, (t) => ({
@@ -167,12 +171,12 @@ export function compareBars(id, rows, nameA, nameB) {
                 const lines = [tip`<strong>${params[0].name}</strong>`];
                 for (const p of params.slice().reverse()) {
                     lines.push(tip`${markup(p.marker)} ${p.seriesName}` +
-                        tip`<span style="float:right;padding-left:18px;font-weight:600">${num(p.value)}</span>`);
+                        tip`<span style="float:right;padding-left:18px;font-weight:600">${say(p.value)}</span>`);
                 }
                 return lines.join('<br>');
             }
         },
-        xAxis: Object.assign(valueAxis(t), { splitNumber: 4 }),
+        xAxis: Object.assign(valueAxis(t, format), { splitNumber: 4 }),
         yAxis: {
             type: 'category',
             data: labels,
@@ -208,7 +212,7 @@ export function compareBars(id, rows, nameA, nameB) {
                     color: t.muted,
                     fontFamily: t.mono,
                     fontSize: 14,
-                    formatter: (p) => num(p.value)
+                    formatter: (p) => (p.value === null || p.value === undefined ? '' : format(p.value))
                 }
             }
         ]

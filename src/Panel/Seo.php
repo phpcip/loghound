@@ -1188,7 +1188,15 @@ final class Seo extends Controller
             'How visits from each channel behaved. Median engaged time is over finished visits the beacon measured.',
             $this->exportTool('quality'),
             '',
-            '<div class="table-wrap"><table id="seo-quality-table" class="seo-table"><thead><tr>'
+            '<div class="seo-subhead"><h3>Channel against channel</h3>'
+            . self::toggle('seo-quality-metric', 'metric', 'What the chart compares', [
+                'visits'          => 'Visits',
+                'pages_per_visit' => 'Pages per visit',
+                'one_page_share'  => 'One-page visits',
+                'engaged_p50'     => 'Engaged time',
+            ], 'visits')
+            . '</div>'
+            . '<div class="table-wrap"><table id="seo-quality-table" class="seo-table"><thead><tr>'
             . '<th scope="col">Channel</th>'
             . '<th scope="col" class="num">Visits</th>'
             . '<th scope="col" class="num">Pages per visit</th>'

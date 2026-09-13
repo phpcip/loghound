@@ -7,6 +7,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.3.1] — 2026-09-13
+
+### Added
+
+- **A chart on every SEO Tools page.** Search engines and AI, landing pages, referring sites and
+  countries and devices draw this period beside the comparison period for the rows the table ranks.
+  Engagement by channel compares channels on visits, pages per visit, one-page visits or engaged
+  time. Crawlers draw requests per crawler and their 4xx and 5xx answers. Crawled, not visited draws
+  crawler requests beside the visits each page received. Top 12 rows on a desktop, top 8 on a phone.
+
+---
+
 ## [1.3.0] — 2026-09-13
 
 ### Added

@@ -11,9 +11,90 @@
 
 import { api, byId, dec, dur, el, hideEmpty, loadCard, num, setPop, showEmpty, tbody, when } from '../core.js';
 import { changeCell, pagedCard } from '../cardtable.js';
-import { dimValue } from '../identity.js';
+import { dispose } from '../charts.js';
+import { countryName } from '../geo.js';
+import { dimValue, valueText } from '../identity.js';
 import { pathCell } from '../url.js';
 import { channelLines, compareBars, compareLines } from '../seo-charts.js';
+
+/** The width below which the panel is laid out for a phone; matches mobile.css. */
+const PHONE_QUERY = '(max-width: 900px)';
+
+/** What the engagement chart compares for each metric: its kind and its name. */
+const QUALITY_METRICS = {
+    visits: ['count', 'Visits'],
+    pages_per_visit: ['ratio', 'Pages per visit'],
+    one_page_share: ['pct', 'One-page visits'],
+    engaged_p50: ['ms', 'Median engaged time']
+};
+
+/** The last engagement payload, so switching the metric redraws without a fetch. */
+let qualityData = null;
+
+/** The metric the engagement chart compares. */
+let qualityMetric = 'visits';
+
+/** Is the panel laid out for a phone? */
+function isPhone() {
+    return window.matchMedia ? window.matchMedia(PHONE_QUERY).matches : window.innerWidth <= 900;
+}
+
+/** The words a chart axis uses for one value of a dimension. */
+function chartLabel(field, value) {
+    if (field === 'country_s') {
+        return countryName(value) || String(value);
+    }
+    return valueText(field, value);
+}
+
+/**
+ * Two bars per row above a card's table: the first series beside the second.
+ *
+ * The rows are drawn in the order the table shows them, the top 12 at desktop width and the top 8
+ * on a phone, and a row with nothing in either series is left out. With nothing left, the chart is
+ * removed rather than drawn empty.
+ *
+ * @param {string} cardId
+ * @param {string} suffix Distinguishes two charts on one card.
+ * @param {Array<{label:string, a:number|null, b:number|null}>} rows
+ * @param {string} nameA
+ * @param {string} nameB
+ * @param {{format?:Function, label?:string}} [opts]
+ */
+function pairChart(cardId, suffix, rows, nameA, nameB, opts) {
+    const options = opts || {};
+    const id = cardId + '-' + suffix;
+    const content = byId(cardId + '-content');
+    let node = byId(id);
+
+    const usable = (rows || [])
+        .filter((row) => (Number(row.a) || 0) !== 0 || (Number(row.b) || 0) !== 0)
+        .slice(0, isPhone() ? 8 : 12);
+
+    if (!usable.length || !content) {
+        if (node) {
+            dispose(id);
+            node.remove();
+        }
+        return;
+    }
+
+    if (!node) {
+        node = el('div', { class: 'chart seo-pairchart', id: id, role: 'img' });
+        const wrap = content.querySelector('.table-wrap');
+        if (wrap && wrap.parentNode) {
+            wrap.parentNode.insertBefore(node, wrap);
+        } else {
+            content.appendChild(node);
+        }
+    }
+    if (options.label) {
+        node.setAttribute('aria-label', options.label);
+    }
+
+    reveal(cardId);
+    compareBars(id, usable, nameA, nameB, { format: options.format, rowPx: isPhone() ? 30 : 36 });
+}
 
 /** Legend name of the selected period. */
 const NAME_A = 'This period';
@@ -474,6 +555,12 @@ function renderMovers(id, spec, data) {
         + 'Showing: ' + data.sort_label + '.');
 
     const table = byId(id + '-table');
+    pairChart(id, 'chart', data.rows.map((row) => ({
+        label: chartLabel(field, row.value),
+        a: row.a,
+        b: row.b
+    })), NAME_A, NAME_B, { label: data.dim_label + ', ' + data.sort_label });
+
     if (!data.rows.length) {
         tbody(table, []);
         showEmpty(id + '-empty', 'Nothing to list', [
@@ -509,8 +596,23 @@ function sortable(value) {
     return value === null || value === undefined ? -1 : value;
 }
 
+/** Draw the chosen metric for every channel, this period beside the comparison period. */
+function drawQuality() {
+    if (!qualityData) {
+        return;
+    }
+    const [kind, label] = QUALITY_METRICS[qualityMetric];
+    pairChart('seo-quality', 'chart', qualityData.rows.map((row) => ({
+        label: row.label,
+        a: row.a[qualityMetric],
+        b: row.b[qualityMetric]
+    })), NAME_A, NAME_B, { format: (value) => fmt(kind, value), label: label + ' per channel' });
+}
+
 /** One row per channel, headed by every channel together. */
 function renderQuality(data) {
+    qualityData = data;
+    drawQuality();
     const rows = [data.overall].concat(data.rows);
     tbody(byId('seo-quality-table'), rows.map((row) => ({
         attrs: row.value === '' ? { class: 'seo-total' } : null,
@@ -561,6 +663,18 @@ function renderCrawlers(data) {
         + (data.capped ? ' Listing the ' + num(data.rows.length) + ' busiest of ' + num(data.distinct) + '.' : '')
         + ' Reverse DNS confirmed means the address’s PTR name resolves back to the same address; it does not by '
         + 'itself prove the name belongs to the company the crawler claims.');
+
+    pairChart('seo-crawlers', 'chart', data.rows.map((row) => ({
+        label: row.name,
+        a: row.a.requests,
+        b: row.b.requests
+    })), NAME_A, NAME_B, { label: 'Requests per crawler' });
+
+    pairChart('seo-crawlers', 'errors', data.rows
+        .filter((row) => row.a.e4 + row.a.e5 > 0)
+        .sort((x, y) => (y.a.e4 + y.a.e5) - (x.a.e4 + x.a.e5))
+        .map((row) => ({ label: row.name, a: row.a.e4, b: row.a.e5 })),
+    '4xx answers in this period', '5xx answers in this period', { label: 'Error answers per crawler in this period' });
 
     if (!data.rows.length) {
         tbody(byId('seo-crawlers-table'), []);
@@ -613,6 +727,11 @@ function renderGap(data) {
         + 'in this period.' + (data.unchecked ? ' ' + num(data.unchecked) + ' with a path too long to look up say not checked.' : '')
         + ' Showing: ' + data.sort_label + '.');
 
+    pairChart('seo-crawlgap', 'chart', data.rows
+        .filter((row) => row.visits !== null)
+        .map((row) => ({ label: row.path, a: row.crawl, b: row.visits })),
+    'Crawler requests', 'Visits from the channel', { label: 'Crawler requests against visits per page' });
+
     if (!data.rows.length) {
         tbody(byId('seo-crawlgap-table'), []);
         showEmpty('seo-crawlgap-empty', 'Nothing to list', [
@@ -658,6 +777,10 @@ export default function init() {
     }
 
     loadQuality();
+    wireToggle('seo-quality-metric', 'metric', (value) => {
+        qualityMetric = QUALITY_METRICS[value] ? value : 'visits';
+        drawQuality();
+    });
 
     wireSelect('seo-crawlers-cat', () => loadCrawlers());
     loadCrawlers();
