@@ -471,10 +471,55 @@ function loadExclusionHosts() {
     }).catch(() => {});
 }
 
+/** The largest rule file an import sends. The server enforces the same limit. */
+const IMPORT_MAX_BYTES = 512000;
+
+/**
+ * Wire every "Import from CSV" control on the rule cards.
+ *
+ * The file is read here and its text posted in the form's hidden `csv` field, so the server
+ * never receives an upload and the form keeps its own CSRF token and action. A file over the
+ * limit is refused before anything is sent, with the reason written beside the control.
+ */
+function initCsvImports() {
+    for (const input of document.querySelectorAll('input[type="file"][data-lh-import]')) {
+        input.addEventListener('change', async () => {
+            const form = input.closest('form');
+            const file = input.files && input.files[0];
+            const note = form ? form.querySelector('[data-lh-import-note]') : null;
+            const field = form ? form.querySelector('textarea[name="csv"]') : null;
+            if (!form || !file || !field) {
+                return;
+            }
+            if (file.size > IMPORT_MAX_BYTES) {
+                if (note) {
+                    note.textContent = 'That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.';
+                }
+                input.value = '';
+                return;
+            }
+            try {
+                field.value = await file.text();
+            } catch (err) {
+                if (note) {
+                    note.textContent = 'The file could not be read.';
+                }
+                return;
+            }
+            if (note) {
+                note.textContent = 'Importing…';
+            }
+            input.disabled = true;
+            form.submit();
+        });
+    }
+}
+
 /**
  * Entry point.
  */
 export default function init() {
+    initCsvImports();
     initTabs();
     initSubmitGuards();
     initJobButtons();

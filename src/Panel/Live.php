@@ -295,6 +295,9 @@ final class Live extends Controller implements JobHost
         Security::requireCsrf();
 
         $action = is_string($_POST['action'] ?? null) ? $_POST['action'] : '';
+        if ($action === 'live_exclusions_import') {
+            $this->importExclusions();
+        }
         if ($action !== 'live_exclusions') {
             return '?v=live';
         }
@@ -333,6 +336,71 @@ final class Live extends Controller implements JobHost
             'ok'         => true,
             'rules'      => $clean,
             'builtin_on' => $cleanBuiltin,
+            'active'     => Rules::fromList($clean, $cleanBuiltin)->activeCount(),
+        ]);
+    }
+
+    /** The largest rule file an import accepts. A rule list is a few kilobytes. */
+    private const IMPORT_MAX_BYTES = 512000;
+
+    /**
+     * Import live exclusions from a CSV file's text, added to the stored ones, and answer JSON.
+     *
+     * The browser reads the file and posts its text, so no upload reaches the server. Imported
+     * rules are appended after the stored ones with duplicates (same field and pattern) skipped,
+     * the built-in switches in the file are applied, and both halves go through the same
+     * sanitisers the Save button uses. The response is the list as stored.
+     */
+    private function importExclusions(): void
+    {
+        $csv = is_string($_POST['csv'] ?? null) ? $_POST['csv'] : '';
+        if (strlen($csv) > self::IMPORT_MAX_BYTES) {
+            \json_out(['error' => 'That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.'], 413);
+        }
+
+        $imported = Rules::fromCsv($csv);
+        if ($imported['rules'] === [] && $imported['on'] === [] && $imported['off'] === []) {
+            \json_out(['error' => 'Nothing was imported: the file has no table with Field and Pattern columns. '
+                . 'Import a CSV exported from this dialog.'], 422);
+        }
+
+        $stored = Rules::fromConfig($this->cfg);
+
+        $seen = [];
+        $merged = [];
+        foreach (array_merge($stored->all(), $imported['rules']) as $rule) {
+            $key = strtolower((string) ($rule['field'] ?? '') . "\n" . (string) ($rule['pattern'] ?? ''));
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $merged[] = $rule;
+        }
+
+        $clean = Rules::sanitise($merged);
+        $cleanBuiltin = Rules::sanitiseBuiltin(array_values(array_diff(
+            array_unique(array_merge($stored->builtinOn(), $imported['on'])),
+            $imported['off']
+        )));
+
+        $this->cfg->set(Rules::CONFIG_KEY, $clean);
+        $this->cfg->set(Rules::BUILTIN_CONFIG_KEY, $cleanBuiltin);
+
+        try {
+            $this->cfg->save();
+        } catch (\Throwable $e) {
+            \json_out(['error' => 'The rules could not be written to the configuration file.'], 500);
+        }
+
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($this->cfg->path(), true);
+        }
+
+        \json_out([
+            'ok'         => true,
+            'rules'      => $clean,
+            'builtin_on' => $cleanBuiltin,
+            'refused'    => count($merged) - count($clean),
             'active'     => Rules::fromList($clean, $cleanBuiltin)->activeCount(),
         ]);
     }

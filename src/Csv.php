@@ -113,6 +113,110 @@ final class Csv
     }
 
     /**
+     * Undo neutralise() on a cell read back from one of this panel's files.
+     *
+     * Only the apostrophe neutralise() adds is removed: one in front of a formula leader. A value
+     * that genuinely starts with an apostrophe and nothing dangerous after it is left as it is.
+     */
+    public static function unneutralise(string $value): string
+    {
+        if (strlen($value) < 2 || $value[0] !== "'") {
+            return $value;
+        }
+
+        $rest = substr($value, 1);
+        $probe = ltrim($rest, self::PADDING);
+        if (in_array($rest[0], self::FORMULA_LEADERS, true)
+            || ($probe !== '' && in_array($probe[0], self::FORMULA_LEADERS, true))
+        ) {
+            return $rest;
+        }
+
+        return $value;
+    }
+
+    /**
+     * Read a yes/no cell back. Empty means yes, so a hand-made file without the column turns rules on.
+     */
+    public static function yes(string $value): bool
+    {
+        return !in_array(strtolower(trim($value)), ['no', 'false', '0', 'off'], true);
+    }
+
+    /**
+     * Read a CSV table back: skip everything before its header row, map columns by header name.
+     *
+     * Built for the files this panel writes — a UTF-8 BOM, a provenance block of two-column
+     * records, a blank line, then the header and the rows — and equally for a hand-made file that
+     * is only a header and rows. Header names match case-insensitively, and every key in
+     * `$required` must be present before a row counts as the header, so a preamble line can never
+     * be mistaken for it. Cells come back trimmed with neutralisation undone; an entirely empty
+     * row is skipped, and rows past `$maxRows` are ignored.
+     *
+     * @param array<string,string> $columns  Header name => key in the returned rows.
+     * @param array<int,string>    $required Keys the header row must contain.
+     * @return array<int,array<string,string>>
+     */
+    public static function readTable(string $text, array $columns, array $required, int $maxRows = 1000): array
+    {
+        if (str_starts_with($text, "\xEF\xBB\xBF")) {
+            $text = substr($text, 3);
+        }
+
+        $handle = fopen('php://memory', 'r+');
+        if ($handle === false) {
+            return [];
+        }
+        fwrite($handle, $text);
+        rewind($handle);
+
+        $names = [];
+        foreach ($columns as $name => $key) {
+            $names[strtolower(trim((string) $name))] = $key;
+        }
+
+        $map = null;
+        $out = [];
+
+        while (($cells = fgetcsv($handle, 0, ',', '"', '')) !== false) {
+            if ($map === null) {
+                $candidate = [];
+                foreach ($cells as $i => $cell) {
+                    $key = $names[strtolower(trim((string) $cell))] ?? null;
+                    if ($key !== null && !in_array($key, $candidate, true)) {
+                        $candidate[$i] = $key;
+                    }
+                }
+                if ($candidate !== [] && array_diff($required, $candidate) === []) {
+                    $map = $candidate;
+                }
+                continue;
+            }
+
+            $row = [];
+            $any = false;
+            foreach ($map as $i => $key) {
+                $value = self::unneutralise(trim((string) ($cells[$i] ?? '')));
+                if ($value !== '') {
+                    $any = true;
+                }
+                $row[$key] = $value;
+            }
+
+            if ($any) {
+                $out[] = $row;
+                if (count($out) >= $maxRows) {
+                    break;
+                }
+            }
+        }
+
+        fclose($handle);
+
+        return $out;
+    }
+
+    /**
      * Quote one field per RFC 4180.
      *
      * The value is already final: neutralisation, number formatting and date formatting all

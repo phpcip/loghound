@@ -956,6 +956,12 @@ final class Settings extends Controller implements JobHost, Sections
             case 'attack_patterns':
                 return $this->saveAttackPatterns();
 
+            case 'exclusions_import':
+                return $this->importExclusions();
+
+            case 'attack_patterns_import':
+                return $this->importAttackPatterns();
+
             case 'beacon_hosts':
                 return $this->saveBeaconHosts();
 
@@ -3079,6 +3085,11 @@ final class Settings extends Controller implements JobHost, Sections
             'exclusions_saved' => 'Exclusions saved. The beacon collector applies them from the very '
                 . 'next request; the reader picks them up when it is next reloaded, not mid-file. '
                 . 'Anything already indexed is untouched — this decides what is recorded from now on.',
+            'exclusions_imported' => 'Rules imported from the file and added to the ones already here; '
+                . 'duplicates were skipped. The reader picks them up when it is next reloaded.',
+            'patterns_imported' => 'Attack patterns imported from the file and added to yours; duplicates '
+                . 'were skipped, and the shipped defaults were switched on or off as the file says. The reader '
+                . 'picks them up when it is next reloaded.',
             'patterns_saved'   => 'Attack patterns saved. The reader applies them from its next reload, and '
                 . 'the live page immediately. Requests already indexed keep the flags they were written with.',
             'hosts_saved'      => 'Measured sites saved. The collector applies the list on its very next '
@@ -3098,6 +3109,10 @@ final class Settings extends Controller implements JobHost, Sections
             'exclusion_refused' => 'Some rules were not saved, because a pattern is not a regular '
                 . 'expression PCRE will accept or a hostname is not a hostname. Everything valid was '
                 . 'kept: the rows missing from the list below are the ones that were refused.',
+            'import_empty'    => 'Nothing was imported: the file has no table with the columns this card '
+                . 'exports, or every row was empty. Import a CSV exported from this page.',
+            'import_too_large' => 'That file is larger than 500 KB, which is far more than a rule list. '
+                . 'Nothing was imported.',
             'pattern_refused' => 'Some attack patterns were not saved: a regular expression PCRE will not '
                 . 'accept, a pattern longer than ' . AttackPatterns::MAX_PATTERN . ' characters, or a hostname '
                 . 'that is not a hostname. Everything valid was kept.',
@@ -4797,6 +4812,48 @@ final class Settings extends Controller implements JobHost, Sections
                     return ['rows' => $rows];
                 },
             ],
+            'attack_patterns' => [
+                'label'   => 'Attack patterns',
+                'shape'   => 'custom',
+                'unit'    => 'patterns',
+                'cap'     => AttackPatterns::MAX_RULES + count(AttackPatterns::DEFAULTS),
+                'note'    => 'Requests that are an attack on your sites. A match flags the request and '
+                    . 'scores the visit a bot. Shipped rows are the defaults Loghound comes with and apply '
+                    . 'to every host; Yours are the patterns added on this installation.',
+                'columns' => [
+                    ['Source', 'source', 'text'],
+                    ['Hostname', 'host', 'text'],
+                    ['Kind', 'kind', 'text'],
+                    ['Pattern', 'pattern', 'text'],
+                    ['On', 'enabled', 'bool'],
+                    ['What it is', 'what', 'text'],
+                ],
+                'source'  => function (): array {
+                    $patterns = AttackPatterns::fromConfig($this->cfg);
+                    $rows = [];
+                    foreach (AttackPatterns::DEFAULTS as $id => $default) {
+                        $rows[] = [
+                            'source'  => 'Shipped',
+                            'host'    => 'every host',
+                            'kind'    => AttackPatterns::KINDS['text'],
+                            'pattern' => $default['pattern'],
+                            'enabled' => !$patterns->isOff($id),
+                            'what'    => $default['what'],
+                        ];
+                    }
+                    foreach ($patterns->rules() as $rule) {
+                        $rows[] = [
+                            'source'  => 'Yours',
+                            'host'    => $rule['host'] === '' ? 'every host' : $rule['host'],
+                            'kind'    => AttackPatterns::KINDS[$rule['kind']] ?? $rule['kind'],
+                            'pattern' => $rule['pattern'],
+                            'enabled' => $rule['enabled'],
+                            'what'    => '',
+                        ];
+                    }
+                    return ['rows' => $rows];
+                },
+            ],
         ];
     }
 
@@ -4878,6 +4935,12 @@ final class Settings extends Controller implements JobHost, Sections
             . ' title="The exclusion rules as stored, as a CSV file"'
             . ' aria-label="The exclusion rules as stored, as a CSV file">CSV</a>'
             . ' <span class="muted">The rules as stored, for a backup or a second install.</span></p>';
+
+        self::csvImportForm(
+            'exclusions_import',
+            'Adds the rules in a CSV exported from this card to the ones above. Duplicates are '
+            . 'skipped, and a pattern that does not compile is refused.'
+        );
 
         self::cardEnd();
     }
@@ -5063,7 +5126,137 @@ final class Settings extends Controller implements JobHost, Sections
             . ' in force now.</span></p>';
         echo '</form>';
 
+        echo '<p><a class="export" href="?v=settings&amp;export=attack_patterns"'
+            . ' data-export="attack_patterns" data-export-carry=""'
+            . ' title="The attack patterns as stored, shipped and yours, as a CSV file"'
+            . ' aria-label="The attack patterns as stored, shipped and yours, as a CSV file">CSV</a>'
+            . ' <span class="muted">Shipped and yours, with what is on, for a backup or a second install.</span></p>';
+
+        self::csvImportForm(
+            'attack_patterns_import',
+            'Adds the patterns in a CSV exported from this card to yours, and switches the shipped '
+            . 'defaults on or off as the file says. Duplicates are skipped, and a regular expression '
+            . 'that does not compile is refused.'
+        );
+
         self::cardEnd();
+    }
+
+    /**
+     * An "Import from CSV" control for a rule card.
+     *
+     * The browser reads the chosen file and posts its text in `csv` (assets/js/views/settings.js),
+     * so no file upload ever reaches the server and the size is checked on both sides. The form
+     * carries its own CSRF token and action like every other form on this page.
+     */
+    private static function csvImportForm(string $action, string $note): void
+    {
+        echo '<form method="post" action="?v=settings" class="csv-import">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="' . Security::esc($action) . '">';
+        echo '<textarea name="csv" hidden></textarea>';
+        echo '<p><label class="small">Import from CSV '
+            . '<input type="file" accept=".csv,text/csv" data-lh-import="1"></label> '
+            . '<span class="muted" data-lh-import-note="1">' . Security::esc($note) . '</span></p>';
+        echo '</form>';
+    }
+
+    /** The largest rule file an import accepts. A rule list is a few kilobytes. */
+    private const IMPORT_MAX_BYTES = 512000;
+
+    /**
+     * Import exclusions from the posted CSV text, appended to the stored rules.
+     *
+     * Duplicates (same hostname, field and pattern, ignoring case) are skipped, the merged list
+     * goes through Exclusions::sanitise(), and a refused row is reported as the save path does.
+     */
+    private function importExclusions(): string
+    {
+        $back = '&s=exclusions';
+        $csv = is_string($_POST['csv'] ?? null) ? $_POST['csv'] : '';
+        if (strlen($csv) > self::IMPORT_MAX_BYTES) {
+            return '?v=settings&err=import_too_large' . $back;
+        }
+
+        $incoming = Exclusions::fromCsv($csv);
+        if ($incoming === []) {
+            return '?v=settings&err=import_empty' . $back;
+        }
+
+        $seen = [];
+        $merged = [];
+        foreach (array_merge(Exclusions::fromConfig($this->cfg)->all(), $incoming) as $rule) {
+            $key = strtolower($rule['host'] . "\n" . $rule['field'] . "\n" . $rule['pattern']);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $merged[] = $rule;
+        }
+
+        $clean = Exclusions::sanitise($merged);
+        $this->cfg->set(Exclusions::CONFIG_KEY, $clean);
+
+        $err = $this->persist();
+        if ($err !== null) {
+            return '?v=settings&err=' . $err . $back;
+        }
+        if (count($clean) < count($merged)) {
+            return '?v=settings&err=exclusion_refused' . $back;
+        }
+
+        return '?v=settings&ok=exclusions_imported' . $back;
+    }
+
+    /**
+     * Import attack patterns from the posted CSV text.
+     *
+     * Operator rows are appended to the stored ones with duplicates (same hostname, kind and
+     * pattern) skipped and the result sanitised; shipped rows switch their default on or off.
+     */
+    private function importAttackPatterns(): string
+    {
+        $back = '&s=attack-patterns';
+        $csv = is_string($_POST['csv'] ?? null) ? $_POST['csv'] : '';
+        if (strlen($csv) > self::IMPORT_MAX_BYTES) {
+            return '?v=settings&err=import_too_large' . $back;
+        }
+
+        $imported = AttackPatterns::fromCsv($csv);
+        if ($imported['rules'] === [] && $imported['on'] === [] && $imported['off'] === []) {
+            return '?v=settings&err=import_empty' . $back;
+        }
+
+        $stored = AttackPatterns::fromConfig($this->cfg);
+
+        $seen = [];
+        $merged = [];
+        foreach (array_merge($stored->rules(), $imported['rules']) as $rule) {
+            $key = strtolower($rule['host'] . "\n" . $rule['kind'] . "\n" . $rule['pattern']);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $merged[] = $rule;
+        }
+
+        $off = array_values(array_diff(array_unique(array_merge($stored->off(), $imported['off'])), $imported['on']));
+
+        $clean = AttackPatterns::sanitise($merged);
+        $this->cfg->set(AttackPatterns::CONFIG_KEY, [
+            'rules' => $clean,
+            'off'   => AttackPatterns::sanitiseOff($off),
+        ]);
+
+        $err = $this->persist();
+        if ($err !== null) {
+            return '?v=settings&err=' . $err . $back;
+        }
+        if (count($clean) < count($merged)) {
+            return '?v=settings&err=pattern_refused' . $back;
+        }
+
+        return '?v=settings&ok=patterns_imported' . $back;
     }
 
     /**

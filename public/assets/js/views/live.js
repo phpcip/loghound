@@ -1253,6 +1253,53 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
         el('tbody', {}, builtinRows)
     ]);
 
+    const importFile = el('input', { type: 'file', accept: '.csv,text/csv' });
+    importFile.hidden = true;
+    const importButton = el('button', { type: 'button', class: 'small', text: 'Import CSV' });
+    importButton.addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', async () => {
+        const file = importFile.files && importFile.files[0];
+        if (!file) {
+            return;
+        }
+        if (file.size > 512000) {
+            status.textContent = 'That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.';
+            importFile.value = '';
+            return;
+        }
+        importButton.disabled = true;
+        status.textContent = 'Importing…';
+        try {
+            const data = await post({ action: 'live_exclusions_import', csv: await file.text() });
+            builtinOn = Array.isArray(data.builtin_on) ? data.builtin_on : builtinOn;
+            rules = Array.isArray(data.rules) ? data.rules : [];
+            noteRules();
+            pruneExcluded();
+
+            const wasRunning = source !== null;
+            if (wasRunning) {
+                stop('asked');
+                begin();
+            }
+
+            const refused = Number(data.refused) || 0;
+            renderExclusions(
+                mount,
+                generation,
+                rules.map((rule) => ({ ...rule })),
+                'Imported and saved; duplicates were skipped'
+                + (refused > 0 ? ', and ' + refused + (refused === 1 ? ' rule was' : ' rules were') + ' refused' : '')
+                + '. Unsaved edits in this dialog were replaced by the stored list'
+                + (wasRunning ? ', and the stream was reconnected.' : '.'),
+                builtinOn.slice()
+            );
+        } catch (err) {
+            status.textContent = err && err.message ? err.message : 'The file could not be imported.';
+            importButton.disabled = false;
+            importFile.value = '';
+        }
+    });
+
     fill(mount, [
         el('p', { class: 'muted' }, [
             'Ready-made groups first, then your own rules underneath. Nothing here changes what is ',
@@ -1274,7 +1321,9 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
         el('div', { class: 'live-tools' }, [
             saveButton,
             status,
-            exportLink('live', 'exclusions', 'Every rule in force, built-in and your own, as a CSV file', {})
+            exportLink('live', 'exclusions', 'Every rule in force, built-in and your own, as a CSV file', {}),
+            importButton,
+            importFile
         ])
     ]);
 }

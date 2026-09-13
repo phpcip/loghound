@@ -7,6 +7,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.2.1] — 2026-09-13
+
+### Added
+
+- **Rules travel as CSV, in and out, on all three rule lists.** Ingest exclusions, live stream
+  exclusions and attack patterns each have a CSV export and an Import from CSV control. An import
+  reads the file the same card exports, adds its rules to the ones already there with duplicates
+  skipped, switches shipped defaults and built-in groups on or off as the file says, and holds
+  every row to the same checks as a rule typed by hand. The file is read in the browser and sent
+  as text, so nothing is uploaded; anything over 500 KB is refused.
+
+---
+
 ## [1.2.0] — 2026-09-13
 
 ### Added

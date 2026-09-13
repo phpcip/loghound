@@ -326,6 +326,54 @@ final class Rules
         return count($this->compiled) + count($this->builtinCompiled);
     }
 
+    /** Header names an imported CSV may use, mapped to keys. */
+    public const CSV_COLUMNS = [
+        'Source'  => 'source',
+        'Field'   => 'field',
+        'Pattern' => 'pattern',
+        'On'      => 'enabled',
+        'Enabled' => 'enabled',
+    ];
+
+    /**
+     * Rules read from a CSV file: the operator's rows, and the built-in groups switched on or off.
+     *
+     * Reads the file the live dialog exports. A "Built-in" row whose field and pattern are one of
+     * BUILTIN switches that group; every other row is an operator rule in the raw shape
+     * sanitise() accepts. Field accepts the label or the slug. Nothing is trusted: the caller
+     * sanitises both halves.
+     *
+     * @return array{rules:array<int,array{field:string,pattern:string,enabled:bool}>,on:array<int,string>,off:array<int,string>}
+     */
+    public static function fromCsv(string $text): array
+    {
+        $fields = [];
+        foreach (self::FIELDS as $slug => $label) {
+            $fields[strtolower($slug)] = $slug;
+            $fields[strtolower($label)] = $slug;
+        }
+
+        $out = ['rules' => [], 'on' => [], 'off' => []];
+        foreach (\Loghound\Csv::readTable($text, self::CSV_COLUMNS, ['field', 'pattern']) as $row) {
+            $field = $fields[strtolower($row['field'] ?? '')] ?? '';
+            $pattern = $row['pattern'] ?? '';
+            $enabled = \Loghound\Csv::yes($row['enabled'] ?? '');
+
+            if (strtolower($row['source'] ?? '') === 'built-in') {
+                foreach (self::BUILTIN as $key => $spec) {
+                    if ($spec['field'] === $field && $spec['pattern'] === $pattern) {
+                        $out[$enabled ? 'on' : 'off'][] = $key;
+                        continue 2;
+                    }
+                }
+            }
+
+            $out['rules'][] = ['field' => $field, 'pattern' => $pattern, 'enabled' => $enabled];
+        }
+
+        return $out;
+    }
+
     /**
      * Every rule in force, built-ins included, in the order excludes() tests them.
      *

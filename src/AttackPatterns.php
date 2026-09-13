@@ -239,6 +239,73 @@ final class AttackPatterns
         return $out;
     }
 
+    /** Header names an imported CSV may use, mapped to keys. */
+    public const CSV_COLUMNS = [
+        'Source'   => 'source',
+        'Hostname' => 'host',
+        'Host'     => 'host',
+        'Kind'     => 'kind',
+        'Pattern'  => 'pattern',
+        'On'       => 'enabled',
+        'Enabled'  => 'enabled',
+    ];
+
+    /**
+     * Patterns read from a CSV file: the operator's rows, and the shipped defaults switched on or off.
+     *
+     * A row whose Source is "Shipped" and whose pattern is a shipped default sets that default on
+     * or off; every other row is an operator pattern in the raw shape sanitise() accepts. Kind
+     * accepts the label or the slug and defaults to text. Nothing is trusted: the caller
+     * sanitises the rules and sanitiseOff() only keeps ids that exist.
+     *
+     * @return array{rules:array<int,array{host:string,kind:string,pattern:string,enabled:bool}>,on:array<int,string>,off:array<int,string>}
+     */
+    public static function fromCsv(string $text): array
+    {
+        $byPattern = [];
+        foreach (self::DEFAULTS as $id => $default) {
+            $byPattern[strtolower($default['pattern'])] = $id;
+        }
+
+        $kinds = [];
+        foreach (self::KINDS as $slug => $label) {
+            $kinds[strtolower($slug)] = $slug;
+            $kinds[strtolower($label)] = $slug;
+        }
+
+        $out = ['rules' => [], 'on' => [], 'off' => []];
+        foreach (Csv::readTable($text, self::CSV_COLUMNS, ['pattern']) as $row) {
+            $pattern = $row['pattern'] ?? '';
+            $enabled = Csv::yes($row['enabled'] ?? '');
+            $shippedId = $byPattern[strtolower($pattern)] ?? null;
+
+            if (strtolower($row['source'] ?? '') === 'shipped' && $shippedId !== null) {
+                $out[$enabled ? 'on' : 'off'][] = $shippedId;
+                continue;
+            }
+
+            $host = strtolower($row['host'] ?? '');
+            $out['rules'][] = [
+                'host'    => $host === 'every host' ? '' : $host,
+                'kind'    => $kinds[strtolower($row['kind'] ?? '')] ?? 'text',
+                'pattern' => $pattern,
+                'enabled' => $enabled,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * The shipped default ids switched off.
+     *
+     * @return array<int,string>
+     */
+    public function off(): array
+    {
+        return array_keys($this->off);
+    }
+
     /** Does this regex body compile, as it would run? */
     public static function compiles(string $pattern): bool
     {

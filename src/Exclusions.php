@@ -182,6 +182,46 @@ final class Exclusions
         return $out;
     }
 
+    /** Header names an imported CSV may use, mapped to rule keys. */
+    public const CSV_COLUMNS = [
+        'Hostname' => 'host',
+        'Host'     => 'host',
+        'Field'    => 'field',
+        'Pattern'  => 'pattern',
+        'On'       => 'enabled',
+        'Enabled'  => 'enabled',
+    ];
+
+    /**
+     * Rules read from a CSV file, in the raw shape sanitise() accepts.
+     *
+     * Reads the file this card exports — `every host`, field labels, `yes`/`no` — and a hand-made
+     * one using slugs. Nothing is trusted: the caller passes the result through sanitise().
+     *
+     * @return array<int,array{host:string,field:string,pattern:string,enabled:bool}>
+     */
+    public static function fromCsv(string $text): array
+    {
+        $fields = [];
+        foreach (self::FIELDS as $slug => $label) {
+            $fields[strtolower($slug)] = $slug;
+            $fields[strtolower($label)] = $slug;
+        }
+
+        $out = [];
+        foreach (Csv::readTable($text, self::CSV_COLUMNS, ['field', 'pattern']) as $row) {
+            $host = strtolower($row['host'] ?? '');
+            $out[] = [
+                'host'    => $host === 'every host' ? '' : $host,
+                'field'   => $fields[strtolower($row['field'] ?? '')] ?? '',
+                'pattern' => $row['pattern'] ?? '',
+                'enabled' => Csv::yes($row['enabled'] ?? ''),
+            ];
+        }
+
+        return $out;
+    }
+
     /** Does this pattern compile, as we would run it? */
     public static function compiles(string $pattern): bool
     {
