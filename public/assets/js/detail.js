@@ -380,7 +380,9 @@ function trailBlock(id, data, host) {
     paint(data.timeline);
     show(data.page);
 
-    return el('div', {}, [list, mount]);
+    /* THE LIST SITS IN ITS OWN SCROLLER so a phone can read a whole path by swiping sideways,
+       without the dialog body or the pager moving with it. On a desktop it is a plain block. */
+    return el('div', {}, [el('div', { class: 'timeline-scroll' }, [list]), mount]);
 }
 
 /**

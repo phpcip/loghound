@@ -3016,6 +3016,25 @@ html.lh-dialog-open { overflow: hidden; }
     .lh-dialog .timeline .t-bytes,
     .lh-dialog .timeline .t-gap,
     .lh-dialog .timeline .t-dur { display: none; }
+
+    /* THE WHOLE PATH, AND A SIDEWAYS SWIPE TO READ IT. The path used to end in an ellipsis at
+       the screen edge, which on a phone is most of every admin path. The list now takes the
+       width of its longest row inside a scroller of its own; every row stretches to that same
+       width, so the status column stays aligned down the list, past the end of the longest
+       path. */
+    .lh-dialog .timeline-scroll {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-x: contain;
+    }
+    .lh-dialog .timeline-scroll > .timeline {
+        width: max-content;
+        min-width: 100%;
+    }
+    .lh-dialog .timeline-scroll .t-path > .urlpath {
+        overflow: visible;
+        text-overflow: clip;
+    }
 }
 
 /* =====================================================================================
