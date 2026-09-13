@@ -161,7 +161,7 @@ go silent rather than guessing — see `Signals::headerLogged()`.
 | Field | Type | I | DV | S | Notes |
 |---|---|:-:|:-:|:-:|---|
 | `referer_s` | string | ✓ | ✓ | ✓ | Stored: the traffic-sources view prints it. |
-| `referer_host_s` `referer_type_s` | string | ✓ | ✓ | | `direct\|search\|social\|ai\|internal\|link\|ad`. |
+| `referer_host_s` `referer_type_s` | string | ✓ | ✓ | | `direct\|search\|social\|ai\|internal\|link\|ad`. `internal` means the visited host or its `www.` variant. A **session** is never `internal`: when its first request names the visited site, the session takes the latest external referer of the same address on the same host, or `direct` when there is none. |
 | `accept_s` `accept_lang_s` `accept_enc_s` | string | ✓ | ✓ | | High-value fingerprint components. `accept_lang_s` in particular carries a lot of entropy across real humans, which is what keeps `fp_hash_s` discriminating. |
 | `sec_ch_ua_s` `sec_ch_platform_s` `sec_ch_mobile_b` | | ✓ | ✓ | | Client hints. Chromium has sent these since v89 on secure contexts. |
 | `sec_fetch_site_s` `sec_fetch_mode_s` `sec_fetch_dest_s` `sec_fetch_user_s` | string | ✓ | ✓ | | `Sec-Fetch-Dest` is by far the most reliable way to tell a document navigation from a sub-resource — worth logging for that alone. |

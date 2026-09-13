@@ -7,6 +7,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.3.4] — 2026-09-13
+
+### Fixed
+
+- **Your own site is never where a visit came from.** A session whose first request carries a
+  referer on the visited host, which happens when a tab is restored or a visit resumes after the
+  idle timeout, used to report that host as its source. It now takes the latest external referer of
+  the same address on the same host, or counts as direct when there is none. A referer on the
+  `www.` variant of the host is the same site.
+
+- **Same site no longer shows as a channel** with no visits in it.
+
+### Changed
+
+- **A spoofed User-Agent is always bot.** A client hint that contradicts the User-Agent, a
+  platform hint that contradicts it, or a crawler claim that reverse DNS does not confirm now
+  forces the verdict to bot, whatever else the session did. Client hints are no longer expected
+  from iOS browsers, Android WebView, or requests not proven to be TLS.
+
+- **A declared bot or a non-browser client is always bot.** Neither a referrer nor human-looking
+  behaviour moves it off the verdict.
+
+- **Signed in means a valid email address and nothing else.** The beacon keeps the identity only
+  when it is a valid email, and beacon interactions or scroll depth no longer count as signed in.
+
+---
+
 ## [1.3.3] — 2026-09-13
 
 ### Changed
