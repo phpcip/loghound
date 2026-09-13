@@ -2450,11 +2450,18 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
    A fixed `::after` on `.urlwrap` is safe even though the wrapper is a flex row: an absolutely
    or fixed positioned child does not become a flex item, so the box does not join the row it
    hangs off. */
+/* `.nobeacon` AND `.nopage` ARE AUTHORED, NOT MEASURED — the same case as `.dim`, and they had
+   the same gap as `.urlwrap`. Neither is a cut value: one is a padlock beside an inferred bounce
+   figure, the other the words "no page", and in both the meaning is absent by design rather than
+   clipped. visits.js therefore declares the sentence outright at creation, and both already
+   carried `cursor: help`, so the stylesheet was promising a tooltip these lists never drew. */
 .card-refresh[data-lh-tip]::after,
 .rowopen[data-lh-tip]::after,
 .facet-opt[data-lh-tip]::after,
 .dim[data-lh-tip]::after,
-.urlwrap[data-lh-tip]::after {
+.urlwrap[data-lh-tip]::after,
+.nobeacon[data-lh-tip]::after,
+.nopage[data-lh-tip]::after {
     content: attr(data-full);
     position: fixed;
     z-index: 40;
@@ -2479,14 +2486,18 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 .rowopen[data-lh-tip]:focus-visible::after,
 .facet-opt[data-lh-tip]:focus-visible::after,
 .dim[data-lh-tip]:focus-visible::after,
-.urlwrap[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+.urlwrap[data-lh-tip]:focus-visible::after,
+.nobeacon[data-lh-tip]:focus-visible::after,
+.nopage[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
 
 @media (hover: hover) and (pointer: fine) {
     .card-refresh[data-lh-tip]:hover::after,
     .rowopen[data-lh-tip]:hover::after,
     .facet-opt[data-lh-tip]:hover::after,
     .dim[data-lh-tip]:hover::after,
-    .urlwrap[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
+    .urlwrap[data-lh-tip]:hover::after,
+    .nobeacon[data-lh-tip]:hover::after,
+    .nopage[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
 }
 
 /* A card still clears the bar.
