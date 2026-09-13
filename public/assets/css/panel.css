@@ -974,6 +974,21 @@ thead th { padding-top: 0; padding-bottom: 3px; }
 
 .chart { width: 100%; min-height: 120px; }
 
+/* THE MAP IS NOT A FULL-WIDTH CHART. Stretched across a card sixteen hundred wide the world came
+   out elongated — and a pixel height cannot hold the shape, because the card is whatever the
+   window is. So the box gets the cropped map's own ratio (360° by 124° ≈ 2.9:1) and takes its
+   height from that, capped at a bit under two thirds of the card so it reads as a map rather
+   than as a band. Desks only: the phone sets its own height a few hundred lines into mobile.css. */
+@media (min-width: 901px) {
+    #net-map {
+        width: 62%;
+        max-width: 1100px;
+        margin-inline: auto;
+        aspect-ratio: 2.9;
+        height: auto !important;
+    }
+}
+
 /* ---------------------------------------------------------------------------
    EVERY STATE STATES BOTH COLOURS.
 

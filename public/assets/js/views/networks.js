@@ -261,12 +261,11 @@ async function renderMap(data) {
         return;
     }
     hideEmpty('net-map-empty');
-    /* A WORLD MAP IS TWICE AS WIDE AS IT IS TALL. At 340px in a card well over a thousand wide,
-       the projection was squashed flat — continents wide and stunted, and the bubbles that carry
-       the actual number squeezed into a band. This gives it the room the shape asks for. */
-    /* THREE TO ONE, WHICH IS WHAT THE CROPPED BOX IS. A card around 1600px wide wants roughly a
-       third of that in height for the map to fill it without bands above and below. */
-    cardChart('net-map', 540);
+    /* THE SHAPE IS THE BOX'S, AND THE BOX IS THE STYLESHEET'S. A height in pixels only holds the
+       proportion at one card width, which is why this number was wrong three times: the card is
+       whatever the window is. `#net-map` carries the cropped map's own ratio in panel.css and
+       takes its height from it, so this is the fallback for a browser without `aspect-ratio`. */
+    cardChart('net-map', 380);
     await loadWorld('');
 
     /* A BUBBLE OPENS THE COUNTRY. The map was the one place in the panel where the obvious

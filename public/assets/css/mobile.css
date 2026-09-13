@@ -933,10 +933,10 @@ textarea {
        =========================================================================== */
 
     .topbar-in {
-        gap: 6px 8px;
+        gap: 4px 6px;
         min-height: 0;
     }
-    .topbar { padding-top: 6px; padding-bottom: 6px; }
+    .topbar { padding-top: 3px; padding-bottom: 3px; margin-bottom: 10px; }
 
     .tb-field { gap: 4px; }
     .tb-field label { font-size: 11px; }
@@ -944,11 +944,14 @@ textarea {
     .topbar-in select,
     .topbar-in .tb-field-btn,
     .topbar-in .lh-scopebtn {
-        min-height: 30px;
-        height: 30px;
-        padding: 0 8px;
-        font-size: 13px;
+        min-height: 26px;
+        height: 26px;
+        padding: 0 6px;
+        font-size: 12px;
     }
+    .tb-filters { padding: 0 6px; gap: 4px; }
+    .tb-filters .tb-badge { padding: 0 4px; font-size: 11px; }
+    .topbar #lh-range { padding-right: 20px; padding-left: 6px; font-size: 12px; }
 
     .pager {
         gap: 6px 10px;
