@@ -891,6 +891,26 @@ final class Sessions extends Controller
 
         $recent = $this->visitorPage('sessions.dimension.recent', $scope, 0, Paging::PAGE);
 
+        /* WHAT THE SESSION-ONLY FILTERS HID. A dialog opened from a hits-plane table — an
+           attacker's address, a network — was counted there without the verdict filters,
+           which a request log cannot answer, and counted here with them. The two disagreed
+           silently and the dialog read 0. So when any such filter is active, the same scope is
+           counted once more without those filters, and the dialog says what they removed. */
+        $loose = null;
+        $dropped = array_values(array_diff($this->facets->selected(), array_keys(Query::hitFilterFields())));
+        if ($dropped !== []) {
+            $looseScope = array_values(array_diff($scope, $this->facets->fqs($dropped)));
+            $g = $this->gw->facet('sessions.dimension.loose', $this->gw->sessionsCore(), [
+                'q'  => '*:*',
+                'fq' => $looseScope,
+            ], ['n' => ['type' => 'query', 'q' => '*:*']]);
+            $labels = Query::filterFields();
+            $loose = [
+                'sessions' => (int) ($g['count'] ?? 0),
+                'dropped'  => array_map(static fn (string $f): string => $labels[$f] ?? $f, $dropped),
+            ];
+        }
+
         return $this->envelope([
             'field'      => $field,
             'label'      => $fields[$field] ?? $field,
@@ -921,6 +941,7 @@ final class Sessions extends Controller
             'page'       => $recent['page'],
             'requests'   => $field === 'paths_ss' ? $this->pathRequests($value) : null,
             'active'     => $this->filters,
+            'loose'      => $loose,
         ]);
     }
 
@@ -942,7 +963,11 @@ final class Sessions extends Controller
             return null;
         }
 
-        return array_merge($this->sessionFqs(), [$clause]);
+        /* THE UNNARROWED SCOPE, NOT THIS VIEW'S. sessionFqs() here adds "reached an HTML page",
+           which is right for the Recent visitors table and wrong for a dialog opened from any
+           other view: a host measured by the beacon alone has no page count at all, so its
+           dialog answered 0 beside a Websites row of 129. A dialog describes the value whole. */
+        return array_merge(parent::sessionFqs(), [$clause]);
     }
 
     /**

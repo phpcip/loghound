@@ -1008,6 +1008,29 @@ function pagesBlock(field, value) {
     return el('div', { class: 'visit-block' }, [caption, wrap, mount]);
 }
 
+/**
+ * What the session-only filters removed, or nothing when they removed nothing.
+ *
+ * A table built from the request log cannot apply a verdict filter, so it counts rows the
+ * dialog — which can — then hides. Without this sentence the dialog reads 0 beside a table
+ * row that plainly has traffic, and the reader cannot tell a filter from a fault.
+ */
+function looseNote(data) {
+    const loose = data.loose;
+    if (!loose || !(loose.sessions > (data.sessions || 0))) {
+        return null;
+    }
+    const hidden = loose.sessions - (data.sessions || 0);
+    const names = (loose.dropped || []).join(', ');
+    return el('p', {
+        class: 'muted',
+        text: num(data.sessions || 0) + ' under the active filters · ' + num(loose.sessions) + ' without '
+            + (names || 'the session-only filters') + '. ' + num(hidden) + (hidden === 1 ? ' visit is' : ' visits are')
+            + ' hidden by ' + ((loose.dropped || []).length === 1 ? 'that filter' : 'those filters')
+            + ', which the table this was opened from may not apply.'
+    });
+}
+
 function renderDimension(body, data) {
     const total = data.sessions || 0;
 
@@ -1020,6 +1043,7 @@ function renderDimension(body, data) {
         ]),
 
         filterNote(data.active),
+        looseNote(data),
 
         /* THE THREE FACTS THAT WERE BURIED. The virtual host sat at the bottom of an
            eleven-group breakdown, and whether these visits searched or attacked could not be
