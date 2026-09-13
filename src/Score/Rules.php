@@ -389,13 +389,16 @@ final class Rules
     ];
 
     /**
-     * The findings that mean the User-Agent is spoofed. Any one of them makes the verdict `bot`,
-     * whatever else fired, so a session is never shown as human and spoofed at the same time.
+     * The findings that make a session `bot`, whatever else fired: a spoofed User-Agent, a client
+     * that declares itself a bot, and a client that is not a browser. No credit, floor or ceiling
+     * moves the verdict off `bot` once one of these fired.
      */
-    private const SPOOFED_UA_CODES = [
+    private const ALWAYS_BOT_CODES = [
         'ua_secch_mismatch',
         'platform_mismatch',
         'rdns_claim_failed',
+        'ua_declared_bot',
+        'ua_not_a_browser',
     ];
 
     /**
@@ -439,6 +442,7 @@ final class Rules
         'rdns_claim_failed',
         'ua_claim_failed',
         'ua_not_a_browser',
+        'ua_declared_bot',
         'ua_secch_mismatch',
         'platform_mismatch',
     ];
@@ -1291,7 +1295,7 @@ final class Rules
             ];
         }
 
-        if (array_intersect($reasons, self::SPOOFED_UA_CODES) !== []) {
+        if (array_intersect($reasons, self::ALWAYS_BOT_CODES) !== []) {
             $verdict = 'bot';
             $score = max($score, (float) $this->thresholds['bot']);
         }
