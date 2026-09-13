@@ -1072,6 +1072,13 @@ export function geoScatter(id, points, onPick) {
         if (pickable) {
             chart.on('click', (p) => {
                 if (p && p.data && p.data.pick) {
+                    /* DISMISS THE TOOLTIP BEFORE THE DIALOG OPENS. A pointer leaves the bubble and
+                       the tooltip goes with it; a finger does not, so on a touch screen it stayed
+                       pinned to the map and floated over the dialog the tap had just opened —
+                       covering the visits it was there to show. The highlight goes too, for the
+                       same reason: nothing should stay lit under a dialog. */
+                    chart.dispatchAction({ type: 'hideTip' });
+                    chart.dispatchAction({ type: 'downplay' });
                     onPick(p.data.pick, p.data);
                 }
             });

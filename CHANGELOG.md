@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.5] — 2026-09-13
+
+### Fixed
+
+- **The map's tooltip stayed pinned over the dialog on a touch screen.** A pointer leaves a bubble
+  and the tooltip goes with it; a finger does not, so tapping a country left the label floating on
+  top of the dialog that tap had just opened — covering the visits it was there to show. The
+  tooltip and the highlight are both dismissed before the dialog opens.
+
+---
+
 ## [1.1.4] — 2026-09-13
 
 ### Fixed
