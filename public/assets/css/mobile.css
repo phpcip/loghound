@@ -197,6 +197,10 @@ table.visits td.visit-email { max-width: none; }
 
 .lh-navhint { display: none; }
 
+/* A chart drawn above an aggregate table (assets/js/tablecharts.js): room above the table so
+   the bars and the rows read as two things, not one crowded block. */
+.chart.tchart { margin: 6px 0 18px; }
+
 /* ===========================================================================
    2. TOUCH SIZING — every pressable thing, on a coarse pointer or a narrow window.
 
@@ -1126,6 +1130,8 @@ table.visits td.visit-email { max-width: none; }
         min-height: 32px;
         padding: 2px 0;
     }
+
+    .chart.tchart { margin: 2px 0 12px; }
 }
 
 /* ===========================================================================

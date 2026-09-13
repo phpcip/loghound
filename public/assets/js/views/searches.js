@@ -13,6 +13,7 @@
 import { api, byId, el, hideEmpty, num, setPop, showEmpty, tbody } from '../core.js';
 import { changeCell, magnitudeBar, pagedCard, shareBar } from '../cardtable.js';
 import { dimRow } from '../identity.js';
+import { clearTableChart, rankChart } from '../tablecharts.js';
 
 /**
  * The empty state for an installation that has never named a search parameter.
@@ -36,6 +37,7 @@ function renderTerms(data) {
     if (!data.configured.length) {
         setPop('an-terms', 'Not collecting any search terms.');
         tbody(byId('an-terms-table'), []);
+        clearTableChart('an-terms');
         notConfigured('an-terms');
         return 'own';
     }
@@ -46,6 +48,7 @@ function renderTerms(data) {
 
     if (!data.rows.length) {
         tbody(byId('an-terms-table'), []);
+        clearTableChart('an-terms');
         return false;
     }
     hideEmpty('an-terms-empty');
@@ -60,6 +63,9 @@ function renderTerms(data) {
         ]
     })));
 
+    rankChart('an-terms', data.rows.map((row) => ({ label: row.term, value: row.sessions })),
+        { label: 'Visits per search term' });
+
     return true;
 }
 
@@ -68,6 +74,7 @@ function renderTrend(data) {
     if (!data.configured.length) {
         setPop('an-termtrend', 'Not collecting any search terms.');
         tbody(byId('an-termtrend-table'), []);
+        clearTableChart('an-termtrend');
         notConfigured('an-termtrend');
         return 'own';
     }
@@ -77,6 +84,7 @@ function renderTrend(data) {
 
     if (!data.rows.length) {
         tbody(byId('an-termtrend-table'), []);
+        clearTableChart('an-termtrend');
         return false;
     }
     hideEmpty('an-termtrend-empty');
@@ -97,6 +105,16 @@ function renderTrend(data) {
             }
         ]
     })));
+
+    rankChart('an-termtrend', data.rows.map((row) => ({
+        label: row.term,
+        value: row.delta,
+        extra: num(row.prev) + ' before, ' + num(row.now) + ' now'
+    })), {
+        signed: true,
+        format: (v) => (v > 0 ? '+' : '') + num(v),
+        label: 'Change in visits per search term against the previous period'
+    });
 
     return true;
 }

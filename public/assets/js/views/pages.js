@@ -15,6 +15,8 @@ import { api, byId, el, hideEmpty, num, pct, setPop, tbody } from '../core.js';
 import { changeCell, magnitudeBar, pagedCard, shareBar } from '../cardtable.js';
 import { dimRow } from '../identity.js';
 import { pathCell } from '../url.js';
+import { tokens } from '../charts.js';
+import { clearTableChart, rankChart, splitChart } from '../tablecharts.js';
 
 /** The three cards' loaders, so a toggle can restart one from its first page. */
 const loaders = {};
@@ -32,6 +34,7 @@ const scope = { 'an-entry': 'all', 'an-exit': 'multi' };
 function renderEntry(data) {
     if (!data.rows.length) {
         tbody(byId('an-entry-table'), []);
+        clearTableChart('an-entry');
         return false;
     }
     hideEmpty('an-entry-empty');
@@ -59,6 +62,15 @@ function renderEntry(data) {
         ]
     })));
 
+    const t = tokens();
+    splitChart('an-entry', data.rows.map((row) => ({
+        label: row.path,
+        parts: [
+            { name: 'Went further', value: Math.max(0, row.sessions - row.single), color: t.pop.ai },
+            { name: 'Left after one request', value: row.single, color: t.pop.unknown }
+        ]
+    })), { label: 'Visits per entry page, split by whether they went further' });
+
     return true;
 }
 
@@ -66,6 +78,7 @@ function renderEntry(data) {
 function renderExit(data) {
     if (!data.rows.length) {
         tbody(byId('an-exit-table'), []);
+        clearTableChart('an-exit');
         return false;
     }
     hideEmpty('an-exit-empty');
@@ -88,6 +101,9 @@ function renderExit(data) {
         ]
     })));
 
+    rankChart('an-exit', data.rows.map((row) => ({ label: row.path, value: row.sessions })),
+        { label: 'Finished visits per exit page' });
+
     return true;
 }
 
@@ -102,6 +118,7 @@ function renderExit(data) {
 function renderTrend(data) {
     if (!data.rows.length) {
         tbody(byId('an-trend-table'), []);
+        clearTableChart('an-trend');
         return false;
     }
     hideEmpty('an-trend-empty');
@@ -130,6 +147,16 @@ function renderTrend(data) {
             }
         ]
     })));
+
+    rankChart('an-trend', data.rows.map((row) => ({
+        label: row.path,
+        value: row.delta,
+        extra: num(row.prev) + ' before, ' + num(row.now) + ' now'
+    })), {
+        signed: true,
+        format: (v) => (v > 0 ? '+' : '') + num(v),
+        label: 'Change in requests per path against the previous period'
+    });
 
     return true;
 }

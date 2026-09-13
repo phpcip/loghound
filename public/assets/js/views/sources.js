@@ -14,6 +14,7 @@ import { pagedCard, shareBar } from '../cardtable.js';
 import { dimRow, dimValue } from '../identity.js';
 import { renderPager } from '../pager.js';
 import { hrefLink } from '../url.js';
+import { clearTableChart, rankChart } from '../tablecharts.js';
 
 /** The population currently selected by the toggles. */
 let population = 'humans';
@@ -36,6 +37,7 @@ function renderChannels(data) {
 
     if (!data.rows.length) {
         tbody(byId('an-channels-table'), []);
+        clearTableChart('an-channels');
         noDataYet('an-channels-empty', 'referrer types');
         return;
     }
@@ -55,6 +57,9 @@ function renderChannels(data) {
             { text: row.why || '—', class: 'muted wrap', sort: row.label }
         ]
     })));
+
+    rankChart('an-channels', data.rows.map((row) => ({ label: row.label, value: row.sessions })),
+        { label: 'Visits per referrer type' });
 }
 
 /** Fill the referring-sites table. */
@@ -64,6 +69,7 @@ function renderReferrers(data) {
 
     if (!data.rows.length) {
         tbody(byId('an-referrers-table'), []);
+        clearTableChart('an-referrers');
         return false;
     }
     hideEmpty('an-referrers-empty');
@@ -76,6 +82,9 @@ function renderReferrers(data) {
             { node: shareBar(row.sessions, data.referred, 'referred visits'), sort: row.sessions }
         ]
     })));
+
+    rankChart('an-referrers', data.rows.map((row) => ({ label: row.host, value: row.sessions })),
+        { label: 'Referred visits per referring site' });
 
     return true;
 }

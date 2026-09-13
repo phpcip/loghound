@@ -22,6 +22,7 @@ import {
     api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, pct, setPop, tbody, when
 } from '../core.js';
 import { lines, stackedBars, tokens } from '../charts.js';
+import { clearTableChart, splitChart } from '../tablecharts.js';
 import { countryNode, dimRow, dimValue, drillRow, openButton, valueText, valueWords } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
 import { pagedCard } from '../cardtable.js';
@@ -365,6 +366,7 @@ function renderWho(data) {
     if (!data.actors.length) {
         tbody(byId('atk-who-table'), []);
         tbody(byId('atk-networks-table'), []);
+        clearTableChart('atk-who');
         noDataYet('atk-who-empty', 'matched addresses');
         return;
     }
@@ -402,6 +404,15 @@ function renderWho(data) {
             { text: row.last ? when(row.last) : '—', sort: row.last || '' }
         ]
     })));
+
+    const t = tokens();
+    splitChart('atk-who', data.actors.map((row) => ({
+        label: row.ip,
+        parts: [
+            { name: 'Answered', value: row.answered, color: t.accent },
+            { name: 'Refused', value: row.refused, color: t.pop.human }
+        ]
+    })), { label: 'Matched requests per address, answered and refused' });
 
     tbody(byId('atk-networks-table'), (data.networks || []).map((row) => ({
         attrs: dimRow('as_org_s', row.org),
@@ -451,6 +462,7 @@ function renderImpersonation(data) {
 
     if (!data.crawlers.length) {
         tbody(byId('atk-crawlers-table'), []);
+        clearTableChart('atk-impersonation');
         noDataYet('atk-impersonation-empty', 'declared crawler sessions');
         return;
     }
@@ -484,6 +496,16 @@ function renderImpersonation(data) {
             { text: row.last ? when(row.last) : '—', sort: row.last || '' }
         ]
     })));
+
+    const t = tokens();
+    splitChart('atk-impersonation', data.crawlers.map((row) => ({
+        label: valueText('ua_bot_name_s', row.name),
+        parts: [
+            { name: 'Verified', value: row.verified, color: t.pop.ai },
+            { name: 'rDNS failed', value: row.rdns_failed, color: t.accent },
+            { name: 'Cloud tenant', value: row.tenant, color: t.pop.unknown }
+        ]
+    })), { label: 'Declared crawler sessions: verified, failed reverse DNS, or answered from a rented cloud machine' });
 }
 
 /**

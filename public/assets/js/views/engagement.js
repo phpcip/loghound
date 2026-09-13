@@ -19,6 +19,8 @@ import { renderBounce } from '../bounce.js';
 import { pagedCard } from '../cardtable.js';
 import { dimRow, dimValue } from '../identity.js';
 import { pathCell } from '../url.js';
+import { tokens } from '../charts.js';
+import { clearTableChart, rankChart, splitChart } from '../tablecharts.js';
 
 /**
  * The split bar: what share of a landing page's measurable visits bounced against what share
@@ -65,6 +67,7 @@ function renderPages(data) {
 
     if (!data.rows.length) {
         tbody(byId('an-bouncepages-table'), []);
+        clearTableChart('an-bouncepages');
         return false;
     }
     hideEmpty('an-bouncepages-empty');
@@ -90,6 +93,21 @@ function renderPages(data) {
         ]
     })));
 
+    const t = tokens();
+    splitChart('an-bouncepages', data.rows.map((row) => {
+        const measured = Number(row.measured) || 0;
+        const bounced = Number(row.bounced) || 0;
+        const satisfied = Number(row.satisfied) || 0;
+        return {
+            label: row.path,
+            parts: [
+                { name: 'Stayed on the page', value: satisfied, color: t.pop.human },
+                { name: 'Bounced', value: bounced, color: t.pop.evasive },
+                { name: 'Went further', value: Math.max(0, measured - bounced - satisfied), color: t.pop.ai }
+            ]
+        };
+    }), { label: 'Measurable visits per landing page: stayed, bounced or went further' });
+
     return true;
 }
 
@@ -114,6 +132,7 @@ function renderPeople(data) {
 
     if (!rows.length) {
         tbody(byId('an-people-table'), []);
+        clearTableChart('an-people');
         return false;
     }
     hideEmpty('an-people-empty');
@@ -129,6 +148,9 @@ function renderPeople(data) {
             { text: row.last ? when(row.last) : '—', mono: true, nowrap: true, sort: row.last || '' }
         ]
     })));
+
+    rankChart('an-people', rows.map((row) => ({ label: row.ident, value: row.sessions })),
+        { label: 'Visits per signed-in visitor' });
 
     return true;
 }

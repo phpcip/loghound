@@ -16,6 +16,7 @@ import {
     api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, setPop, tbody, when
 } from '../core.js';
 import { barsHStacked, donut, histogram, tokens } from '../charts.js';
+import { clearTableChart, splitChart } from '../tablecharts.js';
 import { openSubject } from '../dialog.js';
 import { dimRow, dimValue, valueText } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
@@ -160,6 +161,7 @@ function renderHistogram(data) {
 function renderClasses(data) {
     if (!data.classes.length) {
         tbody(byId('bf-classes-table'), []);
+        clearTableChart('bf-classes');
         noDataYet('bf-classes-empty', 'bot classes');
         return;
     }
@@ -186,6 +188,15 @@ function renderClasses(data) {
             }
         ]
     })));
+
+    const t = tokens();
+    splitChart('bf-classes', data.classes.map((row) => ({
+        label: valueText('bot_class_s', row.class),
+        parts: [
+            { name: 'Declared', value: row.declared ? row.count : 0, color: t.pop.ai },
+            { name: 'Evasive', value: row.declared ? 0 : row.count, color: t.pop.evasive }
+        ]
+    })), { label: 'Sessions per bot class, declared and evasive' });
 }
 
 /**
@@ -269,6 +280,7 @@ function renderCrawlers(data) {
 
     if (!data.crawlers.length) {
         tbody(table, []);
+        clearTableChart('bf-crawlers');
         showNoCrawlers();
         return;
     }
@@ -281,6 +293,15 @@ function renderCrawlers(data) {
     const unspecified = data.crawlers.filter((row) => row.unspecified);
 
     tbody(table, named.map(crawlerRow));
+
+    const t = tokens();
+    splitChart('bf-crawlers', named.map((row) => ({
+        label: row.name,
+        parts: [
+            { name: 'Verified', value: Math.min(row.verified, row.sessions), color: t.pop.ai },
+            { name: 'Not verified', value: Math.max(0, row.sessions - row.verified), color: t.pop.evasive }
+        ]
+    })), { label: 'Sessions per declared crawler, verified and not verified' });
 
     if (!unspecified.length) {
         return;

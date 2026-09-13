@@ -7,6 +7,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.2.3] — 2026-09-13
+
+### Added
+
+- **A chart above every ranked table on the analysis pages.** Bot classes and declared crawlers
+  (verified or not), the addresses behind matched requests (answered or refused), crawler
+  impersonation, netblocks and countries (by population), top pages, entry and exit pages, trending
+  paths and search terms, channels, referring sites, landing-page bounce and signed-in visitors. Each
+  chart is drawn from the rows its table was filled with, so the two always agree and no extra
+  request is made. A card whose data is a handful of headline numbers keeps its figures instead.
+
+- **Compact on a phone.** A chart shows the top 12 rows on a desktop and the top 8 at phone width,
+  at a shorter row height, and the full list stays in the table underneath. Colours are the ones the
+  tables' own bars use, checked for separation in both themes.
+
+### Fixed
+
+- **Charts created after the page loaded now follow their card's width.** Only the charts present
+  in the markup were watched for resizing, so a chart a card drew when its data arrived kept the
+  width it was born at through a rotation, a rail toggle or a window resize.
+
+---
+
 ## [1.2.2] — 2026-09-13
 
 ### Fixed

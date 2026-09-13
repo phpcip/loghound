@@ -16,6 +16,7 @@ import {
     setPop, tbody
 } from '../core.js';
 import { donut, geoScatter, loadWorld, tokens, treemap } from '../charts.js';
+import { clearTableChart, splitChart } from '../tablecharts.js';
 import { openSubject } from '../dialog.js';
 import { countryName, locate } from '../geo.js';
 import { countryNode, dimRow, dimValue, valueText } from '../identity.js';
@@ -290,6 +291,7 @@ async function renderMap(data) {
 function renderNetnames(data) {
     if (!data.netnames.length) {
         tbody(byId('net-netnames-table'), []);
+        clearTableChart('net-netnames');
         noDataYet('net-netnames-empty', 'netblocks');
         return;
     }
@@ -317,6 +319,9 @@ function renderNetnames(data) {
             { node: mixCell(row), sort: row.sessions ? row.evasive / row.sessions : 0 }
         ]
     })));
+
+    splitChart('net-netnames', data.netnames.map((row) => populationParts(row.netname, row)),
+        { label: 'Sessions per netblock, by population' });
 }
 
 /**
@@ -325,6 +330,7 @@ function renderNetnames(data) {
 function renderCountries(data) {
     if (!data.countries.length) {
         tbody(byId('net-countries-table'), []);
+        clearTableChart('net-countries');
         noDataYet('net-countries-empty', 'geolocated sessions');
         return;
     }
@@ -350,6 +356,30 @@ function renderCountries(data) {
             }
         ]
     })));
+
+    splitChart('net-countries', data.countries.map((row) => populationParts(countryName(row.country) || row.country, row)),
+        { label: 'Sessions per country, by population' });
+}
+
+/**
+ * One chart row split into the populations the tables' mix bars show: human, evasive and the rest.
+ *
+ * Human and evasive keep the colours they have in every mix bar on the page; declared crawlers and
+ * unscored sessions share one quiet segment, because a third saturated colour beside the two that
+ * matter would make the chart louder without making it clearer.
+ */
+function populationParts(label, row) {
+    const t = tokens();
+    const human = Number(row.human) || 0;
+    const evasive = Number(row.evasive) || 0;
+    return {
+        label: label,
+        parts: [
+            { name: 'Human', value: human, color: t.pop.human },
+            { name: 'Evasive', value: evasive, color: t.pop.evasive },
+            { name: 'Other', value: Math.max(0, (Number(row.sessions) || 0) - human - evasive), color: t.pop.unknown }
+        ]
+    };
 }
 
 /**

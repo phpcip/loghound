@@ -115,7 +115,66 @@ export function draw(id, factory) {
     }
     const t = tokens();
     entry.instance.setOption(withDefaults(factory(t), t), true);
+    watchResize(node);
     return entry.instance;
+}
+
+/** The one observer every chart container is registered with, created on first use. */
+let resizeObserver = null;
+
+/** Container ids waiting for the next animation frame's redraw. */
+let pendingResize = new Set();
+
+/** Whether a redraw frame is already queued. */
+let resizeQueued = false;
+
+/**
+ * Rebuild one chart's option at its current size.
+ *
+ * A resize REBUILDS the option rather than only calling resize(). The horizontal bar charts
+ * reserve their label column from the container's current width, so a chart that is only resized
+ * keeps a column sized for the width it was born at.
+ */
+function redrawChart(entry) {
+    const t = tokens();
+    entry.instance.setOption(withDefaults(entry.factory(t), t), true);
+    entry.instance.resize();
+}
+
+/** Redraw every chart whose container changed size since the last frame. */
+function flushResize() {
+    resizeQueued = false;
+    for (const id of pendingResize) {
+        const chart = charts.get(id);
+        if (chart) {
+            redrawChart(chart);
+        }
+    }
+    pendingResize = new Set();
+}
+
+/**
+ * Keep a chart container sized to its box, including charts created after the page loaded.
+ *
+ * Registered from draw(), so a chart a card creates when its data arrives is watched exactly
+ * like one that was in the markup. Observing the same element twice is a no-op.
+ */
+function watchResize(node) {
+    if (!window.ResizeObserver || !node) {
+        return;
+    }
+    if (!resizeObserver) {
+        resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                pendingResize.add(entry.target.id);
+            }
+            if (!resizeQueued) {
+                resizeQueued = true;
+                window.requestAnimationFrame(flushResize);
+            }
+        });
+    }
+    resizeObserver.observe(node);
 }
 
 /** Drop a chart (used when a view replaces a container entirely). */
@@ -1187,49 +1246,14 @@ export function initCharts() {
         }
     });
 
-    /* A resize REBUILDS the option rather than only calling resize(). The horizontal bar
-       charts reserve their label column from the container's current width, so a chart that
-       is only resized keeps a column sized for the width it was born at — too wide on a
-       narrowed window, and too narrow to hold the labels on a widened one, which is how a
-       label gets clipped again. Coalesced into one frame because a drag fires this
-       continuously. */
-    const redraw = (entry) => {
-        const t = tokens();
-        entry.instance.setOption(withDefaults(entry.factory(t), t), true);
-        entry.instance.resize();
-    };
-
     if (window.ResizeObserver) {
-        let pending = new Set();
-        let queued = false;
-
-        const flush = () => {
-            queued = false;
-            for (const id of pending) {
-                const chart = charts.get(id);
-                if (chart) {
-                    redraw(chart);
-                }
-            }
-            pending = new Set();
-        };
-
-        const observer = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                pending.add(entry.target.id);
-            }
-            if (!queued) {
-                queued = true;
-                window.requestAnimationFrame(flush);
-            }
-        });
         for (const node of document.querySelectorAll('.chart')) {
-            observer.observe(node);
+            watchResize(node);
         }
     } else {
         window.addEventListener('resize', () => {
             for (const [, entry] of charts) {
-                redraw(entry);
+                redrawChart(entry);
             }
         });
     }

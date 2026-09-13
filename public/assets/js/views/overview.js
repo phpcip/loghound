@@ -14,6 +14,7 @@ import {
     showEmpty, tbody
 } from '../core.js';
 import { barsH, dispose, stackedTraffic, tokens } from '../charts.js';
+import { clearTableChart, rankChart } from '../tablecharts.js';
 import { pagedCard } from '../cardtable.js';
 import { dimRow } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
@@ -225,6 +226,7 @@ function renderPages(data) {
 
     if (!data.rows.length) {
         tbody(byId('ov-pages-table'), []);
+        clearTableChart('ov-pages');
         return false;
     }
     hideEmpty('ov-pages-empty');
@@ -243,6 +245,9 @@ function renderPages(data) {
             shareCell(row.requests, data.total)
         ]
     })));
+
+    rankChart('ov-pages', data.rows.map((row) => ({ label: row.path, value: row.requests })),
+        { label: 'Requests per path' });
 
     return true;
 }
@@ -283,6 +288,7 @@ function renderSearches(data) {
     if (!data.configured.length) {
         setPop('ov-searches', 'Not collecting any search terms.');
         tbody(byId('ov-searches-table'), []);
+        clearTableChart('ov-searches');
         showEmpty('ov-searches-empty', 'Search terms are not being collected', [
             'Loghound reads a search term out of the URL, and only from the query parameters you '
                 + 'have named. None are named on this installation, so nothing is collected and '
@@ -307,6 +313,7 @@ function renderSearches(data) {
 
     if (!data.rows.length) {
         tbody(byId('ov-searches-table'), []);
+        clearTableChart('ov-searches');
         return false;
     }
     hideEmpty('ov-searches-empty');
@@ -324,6 +331,9 @@ function renderSearches(data) {
             shareCell(row.sessions, data.searched)
         ]
     })));
+
+    rankChart('ov-searches', data.rows.map((row) => ({ label: row.term, value: row.sessions })),
+        { label: 'Sessions per search term' });
 
     return true;
 }
