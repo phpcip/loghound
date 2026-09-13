@@ -1128,7 +1128,7 @@ final class Parser
             return 'direct';
         }
 
-        if ($refHost !== null && $host !== null && $refHost === $host) {
+        if ($refHost !== null && $host !== null && self::sameSite($refHost, $host)) {
             return 'internal';
         }
         if ($refHost !== null) {
@@ -1166,6 +1166,16 @@ final class Parser
         }
 
         return 'link';
+    }
+
+    /**
+     * Whether two hostnames are the same site, ignoring case and a leading `www.` on either.
+     */
+    public static function sameSite(string $a, string $b): bool
+    {
+        $strip = static fn (string $h): string => preg_replace('/^www\./', '', strtolower($h)) ?? strtolower($h);
+
+        return $a !== '' && $b !== '' && $strip($a) === $strip($b);
     }
 
     /**

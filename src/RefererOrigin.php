@@ -194,7 +194,7 @@ final class RefererOrigin
             $parsed = parse_url($referer, PHP_URL_HOST);
             $host = is_string($parsed) ? strtolower($parsed) : '';
         }
-        if ($host === '' || $host === strtolower(self::scalar($row['host_s'] ?? null))) {
+        if ($host === '' || Parser::sameSite($host, self::scalar($row['host_s'] ?? null))) {
             return null;
         }
 
