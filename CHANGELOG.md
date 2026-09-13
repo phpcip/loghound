@@ -7,6 +7,42 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.2] — 2026-09-13
+
+### Changed
+
+- **A phone shows the table, not the furniture around it.** The header row goes, and the gap it
+  left behind goes with it — a hidden row still occupied its own padding. The card's title goes
+  too: at 375px "Recent visitors" tells a reader nothing the page does not already say, and the
+  row it sat on already holds refresh and CSV. The two sort selects move into that row instead
+  of costing a line of their own.
+
+- **A visit row, cut to what a phone can read.** The address goes and the flag stays — one glyph
+  answers "where from", while an IPv6 address is a line of its own at that width. The bounce
+  column goes whole. The date splits in two: the day above, the clock below, because the day
+  repeats down the column and the clock is the part being read. Sorting by IP is no longer
+  offered, since the column it would order by is not on screen.
+
+- **The chevron moved to the session time.** It used to live in the bounce cell, which is the one
+  a phone drops — so the way into a visit went with the column that held it. It rides with the
+  duration now, small and carrying no padding of its own, at every width.
+
+- **Map sits with the visitors.** A link under Visitors, between Sessions and Signed-in visitors.
+  It points at one card of Networks, which keeps its own entry; a card lifted into a link of its
+  own is now dropped from its view's section list automatically, so the same page is never
+  offered twice.
+
+### Fixed
+
+- **Signed-in visitors appeared twice** — once as its promoted link and once buried under
+  Engagement, which is the arrangement promoting it was meant to fix.
+
+- **The Attacks table nearly lost a column.** The rule hiding bounce on a phone matched on a
+  class the Attacks table borrows for its Verdict column. It is scoped to the visit-shaped
+  tables now, so the five-column attack and request tables keep everything they have.
+
+---
+
 ## [1.1.1] — 2026-09-13
 
 ### Changed

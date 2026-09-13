@@ -417,7 +417,8 @@ function sortBar(table) {
     if (!head) {
         return null;
     }
-    const cells = Array.prototype.slice.call(head.querySelectorAll('th.sortable'));
+    const cells = Array.prototype.slice.call(head.querySelectorAll('th.sortable'))
+        .filter((th) => !th.hasAttribute('data-lh-nosort'));
     if (cells.length === 0) {
         return null;
     }
@@ -457,7 +458,13 @@ function sortBar(table) {
  */
 function sortBars(on) {
     for (const table of document.querySelectorAll('table')) {
-        const host = table.closest('.table-wrap') || table.parentElement;
+        /* THE CARD'S OWN HEADING ROW, NOT A BAR ABOVE THE TABLE. That row already holds the
+           refresh and CSV controls and, on a phone, its title is hidden — so the two selects take
+           the space the title was using instead of costing the reader another line. */
+        const card = table.closest('.card');
+        const host = (card && card.querySelector('.card-head'))
+            || table.closest('.table-wrap')
+            || table.parentElement;
         if (!host) {
             continue;
         }
@@ -477,7 +484,7 @@ function sortBars(on) {
 
         const bar = sortBar(table);
         if (bar) {
-            host.insertBefore(bar, table);
+            host.appendChild(bar);
         }
     }
 }

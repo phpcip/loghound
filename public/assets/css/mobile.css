@@ -785,6 +785,53 @@ textarea {
     .table-wrap > table td.num,
     .table-wrap > table td.nowrap { white-space: nowrap; }
 
+    /* ===========================================================================
+       A VISIT ROW, CUT TO WHAT A PHONE CAN READ
+
+       The address goes and the flag stays: one glyph answers "where from", while
+       an IPv6 address is a line of its own at this width. The bounce column goes
+       whole — it is a yes or a no that the row's colour already carries, and the
+       chevron that used to live in it now rides with the session time, so the way
+       into a visit survives the column that held it.
+
+       The date splits: the day above, the clock below. The day repeats down the
+       column and the clock is the part being read.
+       =========================================================================== */
+
+    table.visits .visit-ip { display: none; }
+
+    /* SCOPED TO THE VISIT TABLES, NOT TO THE CLASS. `.visit-verdict` is worn by the Attacks
+       table's Verdict column too — it borrows the visit table's styling — so hiding the class
+       outright would delete a column nobody asked to lose. `.visits` with six columns is the
+       visit shape; the five-column attack and request tables keep everything they have. */
+    table.visits td.visit-verdict:nth-child(6),
+    table.visits th.visit-verdict:nth-child(6) { display: none; }
+
+    table.visits .visit-day,
+    table.visits .visit-clock { display: block; }
+    table.visits .visit-clock { color: var(--faint); }
+
+    table.visits td.visit-span {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 6px;
+    }
+
+    /* Small, and carrying no padding of its own: it is a mark at the end of a row,
+       not a button somebody hunts for. The row itself opens the visit too. */
+    table.visits .rowopen {
+        flex: none;
+        padding: 0;
+        margin: 0;
+        min-width: 0;
+        min-height: 0;
+        line-height: 1;
+        font-size: 13px;
+        border: 0;
+        background: none;
+    }
+
     .table-wrap > table td,
     .table-wrap > table th { padding: 5px 8px; }
     .table-wrap > table thead th { font-size: 11px; }
@@ -808,10 +855,35 @@ textarea {
        needs to know which one is which.
        =========================================================================== */
 
+    /* ===========================================================================
+       THE HEADER ROW GOES, AND THE SORT CONTROL TAKES THE TITLE'S PLACE
+
+       A phone has no room for a row of column names above a table whose columns
+       are already labelled by what is in them. It goes, and so does the gap it
+       left behind — a hidden thead still occupied its own padding.
+
+       The card's title goes with it: "02 Recent visitors" tells a reader on a
+       375px screen nothing they cannot see, and the row it sits on already holds
+       refresh and CSV. The two selects move into that row instead of costing a
+       line of their own.
+       =========================================================================== */
+
+    .table-wrap > table > thead { display: none; }
+    .table-wrap > table > tbody > tr:first-child > td { border-top: 0; }
+
+    .card:has(.table-wrap) > .card-head > h2 { display: none; }
+
+    .card-head:has(> .lh-sortbar) {
+        flex-wrap: wrap;
+        row-gap: 8px;
+    }
+
     .lh-sortbar {
         display: flex;
         gap: 8px;
-        padding: 0 0 10px;
+        flex: 1 1 100%;
+        order: 2;
+        padding: 0;
     }
     .lh-sortbar select {
         flex: 1 1 0;

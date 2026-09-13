@@ -116,6 +116,12 @@ final class Layout
                as six siblings among seventeen they read as unrelated pages. Grouped, the rail
                says what it holds; each view keeps its own sections underneath. */
             ['slug' => 'sessions',     'label' => 'Sessions',     'group' => 'visitors', 'hint' => 'Search and drill into one visit'],
+            /* WHERE THEY CAME FROM, ON A MAP. A link to one card of Networks, which keeps its own
+               entry further down — the map answers a question about people rather than about
+               netblocks, so it sits with the people. pinnedSections() drops the card from
+               Networks' own section list so the same page is never offered twice. */
+            ['slug' => 'networks',     'label' => 'Map', 'group' => 'visitors', 'section' => 'net-map',
+             'hint' => 'Every session placed at the country it came from'],
             /* THE PEOPLE THE SITE NAMED, NEXT TO THE SESSIONS THEY MADE. This is a link to one
                card of Engagement rather than a view of its own: `section` names the card, and an
                entry that carries it renders as a leaf with no sub-list, because it already IS a
@@ -123,11 +129,6 @@ final class Layout
                found — a signed-in visitor is the strongest thing this panel knows about anyone. */
             ['slug' => 'engagement',   'label' => 'Signed-in visitors', 'group' => 'visitors',
              'section' => 'an-people', 'hint' => 'Everyone your own site named through the beacon'],
-            /* WHERE THEY CAME FROM, ON A MAP. Same device as the entry above: a link to one card
-               of Networks, which keeps its own entry further down. The map answers a question
-               about people rather than about netblocks, so it belongs where people are. */
-            ['slug' => 'networks',     'label' => 'Map',          'group' => 'visitors',
-             'section' => 'net-map',   'hint' => 'Every session placed at the country it came from'],
             ['slug' => 'sources',      'label' => 'Where they came from', 'group' => 'visitors', 'hint' => 'What kind of thing sent each visit, and which site actually did'],
             ['slug' => 'pages',        'label' => 'Pages',        'group' => 'visitors', 'hint' => 'Where people arrive, where the log last saw them, and what is moving'],
             ['slug' => 'searches',     'label' => 'Site search',   'group' => 'visitors', 'hint' => 'What visitors typed into your own search box'],
@@ -152,7 +153,7 @@ final class Layout
                the same sub-list twice and put a twist control on a link that goes to one page. */
             $view['sections'] = ($class === null || isset($view['section']))
                 ? []
-                : self::sectionsOf($class);
+                : self::sectionsOf($class, self::pinnedSections($views, (string) $view['slug']));
             $view['group'] = $view['group'] ?? '';
             $out[] = $view;
         }
@@ -198,7 +199,36 @@ final class Layout
      * @param class-string<Controller> $class
      * @return array<int,array{slug:string,label:string,id:string}>
      */
-    private static function sectionsOf(string $class): array
+    /**
+     * The cards of a view that already have a navigation entry of their own.
+     *
+     * A card lifted out into its own link must not also appear in its view's section list, or the
+     * same page is offered twice — once near the top and once buried under the view it came from,
+     * which is exactly the arrangement the promotion existed to fix.
+     *
+     * @param array<int,array<string,mixed>> $views
+     * @return array<int,string>
+     */
+    private static function pinnedSections(array $views, string $slug): array
+    {
+        $out = [];
+        foreach ($views as $view) {
+            if ((string) ($view['slug'] ?? '') !== $slug) {
+                continue;
+            }
+            $section = (string) ($view['section'] ?? '');
+            if ($section !== '') {
+                $out[] = $section;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @param class-string<Controller> $class
+     * @param array<int,string> $skip Card ids that carry their own navigation entry.
+     */
+    private static function sectionsOf(string $class, array $skip = []): array
     {
         $sections = $class::sectionList();
         if (count($sections) < 2) {
@@ -208,7 +238,7 @@ final class Layout
         $out = [];
         foreach ($sections as $entry) {
             $id = (string) ($entry[0] ?? '');
-            if ($id === '') {
+            if ($id === '' || in_array($id, $skip, true)) {
                 continue;
             }
             $out[] = [

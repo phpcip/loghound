@@ -1698,12 +1698,14 @@ final class Sessions extends Controller
             . '<col style="width:17%"><col style="width:17%"><col style="width:26%">'
             . '<col style="width:19%"><col style="width:8%"><col style="width:13%">'
             . '</colgroup><thead><tr>'
+            /* `data-lh-nosort` marks a column a phone does not show, so responsive.js leaves it
+               out of the sort control rather than offering an order by something invisible. */
             . '<th scope="col">Date</th>'
-            . '<th scope="col">IP</th>'
+            . '<th scope="col" data-lh-nosort="1">IP</th>'
             . '<th scope="col">Page</th>'
             . '<th scope="col">Email</th>'
             . '<th scope="col">Sess time</th>'
-            . '<th scope="col" class="visit-verdict">Bounce</th>'
+            . '<th scope="col" class="visit-verdict" data-lh-nosort="1">Bounce</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="se-pager"></div>';
 

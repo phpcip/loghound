@@ -27,7 +27,7 @@
 
 'use strict';
 
-import { dur, el, num, when } from './core.js';
+import { dayOnly, dur, el, num, timeOnly, when } from './core.js';
 import { countryNode, dimValue, drillRow, openButton } from './identity.js';
 import { pathCell } from './url.js';
 
@@ -62,11 +62,13 @@ export function visitTableHead() {
     return [
         el('colgroup', {}, WIDTHS.map((w) => el('col', { style: 'width:' + w }))),
         el('thead', {}, [
-            el('tr', {}, HEADINGS.map((text, i) => el('th', {
-                scope: 'col',
-                class: i === 5 ? 'visit-verdict' : null,
-                text: text
-            })))
+            /* `data-lh-nosort` marks a column the phone does not show, so responsive.js leaves it
+               out of the sort control rather than offering an order by something invisible. */
+            el('tr', {}, HEADINGS.map((text, i) => el('th', Object.assign(
+                { scope: 'col', text: text },
+                i === 5 ? { class: 'visit-verdict' } : {},
+                (i === 1 || i === 5) ? { 'data-lh-nosort': '1' } : {}
+            ))))
         ])
     ];
 }
@@ -96,11 +98,16 @@ export function visitRow(v) {
        fallback covers a document written before the field was shipped. */
     const seen = v.ts_end || v.ts_start;
 
+    /* TWO SPANS, ONE LINE ON A DESKTOP AND TWO ON A PHONE. The date repeats down the column and
+       the clock is the part being read, so on a narrow screen the stylesheet stacks them. */
     tr.appendChild(el('td', {
         class: 'mono nowrap visit-when',
-        text: when(seen),
+        title: when(seen),
         'data-sort': seen || ''
-    }));
+    }, [
+        el('span', { class: 'visit-day', text: dayOnly(seen) }),
+        el('span', { class: 'visit-clock', text: timeOnly(seen) })
+    ]));
 
     /* THE FLAG RIDES WITH THE ADDRESS. They answer one question — who, and from where — so
        spending a whole column on a glyph was width taken from the page path. Both are their own
@@ -112,7 +119,11 @@ export function visitRow(v) {
         v.country
             ? countryNode(v.country, { flagOnly: true })
             : el('span', { class: 'muted visit-noflag', text: '·' }),
-        v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })
+        /* WRAPPED SO THE PHONE CAN DROP IT. The flag answers "where from" in one glyph; the
+           address is a line of its own at 375px and the stylesheet hides it there. */
+        el('span', { class: 'visit-ip' }, [
+            v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })
+        ])
     ]));
 
     tr.appendChild(el('td', {
@@ -151,16 +162,21 @@ export function visitRow(v) {
        a visit is capped below human. */
     const unmeasured = shown === null || shown <= 0;
 
+    /* THE OPENER RIDES WITH THE DURATION. It used to sit in the bounce cell, which is the one a
+       phone drops — so the chevron went with it and the only way into a visit was the row itself.
+       Here it survives every width, and it is the last thing on the row either way. */
     tr.appendChild(el('td', {
-        class: unmeasured ? 'nowrap muted' : 'mono nowrap' + (measured ? ' visit-engaged' : ' muted'),
-        text: unmeasured ? 'not measured' : dur(shown),
+        class: 'visit-span ' + (unmeasured ? 'nowrap muted' : 'mono nowrap' + (measured ? ' visit-engaged' : ' muted')),
         title: shown === null || shown <= 0
             ? 'Nothing measured a duration for this visit'
             : (measured
                 ? 'Engaged time, measured by the beacon'
                 : 'Log span: first request to last. Blind to the final page.'),
         'data-sort': String(shown === null ? -1 : shown)
-    }));
+    }, [
+        el('span', { text: unmeasured ? 'not measured' : dur(shown) }),
+        openButton('session', { id: v.id }, 'Open this visit')
+    ]));
 
     /* SORTED THE WAY IT READS. The cell says Yes, No or an em dash now, so sorting on the raw
        boolean put "No" above "Yes" for reasons nothing on screen explained. */
@@ -168,8 +184,7 @@ export function visitRow(v) {
         class: 'visit-verdict',
         'data-sort': v.bounced === true ? '2' : (v.bounced === false ? '1' : '')
     }, [
-        bounceMark(v),
-        openButton('session', { id: v.id }, 'Open this visit')
+        bounceMark(v)
     ]));
 
     return tr;
