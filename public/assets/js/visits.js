@@ -35,8 +35,8 @@ import { pathCell } from './url.js';
  * The column classes, one per column, in order.
  *
  * The widths are in panel.css on these classes, shared with the server-rendered head in
- * Panel\Sessions. Date, address, session time and bounce are fixed px; Page and Email carry no
- * width and split what is left, because those are the two values the reader came for.
+ * Panel\Sessions. Date, address, email, session time and bounce are fixed px; Page carries no
+ * width and takes everything that is left, because a path is the value that gets cut.
  *
  * @type {Array<string>}
  */

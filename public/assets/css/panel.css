@@ -5019,9 +5019,12 @@ table.visits .visit-day { margin-right: 0.5em; }
 /* THE WIDTHS OF THE SIX VISIT COLUMNS, shared by Panel\Sessions and visits.js's head.
    The four fixed-shape values get what their longest value needs at 13px plus the cell
    padding: a date to the second, a flag and a dotted address, "not measured" with its
-   chevron, and the BOUNCE heading with its sort mark. Page and Email take no width, so
-   under `table-layout: fixed` they split every pixel that is left. The phone hides the
-   colgroup and lays the table out on content, so none of this reaches it. */
+   chevron, and the BOUNCE heading with its sort mark. Email is capped too: an address is
+   short and the cell ends in an ellipsis with the whole value in its title, so splitting the
+   free room evenly left it half empty while the path was being cut. Page takes no width and
+   under `table-layout: fixed` gets every pixel that is left. The phone hides the colgroup and
+   lays the table out on content, so none of this reaches it. */
+table.visits col.vc-email  { width: 240px; }
 table.visits col.vc-when   { width: 175px; }
 table.visits col.vc-who    { width: 185px; }
 table.visits col.vc-span   { width: 150px; }

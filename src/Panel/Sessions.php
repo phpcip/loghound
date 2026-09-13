@@ -1692,8 +1692,8 @@ final class Sessions extends Controller
                rows are built by assets/js/visits.js, so the two have to agree column for column
                — they did not, which is why the cells were landing under the wrong headings. */
             /* THE WIDTHS LIVE IN panel.css, ON THESE CLASSES. Date, address, session time and
-               bounce are fixed-width values and get fixed widths; Page and Email carry none and
-               share everything that is left, because they are the values worth reading. */
+               bounce are fixed-width values and get fixed widths; Email is capped because an
+               address is short; Page carries none and takes everything that is left. */
             . '<col class="vc-when"><col class="vc-who"><col class="vc-page">'
             . '<col class="vc-email"><col class="vc-span"><col class="vc-bounce">'
             . '</colgroup><thead><tr>'
