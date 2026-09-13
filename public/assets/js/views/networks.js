@@ -264,7 +264,9 @@ async function renderMap(data) {
     /* A WORLD MAP IS TWICE AS WIDE AS IT IS TALL. At 340px in a card well over a thousand wide,
        the projection was squashed flat — continents wide and stunted, and the bubbles that carry
        the actual number squeezed into a band. This gives it the room the shape asks for. */
-    cardChart('net-map', 760);
+    /* THREE TO ONE, WHICH IS WHAT THE CROPPED BOX IS. A card around 1600px wide wants roughly a
+       third of that in height for the map to fill it without bands above and below. */
+    cardChart('net-map', 540);
     await loadWorld('');
 
     /* A BUBBLE OPENS THE COUNTRY. The map was the one place in the panel where the obvious

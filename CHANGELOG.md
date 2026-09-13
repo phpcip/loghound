@@ -11,6 +11,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The map was drawn out of proportion.** Continents came out wide and stunted at every size,
+  because the charting library squashes a geo map vertically by default — a degree of latitude
+  got three quarters of the pixels a degree of longitude did. Raising the card's height only made
+  a bigger wrong shape. At true scale the map is the shape it should be, and the card is sized to
+  the three-to-one box the projection actually describes: shorter on a desktop than the last
+  attempt, and much shorter on a phone, where it had taken most of the screen.
+
 - **The map's tooltip stayed pinned over the dialog on a touch screen.** A pointer leaves a bubble
   and the tooltip goes with it; a finger does not, so tapping a country left the label floating on
   top of the dialog that tap had just opened — covering the visits it was there to show. The

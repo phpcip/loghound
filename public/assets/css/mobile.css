@@ -967,10 +967,10 @@ textarea {
         font-size: 12px;
     }
 
-    /* THE MAP IS SIZED FOR A DESK, NOT FOR THIS. 760px fills a card that is sixteen hundred
-       wide; on a phone it is most of the screen for a map whose bubbles are already legible at
-       half that. `cardChart` writes the height inline, so the cap has to outrank it. */
-    #net-map { height: 340px !important; }
+    /* THE SAME THREE-TO-ONE, AT PHONE WIDTH. The desktop height is sized for a card sixteen
+       hundred wide; at 375 that is most of the screen and the map floats in it. `cardChart`
+       writes the height inline, so the cap has to outrank it. */
+    #net-map { height: 160px !important; }
 }
 
 /* ===========================================================================

@@ -1020,16 +1020,20 @@ export function geoScatter(id, points, onPick) {
             map: WORLD,
             roam: false,
             silent: true,
-            top: 0,
-            bottom: 0,
-            left: 0,
-            right: 0,
-            /* CROPPED TO WHERE PEOPLE ARE. The projection is fitted to this box, so the box's
-               shape decides how much of the card the map fills — and 84°N to 58°S is far taller
-               than the card is, which is why raising the card's height only bought empty bands
-               above and below rather than a larger map. The Arctic above 72° and everything past
-               52°S hold no visitors and no bubbles; dropping them brings the box close to the
-               card's own proportion, so the landmass fills the space instead of floating in it. */
+            /* TRUE PROPORTIONS. ECharts squashes a geo map vertically by default — `aspectScale`
+               is 0.75 — which is what made the continents look wide and stunted however much
+               height the card was given. At 1 a degree of latitude and a degree of longitude get
+               the same number of pixels, so the shape is the shape, and the projection then fits
+               itself to whichever of the two axes runs out first. */
+            aspectScale: 1,
+            top: 4,
+            bottom: 4,
+            left: 4,
+            right: 4,
+            /* CROPPED TO WHERE PEOPLE ARE. Greenland and Antarctica are a third of the height of
+               a full world map and hold no visitor and no bubble, so the box stops short of both.
+               With aspectScale at 1 this decides the map's shape honestly: 360 degrees across by
+               124 down, which is close to three to one — the proportion the card is built for. */
             boundingCoords: [[-180, 72], [180, -52]],
             itemStyle: { areaColor: t.sunken, borderColor: t.border, borderWidth: 0.6 },
             emphasis: { disabled: true },
