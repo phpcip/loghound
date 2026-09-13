@@ -27,6 +27,7 @@ import pages from './views/pages.js';
 import searches from './views/searches.js';
 import engagement from './views/engagement.js';
 import rhythm from './views/rhythm.js';
+import seo from './views/seo.js';
 import bots from './views/bots.js';
 import attacks from './views/attacks.js';
 import fingerprints from './views/fingerprints.js';
@@ -63,6 +64,7 @@ const VIEWS = {
     searches: searches,
     engagement: engagement,
     rhythm: rhythm,
+    seo: seo,
     bots: bots,
     attacks: attacks,
     fingerprints: fingerprints,

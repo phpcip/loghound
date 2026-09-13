@@ -646,6 +646,30 @@ runs; without that, picking a host would reduce the selector to the host you pic
 would be no way back. Its `multi` flag is what the front end acts on: with one host or none the
 selector is never inserted into the page at all.
 
+### SEO Tools — 9 pages, one card each
+
+Every page compares two windows, resolved by `src/Panel/Period.php` from `cmp`, `vs`, `from`,
+`to`, `vs_from` and `vs_to`. Calendar days are days in `ui.timezone`. A running period is compared
+like for like (today until now against yesterday until the same clock time). The six keys are
+remembered by `Panel\Scope` and put back only on this view, and `Layout::urlWith()` carries them only
+while this view is rendered.
+
+The population is the filter rail: there is no humans/bots toggle. Every sessions query is bounded to
+visits that loaded a page (`pages_i:[1 TO *]`), on arrival (`ts_start`), with both windows in one `fq`
+and split by two query sub-facets `pa` and `pb`.
+
+| Page | Action | What it asks Solr |
+|---|---|---|
+| Scorecard | `scorecard`, `timeline` | Headline sums, uniques and a beacon-only median per window; one query facet per bucket per window |
+| Channels | `channels`, `channel_series` | Terms on `referer_type_s` with both windows nested; per-bucket terms across period A |
+| Search engines & AI, Landing pages, Referring sites, Countries & devices | `movers` | Terms on the page's dimension (1,000 busiest across both windows) with both windows nested, ranked by change in PHP and paged |
+| Engagement by channel | `quality` | Pageviews, one-page visits and beacon-only median engaged time per channel per window |
+| Crawlers | `crawlers` | HITS core: terms on `ua_bot_name_s` with unique paths, 4xx, 5xx and reverse-DNS outcomes per window |
+| Crawled, not visited | `crawlgap` | HITS core: the 100 paths crawled most with a 2xx in period A, then one sessions query for landings on exactly those paths from the matching channel |
+
+The two crawler pages read the hits core, where a verdict does not exist, and say which filters they
+could not apply. `bounds` answers `min(ts_start)` so the date pickers stop at the first day held.
+
 ### Plan usage — 2 requests
 
 `meter` and `plan`, both from `src/Quota.php` against the Opensolr control plane

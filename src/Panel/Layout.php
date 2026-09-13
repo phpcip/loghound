@@ -68,6 +68,7 @@ final class Layout
             'searches'     => Searches::class,
             'engagement'   => Engagement::class,
             'rhythm'       => Rhythm::class,
+            'seo'          => Seo::class,
             'bots'         => Bots::class,
             'attacks'      => Attacks::class,
             'fingerprints' => Fingerprints::class,
@@ -134,6 +135,7 @@ final class Layout
             ['slug' => 'searches',     'label' => 'Site search',   'group' => 'visitors', 'hint' => 'What visitors typed into your own search box'],
             ['slug' => 'engagement',   'label' => 'Engagement',    'group' => 'visitors', 'hint' => 'Bounce measured on what people did, not on how many pages loaded'],
             ['slug' => 'rhythm',       'label' => 'When they come','group' => 'visitors', 'hint' => 'Hour of day against day of week'],
+            ['slug' => 'seo',          'label' => 'SEO Tools',    'hint' => 'This period against another: channels, search and AI, landing pages, crawlers'],
             ['slug' => 'bots',         'label' => 'Bot forensics','hint' => 'Why each verdict was reached'],
             ['slug' => 'attacks',      'label' => 'Attacks',      'hint' => 'What was attempted, and what the server answered'],
             ['slug' => 'fingerprints', 'label' => 'Fingerprints', 'hint' => 'One header signature, many IPs'],
@@ -806,6 +808,35 @@ final class Layout
     }
 
     /**
+     * The page's state as hidden fields, as markup, for a form a view renders inside its own body.
+     *
+     * The same fields hiddenState() writes for the top bar, with the keys the view's own form owns
+     * left out so the browser does not submit two values for them.
+     *
+     * @param array<string,string> $fixed Parameters the form always carries as they are.
+     * @param array<int,string>    $skip  Keys the form's own controls own.
+     */
+    public static function hiddenFields(array $fixed, array $skip): string
+    {
+        $params = self::stateParams();
+        foreach ($skip as $key) {
+            unset($params[$key]);
+        }
+        foreach ($fixed as $key => $value) {
+            if ($value !== '') {
+                $params[$key] = $value;
+            }
+        }
+
+        $out = '';
+        foreach (self::flatten($params) as $name => $value) {
+            $out .= '<input type="hidden" name="' . Security::esc($name) . '"'
+                . ' value="' . Security::esc($value) . '">';
+        }
+        return $out;
+    }
+
+    /**
      * A nested parameter array flattened into the `name=value` pairs a form submits.
      *
      * `f[host_s][0]` rather than `f[host_s][]`, because a hidden field has to name its index for
@@ -968,7 +999,9 @@ final class Layout
      *  - `lf[…]` the Opensolr request-log filters, against OpensolrView::logFilterFields();
      *  - `outcome` the request-log outcome slice, against its own small allowlist;
      *  - `core`  the selected Opensolr index, shape-checked as an index name;
-     *  - `range` the time window, against the range table.
+     *  - `range` the time window, against the range table;
+     *  - the SEO Tools period (Period::KEYS), against Period::validParam(), and only while the
+     *    page being rendered is SEO Tools, so no other view's links carry it.
      *
      * @param array<int,string> $dropFields Filter fields to leave out, because the caller owns them.
      * @return array<string,mixed>
@@ -1030,6 +1063,15 @@ final class Layout
         $range = $_GET['range'] ?? null;
         if (is_string($range) && isset(Query::ranges()[$range])) {
             $params['range'] = $range;
+        }
+
+        if (($_GET['v'] ?? '') === 'seo') {
+            foreach (Period::KEYS as $key) {
+                $value = $_GET[$key] ?? null;
+                if (is_string($value) && Period::validParam($key, $value)) {
+                    $params[$key] = $value;
+                }
+            }
         }
 
         return $params;

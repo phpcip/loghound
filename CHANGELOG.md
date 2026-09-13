@@ -7,6 +7,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.3.0] — 2026-09-13
+
+### Added
+
+- **SEO Tools, a new page in the navigation right below Visitors.** Every number on it is shown for
+  two periods side by side: the one you pick and the one you compare it with. Presets are today so
+  far, yesterday, the last 7, 28 or 90 days, this month so far and last month, or any two calendar
+  ranges back to the first day your index holds. A period that is still running is compared like for
+  like: today until now against yesterday until the same time. Every page follows the filters in
+  force, so humans only is the Verdict filter, set once.
+
+- **Nine pages, one question each.** A scorecard with the headline figures and both periods over
+  time; channels, as bars, a table and a line per channel; search engines and AI assistants by the
+  site that sent the visit; landing pages; referring sites; countries, regions, cities, devices,
+  browsers and operating systems; engagement by channel; declared crawlers with the pages they
+  fetched, their 4xx and 5xx answers and how many were confirmed by reverse DNS; and the pages
+  crawlers fetch most against the visits the matching channel sent to them.
+
+- **Rankings by change.** Biggest gains, biggest losses, most visits now, new and gone, on every
+  table that ranks values, each with a CSV export that carries the two periods and the choices on
+  screen.
+
+---
+
 ## [1.2.3] — 2026-09-13
 
 ### Added

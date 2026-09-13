@@ -180,6 +180,7 @@ const MARKS = {
         engagement:   ['M8 3.6a4.6 4.6 0 1 1 0 9.2 4.6 4.6 0 0 1 0-9.2Z', 'M8 6.2v2.2l1.6 1.1', 'M6.6 2.2h2.8'],
         /* A grid: hour of day against day of week, which is exactly what the view draws. */
         rhythm:       ['M2.6 3.4h10.8v9.2H2.6z', 'M2.6 6.6h10.8', 'M2.6 9.6h10.8', 'M6.2 3.4v9.2', 'M9.8 3.4v9.2'],
+        seo:          ['M2.6 12.6h10.8', 'm3.2 10.2 3-3.2 2.4 2 4-4.4', 'M10.2 4.6h2.4V7'],
         _:            ['M2.6 4h10.8v8H2.6z'],
     },
 

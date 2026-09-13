@@ -66,6 +66,9 @@ final class Scope
      * controller asks `$_GET` and gets the whole scope, restored or not, with no second code path
      * and no chance of a view being written against the request and missing the session.
      *
+     * The SEO Tools period is remembered from wherever it is spoken and restored only on SEO Tools,
+     * so it never lands in another view's address bar.
+     *
      * @return array<string,mixed> The keys that were restored, for the caller's canonical redirect.
      */
     public static function apply(): array
@@ -81,14 +84,20 @@ final class Scope
         $added = [];
         $keep = $stored;
 
-        foreach (['range' => 'ranges', 'core' => 'core', 'outcome' => 'outcome', 'rows' => 'rows'] as $key => $kind) {
+        $scalars = ['range' => 'ranges', 'core' => 'core', 'outcome' => 'outcome', 'rows' => 'rows'];
+        foreach (Period::KEYS as $periodKey) {
+            $scalars[$periodKey] = 'period:' . $periodKey;
+        }
+        $onSeo = ($_GET['v'] ?? '') === 'seo';
+
+        foreach ($scalars as $key => $kind) {
             $spoken = self::scalar($key, $kind);
             if ($spoken !== null) {
                 $keep[$key] = $spoken;
                 continue;
             }
             $held = isset($stored[$key]) && is_string($stored[$key]) ? $stored[$key] : '';
-            if ($held !== '' && self::validScalar($kind, $held)) {
+            if ($held !== '' && self::validScalar($kind, $held) && ($onSeo || !str_starts_with($kind, 'period:'))) {
                 $_GET[$key] = $held;
                 $added[$key] = $held;
             }
@@ -202,7 +211,7 @@ final class Scope
                remembered value can never ask for more than a typed one could. */
             'rows'    => $value !== '' && ctype_digit($value)
                 && (int) $value >= 1 && (int) $value <= Paging::MAX_PAGE,
-            default   => false,
+            default   => str_starts_with($kind, 'period:') && Period::validParam(substr($kind, 7), $value),
         };
     }
 
