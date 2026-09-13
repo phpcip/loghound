@@ -38,11 +38,9 @@
  */
 
 import { icon } from './icons.js';
-import { timeOnly } from './core.js';
 import { sortBy } from './sorttable.js';
 
 const NARROW = 900;
-const STACK_ATTR = 'data-lh-col';
 const RAIL_KEY = 'lh.rail';
 const TIP_SELECTOR = 'nav.side .navlink, nav.side .lh-railbtn, nav.side .theme-toggle';
 const TIP_HOVERED = 'nav.side .navlink:hover, nav.side .lh-railbtn:hover, nav.side .theme-toggle:hover';
@@ -368,102 +366,15 @@ function setUpNavGroups(side) {
 }
 
 /* ===================================================================================
- * 2. Tables as records
+ * 2. Tables on a phone
  * ================================================================================ */
 
 /**
- * The column headings of a table, as plain text.
+ * Bring the tables into line with the current viewport width.
  *
- * Read from the last row of the head, because a table with a grouped header puts the real
- * column names there. A heading is taken as text and stays text all the way onto the cell: a
- * column named from a hostname or a handler path is attacker-influenced, and the only safe
- * thing to do with it is never let it near a markup sink.
- *
- * @returns {string[]}
- */
-function headings(table) {
-    const rows = table.tHead ? table.tHead.rows : null;
-    if (!rows || rows.length === 0) {
-        return [];
-    }
-    const row = rows[rows.length - 1];
-    const out = [];
-    for (const cell of row.cells) {
-        const label = (cell.textContent || '').replace(/\s+/g, ' ').trim();
-        const span = Math.max(1, cell.colSpan || 1);
-        for (let i = 0; i < span; i++) {
-            out.push(label);
-        }
-    }
-    return out;
-}
-
-/**
- * Copy the column heading onto every cell of every body row.
- *
- * Index-based, and a cell that spans columns is left without a label on purpose — it is a
- * panel inside the record (an expanded member list, an empty-state sentence, a recorded
- * request), not one fact with a name. Only rows of THIS table are touched: a nested table
- * inside an expanded row is stamped by its own pass, with its own headings.
- */
-function stampLabels(table) {
-    const labels = headings(table);
-    if (labels.length === 0) {
-        return;
-    }
-    for (const body of table.tBodies) {
-        for (const row of body.rows) {
-            if (row.parentNode !== body) {
-                continue;
-            }
-            let index = 0;
-            for (const cell of row.cells) {
-                const span = Math.max(1, cell.colSpan || 1);
-                if (span === 1 && labels[index] !== undefined) {
-                    if (cell.getAttribute(STACK_ATTR) !== labels[index]) {
-                        cell.setAttribute(STACK_ATTR, labels[index]);
-                    }
-                } else if (cell.hasAttribute(STACK_ATTR)) {
-                    cell.removeAttribute(STACK_ATTR);
-                }
-                index += span;
-            }
-        }
-    }
-}
-
-/**
- * Decide whether a table has to be stacked, by measuring it rather than counting its columns.
- *
- * The class is removed before the measurement, because a stacked table is as wide as its
- * container by definition and would always answer "I fit". What is compared is the table's
- * own width against the width available to it: `min-width: 900px` on the nine-column tables,
- * and the natural width of the content on the others.
- *
- * A margin of 4px keeps a table that lands within rounding of its container from flipping
- * between the two layouts as a scrollbar appears and disappears.
- */
-function needsStack(table) {
-    const host = table.closest('.table-wrap') || table.parentElement;
-    if (!host) {
-        return false;
-    }
-    const had = table.classList.contains('lh-stack');
-    if (had) {
-        table.classList.remove('lh-stack');
-    }
-    const wide = table.getBoundingClientRect().width > host.clientWidth + 4;
-    if (had && !wide) {
-        table.classList.add('lh-stack');
-    }
-    return wide;
-}
-
-/**
- * Stack every table that does not fit, and unstack every one that now does.
- *
- * Runs on load, on resize, and whenever a view replaces its rows. The guard flag keeps the
- * attribute writes below from waking the observer that called it.
+ * Runs on load, on resize, and whenever a view replaces its rows. All it does now is clear the
+ * stacking mark a previously-loaded script may have left and put the sort bar above every table
+ * on a narrow screen; the width itself is CSS's job, in mobile.css.
  */
 function restack() {
     if (stamping) {
@@ -471,82 +382,20 @@ function restack() {
     }
     stamping = true;
 
+    /* NOTHING IS STACKED ANY MORE. A table cut into one card per row destroys the thing a table
+       is for — reading down a column — and it drops values to make the rest fit. What a phone
+       needs is the whole table at the width its content wants, inside the wrapper that already
+       scrolls sideways. So the rows stay rows, every column stays reachable, and the only thing
+       that changes with the viewport is the sort bar. The class is still cleared here because a
+       page loaded before this change may have been marked by the previous script. */
     const on = narrow();
     for (const table of document.querySelectorAll('table')) {
-        if (!on) {
-            table.classList.remove('lh-stack');
-            continue;
-        }
-        if (table.tBodies.length === 0 || table.rows.length === 0) {
-            continue;
-        }
-        /* A VISIT TABLE IS NOT STACKED. It is cut to four columns instead — see
-           compactVisits() — because a visit has one fact worth reading per column and a card
-           per visit turns twenty of them into a page of scrolling. */
-        if (table.classList.contains('visit6')) {
-            table.classList.remove('lh-stack');
-            continue;
-        }
-        stampLabels(table);
-        if (needsStack(table)) {
-            table.classList.add('lh-stack');
-        } else {
-            table.classList.remove('lh-stack');
-        }
+        table.classList.remove('lh-stack');
     }
 
-    compactVisits(on);
     sortBars(on);
 
     stamping = false;
-}
-
-/** Where a visit row's full timestamp is kept while the phone shows only the clock. */
-const FULL_TIME = 'data-lh-full';
-
-/**
- * The six-column visit table, cut to the four columns worth reading on a phone.
- *
- * TIME, PAGE, WHO, HOW LONG. The date goes because every row in a scoped table carries the same
- * one and it costs half the width of the column; the address goes because the flag and the email
- * already answer "who", and an IPv6 address on a 375px screen is a line of its own; the bounce
- * column goes with the chevron in it, because the row itself opens the visit and always did.
- *
- * The flag MOVES rather than being drawn twice: it rides with the address on a desktop, where
- * that column exists, and with the email on a phone, where it does not. Both directions are
- * idempotent, because this runs on every resize and after every re-render.
- *
- * @param {boolean} on Whether the viewport is narrow.
- */
-function compactVisits(on) {
-    for (const table of document.querySelectorAll('table.visit6')) {
-        table.classList.toggle('lh-visit-compact', on);
-
-        for (const body of table.tBodies) {
-            for (const row of body.rows) {
-                const when = row.querySelector('.visit-when');
-                const who = row.querySelector('.visit-who');
-                const mail = row.querySelector('.visit-email');
-                const flag = row.querySelector('.visit-flag');
-                if (!when || !who || !mail || !flag) {
-                    continue;
-                }
-
-                const home = on ? mail : who;
-                if (flag.parentNode !== home) {
-                    home.insertBefore(flag, home.firstChild);
-                }
-
-                if (on && !when.hasAttribute(FULL_TIME)) {
-                    when.setAttribute(FULL_TIME, when.textContent || '');
-                    when.textContent = timeOnly(when.dataset.sort || '');
-                } else if (!on && when.hasAttribute(FULL_TIME)) {
-                    when.textContent = when.getAttribute(FULL_TIME) || '';
-                    when.removeAttribute(FULL_TIME);
-                }
-            }
-        }
-    }
 }
 
 /**
@@ -613,8 +462,7 @@ function sortBars(on) {
             continue;
         }
 
-        const wanted = on
-            && (table.classList.contains('lh-stack') || table.classList.contains('lh-visit-compact'));
+        const wanted = on;
         const already = host.querySelector('.lh-sortbar');
 
         if (!wanted) {

@@ -724,134 +724,88 @@ textarea {
 
 @media (max-width: 900px) {
 
-    /* The wrapper stops being a horizontal scroller for a table that no longer needs one:
-       a nested scroll region that scrolls nothing is a scroll trap. */
+    /* ===========================================================================
+       TABLES ON A PHONE: ALL OF THE TABLE, AND A CONTAINER THAT SCROLLS
 
-    .table-wrap:has(> table.lh-stack) { overflow-x: visible; }
+       They used to be cut into one card per row. That dropped the thing a table is
+       for — reading down a column — and repeated every heading once per row.
 
-    table.lh-stack {
-        display: block;
-        min-width: 0;
+       What is here instead is the whole table at the width its content asks for,
+       inside `.table-wrap`, which already carries `overflow-x: auto` and momentum
+       scrolling from panel.css. The wrapper scrolls, never the page.
+
+       THREE RULES HAVE TO MOVE TOGETHER or none of them takes effect: `table-fixed`
+       sets `table-layout: fixed` with a 680px floor and truncates every column to
+       reach it, the colgroup declares percentages for that fixed layout, and
+       `table { width: 100% }` pins the whole thing to the screen.
+       =========================================================================== */
+
+    .table-wrap {
+        max-width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-x: contain;
+    }
+
+    .table-wrap > table,
+    .table-wrap > table.table-fixed {
+        width: max-content;
+        min-width: 100%;
         table-layout: auto;
-        font-size: 14px;
+        font-size: 13px;
     }
 
-    table.lh-stack colgroup { display: none; }
+    .table-wrap > table > colgroup { display: none; }
 
-    /* The sort bar. */
-
-    table.lh-stack thead { display: block; }
-    table.lh-stack thead tr {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        padding: 0 0 12px;
-        background: none;
-        border-bottom: 1px solid var(--ink);
-    }
-    table.lh-stack thead th { display: none; }
-    table.lh-stack thead th.sortable {
-        position: static;
-        display: inline-flex;
-        align-items: center;
-        min-height: var(--lh-tap);
-        padding: 0 26px 0 10px;
-        border: 1px solid var(--hairline);
-        border-radius: var(--radius);
-        white-space: nowrap;
-    }
-    table.lh-stack thead th.sortable .sort-mark { right: 8px; }
-    table.lh-stack thead th.sorted-asc,
-    table.lh-stack thead th.sorted-desc { border-color: var(--accent); }
-
-    /* A record. */
-
-    table.lh-stack tbody { display: block; }
-    table.lh-stack tbody tr {
-        display: block;
-        padding: 12px 14px;
-        margin-top: 12px;
-        border: 1px solid var(--hairline);
-        border-radius: var(--radius);
-    }
-    table.lh-stack tbody tr:hover td { background: none; color: var(--ink); }
-
-    /* A row that opens something keeps saying so: the accent rule on the left is the same
-       device the panel uses for "this is the one that matters". */
-
-    table.lh-stack tbody tr.row-link { border-left: 2px solid var(--accent); }
-
-    /* A cell: label left, value right, both allowed to wrap. The label column is 96px,
-       which is eleven characters of the 14px uppercase face — enough for FIRST SEEN,
-       COUNTRY, VERDICT and SESSIONS, and the rest wrap to a second line rather than
-       truncating, because a truncated label is not a label. */
-
-    table.lh-stack tbody td,
-    table.lh-stack tbody th {
-        display: grid;
-        grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
-        gap: 4px 12px;
-        align-items: baseline;
-        padding: 6px 0;
-        border: 0;
-        border-top: 1px solid var(--hairline);
-        text-align: left;
-        white-space: normal;
+    .table-wrap > table.table-fixed td,
+    .table-wrap > table.table-fixed th {
         overflow: visible;
-        overflow-wrap: anywhere;
+        text-overflow: clip;
         max-width: none;
+    }
+
+    /* A LONG VALUE STILL WRAPS. One 96-character URL on a single line makes the table
+       three screens wide, and then scrolling sideways is the only way to read
+       anything. Paths, user agents and signatures break; timestamps, figures and
+       addresses keep their line, because breaking those makes them unreadable. */
+
+    .table-wrap > table td.urlcell,
+    .table-wrap > table td.clip,
+    .table-wrap > table .urlpath,
+    .table-wrap > table .clip-line,
+    .table-wrap > table .shape,
+    .table-wrap > table .client > div {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        overflow: visible;
         text-overflow: clip;
     }
 
-    table.lh-stack tbody td::before {
-        content: attr(data-lh-col);
-        font: 600 12px/1.4 var(--font-ui);
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--faint);
-    }
+    .table-wrap > table td.mono,
+    .table-wrap > table td.num,
+    .table-wrap > table td.nowrap { white-space: nowrap; }
 
-    /* The headline cell. No label — the column heading for a record's identity says
-       nothing a reader needs twice — and no rule above it, because it is the top of the
-       card. */
+    .table-wrap > table td,
+    .table-wrap > table th { padding: 5px 8px; }
+    .table-wrap > table thead th { font-size: 11px; }
 
-    table.lh-stack tbody td:first-child {
-        display: block;
-        padding: 0 0 10px;
-        margin-bottom: 4px;
-        border-top: 0;
-        border-bottom: 1px solid var(--hairline);
-        font-size: 14px;
-        font-weight: 700;
-    }
-    table.lh-stack tbody td:first-child::before { content: none; }
+    /* A number stops being right-aligned: columns are sized by content here, so there
+       is nothing to line it up against. */
+    .table-wrap > table td.num { text-align: left; }
 
-    /* A cell that spans the row is a panel of its own — the expanded members list under a
-       fingerprint cluster, an empty-state message, a recorded request. It is not a
-       label-and-value pair and must not be drawn as one. */
-
-    table.lh-stack tbody td[colspan] {
-        display: block;
-        padding: 10px 0 0;
-    }
-    table.lh-stack tbody td[colspan]::before { content: none; }
-
-    table.lh-stack tbody tr.members {
-        padding: 0;
-        margin-top: 0;
-        border: 0;
-        border-radius: 0;
-    }
-    table.lh-stack tbody tr.members > td { background: var(--band); }
+    /* THE HEADER STOPS BEING STICKY. panel.css pins it with `position: sticky` so it
+       survives a long vertical scroll, which is right on a desktop. Inside a wrapper
+       that scrolls HORIZONTALLY it detaches from the columns it names. */
+    .table-wrap > table thead th { position: static; }
 
     /* ===========================================================================
-       THE SORT BAR, AND THE HEADER IT REPLACES
+       THE SORT BAR
 
-       A sortable header on a phone was a row of chips that wrapped onto three
-       lines and spent the top third of the card on controls. Two native selects
-       say the same two things — which column, which direction — in one line, and
-       the platform renders them as a picker with the current choice visible
-       instead of an arrow glyph that has to be decoded.
+       A sortable header on a phone is a row of chips that wraps onto three lines.
+       Two native selects say the same two things — which column, which direction —
+       in one line, and the platform renders them as a picker showing the current
+       choice. The header row itself stays: with every column on screen the reader
+       needs to know which one is which.
        =========================================================================== */
 
     .lh-sortbar {
@@ -865,112 +819,6 @@ textarea {
         min-height: var(--lh-tap);
         font-size: 14px;
     }
-
-    /* The chips go once the selects are there. Both at once is two controls for one
-       decision, and the one that looks like a header would win the press. */
-    .table-wrap:has(> .lh-sortbar) table.lh-stack thead,
-    .table-wrap:has(> .lh-sortbar) table.lh-visit-compact thead { display: none; }
-
-    /* ===========================================================================
-       A VISIT TABLE ON A PHONE: FOUR COLUMNS, STILL A TABLE
-
-       Not stacked. A visit carries one fact per column, so a card per visit turns
-       twenty visits into a page of scrolling with the same six labels repeated
-       twenty times. What survives is the clock, the page, who it was, and how long
-       they stayed.
-
-       The date goes because every row in a scoped table carries the same one. The
-       address column goes because the flag and the email already answer "who", and
-       an IPv6 address is a line of its own at this width — responsive.js moves the
-       flag into the email cell so nothing is lost. The bounce column goes with the
-       chevron inside it, because the row itself opens the visit and always did.
-       =========================================================================== */
-
-    table.visit6.lh-visit-compact {
-        width: 100%;
-        min-width: 0;
-        table-layout: fixed;
-        font-size: 13px;
-    }
-
-    table.visit6.lh-visit-compact colgroup { display: none; }
-
-    table.visit6.lh-visit-compact tbody td {
-        padding: 5px 6px;
-        font-size: 13px;
-        line-height: 1.35;
-        vertical-align: top;
-    }
-
-    /* IP and Bounce. Hidden rather than removed: the row is still the six cells the
-       desktop renders, so nothing has to be rebuilt when the phone is turned. */
-    table.visit6.lh-visit-compact tbody td:nth-child(2),
-    table.visit6.lh-visit-compact tbody td:nth-child(6) { display: none; }
-
-    table.visit6.lh-visit-compact tbody td:nth-child(1) { width: 20%; }
-    table.visit6.lh-visit-compact tbody td:nth-child(3) { width: 34%; }
-    table.visit6.lh-visit-compact tbody td:nth-child(4) { width: 30%; }
-    table.visit6.lh-visit-compact tbody td:nth-child(5) { width: 16%; }
-
-    /* The flag arrives at the head of the email cell and must not push the address
-       it is now sitting next to onto a second line. */
-    /* THE FLAG TAKES ITS STYLING WITH IT. The rules that size it live on `td.visit-who` in
-       panel.css, which is the cell it came from and the cell that is hidden here — so the
-       moment it moves into the email cell it would render at body size with no spacing and
-       the no-flag placeholder would lose the fixed width that keeps the column aligned. */
-    table.visit6.lh-visit-compact .visit-flag {
-        margin-right: 4px;
-        vertical-align: -2px;
-    }
-    table.visit6.lh-visit-compact .visit-email .flag { font-size: 15px; }
-    table.visit6.lh-visit-compact .visit-email .visit-noflag {
-        display: inline-block;
-        width: 12px;
-        text-align: center;
-    }
-    table.visit6.lh-visit-compact .visit-email { white-space: nowrap; }
-
-    /* Things sized for a column, inside a card that has no columns. */
-
-    table.lh-stack .bar-col,
-    table.lh-stack .bar,
-    table.lh-stack .meter { width: auto; min-width: 60px; }
-    table.lh-stack .spark { width: 100%; max-width: 180px; }
-    table.lh-stack .chip { max-width: 100%; white-space: normal; }
-    table.lh-stack .clip-line,
-    table.lh-stack .client > div,
-    table.lh-stack .shape {
-        white-space: normal;
-        overflow: visible;
-        overflow-wrap: anywhere;
-        text-overflow: clip;
-    }
-
-    /* A number keeps its tabular figures but stops being right-aligned: in a two-column
-       label-and-value row there is nothing to line it up against. */
-
-    table.lh-stack td.num { text-align: left; }
-
-    /* A path and its "open the page" link, in a card with no columns.
-
-       THE WHOLE VALUE HAS TO BE REACHABLE, and in a card it can be: there is no column to fit
-       inside, so the path wraps to as many lines as it needs instead of truncating, and the link
-       wraps with it rather than being pushed off the right-hand edge. A 96-character URL at
-       375px therefore reads as three lines of a card and never as a row that scrolls sideways. */
-
-    table.lh-stack td.urlcell { overflow: visible; }
-    table.lh-stack .urlwrap { flex-wrap: wrap; }
-    table.lh-stack .urlwrap > .urlpath {
-        white-space: normal;
-        overflow: visible;
-        overflow-wrap: anywhere;
-        text-overflow: clip;
-    }
-
-    /* A stacked table's rows are cards, so the sticky positioning that kept a header on
-       screen while a long table scrolled has nothing left to do. */
-
-    table.lh-stack thead th { position: static; }
 }
 
 /* ===========================================================================

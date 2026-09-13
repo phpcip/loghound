@@ -107,14 +107,9 @@ export function visitRow(v) {
         class: 'mono clip visit-who',
         'data-sort': [v.country, v.ip].filter(Boolean).join(' ')
     }, [
-        /* WRAPPED SO IT CAN BE PICKED UP AND PUT DOWN. On a phone the flag rides with the email
-           rather than with the address, because the address column is not shown there at all —
-           and a node can only be moved by something that can find it. */
-        el('span', { class: 'visit-flag' }, [
-            v.country
-                ? countryNode(v.country, { flagOnly: true })
-                : el('span', { class: 'muted visit-noflag', text: '·' })
-        ]),
+        v.country
+            ? countryNode(v.country, { flagOnly: true })
+            : el('span', { class: 'muted visit-noflag', text: '·' }),
         v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })
     ]));
 
@@ -283,7 +278,7 @@ export function visitTable(rows) {
         body.appendChild(visitRow(v));
     }
 
-    const table = el('table', { class: 'tight table-fixed visits visit6' }, visitTableHead().concat([body]));
+    const table = el('table', { class: 'tight table-fixed visits' }, visitTableHead().concat([body]));
 
     return el('div', { class: 'table-wrap' }, [table]);
 }

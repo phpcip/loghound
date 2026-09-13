@@ -4213,10 +4213,6 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     .fb-selected { flex-basis: 100%; margin-right: 0; }
     .fb-foot .fb-apply { flex: 1 1 auto; }
 
-    /* A pivot row becomes a card like every other stacked row, and its cells become a
-       wrapping list inside it rather than a third column of nothing. */
-    table.lh-stack .pivot-cells { gap: 8px; }
-    table.lh-stack .pivot-cell { max-width: 100%; }
 }
 
 /* --- A search that has left the machine ------------------------------------------------
@@ -5147,15 +5143,6 @@ button.stat:hover .stat-go { color: var(--accent); }
     white-space: nowrap;
 }
 
-/* A stacked table is a card per record, where there is room for the whole name and no column
-   to keep it out of — so the truncation is given back. */
-@media (max-width: 900px) {
-    table.lh-stack .hostcell > :not(.hostdot) {
-        white-space: normal;
-        overflow: visible;
-        text-overflow: clip;
-    }
-}
 
 .hostdot {
     flex: none;
