@@ -7,6 +7,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.3.3] — 2026-09-13
+
+### Changed
+
+- **Screenshots of the panel in action.** The README, PANEL.md, DETECTION.md and ATTACKS.md now
+  open with a link to 19 captioned screenshots on the Loghound page at opensolr.com, replacing the
+  placeholder that stood where screenshots should have been.
+
+- **The documentation covers everything since 1.2.** A summary of what is new at the top of the
+  README, and PANEL.md now describes exclusions, attack patterns, CSV import and export of every
+  rule list, and the chart above every ranked table.
+
+---
+
 ## [1.3.2] — 2026-09-13
 
 ### Changed

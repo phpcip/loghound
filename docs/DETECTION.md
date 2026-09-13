@@ -1,5 +1,8 @@
 # How Loghound detects bots
 
+> **See it in action:** [19 screenshots of the live panel](https://opensolr.com/loghound#screenshots),
+> including why each session was scored, bot class by network type and crawler impersonation.
+
 - [The three-plane model](#the-three-plane-model)
 - [The verdict matrix](#the-verdict-matrix)
 - [The fingerprint](#the-fingerprint)

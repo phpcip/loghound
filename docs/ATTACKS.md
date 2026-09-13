@@ -1,5 +1,8 @@
 # Attacks — what Loghound detects, and what it refuses to claim
 
+> **See it in action:** [19 screenshots of the live panel](https://opensolr.com/loghound#screenshots),
+> including attack probes over time and crawlers that are not what they say.
+
 This document covers the **Attacks** view and the detector behind it
 (`src/Score/Attacks.php`, `src/Panel/Attacks.php`).
 

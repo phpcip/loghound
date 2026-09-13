@@ -1,5 +1,8 @@
 # The web panel
 
+> **See it in action:** [19 screenshots of the live panel](https://opensolr.com/loghound#screenshots)
+> on the Loghound page at opensolr.com, each with a short explanation.
+
 - [Running it](#running-it)
 - [A section is a page](#a-section-is-a-page)
 - [Two planes, and what talks to which](#two-planes-and-what-talks-to-which)
@@ -788,6 +791,32 @@ on the way in and on the way back out. Each entry carries the copyable block des
 
 An empty card is the normal state and says so.
 
+#### Exclusions and attack patterns
+
+Two rule lists, both plain forms that post the whole list and rewrite it, so a row's identity is
+its position in one submission.
+
+**Exclusions** (`src/Exclusions.php`, config key `exclusions`) are requests never recorded, per
+hostname or for every host: a field and a PCRE body, applied by the tailer before enrichment and by
+the collector before a payload is staged. `*` on the path excludes a hostname outright.
+
+**Attack patterns** (`src/AttackPatterns.php`, config key `attack_patterns`) hold two things. `rules`
+are the operator's own patterns, `text` (a case-insensitive substring of the decoded path and query,
+the same surface `Score\Attacks` reads) or `regex` (a body wrapped as `~...~i`, refused on save if it
+does not compile, capped at 200 characters). `off` lists the ids of the 48 shipped defaults that were
+switched off, so a later release cannot re-enable one and a default added later starts on. A match
+writes `atk_custom_pattern` to `hit_flags_ss` and the matched patterns to `hit_patterns_ss` (at most
+five), and `atk_custom_pattern` is decisive. Patterns load when the reader starts; the Live reader
+loads them on first use, so the live page flags a line exactly as ingest will.
+
+**CSV, both directions.** Both cards, and the live-exclusions dialog, export through the `custom`
+export shape and import through `Csv::readTable()`, which skips the provenance preamble, finds the
+header row by name, maps columns case-insensitively and undoes the export's formula neutralisation.
+The browser reads the file and posts its text in a hidden `csv` field on a form that carries its own
+token, so no upload reaches the server and `open_basedir` never matters; the server refuses more than
+500 KB. An import appends to the stored list with duplicates skipped, applies shipped/built-in on-off
+switches from the file, and runs every row through the list's own sanitiser.
+
 #### Remove Loghound entirely
 
 `destructive_uninstall`, 11 steps — the same eleven `install/uninstall.sh` prints, from
@@ -1084,6 +1113,16 @@ than as a separate product. `public/assets/css/panel.css` is the single source o
 the only file in the panel where a hex code is written; `charts.js` reads the tokens out of
 the stylesheet with `getComputedStyle`, so a chart can never drift out of step with the
 interface around it and dark mode needs no second palette.
+
+**A chart above every ranked table.** `public/assets/js/tablecharts.js` draws `rankChart()` (one
+value per row) or `splitChart()` (stacked parts per row) above an aggregate table from the same rows
+the table was filled with, so the two cannot disagree and no request is added. It keeps the top 12
+rows on a desktop and the top 8 at phone width with shorter rows, removes itself when fewer than two
+rows have a value, and inserts its container before the card's `.table-wrap`. `charts.js` registers
+every container `draw()` renders with one shared `ResizeObserver`, so charts created after page load
+follow their card's width too. Colour pairs were chosen with a palette validator in both themes: the
+grey `--c-declared` next to the accent and `--c-human` next to that grey fail the normal-vision
+separation floor and are never adjacent in a stack.
 
 ### The palette
 

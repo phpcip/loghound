@@ -5,6 +5,17 @@
 Loghound reads the access logs you already have, correlates them with a small JavaScript
 beacon, and tells you two things that nothing else tells you honestly.
 
+> **See it in action:** [19 screenshots of the live panel](https://opensolr.com/loghound#screenshots),
+> each with a short explanation, on the Loghound page at opensolr.com. Full documentation:
+> [opensolr.com/loghound-docs](https://opensolr.com/loghound-docs).
+
+**New since 1.2:** [SEO Tools](docs/PANEL.md#seo-tools--9-pages-one-card-each) comparing any
+two periods like for like · [attack patterns](docs/ATTACKS.md#your-attack-patterns) you define per
+host, with 48 shipped defaults · non-browser User-Agents and refused attacks
+[scored as bots](docs/DETECTION.md#declared-crawlers) · every rule list exported to and imported
+from CSV · a chart above every ranked table, compact on a phone. Details in the
+[changelog](CHANGELOG.md).
+
 ---
 
 ## Why this exists
@@ -53,14 +64,15 @@ there is no subsequent request to measure against.
 
 ## Screenshots
 
-> **PLACEHOLDER.** No screenshots have been captured yet. The intended hero image is the
-> **Fingerprint clusters** view: one row per header fingerprint, with the count of
-> distinct IP addresses that shared it, expanding to the member IPs and their ASNs.
->
-> - `docs/img/overview.png` — overview: human / bot / AI-crawler by hour
-> - `docs/img/clusters.png` — fingerprint clusters (hero)
-> - `docs/img/forensics.png` — bot forensics: reason-code facet bars
-> - `docs/img/session.png` — session explorer with the beacon timeline overlay
+**[See all 19 screenshots on the Loghound page →](https://opensolr.com/loghound#screenshots)**
+
+Every screen is captured from the reference installation reading opensolr.com's own traffic,
+with a short explanation under each one: the four time-on-site clocks, sessions split into five
+populations, top pages, country by verdict, the live stream, recent visitors with the facet rail,
+the map, channels, bounce rate, the hour-by-weekday heatmap, SEO Tools period against period,
+why each session was scored, bot class by network type, crawler impersonation, attack probes over
+time, fingerprint clusters (the hero view: 721 addresses, one fingerprint), latency over time,
+slowest paths and status codes.
 
 ---
 
