@@ -7,6 +7,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.2.2] — 2026-09-13
+
+### Fixed
+
+- **On a phone, form controls are compact.** The sort pair above a table was drawn at desktop size —
+  a 120px minimum width, 15px type and a 44px height — because its compact rule sized the hidden
+  native select instead of the control on screen. It is 24px now, and every field, dropdown and
+  button in pages and dialogs is 32px at phone width. Text fields keep 16px type so iOS does not zoom
+  in when one is tapped. Desktop is unchanged.
+
+---
+
 ## [1.2.1] — 2026-09-13
 
 ### Added

@@ -1046,6 +1046,86 @@ table.visits td.visit-email { max-width: none; }
        hundred wide; at 375 that is most of the screen and the map floats in it. `cardChart`
        writes the height inline, so the cap has to outrank it. */
     #net-map { height: 160px !important; }
+
+    /* ===========================================================================
+       COMPACT FORM CONTROLS ON A PHONE
+
+       Every <select> is drawn by assets/js/smartselect.js as a `.ss-button`, so the
+       24px `.lh-sortbar select` rule above sized the hidden native element while the
+       visible control kept its desktop 120px minimum width, 15px type and the 44px
+       touch floor from section 2. These rules size what is actually on screen.
+
+       Fields and buttons drop to 32px. Text inputs keep 16px type, because iOS
+       Safari zooms the page into any field with smaller type the moment it is
+       focused. The top bar (28px) and the pager (24px) keep their own tighter
+       rules, which outrank these by specificity.
+       =========================================================================== */
+
+    .lh-sortbar .ss { flex: 0 0 auto; min-width: 0; }
+    .lh-sortbar .ss-button {
+        min-width: 0;
+        min-height: 0;
+        height: 24px;
+        gap: 4px;
+        padding: 0 6px;
+        font-size: 12px;
+    }
+    .lh-sortbar .ss-caret { width: 5px; height: 5px; }
+
+    main .ss-button,
+    #lh-dialog .ss-button,
+    .lh-dialog .ss-button {
+        min-width: 0;
+        min-height: 32px;
+        height: 32px;
+        gap: 6px;
+        padding: 0 8px;
+        font-size: 13px;
+    }
+
+    main input[type="text"]:not([class*="pager-"]),
+    main input[type="search"],
+    main input[type="number"]:not([class*="pager-"]),
+    main input[type="email"],
+    main input[type="url"],
+    main input[type="password"],
+    #lh-dialog input[type="text"],
+    #lh-dialog input[type="search"],
+    .lh-dialog input[type="text"],
+    .lh-dialog input[type="search"] {
+        min-height: 32px;
+        height: 32px;
+        padding: 0 8px;
+        font-size: 16px;
+    }
+
+    main button.small,
+    main button.ghost,
+    main button.primary,
+    main form button[type="submit"],
+    #lh-dialog button.small,
+    .lh-dialog button.small,
+    .live-tools button {
+        min-height: 32px;
+        padding-top: 0;
+        padding-bottom: 0;
+        font-size: 13px;
+    }
+
+    main input[type="checkbox"],
+    main input[type="radio"],
+    main label.radio input,
+    main label.check input,
+    #lh-dialog input[type="checkbox"],
+    .lh-dialog input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+    }
+    main label.radio,
+    main label.check {
+        min-height: 32px;
+        padding: 2px 0;
+    }
 }
 
 /* ===========================================================================
