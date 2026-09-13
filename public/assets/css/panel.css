@@ -3339,7 +3339,10 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
 
 @media (min-width: 901px) {
 
-    :root.lh-rail-collapsed { --side-w: 60px; }
+    /* The flyout's width is a token because two rules need the same number: the panel's own
+       `width`, and the `left` of a second-level panel, which opens flush against its right
+       edge. Repeating 230px in both is how they drift apart. */
+    :root.lh-rail-collapsed { --side-w: 60px; --lh-flyout-w: 230px; }
 
     /* --lh-navtip-h is the tooltip's own height, declared once because two things
        read it: the box, and the `top` that centres the box on the mark it
@@ -3464,7 +3467,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         /* Hangs from the icon's top edge, not from its middle. The fallback keeps the old
            behaviour if assets/js/responsive.js has not published the second number yet. */
         top: var(--lh-navtip-top, var(--lh-navtip-y));
-        width: 230px;
+        width: var(--lh-flyout-w);
         max-height: 60vh;
         overflow-y: auto;
         padding: 6px 0;
@@ -3477,7 +3480,29 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     }
     :root.lh-rail-collapsed .side .navsub-link { padding: 6px 14px; }
 
-    :root.lh-rail-collapsed .navgroup:focus-within .navsub {
+    /* A SECOND-LEVEL PANEL OPENS BESIDE THE FIRST, NOT ON TOP OF IT. Every `.navsub` above is
+       placed at the rail's own edge, which is right for the panel a rail icon opens and wrong
+       for the one a row INSIDE that panel opens — it landed at the same coordinate and buried
+       its parent. It hangs off the parent's right edge instead, flush for the same reason the
+       parent is flush against the rail: a gap between the row and the panel it opens is a dead
+       zone that closes the menu as the pointer crosses it. Vertically it needs nothing new —
+       responsive.js writes the anchor on whichever `.navgroup` the pointer reached, and a
+       nested group is the closest one to its own row. */
+    :root.lh-rail-collapsed .navsub .navsub {
+        left: calc(var(--side-w) + var(--lh-flyout-w));
+    }
+
+    /* THE CHILD COMBINATOR IS THE WHOLE FIX. Written as a descendant, `:hover` on a group
+       matched every `.navsub` under it — its own, and the one belonging to each second-level
+       group nested inside it. So pointing at Visitors opened five panels at once, all of them
+       fixed at the same `top` and `left`, stacked into an unreadable pile of half-clipped
+       headings. A group now opens ITS OWN list and nothing else; a nested list waits for the
+       pointer or the focus to reach the row that owns it.
+
+       `:hover` still holds on the parent while the pointer is inside a nested panel — hover
+       follows the DOM, not the drawn position — so walking out to a second-level entry does
+       not shut the panel it came from. */
+    :root.lh-rail-collapsed .navgroup:focus-within > .navsub {
         display: block !important;
         opacity: 1;
         visibility: visible;
@@ -3485,7 +3510,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     }
 
     @media (hover: hover) and (pointer: fine) {
-        :root.lh-rail-collapsed .navgroup:hover .navsub {
+        :root.lh-rail-collapsed .navgroup:hover > .navsub {
             display: block !important;
             opacity: 1;
             visibility: visible;
