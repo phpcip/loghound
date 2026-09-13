@@ -910,8 +910,12 @@ textarea {
     /* AS TIGHT AS A CONTROL CAN BE AND STILL BE PRESSED. No padding of its own, no minimum tap
        height — the row it shares is already tall enough for a thumb, and every pixel here is a
        pixel taken from the table underneath. */
+    /* AS WIDE AS THEIR LONGEST OPTION AND NO WIDER. `flex: 1 1 0` had the pair filling the row
+       up to the reload mark, so "Date" sat in a control four times its width. Content-sized,
+       the two say the same thing in half the room and the row reads as controls, not fields. */
     .lh-sortbar select {
-        flex: 1 1 0;
+        flex: 0 0 auto;
+        width: auto;
         min-width: 0;
         min-height: 0;
         height: 24px;
