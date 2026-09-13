@@ -993,10 +993,13 @@ table.visits td.visit-email { max-width: none; }
         font-size: 13px;
     }
 
-    /* The scope bar is pinned right under it. The 20px main offset left a 14px band of page
-       between the two bars (the bar pulls itself up 6px); 8px closes it to a hairline's
-       breathing room. Only where the bar exists — a view without one keeps its 20px. */
+    /* The scope bar is pinned right under it, 8px below the navigation bar. Only where the bar
+       exists — a view without one keeps its 20px.
+       --nav-pull IS THE SAME 8px, SET ON THE SAME LINE PAIR. panel.css pulls the bar up by 28px
+       (≤620) or 32px (≤1000), matching main's desk-width padding; against an 8px offset sticky
+       clamped the bar 20-24px below its place and the card's sort row sat under it. */
     .lh-nav-js main:has(> .topbar) { padding-top: calc(var(--lh-topbar-h) + 8px); }
+    .lh-nav-js main:has(> .topbar) > .topbar { --nav-pull: 8px; }
     .topbar { margin-bottom: 6px; }
     .topbar .tb-filters,
     .topbar .tb-res,
