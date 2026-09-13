@@ -7,6 +7,10 @@
  * their referer. This rewrites each of them with the latest external referer of the same
  * address on the same host at or before the session start, or marks the visit direct.
  *
+ * Each document is written back whole, not as an atomic update. Every sessions field that is
+ * not a copyField target is stored or has docValues, so the field list read from this release's
+ * schema.xml returns the complete document, and copyField targets are rebuilt by Solr.
+ *
  * USAGE
  *   loghound-referers           count the sessions that would change, change nothing
  *   loghound-referers --apply   rewrite them
@@ -32,6 +36,7 @@ require __DIR__ . '/../src/autoload.php';
 use Loghound\Config;
 use Loghound\Parser;
 use Loghound\RefererOrigin;
+use Loghound\Security;
 use Loghound\Solr;
 
 $root       = dirname(__DIR__);
@@ -66,6 +71,12 @@ if ($hitsCore === '' || $sessionsCore === '') {
     exit(1);
 }
 
+$fields = lh_referers_fields($root . '/solr/sessions/conf/schema.xml');
+if ($fields === null) {
+    fwrite(STDERR, "Loghound: the sessions schema would not return complete documents; nothing was changed.\n");
+    exit(1);
+}
+
 $origin = new RefererOrigin();
 $origin->useSolr($solr, $hitsCore);
 
@@ -93,7 +104,7 @@ while (true) {
             'fq'   => $filter,
             'sort' => 'ts_start asc',
             'rows' => 200,
-            'fl'   => 'id,ip_s,host_s,ts_start',
+            'fl'   => implode(',', $fields),
         ])['response']['docs'] ?? [];
     } catch (\Throwable $e) {
         fwrite(STDERR, 'Loghound: ' . $e->getMessage() . "\n");
@@ -103,15 +114,14 @@ while (true) {
         break;
     }
 
-    $updated = 0;
+    $batch = [];
     foreach ($docs as $doc) {
-        $id = (string) ($doc['id'] ?? '');
         $ts = (string) ($doc['ts_start'] ?? '');
         $tsMs = Parser::epochMs($ts);
         if ($tsMs <= 0 && ($unix = strtotime($ts)) !== false) {
             $tsMs = $unix * 1000;
         }
-        if ($id === '' || $tsMs <= 0) {
+        if ((string) ($doc['id'] ?? '') === '' || $tsMs <= 0) {
             continue;
         }
 
@@ -120,24 +130,65 @@ while (true) {
             fwrite(STDERR, 'Loghound: the hits lookup failed; nothing more is rewritten. ' . $solr->lastError() . "\n");
             exit(2);
         }
-        $set =$source ?? ['referer_s' => null, 'referer_host_s' => null, 'referer_type_s' => 'direct'];
 
-        try {
-            $solr->atomicUpdate($sessionsCore, $id, ['set' => $set]);
-        } catch (\Throwable $e) {
-            fwrite(STDERR, 'Loghound: ' . $id . ': ' . $e->getMessage() . "\n");
-            exit(2);
-        }
-
-        $updated++;
+        unset($doc['_version_']);
+        $batch[] = RefererOrigin::apply($doc, $source);
         $source === null ? $direct++ : $external++;
     }
 
-    if ($updated === 0) {
+    if ($batch === []) {
         break;
     }
+
+    try {
+        $solr->addDocs($sessionsCore, $batch);
+    } catch (\Throwable $e) {
+        fwrite(STDERR, 'Loghound: ' . $e->getMessage() . "\n");
+        exit(2);
+    }
+
     fwrite(STDOUT, '  rewritten ' . ($external + $direct) . ' of ' . $total . "\n");
+    sleep(2);
 }
 
 fwrite(STDOUT, 'Done. External source found: ' . $external . ', direct: ' . $direct . "\n");
 exit(0);
+
+/**
+ * Every sessions field that comes back in a query, or null when one would be lost on rewrite.
+ *
+ * copyField targets are skipped because Solr rebuilds them, `_version_` and `_root_` because
+ * Solr manages them. Any other field that is neither stored nor docValues makes a whole-document
+ * rewrite lossy, and the script refuses.
+ *
+ * @return array<int,string>|null
+ */
+function lh_referers_fields(string $schemaPath): ?array
+{
+    $xml = is_file($schemaPath) ? simplexml_load_file($schemaPath, null, LIBXML_NONET) : false;
+    if ($xml === false) {
+        return null;
+    }
+
+    $targets = [];
+    foreach ($xml->copyField as $copy) {
+        $targets[(string) $copy['dest']] = true;
+    }
+
+    $fields = [];
+    foreach ($xml->field as $field) {
+        $name = (string) $field['name'];
+        if (isset($targets[$name]) || $name === '_version_' || $name === '_root_') {
+            continue;
+        }
+        if (!Security::isSafeFieldName($name)) {
+            return null;
+        }
+        if ((string) $field['stored'] === 'false' && (string) $field['docValues'] !== 'true') {
+            return null;
+        }
+        $fields[] = $name;
+    }
+
+    return $fields === [] ? null : $fields;
+}
