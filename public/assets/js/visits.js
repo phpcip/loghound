@@ -32,16 +32,15 @@ import { countryNode, dimValue, drillRow, openButton } from './identity.js';
 import { pathCell } from './url.js';
 
 /**
- * The column widths, as percentages that sum to 100.
+ * The column classes, one per column, in order.
  *
- * Percentages only, never `ch`: the two units cannot be reconciled under `table-layout: fixed`
- * and mixing them is what starved the last column to zero in the tables this replaces. The page
- * column takes every point the other four can spare, because it is the one whose value is long
- * and whose truncation costs the reader the most.
+ * The widths are in panel.css on these classes, shared with the server-rendered head in
+ * Panel\Sessions. Date, address, session time and bounce are fixed px; Page and Email carry no
+ * width and split what is left, because those are the two values the reader came for.
  *
  * @type {Array<string>}
  */
-const WIDTHS = ['17%', '17%', '26%', '19%', '8%', '13%'];
+const COLS = ['vc-when', 'vc-who', 'vc-page', 'vc-email', 'vc-span', 'vc-bounce'];
 
 /* THE VERDICT IS NO LONGER A COLUMN. It was a chip at the end of every row, spending a seventh
    of the width on one word that is already the row's colour — see `.visits tbody tr[data-verdict]`
@@ -60,7 +59,7 @@ const HEADINGS = ['Last seen', 'IP', 'Page', 'Email', 'Sess time', 'Bounced'];
  */
 export function visitTableHead() {
     return [
-        el('colgroup', {}, WIDTHS.map((w) => el('col', { style: 'width:' + w }))),
+        el('colgroup', {}, COLS.map((c) => el('col', { class: c }))),
         el('thead', {}, [
             /* `data-lh-nosort` marks a column the phone does not show, so responsive.js leaves it
                out of the sort control rather than offering an order by something invisible. */

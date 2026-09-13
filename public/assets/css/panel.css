@@ -3366,7 +3366,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
     /* The flyout's width is a token because two rules need the same number: the panel's own
        `width`, and the `left` of a second-level panel, which opens flush against its right
        edge. Repeating 230px in both is how they drift apart. */
-    :root.lh-rail-collapsed { --side-w: 60px; --lh-flyout-w: 230px; }
+    :root.lh-rail-collapsed { --side-w: 60px; --lh-flyout-w: 230px; --lh-flyout-max: 60vh; }
 
     /* --lh-navtip-h is the tooltip's own height, declared once because two things
        read it: the box, and the `top` that centres the box on the mark it
@@ -3492,7 +3492,24 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
            behaviour if assets/js/responsive.js has not published the second number yet. */
         top: var(--lh-navtip-top, var(--lh-navtip-y));
         width: var(--lh-flyout-w);
-        max-height: 60vh;
+
+        /* IT MAY ONLY BE AS TALL AS THE ROOM BELOW THE MARK IT HANGS FROM. The cap was a flat
+           60vh, which says nothing about where the panel STARTS — so Settings, whose mark sits
+           near the foot of the rail, opened a panel 60vh tall from a point far less than 60vh
+           above the bottom of the window. The overflow went under the edge, and a `fixed` box
+           cannot be scrolled to by the page: the list simply ended at Scoring, with six sections
+           below it unreachable by any means.
+
+           Bounded by what is actually there, the panel scrolls inside itself instead — which is
+           what `overflow-y` below was always for. The plain declaration stays as the fallback:
+           with `--lh-navtip-top` unset (before responsive.js publishes, or with script off) the
+           `min()` is invalid at computed-value time and is dropped, leaving the flat cap and the
+           static position this block already falls back to. */
+        max-height: var(--lh-flyout-max);
+        max-height: min(
+            var(--lh-flyout-max),
+            calc(100vh - var(--lh-navtip-top) - var(--lh-sectiontip-edge))
+        );
         overflow-y: auto;
         padding: 6px 0;
         background: var(--page);
@@ -4994,6 +5011,21 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 /* The timestamp is never clipped: table-fixed puts `overflow:hidden` on every cell, so nowrap
    alone still ended the value in an ellipsis when the column was a pixel short. */
 table.visits td.visit-when { white-space: nowrap; overflow: visible; }
+
+/* THE DAY AND THE CLOCK ARE TWO SPANS WITH NO TEXT BETWEEN THEM, so on one line they read
+   "09/13/202605:39:42". The phone stacks them and never showed it. */
+table.visits .visit-day { margin-right: 0.5em; }
+
+/* THE WIDTHS OF THE SIX VISIT COLUMNS, shared by Panel\Sessions and visits.js's head.
+   The four fixed-shape values get what their longest value needs at 13px plus the cell
+   padding: a date to the second, a flag and a dotted address, "not measured" with its
+   chevron, and the BOUNCE heading with its sort mark. Page and Email take no width, so
+   under `table-layout: fixed` they split every pixel that is left. The phone hides the
+   colgroup and lays the table out on content, so none of this reaches it. */
+table.visits col.vc-when   { width: 175px; }
+table.visits col.vc-who    { width: 185px; }
+table.visits col.vc-span   { width: 150px; }
+table.visits col.vc-bounce { width: 95px; }
 
 /* A dimension value drawn as its mark alone — the flag in a visit table's country column.
    No text node, so the anchor shrinks to the glyph and the column can be narrow. */

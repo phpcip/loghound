@@ -1691,12 +1691,11 @@ final class Sessions extends Controller
             /* SIX COLUMNS, AND THE WIDTHS ARE THE CONTRACT. This head is rendered here while the
                rows are built by assets/js/visits.js, so the two have to agree column for column
                — they did not, which is why the cells were landing under the wrong headings. */
-            /* THE BOUNCE COLUMN HOLDS TWO THINGS: a percentage and the chevron that opens the
-               record. At 9% they did not fit side by side, so the chevron wrapped and every row
-               drew two lines tall. The width comes out of Page and Email, both of which
-               truncate gracefully and neither of which wraps. */
-            . '<col style="width:17%"><col style="width:17%"><col style="width:26%">'
-            . '<col style="width:19%"><col style="width:8%"><col style="width:13%">'
+            /* THE WIDTHS LIVE IN panel.css, ON THESE CLASSES. Date, address, session time and
+               bounce are fixed-width values and get fixed widths; Page and Email carry none and
+               share everything that is left, because they are the values worth reading. */
+            . '<col class="vc-when"><col class="vc-who"><col class="vc-page">'
+            . '<col class="vc-email"><col class="vc-span"><col class="vc-bounce">'
             . '</colgroup><thead><tr>'
             /* `data-lh-nosort` marks a column a phone does not show, so responsive.js leaves it
                out of the sort control rather than offering an order by something invisible. */
