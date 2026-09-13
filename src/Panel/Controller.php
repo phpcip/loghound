@@ -1216,7 +1216,7 @@ abstract class Controller
         $lines = [
             ['Loghound export', (string) $set['label']],
             ['Panel view', $this->title()],
-            ['Taken', Csv::moment(gmdate('c'), $tz)],
+            ['Taken', Csv::moment(gmdate('Y-m-d\TH:i:s\Z'), $tz)],
             ['Timezone', $tz],
         ];
 

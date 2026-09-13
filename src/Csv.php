@@ -376,7 +376,7 @@ final class Csv
      */
     public static function filename(string $view, string $dataset, string $range, string $tz = 'UTC'): string
     {
-        $stamp = self::moment(gmdate('c'), $tz);
+        $stamp = self::moment(gmdate('Y-m-d\TH:i:s\Z'), $tz);
         $stamp = str_replace(['/', ':', ' '], ['-', '', '-'], $stamp);
 
         return implode('-', array_filter([

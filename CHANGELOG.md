@@ -29,6 +29,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   table that ranks values, each with a CSV export that carries the two periods and the choices on
   screen.
 
+### Fixed
+
+- **Every CSV export says when it was taken again.** The Taken line in the file's header was empty
+  and the time was missing from the file name, on every export in the panel.
+
 ---
 
 ## [1.2.3] — 2026-09-13
