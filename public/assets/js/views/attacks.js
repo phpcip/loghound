@@ -375,7 +375,12 @@ function renderWho(data) {
         cells: [
             {
                 node: el('div', { class: 'client' }, [
-                    el('div', { class: 'clip-line' }, [dimValue('ip_s', row.ip, { mono: true })]),
+                    /* THE FLAG LEADS THE ADDRESS, as in the visit tables: where from, in one glyph,
+                       and a filter control of its own. The code no longer repeats under Network. */
+                    el('div', { class: 'clip-line atk-who-ip' }, [
+                        row.country ? countryNode(row.country, { flagOnly: true }) : null,
+                        dimValue('ip_s', row.ip, { mono: true })
+                    ]),
                     el('div', { class: 'sub clip-line', text: row.rdns || '—' })
                 ]),
                 clip: true,
@@ -410,17 +415,11 @@ function renderWho(data) {
     })));
 }
 
-/** The network a row came from, with its type beneath it. */
+/** The network a row came from, with its type beneath it. The country is the flag beside the address. */
 function networkCell(row) {
     const lower = [];
     if (row.as_type) {
         lower.push(dimValue('as_type_s', row.as_type));
-    }
-    if (row.country) {
-        if (lower.length) {
-            lower.push(el('span', { text: ' · ' }));
-        }
-        lower.push(el('span', { text: row.country }));
     }
     return el('div', { class: 'client' }, [
         el('div', { class: 'clip-line' }, [row.org ? dimValue('as_org_s', row.org) : el('span', { text: '—' })]),
