@@ -7,6 +7,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.1] — 2026-09-13
+
+### Changed
+
+- **The map sits with the visitors, not with the netblocks.** It answers a question about
+  people — where they came from — and it was filed under Networks between ASNs and Netblocks,
+  which is where you look for a netblock rather than for a person. It is a link beside Sessions
+  and Signed-in visitors now. Networks keeps its own entry and its own copy of the card;
+  nothing moved out of it.
+
+- **The map is no longer squashed flat.** It was drawn 340 pixels tall in a card well over a
+  thousand wide, and a world map is twice as wide as it is tall — so the projection came out
+  flattened, continents wide and stunted, and the bubbles that carry the actual numbers
+  squeezed into a band across the middle. It gets the height the shape asks for.
+
+---
+
 ## [1.1.0] — 2026-09-13
 
 ### Fixed
