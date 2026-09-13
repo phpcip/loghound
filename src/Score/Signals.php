@@ -588,6 +588,11 @@ final class Signals
      *   * The UA does not claim a Chromium browser. Firefox and Safari do not send
      *     Sec-CH-UA at all; expecting it would flag every one of them.
      *   * The UA claims Chrome older than 89, which predates the header.
+     *   * The UA carries no `Chrome/` or `Chromium/` engine token. Chrome, Edge and every other
+     *     browser on iOS (`CriOS`, `EdgiOS`, …) run on WebKit and never send the header.
+     *   * The UA is an Android WebView (`; wv)`), including in-app browsers.
+     *   * The log does not show the request came over TLS. Without proof of a secure context
+     *     the header's absence proves nothing.
      *   * Sec-CH-UA is sent only on secure contexts, so a plain-HTTP request legitimately
      *     has none. When the format captures the TLS protocol and it says the request was
      *     NOT over TLS, the browser was right not to send the header and its absence must
@@ -618,10 +623,12 @@ final class Signals
         if ($ver > 0 && $ver < 89) {
             return null;
         }
-        if (array_key_exists('tls_proto_s', $first)
-            && stripos((string) $first['tls_proto_s'], 'tls') === false
-            && stripos((string) $first['tls_proto_s'], 'ssl') === false
-        ) {
+        $ua = (string) ($s['ua'] ?? '');
+        if (!preg_match('~\b(?:Headless)?Chrom(?:e|ium)/\d~', $ua) || str_contains($ua, '; wv)')) {
+            return null;
+        }
+        $tls = (string) ($first['tls_proto_s'] ?? '');
+        if (stripos($tls, 'tls') === false && stripos($tls, 'ssl') === false) {
             return null;
         }
 
@@ -675,7 +682,7 @@ final class Signals
             'windows'  => ['windows'],
             'macos'    => ['mac os', 'macos', 'mac os x', 'os x'],
             'linux'    => ['linux', 'ubuntu', 'fedora', 'debian'],
-            'android'  => ['android'],
+            'android'  => ['android', 'linux'],
             'ios'      => ['ios', 'iphone os'],
             'chrome os' => ['chrome os', 'chromium os'],
             'chromeos' => ['chrome os', 'chromium os'],

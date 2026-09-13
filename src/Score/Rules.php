@@ -383,6 +383,19 @@ final class Rules
            word for what it is costs nothing and is right every time. */
         'ua_declared_bot',
         'ua_not_a_browser',
+        'ua_secch_mismatch',
+        'platform_mismatch',
+        'rdns_claim_failed',
+    ];
+
+    /**
+     * The findings that mean the User-Agent is spoofed. Any one of them makes the verdict `bot`,
+     * whatever else fired, so a session is never shown as human and spoofed at the same time.
+     */
+    private const SPOOFED_UA_CODES = [
+        'ua_secch_mismatch',
+        'platform_mismatch',
+        'rdns_claim_failed',
     ];
 
     /**
@@ -426,6 +439,8 @@ final class Rules
         'rdns_claim_failed',
         'ua_claim_failed',
         'ua_not_a_browser',
+        'ua_secch_mismatch',
+        'platform_mismatch',
     ];
 
     /**
@@ -1274,6 +1289,11 @@ final class Rules
                     . 'log were not evaluated, and the evidence that remains comes from one plane, which is the '
                     . 'plane a determined client controls.',
             ];
+        }
+
+        if (array_intersect($reasons, self::SPOOFED_UA_CODES) !== []) {
+            $verdict = 'bot';
+            $score = max($score, (float) $this->thresholds['bot']);
         }
 
         $class = $this->classify($s, $reasons, $verdict);
