@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.3.2] — 2026-09-13
+
+### Changed
+
+- **Filter by comes first in the top bar.** Applied filters now sits to its right.
+
+---
+
 ## [1.3.1] — 2026-09-13
 
 ### Added

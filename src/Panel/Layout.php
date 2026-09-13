@@ -609,23 +609,6 @@ final class Layout
         echo '<div class="topbar" id="lh-topbar">' . "\n";
         echo '<div class="topbar-in">';
 
-        if ($filters) {
-            /* SHOWN ONLY WHEN SOMETHING IS APPLIED. A permanent "0 filters" button is furniture
-               that reports nothing; what an operator needs is to notice, from anywhere on the
-               page, that the numbers in front of them are narrowed. The badge is the count and
-               the dialog is where they are listed and removed. */
-            echo '<button type="button" class="tb-filters" id="lh-tb-filters"'
-                . ($applied === 0 ? ' hidden' : '')
-                . ' aria-haspopup="dialog">'
-                /* TWO WORDINGS, ONE CONTROL. On a phone the bar has to fit the filter button,
-                   the duration and the resources mark on one line, and "Applied filters" eats
-                   the room the other two need. The stylesheet shows one and hides the other;
-                   both are in the markup so no script is needed and neither can drift. */
-                . '<span class="tb-filters-label">Applied filters</span>'
-                . '<span class="tb-filters-short">Filters</span>'
-                . '<span class="tb-badge" id="lh-tb-badge">' . Security::esc((string) $applied) . '</span>'
-                . '</button>';
-        }
 
         /* THE FORM EXISTS ONLY WHERE IT HAS A CONTROL IN IT. On Settings and Storage & bandwidth
            nothing is scoped by anything, so there is no duration and no hostname — and an empty
@@ -651,6 +634,24 @@ final class Layout
         if ($view->honours(Controller::SCOPE_FACETS)) {
             echo '<button type="button" class="tb-field-btn" id="lh-facets-toggle"'
                 . ' aria-controls="lh-facets-groups" aria-expanded="false">Show filters</button>';
+        }
+
+        if ($filters) {
+            /* SHOWN ONLY WHEN SOMETHING IS APPLIED. A permanent "0 filters" button is furniture
+               that reports nothing; what an operator needs is to notice, from anywhere on the
+               page, that the numbers in front of them are narrowed. The badge is the count and
+               the dialog is where they are listed and removed. It sits to the right of Filter by. */
+            echo '<button type="button" class="tb-filters" id="lh-tb-filters"'
+                . ($applied === 0 ? ' hidden' : '')
+                . ' aria-haspopup="dialog">'
+                /* TWO WORDINGS, ONE CONTROL. On a phone the bar has to fit the filter button,
+                   the duration and the resources mark on one line, and "Applied filters" eats
+                   the room the other two need. The stylesheet shows one and hides the other;
+                   both are in the markup so no script is needed and neither can drift. */
+                . '<span class="tb-filters-label">Applied filters</span>'
+                . '<span class="tb-filters-short">Filters</span>'
+                . '<span class="tb-badge" id="lh-tb-badge">' . Security::esc((string) $applied) . '</span>'
+                . '</button>';
         }
 
         if ($range || $host) {
