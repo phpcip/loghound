@@ -7,6 +7,70 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.7] — 2026-09-13
+
+### Fixed
+
+- **The map was drawn as a band.** It filled a card as wide as the window, and a height in pixels
+  cannot hold a proportion across widths — which is why that number came out wrong every time it
+  was changed. The box now carries the cropped map's own ratio, 360 degrees of longitude by 124
+  of latitude, and is capped at a bit under two thirds of the card on a desk, so it reads as a
+  map rather than as a strip. The phone keeps its own height.
+
+- **Pointing at one icon in the collapsed rail opened every menu under it.** The rules that reveal
+  a flyout were written to match any list beneath the group rather than its own, and all of them
+  are positioned at the same point — so reaching for Visitors opened five panels stacked on one
+  coordinate, a pile of half-clipped headings. A group opens its own list now, and a second-level
+  panel hangs off the right edge of the one that owns it instead of landing on top of it.
+
+- **The Visitors flyout read as a scatter of words, not as a list.** Its rows are view links, which
+  the rail centres and strips of their labels because that is what a 60px column needs — inside a
+  230px panel with the labels back, all eight sat centred, each indented by however long its own
+  label happened to be. Map was pushed halfway across; Where they came from barely moved. They
+  line up on one column now, with the section rows.
+
+- **A truncated path never showed the value behind it.** The panel measured the path, decided it
+  was cut, and attached a tooltip correctly — and the stylesheet had no rule to draw one on that
+  element, so the bubble existed in the markup and nowhere on screen. Nothing was wrong with the
+  measurement, which is why earlier attempts at how the cell overflows never brought it back.
+
+- **The two cells that exist to explain themselves explained nothing.** The padlock beside an
+  inferred bounce figure, and the words "no page", each carry a written sentence and the help
+  cursor that promises one. Neither had a rule to render it either. Both say their piece now: why
+  a bounce figure is inferred when no beacon reported, and what a visit that requested no HTML
+  page actually fetched.
+
+- **A long menu ran off the bottom of the window.** A flyout was capped at a share of the screen's
+  height regardless of where it started, so Settings — whose mark sits near the foot of the rail —
+  opened a panel taller than the room beneath it. The list ended at Scoring with six sections
+  below it unreachable, because a fixed panel is not somewhere the page can scroll to. It is
+  bounded by the room that is actually there and scrolls inside itself.
+
+- **The scope bar sat on top of the card's sort row on a phone.** The bar pulls itself up by one
+  amount and was pinned by another, so it clamped twenty-odd pixels below where it belonged and
+  covered the row beneath it.
+
+- **An address was cut off on a phone and a tablet.** Two separate caps reached the email column,
+  and "support@opensolr.com" arrived as "support@ope…" — who someone is was the one value on the
+  row a reader could not finish. The cell takes the width the address needs; the path beside it
+  gives up the room, because a path is recognisable from its start and an address is not.
+
+### Changed
+
+- **The sort controls are the width of their words.** The pair stretched to fill the row, so
+  "Date" sat in a control four times the size of the word in it.
+
+- **The three bands above the first row give back a third of their height on a phone.** Measured
+  at 390px, the navigation bar, the scope bar and the card's tools row cost 170px between them
+  before a single line of data — close to a quarter of the screen. Every control keeps the width
+  a thumb needs and gives up the height a phone cannot spare.
+
+- **The email column is capped so the page path takes the rest of the row.** An address is short
+  and ends in an ellipsis with the whole value a hover away; splitting the free width evenly left
+  it half empty while the path — the long value, and the one worth reading — was being cut.
+
+---
+
 ## [1.1.6] — 2026-09-13
 
 ### Fixed
