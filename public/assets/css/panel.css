@@ -2440,10 +2440,21 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
     --lh-navtip-y: ;
 }
 
+/* `.urlwrap` IS IN THIS LIST BECAUSE THE PATH IS THE VALUE THAT IS ALWAYS CUT. It was marked and
+   never drawn: markValueTips() measures `.urlpath`, which is the element the ellipsis is on, and
+   writes `data-full` and `data-lh-tip` onto the `.urlwrap` around it — but the selector lists
+   here named only the four controls above, so every path in every table carried a tooltip that
+   no rule in this stylesheet rendered. Nothing was wrong with the measurement, which is why
+   changing how the cell overflows never brought the bubble back.
+
+   A fixed `::after` on `.urlwrap` is safe even though the wrapper is a flex row: an absolutely
+   or fixed positioned child does not become a flex item, so the box does not join the row it
+   hangs off. */
 .card-refresh[data-lh-tip]::after,
 .rowopen[data-lh-tip]::after,
 .facet-opt[data-lh-tip]::after,
-.dim[data-lh-tip]::after {
+.dim[data-lh-tip]::after,
+.urlwrap[data-lh-tip]::after {
     content: attr(data-full);
     position: fixed;
     z-index: 40;
@@ -2467,13 +2478,15 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 .card-refresh[data-lh-tip]:focus-visible::after,
 .rowopen[data-lh-tip]:focus-visible::after,
 .facet-opt[data-lh-tip]:focus-visible::after,
-.dim[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+.dim[data-lh-tip]:focus-visible::after,
+.urlwrap[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
 
 @media (hover: hover) and (pointer: fine) {
     .card-refresh[data-lh-tip]:hover::after,
     .rowopen[data-lh-tip]:hover::after,
     .facet-opt[data-lh-tip]:hover::after,
-    .dim[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
+    .dim[data-lh-tip]:hover::after,
+    .urlwrap[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
 }
 
 /* A card still clears the bar.
