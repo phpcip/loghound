@@ -189,6 +189,12 @@ textarea {
  * a base rule that hides it and one rule inside the drawer that does not.
  */
 
+/* THE ADDRESS IS NEVER CLIPPED, AT ANY WIDTH. panel.css caps every `td.clip` at 22ch under
+   1000px, which reaches the email column on a tablet as it did on a phone. This file loads
+   after it, so one unscoped rule lifts the cap everywhere; the 46ch desk cap it also lifts
+   never cut an address of any plausible length. */
+table.visits td.visit-email { max-width: none; }
+
 .lh-navhint { display: none; }
 
 /* ===========================================================================
@@ -809,10 +815,14 @@ textarea {
         white-space: nowrap;
     }
 
-    /* THE EMAIL DOES NOT BREAK. An address split across three lines is not easier to read than
-       one that ends in an ellipsis, and it made every row three lines tall. */
+    /* THE EMAIL DOES NOT BREAK, AND IT IS NOT CUT EITHER. An address split across three lines
+       is not easier to read than one on a line, and it made every row three lines tall; but
+       `30vw` then cut "support@opensolr.com" to "support@ope…", and who someone is was the one
+       value on the row the reader could not finish. The cell now takes the width of the
+       address and the path beside it — `width: 100%`, already ellipsised — gives up the room,
+       because a path is recognisable from its start and an address is not. */
     table.visits td.visit-email {
-        max-width: 30vw;
+        max-width: none;
         white-space: nowrap;
     }
 
