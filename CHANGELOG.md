@@ -7,6 +7,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.8] — 2026-09-13
+
+### Added
+
+- **Each referring site opens to the pages that linked to you.** The host says which site sent a
+  visit; it never said where on that site the link was published. Every row under Which site sent
+  them now expands to the full referrer URLs that host sent, with the visits each one brought and a
+  link that opens it, paged, under the same range, filters and population as the table above it.
+
+### Changed
+
+- **A path is shown without its query string.** In a visit's trail, in a dialog's request table and
+  in Live, the query string turned every admin row into noise. The path stands alone, in the cell
+  and in its tooltip; the link beside it still opens the exact URL that was requested. The Attacks
+  view keeps it, because there the query string is the payload.
+
+- **A referrer is shown whole, with a link to it.** The visit dialog and a Live request's detail
+  print the complete referrer URL and put the same new-tab mark every path carries beside it. The
+  link is only drawn for a plain http or https address the server has vetted; anything else stays
+  text.
+
+### Fixed
+
+- **A visit's trail cut every long path off at the edge of a phone.** The list now scrolls sideways
+  in a box of its own, so a whole path can be read with a swipe while the dialog stays where it is,
+  and the status column stays aligned down the list past the end of the longest path.
+
+---
+
 ## [1.1.7] — 2026-09-13
 
 ### Fixed
