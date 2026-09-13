@@ -177,6 +177,9 @@ final class Sources extends Controller
 
         $rows = [];
         foreach (Vocabulary::knownValues('referer_type_s') as $value) {
+            if ($value === 'internal' && empty($counts[$value])) {
+                continue;
+            }
             $spoken = Vocabulary::value('referer_type_s', $value);
             $rows[] = [
                 'value'    => $value,

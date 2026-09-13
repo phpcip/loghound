@@ -161,6 +161,9 @@ final class Sessionizer
     /** This installation's collector path, handed to Signals::classifyRequest(); '' before setup. */
     private string $selfCollector;
 
+    /** Decides the source of a session whose first request names this site; see RefererOrigin. */
+    private RefererOrigin $refererOrigin;
+
     /**
      * The idle timeout is SPEC §5's 30 minutes, configurable, and clamped to something sane
      * at both ends: a 5-second timeout would turn every page load into its own session, and
@@ -194,6 +197,16 @@ final class Sessionizer
         $this->selfHost      = (string) $own['host'];
         $this->selfPaths     = (array) $own['paths'];
         $this->selfCollector = (string) $own['collector'];
+
+        $this->refererOrigin = new RefererOrigin();
+    }
+
+    /**
+     * The referer resolver, so the tailer can hand it the `hits` core.
+     */
+    public function refererOrigin(): RefererOrigin
+    {
+        return $this->refererOrigin;
     }
 
     /**
@@ -303,8 +316,12 @@ final class Sessionizer
             return $hit;
         }
 
+        if (!$isSelf) {
+            $this->refererOrigin->remember($hit, $tsMs);
+        }
+
         if ($row === null) {
-            $agg = $this->newAggregate($hit);
+            $agg = $this->newAggregate($this->refererOrigin->resolve($hit, $tsMs));
             $sessionId = $this->state->openSession(
                 $clientKey,
                 $tsMs,

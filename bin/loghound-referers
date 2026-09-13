@@ -1,0 +1,139 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Loghound — give already indexed sessions their real source instead of this site.
+ *
+ * Sessions indexed before RefererOrigin existed can carry the visited site's own address as
+ * their referer. This rewrites each of them with the latest external referer of the same
+ * address on the same host at or before the session start, or marks the visit direct.
+ *
+ * USAGE
+ *   loghound-referers           count the sessions that would change, change nothing
+ *   loghound-referers --apply   rewrite them
+ *
+ * Sessions still open in the tailer are republished by the scorer from their aggregate, so run
+ * it once more after the idle timeout has passed since the tailer was restarted.
+ *
+ * EXIT CODES: 0 done, 1 unusable configuration or bad flags, 2 Solr failed.
+ *
+ * @package Loghound
+ * @license MIT
+ */
+
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+
+require __DIR__ . '/../src/autoload.php';
+
+use Loghound\Config;
+use Loghound\Parser;
+use Loghound\RefererOrigin;
+use Loghound\Solr;
+
+$root       = dirname(__DIR__);
+$configPath = getenv('LOGHOUND_CONFIG') ?: $root . '/config/loghound.php';
+
+$apply = false;
+foreach (array_slice($argv, 1) as $arg) {
+    if ($arg === '--apply') {
+        $apply = true;
+        continue;
+    }
+    if ($arg === '--help' || $arg === '-h') {
+        fwrite(STDOUT, "Usage: loghound-referers [--apply]\n");
+        exit(0);
+    }
+    fwrite(STDERR, 'loghound-referers: unknown option ' . $arg . "\n");
+    exit(1);
+}
+
+$cfg = Config::load($configPath);
+$errors = $cfg->validate();
+if ($errors !== []) {
+    fwrite(STDERR, "Loghound: configuration is not usable:\n  - " . implode("\n  - ", $errors) . "\n");
+    exit(1);
+}
+
+$solr = new Solr((array) $cfg->get('solr', []));
+$hitsCore = (string) $cfg->get('solr.hits_core', '');
+$sessionsCore = (string) $cfg->get('solr.sessions_core', '');
+if ($hitsCore === '' || $sessionsCore === '') {
+    fwrite(STDERR, "Loghound: no indexes configured. Run bin/loghound-setup first.\n");
+    exit(1);
+}
+
+$origin = new RefererOrigin();
+$origin->useSolr($solr, $hitsCore);
+
+$filter = ['referer_type_s:internal'];
+
+try {
+    $total = (int) ($solr->query($sessionsCore, ['q' => '*:*', 'fq' => $filter, 'rows' => 0])['response']['numFound'] ?? 0);
+} catch (\Throwable $e) {
+    fwrite(STDERR, 'Loghound: ' . $e->getMessage() . "\n");
+    exit(2);
+}
+
+fwrite(STDOUT, 'Sessions whose referer is this site: ' . $total . "\n");
+if (!$apply || $total === 0) {
+    exit(0);
+}
+
+$external = 0;
+$direct = 0;
+
+while (true) {
+    try {
+        $docs = $solr->query($sessionsCore, [
+            'q'    => '*:*',
+            'fq'   => $filter,
+            'sort' => 'ts_start asc',
+            'rows' => 200,
+            'fl'   => 'id,ip_s,host_s,ts_start',
+        ])['response']['docs'] ?? [];
+    } catch (\Throwable $e) {
+        fwrite(STDERR, 'Loghound: ' . $e->getMessage() . "\n");
+        exit(2);
+    }
+    if ($docs === []) {
+        break;
+    }
+
+    $updated = 0;
+    foreach ($docs as $doc) {
+        $id = (string) ($doc['id'] ?? '');
+        $tsMs = Parser::epochMs((string) ($doc['ts_start'] ?? ''));
+        if ($id === '' || $tsMs <= 0) {
+            continue;
+        }
+
+        $source = $origin->lookup((string) ($doc['ip_s'] ?? ''), (string) ($doc['host_s'] ?? ''), $tsMs);
+        if ($source === null && $origin->failed()) {
+            fwrite(STDERR, 'Loghound: the hits lookup failed; nothing more is rewritten. ' . $solr->lastError() . "\n");
+            exit(2);
+        }
+        $set =$source ?? ['referer_s' => null, 'referer_host_s' => null, 'referer_type_s' => 'direct'];
+
+        try {
+            $solr->atomicUpdate($sessionsCore, $id, ['set' => $set]);
+        } catch (\Throwable $e) {
+            fwrite(STDERR, 'Loghound: ' . $id . ': ' . $e->getMessage() . "\n");
+            exit(2);
+        }
+
+        $updated++;
+        $source === null ? $direct++ : $external++;
+    }
+
+    if ($updated === 0) {
+        break;
+    }
+    fwrite(STDOUT, '  rewritten ' . ($external + $direct) . ' of ' . $total . "\n");
+}
+
+fwrite(STDOUT, 'Done. External source found: ' . $external . ', direct: ' . $direct . "\n");
+exit(0);

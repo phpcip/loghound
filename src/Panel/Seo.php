@@ -642,6 +642,9 @@ final class Seo extends Controller
         $rows = [];
         foreach (self::channelValues(array_keys($counts)) as $value) {
             [$a, $b] = $counts[$value] ?? [0, 0];
+            if ($value === 'internal' && $a === 0 && $b === 0) {
+                continue;
+            }
             $rows[] = [
                 'value' => $value,
                 'label' => Vocabulary::label('referer_type_s', $value),

@@ -1271,6 +1271,10 @@ final class Pipeline
         $this->initEnrichers($state);
         $this->initSessionizer($state);
         $this->initSolr();
+
+        if ($this->sessionizer !== null && $this->solr instanceof \Loghound\Solr) {
+            $this->sessionizer->refererOrigin()->useSolr($this->solr, $this->hitsCore);
+        }
     }
 
     /**
