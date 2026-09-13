@@ -1020,10 +1020,10 @@ export function geoScatter(id, points, onPick) {
             map: WORLD,
             roam: false,
             silent: true,
-            top: 6,
-            bottom: 6,
-            left: 6,
-            right: 6,
+            top: 0,
+            bottom: 0,
+            left: 0,
+            right: 0,
             /* CROPPED TO WHERE PEOPLE ARE. The projection is fitted to this box, so the box's
                shape decides how much of the card the map fills — and 84°N to 58°S is far taller
                than the card is, which is why raising the card's height only bought empty bands

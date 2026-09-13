@@ -757,28 +757,30 @@ textarea {
 
     .table-wrap > table > colgroup { display: none; }
 
+    /* THE CELLS KEEP THEIR ELLIPSIS. `overflow: visible` here was what broke the tooltips
+       everywhere: responsive.js decides a value is truncated by measuring
+       `scrollWidth > clientWidth`, and with overflow visible those are always equal — so it
+       concluded nothing was cut and stripped `data-lh-tip` from every path in every table.
+       Only the width cap is lifted, which is all this rule ever needed to do. */
     .table-wrap > table.table-fixed td,
     .table-wrap > table.table-fixed th {
-        overflow: visible;
-        text-overflow: clip;
         max-width: none;
     }
 
-    /* A LONG VALUE STILL WRAPS. One 96-character URL on a single line makes the table
-       three screens wide, and then scrolling sideways is the only way to read
-       anything. Paths, user agents and signatures break; timestamps, figures and
-       addresses keep their line, because breaking those makes them unreadable. */
+    /* THE ELLIPSIS STAYS, AND SO DOES THE TOOLTIP THAT DEPENDS ON IT. These cells used to be
+       given `overflow: visible`, which looked harmless and was not: responsive.js decides
+       whether a value needs a tooltip by measuring `scrollWidth > clientWidth`, and with
+       overflow visible those two are always equal. So it concluded nothing was truncated and
+       STRIPPED `data-lh-tip` from every path in every table — and because the strip is not
+       undone when the viewport widens again, the tooltips stayed gone on a desktop too.
 
-    .table-wrap > table td.urlcell,
-    .table-wrap > table td.clip,
-    .table-wrap > table .urlpath,
-    .table-wrap > table .clip-line,
+       Truncation is the right behaviour here anyway: a path that wraps to five lines makes a
+       row five lines tall, which is worse than an ellipsis plus a tooltip. */
+
     .table-wrap > table .shape,
     .table-wrap > table .client > div {
         white-space: normal;
         overflow-wrap: anywhere;
-        overflow: visible;
-        text-overflow: clip;
     }
 
     .table-wrap > table td.mono,
@@ -800,20 +802,18 @@ textarea {
 
     table.visits .visit-ip { display: none; }
 
-    /* THE PATH GETS THE ROOM, AND BREAKS RATHER THAN TRUNCATES. It is the longest value on the
-       row and the one worth reading; a bounded width keeps it from taking the whole screen while
-       `anywhere` lets it wrap mid-path instead of ending in an ellipsis. */
+    /* THE PATH TAKES THE ROOM THAT IS LEFT, on one line, ending in an ellipsis with the whole
+       value in its tooltip. It is the widest column because it is the one worth reading. */
     table.visits td.urlcell {
-        max-width: 46vw;
-        white-space: normal;
-        overflow-wrap: anywhere;
-        word-break: break-word;
+        width: 100%;
+        white-space: nowrap;
     }
 
+    /* THE EMAIL DOES NOT BREAK. An address split across three lines is not easier to read than
+       one that ends in an ellipsis, and it made every row three lines tall. */
     table.visits td.visit-email {
-        max-width: 28vw;
-        white-space: normal;
-        overflow-wrap: anywhere;
+        max-width: 30vw;
+        white-space: nowrap;
     }
 
     /* SCOPED TO THE VISIT TABLES, NOT TO THE CLASS. `.visit-verdict` is worn by the Attacks
@@ -827,12 +827,11 @@ textarea {
     table.visits .visit-clock { display: block; }
     table.visits .visit-clock { color: var(--faint); }
 
-    table.visits td.visit-span {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 6px;
-    }
+    /* NOT `display: flex`. The row's verdict tint is painted on the `td`, and a cell that stops
+       being a table-cell stops taking it — which is why this column came out white against a
+       coloured row. The chevron is floated instead, so the cell stays a cell. */
+    table.visits td.visit-span { white-space: nowrap; }
+    table.visits td.visit-span > .rowopen { float: right; }
 
     /* Small, and carrying no padding of its own: it is a mark at the end of a row,
        not a button somebody hunts for. The row itself opens the visit too. */
@@ -915,14 +914,63 @@ textarea {
         flex: 1 1 0;
         min-width: 0;
         min-height: 0;
-        height: 28px;
-        padding: 0 18px 0 6px;
+        height: 24px;
+        padding: 0 14px 0 4px;
         margin: 0;
-        font-size: 13px;
+        font-size: 12px;
         line-height: 1;
         border-radius: 2px;
-        background-position: right 4px center;
+        background-position: right 2px center;
     }
+
+    /* ===========================================================================
+       EVERY CHROME AROUND THE DATA, AS TIGHT AS IT GOES
+
+       The bar at the top and the pager at the bottom were spaced for a desk, and
+       between them they were costing more vertical room than four rows of the
+       table they frame. Nothing is removed — every control is still there and
+       still the size a thumb can hit — but the air around them is.
+       =========================================================================== */
+
+    .topbar-in {
+        gap: 6px 8px;
+        min-height: 0;
+    }
+    .topbar { padding-top: 6px; padding-bottom: 6px; }
+
+    .tb-field { gap: 4px; }
+    .tb-field label { font-size: 11px; }
+    .topbar-in .ss-btn,
+    .topbar-in select,
+    .topbar-in .tb-field-btn,
+    .topbar-in .lh-scopebtn {
+        min-height: 30px;
+        height: 30px;
+        padding: 0 8px;
+        font-size: 13px;
+    }
+
+    .pager {
+        gap: 6px 10px;
+        margin-top: 8px;
+        padding-top: 6px;
+        font-size: 12px;
+    }
+    .pager-steps { gap: 8px; }
+    .pager-jump { gap: 6px; }
+    .pager-jump-label { gap: 4px; }
+    .pager-size { gap: 4px; }
+    .pager-jump-input,
+    .pager-size-input {
+        height: 24px;
+        padding: 0 4px;
+        font-size: 12px;
+    }
+
+    /* THE MAP IS SIZED FOR A DESK, NOT FOR THIS. 760px fills a card that is sixteen hundred
+       wide; on a phone it is most of the screen for a map whose bubbles are already legible at
+       half that. `cardChart` writes the height inline, so the cap has to outrank it. */
+    #net-map { height: 340px !important; }
 }
 
 /* ===========================================================================

@@ -7,6 +7,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.4] — 2026-09-13
+
+### Fixed
+
+- **Path tooltips came back.** Hovering a truncated path stopped showing the full value, in every
+  table and on every screen. The phone stylesheet had given table cells `overflow: visible`, and
+  the panel decides a value needs a tooltip by measuring whether it overflows its cell — with
+  overflow visible nothing ever does, so it concluded nothing was truncated and removed the
+  tooltips. The cells keep their ellipsis now, which is what the measurement reads.
+
+- **The session time column lost the row's colour.** That cell had been made a flex container to
+  carry the chevron, and a cell that stops being a table cell stops taking the row's verdict
+  tint — so the column came out white against a coloured row. The chevron floats instead.
+
+### Changed
+
+- **The map is sized per screen.** 760px on a desktop, where the card is wide enough to carry it;
+  capped on a phone, where the previous size took most of the screen for bubbles that are legible
+  at half of it.
+
+- **The email stops breaking, and the path takes the room.** An address split over three lines is
+  no easier to read than one ending in an ellipsis, and it made every row three lines tall. The
+  path gets the width that frees up, on one line, with the whole value in its tooltip.
+
+- **Every chrome around the data is tighter on a phone.** The bar at the top, the sort controls
+  and the pager underneath were spaced for a desk and between them cost more vertical room than
+  four rows of the table they frame. Nothing is removed and every control is still thumb-sized;
+  the air around them is gone.
+
+---
+
 ## [1.1.3] — 2026-09-13
 
 ### Changed
