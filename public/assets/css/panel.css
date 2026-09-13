@@ -776,6 +776,13 @@ td.wrap, .wrap { white-space: normal; overflow-wrap: anywhere; }
 
 td.urlcell { text-overflow: clip; }
 
+/* A REFERRER: the whole URL, wrapping where it must, with the ↗ riding at its end. */
+.refurl > .urlout { margin-left: 6px; vertical-align: middle; }
+
+/* A referring site's row: the expander that lists its full referrer URLs, then the host. */
+.ref-host { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.ref-urls td.wrap .urlout { margin-left: 6px; vertical-align: middle; }
+
 .urlout {
     display: inline-flex; align-items: center; justify-content: center;
     width: 22px; height: 22px;

@@ -51,7 +51,7 @@ import {
 } from './identity.js';
 import { markSortable } from './sorttable.js';
 import { countryName } from './geo.js';
-import { outLink, pathCell, urlMark } from './url.js';
+import { hrefLink, outLink, pathCell, urlMark } from './url.js';
 import { renderPager } from './pager.js';
 import { fillVisits, visitCaption, visitTable } from './visits.js';
 
@@ -97,9 +97,13 @@ function cameFrom(s) {
         return 'no referrer sent';
     }
 
-    return s.referer_href && s.referer_href !== '#'
-        ? el('a', { href: s.referer_href, rel: 'noreferrer noopener', text: s.referer })
-        : el('span', { class: 'mono wrap', text: s.referer });
+    /* THE WHOLE URL AS TEXT, AND THE LINK AS THE MARK BESIDE IT — the same ↗ every path in the
+       panel carries, opening in a new tab, so the exact page the link was published on is
+       readable in full and one tap away. */
+    return el('span', { class: 'refurl' }, [
+        el('span', { class: 'mono wrap', text: s.referer }),
+        hrefLink(s.referer_href)
+    ]);
 }
 
 /** A plain sentence, or nothing when there is no sentence to say. */
@@ -323,10 +327,11 @@ function trailBlock(id, data, host) {
             list.appendChild(el('li', {}, [
                 el('span', { class: 'muted mono', text: when(hit.ts).split(' ')[1] || '' }),
                 el('span', { class: 't-method muted', text: hit.method || '' }),
-                el('span', { class: 't-path urlwrap', title: hit.path + (hit.query ? '?' + hit.query : '') }, [
+                /* THE PATH ALONE. The query string made every admin row unreadable; the link
+                   beside it still carries it, so the exact page requested is one tap away. */
+                el('span', { class: 't-path urlwrap', title: hit.path }, [
                     el('span', { class: 'urlpath' }, [
-                        el('span', { text: hit.path }),
-                        hit.query ? el('span', { class: 'muted', text: '?' + hit.query }) : null
+                        el('span', { text: hit.path })
                     ]),
                     urlMark(hit.path, { host: hit.host, fallback: host, query: hit.query })
                 ]),
@@ -1246,7 +1251,7 @@ function requestRow(r) {
     tr.appendChild(el('td', { class: 'clip urlcell', title: (r.method || '') + ' ' + (r.path || '') }, [
         el('span', { class: 'mono muted', text: (r.method || '') + ' ' }),
         r.path
-            ? pathCell(r.path + (r.query ? '?' + r.query : ''), { host: r.host })
+            ? pathCell(r.path, { host: r.host, query: r.query })
             : el('span', { class: 'muted', text: 'no path logged' })
     ]));
 

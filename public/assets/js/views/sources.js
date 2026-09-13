@@ -9,9 +9,11 @@
 
 'use strict';
 
-import { api, byId, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody } from '../core.js';
+import { api, byId, el, hideEmpty, loadCard, noDataYet, num, pct, setPop, tbody } from '../core.js';
 import { pagedCard, shareBar } from '../cardtable.js';
 import { dimRow, dimValue } from '../identity.js';
+import { renderPager } from '../pager.js';
+import { hrefLink } from '../url.js';
 
 /** The population currently selected by the toggles. */
 let population = 'humans';
@@ -69,13 +71,109 @@ function renderReferrers(data) {
     tbody(byId('an-referrers-table'), data.rows.map((row) => ({
         attrs: dimRow('referer_host_s', row.host),
         cells: [
-            { node: dimValue('referer_host_s', row.host, { mono: true }), clip: true, title: row.host, sort: row.host },
+            { node: hostCell(row.host), clip: true, title: row.host, sort: row.host },
             { text: num(row.sessions), num: true, sort: row.sessions },
             { node: shareBar(row.sessions, data.referred, 'referred visits'), sort: row.sessions }
         ]
     })));
 
     return true;
+}
+
+/**
+ * A referring site's cell: the expander that lists the full URLs it sent, then the host filter.
+ *
+ * The open list is a `<tr class="members ref-urls">` under the row, the shape the fingerprint
+ * table already uses. It lives only in the DOM: a reload replaces the tbody, and every expander
+ * comes back closed with nothing under it, so there is no separate state to fall out of step.
+ */
+function hostCell(host) {
+    const button = el('button', {
+        type: 'button',
+        class: 'expander',
+        'aria-expanded': 'false',
+        'aria-label': 'Show the full referrer URLs from ' + host,
+        text: '+'
+    });
+    button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleUrls(button, host);
+    });
+    return el('span', { class: 'ref-host' }, [button, dimValue('referer_host_s', host, { mono: true })]);
+}
+
+/** Open or close the URL list under a referring site's row. */
+function toggleUrls(button, host) {
+    const tr = button.closest('tr');
+    const next = tr.nextElementSibling;
+
+    if (next && next.classList.contains('ref-urls')) {
+        next.remove();
+        button.textContent = '+';
+        button.setAttribute('aria-expanded', 'false');
+        return;
+    }
+
+    button.textContent = '−';
+    button.setAttribute('aria-expanded', 'true');
+
+    const inner = el('div', { class: 'members-inner' });
+    tr.parentNode.insertBefore(el('tr', { class: 'members ref-urls' }, [
+        el('td', { colspan: '3' }, [inner])
+    ]), tr.nextSibling);
+
+    loadUrls(inner, host, 0);
+}
+
+/** Fetch one page of a site's referrer URLs into the open row, with a retry in place on failure. */
+async function loadUrls(inner, host, start, rows) {
+    inner.replaceChildren(el('p', { class: 'muted', text: 'Loading referrer URLs…' }));
+    try {
+        const data = await api('sources', 'referrer_urls', {
+            host: host,
+            start: start,
+            rows: rows,
+            pop: population
+        });
+        renderUrls(inner, host, data);
+    } catch (err) {
+        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        again.addEventListener('click', () => loadUrls(inner, host, start, rows));
+        inner.replaceChildren(
+            el('p', { class: 'muted', text: 'Could not load referrer URLs: ' + String(err && err.message ? err.message : err) }),
+            el('div', { class: 'card-error-actions' }, [again])
+        );
+    }
+}
+
+/**
+ * The URL list itself: every full referrer this site sent, wrapped rather than cut, each with the
+ * ↗ that opens it. The href is the server's safeUrl() answer and hrefLink() refuses anything else.
+ */
+function renderUrls(inner, host, data) {
+    if (!data.rows.length) {
+        inner.replaceChildren(el('p', { class: 'muted', text: 'No full referrer URL is stored for ' + host + ' in this range.' }));
+        return;
+    }
+
+    const table = el('table', { class: 'table-fixed' }, [
+        el('colgroup', {}, [el('col', { style: 'width:84%' }), el('col', { style: 'width:16%' })]),
+        el('thead', {}, [el('tr', {}, [
+            el('th', { scope: 'col', text: 'Referring page' }),
+            el('th', { scope: 'col', class: 'num', text: 'Visits' })
+        ])]),
+        el('tbody', {}, data.rows.map((row) => el('tr', {}, [
+            el('td', { class: 'wrap' }, [
+                el('span', { class: 'mono', text: row.url }),
+                hrefLink(row.href)
+            ]),
+            el('td', { class: 'num', text: num(row.sessions) })
+        ])))
+    ]);
+
+    const mount = el('div', { class: 'pager-mount' });
+    inner.replaceChildren(el('div', { class: 'table-wrap' }, [table]), mount);
+    renderPager(mount, data.page, (start, rows) => loadUrls(inner, host, start, rows || data.page.rows));
 }
 
 /** Load the channel card, which has no pages. */

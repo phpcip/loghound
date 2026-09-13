@@ -44,7 +44,7 @@ import { api, boot, byId, el, fill, post, tip, bytes, durUs, num, timeOnly, when
 import { draw, shadowPointer } from '../charts.js';
 import { dimValue, drillRow, flagNode, openButton, valueText, valueWords } from '../identity.js';
 import { hostCell } from '../hostcolor.js';
-import { pathCell } from '../url.js';
+import { hrefLink, pathCell } from '../url.js';
 import { dialogFail, isCurrent, openDialog, registerOpener } from '../dialog.js';
 import { visitCaption, visitTable } from '../visits.js';
 import { renderPager } from '../pager.js';
@@ -635,7 +635,12 @@ async function openLine(id) {
         el('h3', { text: 'Where it came from' }),
         geoBlock(row),
         kv([
-            ['Referrer', row.referer || 'none was sent', row.referer ? true : false],
+            ['Referrer', row.referer
+                ? el('span', { class: 'refurl' }, [
+                    el('span', { class: 'mono wrap', text: row.referer }),
+                    hrefLink(row.referer_href)
+                ])
+                : 'none was sent'],
             ['Which counts as', row.referer_type ? dimValue('referer_type_s', row.referer_type) : null]
         ]),
 

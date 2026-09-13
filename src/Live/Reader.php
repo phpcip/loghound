@@ -567,6 +567,7 @@ final class Reader
             'ai_crawler'  => array_key_exists('ai_crawler_b', $doc) ? (bool) $doc['ai_crawler_b'] : null,
 
             'referer'      => isset($doc['referer_s']) ? (string) $doc['referer_s'] : null,
+            'referer_href' => isset($doc['referer_s']) ? Security::safeUrl((string) $doc['referer_s']) : null,
             'referer_host' => isset($doc['referer_host_s']) ? (string) $doc['referer_host_s'] : null,
             'referer_type' => isset($doc['referer_type_s']) ? (string) $doc['referer_type_s'] : null,
 

@@ -452,6 +452,32 @@ export function outLink(host, path, query) {
 }
 
 /**
+ * The "open in a new tab" control for a whole URL the server already vetted, or null.
+ *
+ * For values that are not a path on one of this installation's sites — a referrer, which is the
+ * page somebody else published the link on. The server passes it through Security::safeUrl(),
+ * which answers `#` for anything that is not plain http(s); the scheme is checked again here so
+ * an unvetted string can never become an href.
+ *
+ * @param {string|null} href
+ * @returns {HTMLElement|null}
+ */
+export function hrefLink(href) {
+    const url = href === null || href === undefined ? '' : String(href);
+    if (!/^https?:\/\/[^\s"'<>]+$/i.test(url)) {
+        return null;
+    }
+    return el('a', {
+        class: 'urlout',
+        href: url,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        title: 'Open ' + url + ' in a new tab',
+        'aria-label': 'Open ' + url + ' in a new tab'
+    }, [el('span', { class: 'urlout-mark', 'aria-hidden': 'true', text: '↗' })]);
+}
+
+/**
  * The marker that stands where a link cannot: a path that belongs to more than one site.
  *
  * It says so rather than staying silent, because silence reads as "this path has no page" when
@@ -558,7 +584,8 @@ export function pathCell(path, opts) {
     const cell = el('span', { class: classes, text: shown === '' ? 'no path' : shown });
     if (raw !== '') {
         cell.setAttribute('data-lh-tip', '1');
-        cell.setAttribute('data-full', raw + (options.query ? '?' + options.query : ''));
+        /* The path alone, as on screen. The query string still travels in the link beside it. */
+        cell.setAttribute('data-full', raw);
     }
 
     return el('span', { class: 'urlwrap' }, [

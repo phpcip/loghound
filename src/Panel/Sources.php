@@ -125,6 +125,7 @@ final class Sources extends Controller
         return match ($action) {
             'channels'  => $this->channels(),
             'referrers' => $this->referrers(),
+            'referrer_urls' => $this->referrerUrls(),
             default     => ['error' => 'Unknown action'],
         };
     }
@@ -243,6 +244,58 @@ final class Sources extends Controller
                 $rows,
                 Paging::distinct($f, 'hosts'),
                 'referring sites',
+                count($out)
+            ),
+        ]);
+    }
+
+    /**
+     * The full referrer URLs one referring site sent, for the row's expander.
+     *
+     * The host says which site linked; the URL says which PAGE on it did, which is what an
+     * operator needs to find where the link was published. Same population and filters as the
+     * host table, narrowed to the one host, faceted on the stored header. The host is bound as a
+     * quoted term, never spliced, and each URL's href is only what Security::safeUrl() accepts.
+     *
+     * @return array<string,mixed>
+     */
+    private function referrerUrls(): array
+    {
+        $host = self::text('host', 253);
+        if ($host === '') {
+            return ['error' => 'No referring site given'];
+        }
+
+        [$extra, $label] = $this->population();
+        $start = Paging::start();
+        $rows = Paging::rows();
+
+        $f = $this->gw->facet('sources.referrer_urls', $this->gw->sessionsCore(), [
+            'q'  => '*:*',
+            'fq' => array_merge($this->sessionFqs(), $extra, [Query::term('referer_host_s', $host)]),
+        ], [
+            'urls' => Paging::terms('referer_s', $start, $rows),
+        ]);
+
+        $out = [];
+        foreach (self::buckets($f, 'urls') as $bucket) {
+            $url = (string) ($bucket['val'] ?? '');
+            $out[] = [
+                'url'      => $url,
+                'href'     => Security::safeUrl($url),
+                'sessions' => (int) ($bucket['count'] ?? 0),
+            ];
+        }
+
+        return $this->envelope([
+            'population_label' => $label,
+            'host'             => $host,
+            'rows'             => $out,
+            'page'             => Paging::block(
+                $start,
+                $rows,
+                Paging::distinct($f, 'urls'),
+                'referring pages',
                 count($out)
             ),
         ]);
