@@ -940,18 +940,73 @@ textarea {
 
     .tb-field { gap: 4px; }
     .tb-field label { font-size: 11px; }
-    .topbar-in .ss-btn,
+    .topbar-in .ss-button,
     .topbar-in select,
-    .topbar-in .tb-field-btn,
-    .topbar-in .lh-scopebtn {
-        min-height: 26px;
-        height: 26px;
+    .topbar-in .tb-field-btn {
+        min-height: 28px;
+        height: 28px;
         padding: 0 6px;
         font-size: 12px;
     }
     .tb-filters { padding: 0 6px; gap: 4px; }
     .tb-filters .tb-badge { padding: 0 4px; font-size: 11px; }
     .topbar #lh-range { padding-right: 20px; padding-left: 6px; font-size: 12px; }
+
+    /* ===========================================================================
+       THE THREE BANDS ABOVE THE FIRST ROW, AS SHORT AS THEY GO
+
+       Measured on a 390px phone: the navigation bar, the scope bar and the
+       card's tools row cost 170px between them before the first log line —
+       nearly a quarter of the screen. The 28px sizes above were being
+       outranked by the 44px touch floor in section 1 on every control that
+       was on that list — the filters button, the facet button (by id), the
+       resources mark, the reload mark, the VIEWS control — and a row is as
+       tall as its tallest control, so every row stayed at the floor.
+
+       Every control keeps its width for the thumb; what it gives up is the
+       height a phone cannot spare. Specificity is raised on each rule below
+       so it outranks the floor rule it is overriding, not its order in the
+       file. Desktop is untouched: this block is inside the phone query.
+       =========================================================================== */
+
+    /* The navigation bar. responsive.js publishes max(brand + 16, button + 16, 48) as the
+       fixed bar's height, so 32px for the control lands the bar on its own 48px floor with
+       nothing wasted under it. */
+    .lh-nav-js .side { padding-top: 6px; padding-bottom: 6px; }
+    .lh-nav-js .lh-navbtn {
+        min-height: 32px;
+        padding: 0 10px;
+        font-size: 13px;
+    }
+
+    /* The scope bar is pinned right under it. The 20px main offset left a 14px band of page
+       between the two bars (the bar pulls itself up 6px); 8px closes it to a hairline's
+       breathing room. Only where the bar exists — a view without one keeps its 20px. */
+    .lh-nav-js main:has(> .topbar) { padding-top: calc(var(--lh-topbar-h) + 8px); }
+    .topbar { margin-bottom: 6px; }
+    .topbar .tb-filters,
+    .topbar .tb-res,
+    .topbar .tb-go,
+    .topbar #lh-facets-toggle {
+        min-height: 28px;
+        height: 28px;
+    }
+    .topbar .tb-res { width: 32px; }
+
+    /* The card's tools row, where the sort selects sit beside reload and CSV. The selects
+       were already 24px; the reload mark beside them was held at the 44px floor and set the
+       row's height on its own. */
+    .card-head:has(> .lh-sortbar) { padding-bottom: 3px; margin-bottom: 4px; }
+    .card-head:has(> .lh-sortbar) .card-refresh {
+        min-height: 24px;
+        height: 24px;
+        min-width: 32px;
+        padding: 0;
+    }
+    .card-head:has(> .lh-sortbar) .export {
+        padding: 2px 0;
+        font-size: 12px;
+    }
 
     .pager {
         gap: 6px 10px;
