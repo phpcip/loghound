@@ -7,6 +7,88 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.0] — 2026-09-13
+
+### Fixed
+
+- **A signed-in visitor is a person, and the scorer could not see it.** `signed_in` and the
+  identity your own site declares were never read by the scoring rules at all. They are now, and
+  either one settles the verdict: a visitor your application has authenticated is a person,
+  whatever else fired. Two findings still overrule it, and both are the client contradicting
+  itself rather than us doubting it — a driver artefact actually present in the page, and a
+  beacon that lied about its own clock.
+
+- **One request no longer outvotes a thousand.** Every rule adds to the score and nothing
+  subtracted, so a single decisive finding convicted on its own. A signed-in administrator with
+  1,758 requests, 9,609 recorded interactions and twenty minutes of measured engaged time was
+  published as a bot because one of those requests was a database query whose URL contained
+  MySQL backticks.
+
+- **A backtick is a quote before it is a shell.** The command-injection rule treated any two
+  backticks as command substitution, so every query phpMyAdmin sends — `` `table`.`column` ``,
+  percent-encoded — matched it. It now requires a command between the ticks and ignores a URL
+  that is plainly SQL. Checked against the real flagged requests in a production index: all
+  fifteen genuine scanner probes still match, and only the database query stops. `id` and
+  `whoami` are gone from the literal list, because they matched `SELECT id` on any site with a
+  database tool.
+
+- **Somebody who did something on the page is a person.** A click, a key, or a quarter of a page
+  scrolled now settles the verdict, the same way a declared identity does. A client that says it
+  is a crawler is exempt and stays a crawler whatever it presses. Timezone agreement was a
+  candidate and is deliberately not used: a client sets its own clock to whatever it likes.
+
+- **A background tab is not a headless browser.** `window.outerWidth` reports 0 in a background
+  tab and while a page is being torn down, which is most of what a beacon reports from, and the
+  server read that 0 as evidence of automation. The beacon now omits the measurement unless the
+  window can answer, and "not reported" is no longer confused with "zero".
+
+- **A conditional request is no longer evidence of a person.** "Has this changed since last
+  time?" was counted as a sign of a real browser. Measured on a real index, every session that
+  sent one was a self-declared crawler: crawlers keep caches, and plenty of people browse with
+  theirs emptied or disabled.
+
+- **Verdicts arrived with no reason attached.** The panel kept its own hand-written copy of the
+  rule descriptions and had fallen five codes behind, so several findings rendered as "no
+  description for this rule code in this panel version". It now reads the scorer's own table, so
+  the two cannot drift again.
+
+- **Place names arrived mangled.** São Paulo was published as `SÃ£o Paulo` and Muriaé as
+  `MuriaÃ©`. The geolocation data arrives double-encoded from upstream; it is detected and
+  repaired on the way in, conservatively enough that Cyrillic, Greek and CJK names are never
+  touched.
+
+### Added
+
+- **Arriving from somewhere counts in your favour.** A search engine, a social network or a link
+  on another site takes points off the score — the first credit in the ruleset, where everything
+  until now could only accuse. Measured before it was chosen: of visits arriving that way, 0%,
+  0% and 1% respectively were self-declared crawlers. Arriving with no referrer earns nothing
+  either way, because half of those visits are bookmarks, typed addresses and browsers that
+  strip the header.
+
+- **A saved exclusion applies itself.** Rules were read once at start-up and refreshed only by
+  reloading the service, so traffic an operator had excluded kept arriving — with the rule
+  visible in Settings, correct in the configuration file, and unknown to the running daemon. The
+  daemon now notices the file changed and reloads within a second, through the same path that
+  already rejects a broken configuration and keeps the previous one.
+
+### Changed
+
+- **Tables on a phone keep every column.** They were cut into one card per row, which repeated
+  every heading once per row and destroyed the thing a table is for — reading down a column. The
+  table now takes the width its content asks for inside a container that scrolls sideways, so
+  nothing is dropped and nothing is truncated. Sorting moved to two plain selects above the
+  table, and the header row stays put.
+
+- **"Bounced" is a yes or a no.** A single visit either bounced or it did not; printing that as
+  0% or 100% made a column with two legitimate values look like a broken calculation. A rate is
+  something averaged over many visits, which is what the Engagement view is for.
+
+- **Signed-in visitors sits beside Sessions.** It was three levels down, which is where the one
+  thing the panel knows for certain about a visitor was least likely to be found.
+
+---
+
 ## [1.0.1] — 2026-09-13
 
 ### Changed

@@ -753,6 +753,45 @@ final class Geo
         if (!mb_check_encoding($s, 'UTF-8')) {
             $s = mb_convert_encoding($s, 'UTF-8', 'UTF-8');
         }
+        $s = self::undouble($s);
         return mb_strlen($s, 'UTF-8') > $max ? mb_substr($s, 0, $max, 'UTF-8') : $s;
+    }
+
+    /**
+     * Undo one round of double-encoded UTF-8, where the upstream did it for us.
+     *
+     * THE PLATFORM'S GEOLOCATION ENDPOINT SENDS THIS. Verified against the live API: a lookup for
+     * a São Paulo address comes back as `"SÃ£o Paulo"` — the two bytes of `ã` read as
+     * Latin-1 and re-encoded, so the panel printed `SÃ£o Paulo` and `MuriaÃ©`. The bytes are
+     * valid UTF-8, so nothing upstream of here notices; they simply encode the wrong characters.
+     *
+     * The real fix belongs in the platform and is not in this repository, so this repairs what
+     * arrives. It is deliberately conservative: the round trip is attempted only when every
+     * non-ASCII character sits in the Latin-1 supplement — the signature of the fault — and the
+     * result is kept only if it is valid UTF-8 AND shorter, which a genuine repair always is.
+     * A name that is honestly Cyrillic, Greek or CJK never matches the test and is never touched.
+     */
+    private static function undouble(string $s): string
+    {
+        if ($s === '' || !preg_match('/[\xC2-\xC3]/', $s)) {
+            return $s;
+        }
+        if (preg_match('/[^\x00-\x7F]/u', $s) === 1
+            && preg_match('/^[\x00-\x7F\xC2-\xC3][\x00-\xFF]*$/', $s) !== 1) {
+            return $s;
+        }
+
+        $try = @mb_convert_encoding($s, 'ISO-8859-1', 'UTF-8');
+        if (!is_string($try) || $try === '' || $try === $s) {
+            return $s;
+        }
+        if (!mb_check_encoding($try, 'UTF-8') || strlen($try) >= strlen($s)) {
+            return $s;
+        }
+        if (preg_match('/[\x00-\x1F\x7F]/', $try) === 1) {
+            return $s;
+        }
+
+        return $try;
     }
 }

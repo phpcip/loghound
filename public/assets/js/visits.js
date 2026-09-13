@@ -49,7 +49,9 @@ const WIDTHS = ['17%', '17%', '26%', '19%', '8%', '13%'];
    answer: how long they stayed, and whether it counted as a bounce. The flag moves to a narrow
    column left of the address, headed CTR because the glyph needs no more than three letters
    above it and the room belongs to the columns that hold real text. */
-const HEADINGS = ['Last seen', 'IP', 'Page', 'Email', 'Sess time', 'Bounce'];
+/* "BOUNCED", NOT "BOUNCE". The cell answers yes or no for one visit; a rate is something you
+   average over many, and the old heading made two legitimate values look like a broken sum. */
+const HEADINGS = ['Last seen', 'IP', 'Page', 'Email', 'Sess time', 'Bounced'];
 
 /**
  * The `<colgroup>` and `<thead>` a visit table starts with, for a table built in the browser.
@@ -160,7 +162,12 @@ export function visitRow(v) {
         'data-sort': String(shown === null ? -1 : shown)
     }));
 
-    tr.appendChild(el('td', { class: 'visit-verdict', 'data-sort': v.bounced === null ? '' : String(v.bounced) }, [
+    /* SORTED THE WAY IT READS. The cell says Yes, No or an em dash now, so sorting on the raw
+       boolean put "No" above "Yes" for reasons nothing on screen explained. */
+    tr.appendChild(el('td', {
+        class: 'visit-verdict',
+        'data-sort': v.bounced === true ? '2' : (v.bounced === false ? '1' : '')
+    }, [
         bounceMark(v),
         openButton('session', { id: v.id }, 'Open this visit')
     ]));
@@ -177,7 +184,11 @@ export function visitRow(v) {
  * instead of guessing in either direction.
  */
 function bounceMark(v) {
-    const pct = v.bounced === true ? '100%' : '0%';
+    /* A PERCENTAGE OF ONE VISIT IS NOT A PERCENTAGE. Bounced is yes or no for a single visit, and
+       printing it as 0% or 100% made a column that could only ever hold two values look like a
+       broken calculation. A rate is something you average over many visits, which is what the
+       Engagement view is for. Null is neither: the server sends it when nothing could decide. */
+    const pct = v.bounced === true ? 'Yes' : (v.bounced === false ? 'No' : '—');
 
     /* MEASURED, so the figure is stated plainly. The beacon recorded engagement in the browser,
        which is the only way to tell a four-minute read of one page from a visitor who left

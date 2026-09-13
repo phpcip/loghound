@@ -415,6 +415,12 @@ final class Signals
         $s['secch_mismatch']    = self::secChMismatch($first, $s);
         $s['platform_mismatch'] = self::platformMismatch($first);
 
+        /* WHO SENT THEM. Parser derives this from the Referer header: `search`, `social`, `link`,
+           `ad`, `ai`, `internal`, or `direct` when the header was absent. The scorer could not
+           see it at all until now, so "somebody followed a link from another site to get here"
+           counted for nothing. */
+        $s['referer_type'] = isset($first['referer_type_s']) ? (string) $first['referer_type_s'] : '';
+
         $s['hits']         = (int) ($session['hits'] ?? 0);
         $s['pages']        = (int) ($session['pages'] ?? 0);
         $s['assets']       = (int) ($session['assets'] ?? 0);

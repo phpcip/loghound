@@ -174,6 +174,23 @@ if ($errors !== []) {
 $RUNNING = true;
 $RELOAD  = false;
 
+/**
+ * The configuration file's modification time, watched so a saved rule takes effect by itself.
+ *
+ * THE PANEL WRITES RULES; THIS PROCESS READ THEM ONCE. Exclusions, sources and everything else
+ * are loaded in the constructor and refreshed only on SIGHUP, so an operator who added an
+ * exclusion in Settings watched the excluded traffic keep arriving — for nine hours, in the case
+ * that prompted this — with the rule visible in the panel, correct in the file, and unknown to
+ * the daemon. Nothing in the interface says "now go and reload the service", and nobody should
+ * have to know that.
+ *
+ * Checked once a second against the same reload path SIGHUP uses, so a bad file is rejected and
+ * the previous configuration kept, exactly as before. `clearstatcache` is required because PHP
+ * caches stat results per path and would otherwise report the mtime it saw at boot forever.
+ */
+$CONFIG_MTIME = @filemtime($args['config']) ?: 0;
+$LAST_CFG_CHECK = 0.0;
+
 /** @var array<string,Tail> Tail instance per resolved log path. */
 $tails = [];
 
@@ -432,9 +449,21 @@ do {
         $lastStatus = $now;
     }
 
+    /* A SAVED RULE APPLIES ITSELF. See $CONFIG_MTIME for why this exists at all. */
+    if ($now - $LAST_CFG_CHECK >= 1.0) {
+        $LAST_CFG_CHECK = $now;
+        clearstatcache(true, $args['config']);
+        $seen = @filemtime($args['config']) ?: 0;
+        if ($seen > 0 && $seen !== $CONFIG_MTIME) {
+            $CONFIG_MTIME = $seen;
+            $RELOAD = true;
+            logLine('info', 'configuration changed on disk');
+        }
+    }
+
     if ($RELOAD) {
         $RELOAD = false;
-        logLine('info', 'SIGHUP: reloading configuration');
+        logLine('info', 'reloading configuration');
         flushBatch($pipeline, $batch, $batchBytes, $counters, $args['verbose'], $quota, $quotaCore);
 
         $newCfg = Config::load($args['config']);

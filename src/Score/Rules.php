@@ -384,6 +384,29 @@ final class Rules
     /** Scroll depth, in percent, that counts as a person reading rather than a fetch. */
     private const HUMAN_SCROLL_PCT = 25;
 
+    /**
+     * Points taken off the score for arriving from somewhere real.
+     *
+     * Only the three kinds that measured clean on a real index. `internal` and `direct` are
+     * absent on purpose, and `ad` and `ai` are left out for want of enough observations to
+     * justify a number — an unmeasured credit is a guess, and this table is meant to be evidence.
+     */
+    private const REFERER_CREDIT = [
+        'search' => 25,
+        'social' => 20,
+        'link'   => 20,
+    ];
+
+    /** How each credited referrer type is named in the sentence the panel shows. */
+    private const REFERER_WORDS = [
+        'search' => 'a search engine',
+        'social' => 'a social network',
+        'link'   => 'a link on another site',
+    ];
+
+    /** The reason code the credit records, so a lowered score is never unexplained. */
+    public const REFERRED_REASON = 'arrived_from_somewhere';
+
     /** The reason recorded when that ceiling is applied, so the softening is never silent. */
     public const HUMAN_EVIDENCE_REASON = 'strong_human_evidence';
 
@@ -634,6 +657,15 @@ final class Rules
      * @var array<string,array{label:string,why:string,severity:string}>
      */
     public const REASONS = [
+        'arrived_from_somewhere' => [
+            'label' => 'Arrived from somewhere real',
+            'severity' => 'info',
+            'why' => 'A search engine, a social network or a link on another site sent this visit. '
+                . 'Something outside your site pointed at it, which is a fact about how they arrived '
+                . 'rather than a guess about the client, and it takes points off the score. Arriving '
+                . 'with no referrer earns nothing either way: bookmarks, typed addresses and browsers '
+                . 'that strip the header all look identical to a crawler that never had one.',
+        ],
         'site_identified_visitor' => [
             'label' => 'A person was here',
             'severity' => 'info',
@@ -1020,6 +1052,34 @@ final class Rules
             $total    += $weight;
             $reasons[] = $code;
             $detail[$code] = ['weight' => $weight, 'why' => $why];
+        }
+
+        /* ARRIVING FROM SOMEWHERE IS EVIDENCE, AND IT IS THE ONLY CREDIT IN THIS FILE. Every rule
+           above adds; nothing has ever subtracted, so positive evidence could only ever fail to
+           accuse rather than actually help. A visit that followed a link from another site, a
+           search result or a social post was sent by something that exists.
+
+           MEASURED, AND DELIBERATELY NARROW. On a real index: search 0% self-declared bots out of
+           10 visits, social 0% of 3, link 1% of 67 — against internal at 19% and direct at 54%.
+           So `internal` earns nothing, because a site linking to its own pages says nothing about
+           who is reading them, and `direct` earns nothing either: half of it is bots, and the
+           other half is bookmarks, typed addresses and browsers that strip the header. The
+           inverse rule — no referrer, therefore suspicious — would convict that other half, and
+           missing real readers is the error this product cannot afford.
+
+           A CREDIT, NOT A VERDICT. It moves the number; it does not decide the answer, and
+           clampScore() floors at zero so it can never make a score negative. */
+        $credit = self::REFERER_CREDIT[$s['referer_type'] ?? ''] ?? 0;
+        if ($credit > 0 && $total > 0.0) {
+            $total -= $credit;
+            $reasons[] = self::REFERRED_REASON;
+            $detail[self::REFERRED_REASON] = [
+                'weight' => -$credit,
+                'why'    => 'This visit arrived from ' . self::REFERER_WORDS[$s['referer_type']]
+                    . ', so something outside your site sent them here. That is a fact about the '
+                    . 'arrival rather than a guess about the client, and it takes ' . $credit
+                    . ' points off the score.',
+            ];
         }
 
         $score   = Signals::clampScore($total);
