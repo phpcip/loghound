@@ -116,6 +116,13 @@ final class Layout
                as six siblings among seventeen they read as unrelated pages. Grouped, the rail
                says what it holds; each view keeps its own sections underneath. */
             ['slug' => 'sessions',     'label' => 'Sessions',     'group' => 'visitors', 'hint' => 'Search and drill into one visit'],
+            /* THE PEOPLE THE SITE NAMED, NEXT TO THE SESSIONS THEY MADE. This is a link to one
+               card of Engagement rather than a view of its own: `section` names the card, and an
+               entry that carries it renders as a leaf with no sub-list, because it already IS a
+               section. Buried three levels down under Engagement it was the one answer nobody
+               found — a signed-in visitor is the strongest thing this panel knows about anyone. */
+            ['slug' => 'engagement',   'label' => 'Signed-in visitors', 'group' => 'visitors',
+             'section' => 'an-people', 'hint' => 'Everyone your own site named through the beacon'],
             ['slug' => 'sources',      'label' => 'Where they came from', 'group' => 'visitors', 'hint' => 'What kind of thing sent each visit, and which site actually did'],
             ['slug' => 'pages',        'label' => 'Pages',        'group' => 'visitors', 'hint' => 'Where people arrive, where the log last saw them, and what is moving'],
             ['slug' => 'searches',     'label' => 'Site search',   'group' => 'visitors', 'hint' => 'What visitors typed into your own search box'],
@@ -135,11 +142,40 @@ final class Layout
         $out = [];
         foreach ($views as $view) {
             $class = $routes[$view['slug']] ?? null;
-            $view['sections'] = $class === null ? [] : self::sectionsOf($class);
+            /* AN ENTRY THAT NAMES A SECTION IS A LEAF. It points at one card of a view that has
+               its own entry elsewhere in this list, so giving it that view's sections would draw
+               the same sub-list twice and put a twist control on a link that goes to one page. */
+            $view['sections'] = ($class === null || isset($view['section']))
+                ? []
+                : self::sectionsOf($class);
             $view['group'] = $view['group'] ?? '';
             $out[] = $view;
         }
         return $out;
+    }
+
+    /**
+     * Is the card currently open pinned to its own entry somewhere else in the navigation?
+     *
+     * Asked by a view entry before it calls itself current. A card that has been lifted out into
+     * a link of its own is represented by that link while it is open, and the view it came from
+     * is not the page the reader is on.
+     *
+     * @param array<int,array<string,mixed>> $views
+     */
+    private static function pinnedElsewhere(array $views, string $active, string $section): bool
+    {
+        if ($section === '') {
+            return false;
+        }
+
+        foreach ($views as $view) {
+            if (($view['slug'] ?? '') === $active && (string) ($view['section'] ?? '') === $section) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** The heading a group of views is shown under, keyed by the group name they declare. */
@@ -412,7 +448,15 @@ final class Layout
                 }
             }
 
-            $current = $item['slug'] === $active;
+            /* A SECTION LINK IS CURRENT ONLY ON ITS OWN CARD, and the view it belongs to is not
+               current while that card is open. Without both halves, opening Signed-in visitors
+               would light up Engagement as well, and opening any other Engagement card would
+               light up this link too — two entries claiming the same page. */
+            $pinned = (string) ($item['section'] ?? '');
+            $current = $pinned !== ''
+                ? ($item['slug'] === $active && $pinned === $section)
+                : ($item['slug'] === $active && !self::pinnedElsewhere($navItems, $active, $section));
+
             $sections = $item['sections'];
             $first = $sections === [] ? null : $sections[0];
 
@@ -421,9 +465,11 @@ final class Layout
                urlWith() re-validates every key it carries, and the section is named explicitly
                rather than carried, because a section belongs to one view and carrying `s`
                across a navigation would ask Attacks for a page of Settings. */
-            $href = self::urlWith($first === null
-                ? ['v' => $item['slug']]
-                : ['v' => $item['slug'], 's' => $first['slug']]);
+            $href = self::urlWith($pinned !== ''
+                ? ['v' => $item['slug'], 's' => Controller::sectionSlug($pinned)]
+                : ($first === null
+                    ? ['v' => $item['slug']]
+                    : ['v' => $item['slug'], 's' => $first['slug']]));
 
             $listId = 'lh-nav-' . $item['slug'];
 
