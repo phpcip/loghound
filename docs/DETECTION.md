@@ -115,6 +115,9 @@ Weights are overridable in `scoring.weights`.
 | `ua_secch_mismatch` | **75** | `Sec-CH-UA` is absent from, or contradicts, a Chrome UA claim | Chrome always sends `Sec-CH-UA` on a secure origin. A "Chrome 152" that does not, or that says something else, has been dressed up. Requires the header to be logged. |
 | `platform_mismatch` | **70** | `Sec-CH-UA-Platform` contradicts the OS the UA claims | "Windows NT 10.0" in the UA and `"Linux"` in the client hint is a headless container in a Windows costume. |
 | `hosting_asn_browser_ua` | **45** | `as_type_s = hosting` with a consumer-browser UA | People do browse from VPSes, so this is not decisive. But a consumer browser arriving from AWS, Hetzner or DigitalOcean is unusual enough to be worth 45 points stacked with anything else. |
+| `refused_attack` | **85** | The site answered a request that matched an attack pattern (built-in or one of yours) with `403` or `406`. Sign-in requests do not count. | Two independent judgements agree about one request: the site's own defences refused it, and the detector names it a probe. |
+| `mostly_refused` | **45** | Five or more page and endpoint requests (assets not counted), at least half refused — not counting `401`, `407` or `429` | Enumerating paths until one works. Counting only non-asset requests keeps a reader with a few broken images out of it. |
+| `refused_403` | **40** | The session received at least one `403`, and `refused_attack` did not fire | On a production index 469 of the 473 visits that met a 403 were bots. A captcha wall can refuse a person too, so it stacks and never convicts alone. |
 | `tz_mismatch` | **35** | The browser's `Intl` timezone disagrees with the timezone derived from the IP's geolocation | Travellers, VPN users and anyone with a deliberately-set timezone trip this legitimately, so it is low. It is a *stacking* signal: meaningless alone, meaningful next to a fingerprint cluster. Needs `tz_s`, which needs `enrich.geo_enabled`. |
 
 ### Behavioural plane
@@ -134,6 +137,7 @@ Weights are overridable in `scoring.weights`.
 | Code | Weight | Fires when |
 |---|---|---|
 | `ua_declared_bot` | **100** | The UA honestly identifies itself as a crawler |
+| `ua_not_a_browser` | **100** | The log records a User-Agent, and it is neither a browser a person could be using nor a declared crawler: an empty header, a bare `Mozilla/5.0`, `WordPress/6.4.3`, a home-made client. `Enrich\Ua::isBrowserLike()` recognises every rendering engine and every desktop, mobile, regional, in-app, privacy and text-mode browser, TVs, consoles and feature phones, and errs towards "browser". Class `undeclared_client`. |
 
 Verdict `bot`, class `declared_crawler` or `ai_crawler`. **Not a threat** — see below.
 

@@ -225,6 +225,22 @@ final class Ua
         ['phantomjs',             'PhantomJS',           'other',    false],
         ['electron/',             'Electron',            'other',    false],
 
+        /* SOFTWARE ACTING FOR A PERSON, NOT A PERSON BROWSING. Each names itself honestly, so each
+           is declared traffic rather than an undeclared client: Apple's password, passkey and
+           networking agents, Chrome's search prefetch proxy, Google's own tools, user-triggered AI
+           fetchers, a load balancer's health check, an Android app's HTTP stack. */
+        ['com.apple.',            'Apple system service', 'other',   false],
+        ['networkingextension/',  'Apple NetworkingExtension', 'other', false],
+        ['chrome privacy preserving prefetch proxy', 'Chrome Prefetch Proxy', 'other', false],
+        ['google-lens',           'Google Lens',         'other',    false],
+        ['google-adstxt',         'Google-adstxt',       'search',   false],
+        ['google-site-verification', 'Google Site Verification', 'other', false],
+        ['claude-user',           'Claude-User',         'ai',       true],
+        ['amazon-quick',          'Amazon Quick',        'ai',       false],
+        ['elb-healthchecker',     'ELB-HealthChecker',   'monitor',  false],
+        ['lightpanda',            'Lightpanda',          'other',    false],
+        ['dalvik/',               'Dalvik',              'other',    false],
+
         /* THE LAST-RESORT MARKERS, AND WHY `unspecified agent` IS NOT FOLDED INTO
            `unspecified bot`. Five needles, four names, and the obvious tidy-up is to collapse
            them into one "unnamed crawler" bucket so that the by-name table in Bot forensics
@@ -363,6 +379,53 @@ final class Ua
     public function claimsBrowser(): bool
     {
         return $this->claimsBrowser;
+    }
+
+    /**
+     * Every token that marks a User-Agent as a browser a person could be using.
+     *
+     * Deliberately wider than matchBrowser(), which labels a family for the facets and must not
+     * change what existing documents are called. This answers one question only — could a human
+     * be behind this string — and it errs towards yes: a rendering engine, a named browser
+     * (desktop, mobile, regional, in-app, privacy, text-mode), a platform in the classic
+     * `Mozilla/5.0 (Platform…)` shape, a TV, console, e-reader or feature phone. A string that
+     * matches none of these is software.
+     */
+    private const BROWSER_LIKE = '~'
+        . 'AppleWebKit/|KHTML|Gecko/|Gecko\)|Trident/|Presto/|Goanna/|EdgeHTML/|Servo/|LibWeb/|Ladybird|'
+        . 'Chrome/|Chromium/|CriOS/|Firefox/|FxiOS/|Safari/|Edg(?:e|A|iOS)?/|OPR/|OPiOS/|OPT/|Opera|'
+        . 'SamsungBrowser/|Vivaldi/|YaBrowser/|YaSearchBrowser/|UCBrowser/|UBrowser/|UCWEB|Whale/|'
+        . 'M?QQBrowser/|MiuiBrowser/|HuaweiBrowser/|HeyTapBrowser/|OppoBrowser/|VivoBrowser/|'
+        . 'coc_coc_browser/|Maxthon|Puffin/|Silk/|DuckDuckGo/|Ddg/|Brave|AvastSecureBrowser/|'
+        . 'AVG Secure|Ecosia|Focus/|Klar/|PaleMoon/|Waterfox|LibreWolf|IceCat/|Iceweasel/|Basilisk/|'
+        . 'K-Meleon/|SeaMonkey/|Konqueror/|Epiphany/|Midori/|Falkon/|QupZilla/|Otter/|Dillo/|'
+        . 'NetSurf/|GSA/|FBAN/|FBAV/|Instagram|MicroMessenger/|\bLine/|Snapchat|Pinterest/|'
+        . 'musical_ly|BytedanceWebview|KAKAOTALK|NAVER\(|Twitter for|NetFront|Obigo|Teleca|Polaris|'
+        . 'Dorado|UP\.Browser|Blazer|Kindle/|PlayStation|Nintendo|Xbox|SMART-TV|SmartTV|Tizen|'
+        . 'Web0S|webOS|HbbTV|CrKey|AFT[A-Z]|KAIOS|'
+        . '^Lynx/|^w3m/|^E?Links[/ (]|^amaya/|^iCab|^OmniWeb|^Camino|^Galeon|^Arora/|'
+        . '^Mozilla/[45]\.0 \((?:compatible; MSIE|Windows|Macintosh|X11|Linux|iPhone|iPad|iPod|'
+        . 'Android|BlackBerry|BB10|PlayBook|Mobile|Tablet|Symbian|SymbOS|Series ?[46]0|Fuchsia|CrOS)|'
+        . '^(?:Nokia|SAMSUNG-|SonyEricsson|LG-|MOT-|BlackBerry|Vodafone/|DoCoMo/|KDDI-|SoftBank/|portalmmm)'
+        . '~i';
+
+    /**
+     * Could a person's browser have sent this User-Agent?
+     *
+     * The test behind the `ua_not_a_browser` rule, which convicts on its own, so it is built to
+     * never say no to a real browser: any named browser matchBrowser() knows, or any token in
+     * BROWSER_LIKE. An empty string is no browser at all.
+     */
+    public static function isBrowserLike(string $ua): bool
+    {
+        $ua = trim($ua);
+        if ($ua === '') {
+            return false;
+        }
+        if (self::matchBrowser($ua) !== null) {
+            return true;
+        }
+        return preg_match(self::BROWSER_LIKE, $ua) === 1;
     }
 
     /** Does this UA self-declare as a crawler, monitor, scanner or HTTP library? */

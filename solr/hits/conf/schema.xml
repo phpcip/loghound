@@ -518,6 +518,13 @@
     <field name="hit_flags_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
 
     <!--
+      THE OPERATOR'S ATTACK PATTERNS THIS HIT MATCHED (Loghound\AttackPatterns), written beside
+      `atk_custom_pattern` on hit_flags_ss so the Attacks view can say which pattern fired. The
+      values are the operator's own configured patterns, never request text. At most five.
+    -->
+    <field name="hit_patterns_ss" type="strings" indexed="true" stored="true" docValues="true" multiValued="true"/>
+
+    <!--
       THE VERSION OF THE PER-HIT RULE TABLE THAT JUDGED THIS REQUEST (Score\Attacks).
 
       It exists because `hit_flags_ss` absent means two different things — "evaluated, nothing

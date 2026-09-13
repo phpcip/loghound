@@ -565,6 +565,9 @@ final class Sessionizer
                    a dead link. Null until a hit carries a status at all. */
                 'soft_refusals' => 0,
                 'first_status'  => null,
+                'nonasset_hits'    => 0,
+                'nonasset_refused' => 0,
+                'refused_attacks'  => 0,
 
                 'got_304'    => false,
                 'html_200'   => false,
@@ -742,6 +745,22 @@ final class Sessionizer
             }
         } elseif ($status >= 500) {
             $agg['st5']++;
+        }
+
+        if (!in_array($kind, ['asset', 'favicon', 'beacon'], true)) {
+            $agg['nonasset_hits'] = (int) ($agg['nonasset_hits'] ?? 0) + 1;
+            if ($status >= 400 && !in_array($status, [401, 407, 429], true)) {
+                $agg['nonasset_refused'] = (int) ($agg['nonasset_refused'] ?? 0) + 1;
+            }
+        }
+
+        if ($status === 403 || $status === 406) {
+            foreach ((array) ($hit['hit_flags_ss'] ?? []) as $flag) {
+                if (is_string($flag) && $flag !== '' && $flag !== 'atk_login_probe') {
+                    $agg['refused_attacks'] = (int) ($agg['refused_attacks'] ?? 0) + 1;
+                    break;
+                }
+            }
         }
 
         if ($path !== '' && self::isVisitedPath($kind)) {
@@ -955,6 +974,9 @@ final class Sessionizer
             'first_status' => isset($agg['first_status']) && is_numeric($agg['first_status'])
                 ? (int) $agg['first_status']
                 : null,
+            'nonasset_hits'    => (int) ($agg['nonasset_hits'] ?? 0),
+            'nonasset_refused' => (int) ($agg['nonasset_refused'] ?? 0),
+            'refused_attacks'  => (int) ($agg['refused_attacks'] ?? 0),
 
             'entry_path'   => $agg['entry_path'] ?? null,
             'exit_path'    => $agg['exit_path'] ?? null,

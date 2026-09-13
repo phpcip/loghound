@@ -7,6 +7,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.2.0] — 2026-09-13
+
+### Added
+
+- **Attack patterns, on a Settings page of their own.** Requests that are an attack on your sites, on
+  top of the built-in detector, for every host or for one, as text or as a regular expression. A match
+  is flagged *Your attack pattern* on the Attacks page, the pattern is shown on the request, and the
+  visit is scored a bot. Loghound ships with defaults that are an attack on any website — webshell
+  names, deployment secrets, botnet droppers — and a default you switch off stays off after an update.
+
+- **A User-Agent that is not a browser is not a person.** A visit whose User-Agent is neither a browser
+  nor a declared crawler — an empty header, a bare `Mozilla/5.0`, `WordPress/6.4.3` — is scored a bot
+  and classed *Undeclared client*. The browser recognition behind it covers every engine and every
+  desktop, mobile, regional, in-app, privacy and text-mode browser, TVs, consoles and feature phones.
+  A log format that does not record the User-Agent is never judged by it.
+
+- **A refused attack convicts.** A request matching an attack pattern that the site answered with 403
+  or 406 is scored a bot. Any other 403 adds points towards bot without convicting on its own.
+
+### Changed
+
+- **Mostly refused counts pages and endpoints, and half is enough.** It required the visit's first
+  request to be refused and four fifths of everything to be refused, and a WordPress sweep that opened
+  on a request answered with the homepage slipped through at 57%. Assets and sign-in or rate-limit
+  refusals are not counted.
+
+- **Rule versions.** Scoring rules are version 4 and the attack table is version 2. Verdicts and flags
+  already written are not recomputed.
+
+- **Deploying this release needs a schema push** for the new `hit_patterns_ss` field:
+  `php bin/loghound-schema --force`, before the reader restarts.
+
+---
+
 ## [1.1.9] — 2026-09-13
 
 ### Changed

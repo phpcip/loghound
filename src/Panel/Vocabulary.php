@@ -76,6 +76,7 @@ final class Vocabulary
         'spoofed_ua'       => ['label' => 'Spoofed User-Agent', 'why' => 'The headers contradict each other, or a crawler claim failed reverse DNS.'],
         'proxy_fleet'      => ['label' => 'Proxy fleet', 'why' => 'One browser fingerprint arriving from many unrelated networks.'],
         'headless'         => ['label' => 'Headless browser', 'why' => 'A driven or screenless browser: an automation marker, a software rasteriser, or a failed engine claim.'],
+        'undeclared_client' => ['label' => 'Undeclared client', 'why' => 'Not a browser, and did not declare itself a known crawler: software that did not say what it is.'],
         'scripted'         => ['label' => 'Scripted client', 'why' => 'Scored as automation without falling into any of the named classes.'],
         'none'             => ['label' => 'Not automation', 'why' => 'Not classed as a bot of any kind.'],
     ];

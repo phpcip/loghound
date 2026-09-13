@@ -383,6 +383,30 @@ run is not evidence.
 
 ---
 
+### Your attack patterns
+
+#### Your attack pattern — `atk_custom_pattern` (high)
+
+The request matched one of the patterns on **Settings → Attack patterns**. This is the one row
+of the table you write yourself, and it is decisive: a session with a match is scored a bot.
+
+- **Shipped defaults** are requests that are an attack on any website — webshell file names,
+  deployment and developer secrets, botnet droppers. They apply to every host. Switching one off
+  is stored, so an update never turns it back on; a default added by a later release starts on.
+- **Your patterns** apply to every host or to one. `Text` matches anywhere in the decoded request
+  path and query string, ignoring case. `Regular expression` is a PCRE body with no delimiters or
+  flags, refused on save if it does not compile.
+- The patterns a request matched are written to `hit_patterns_ss` and shown on the request row.
+
+The defaults deliberately leave out everything that is a real path for somebody: `/wp-admin`,
+`/wp-login.php`, `/wp-json/`, `/xmlrpc.php`, `/admin.php`, `/vendor/`, `/swagger`, `/graphql`,
+`/actuator/`, device login pages. If one of your hosts runs none of them, add them for that host.
+
+Patterns are read when the reader starts and applied at ingest, like every other rule on this
+page; a change applies from the next reload and never rewrites history.
+
+---
+
 ## 4. The view, card by card
 
 | # | Card | Plane | What it answers |

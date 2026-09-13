@@ -93,7 +93,10 @@ final class Attacks
      * Bump it whenever a pattern is added, removed or changed, so a finding can be read
      * against the ruleset that produced it rather than against the one installed today.
      */
-    public const RULE_VERSION = 1;
+    public const RULE_VERSION = 2;
+
+    /** The code a match against the operator's own attack patterns (Loghound\AttackPatterns) writes. */
+    public const CUSTOM_CODE = 'atk_custom_pattern';
 
     /**
      * How much of the request surface is examined.
@@ -438,6 +441,18 @@ final class Attacks
                 . 'list does that today, which is what makes the rule safe — but if one starts, this '
                 . 'rule is where it will show up as a wrong answer.',
         ],
+
+        'atk_custom_pattern' => [
+            'label'    => 'Your attack pattern',
+            'family'   => 'custom',
+            'severity' => 'high',
+            'what'     => 'The request matched one of the attack patterns on the Settings page: a shipped '
+                . 'default (webshell names, deployment secrets, botnet droppers) or a pattern you added '
+                . 'for every host or for one. The patterns it matched are listed on the request.',
+            'misses'   => 'Anything not on your list. The list only knows what you, or the defaults, told it.',
+            'over'     => 'Whatever your own patterns over-report. A pattern that is a real path on one of '
+                . 'your hosts belongs to the other hosts only, or should be switched off.',
+        ],
     ];
 
     /**
@@ -737,6 +752,7 @@ final class Attacks
         'atk_known_exploit',
         'atk_scanner_ua',
         'atk_crawler_impersonation',
+        'atk_custom_pattern',
     ];
 
     /**
@@ -809,6 +825,7 @@ final class Attacks
             'credential'    => 'Credential attacks',
             'recon'         => 'Reconnaissance',
             'impersonation' => 'Impersonation',
+            'custom'        => 'Your attack patterns',
         ];
     }
 
@@ -915,12 +932,21 @@ final class Attacks
      * is not a document that matched nothing, it is a document with a field nobody set, and
      * SPEC §4.1 is explicit that absent must stay absent.
      *
+     * The operator's attack patterns, when supplied, add CUSTOM_CODE to the flags and write the
+     * patterns that matched to `hit_patterns_ss`, so the Attacks view can say which one fired.
+     *
      * @param array<string,mixed> $hit
      * @return array<string,mixed>
      */
-    public static function apply(array $hit): array
+    public static function apply(array $hit, ?\Loghound\AttackPatterns $patterns = null): array
     {
         $flags = self::of($hit);
+
+        $matched = $patterns !== null ? $patterns->matches($hit) : [];
+        if ($matched !== []) {
+            $flags[] = self::CUSTOM_CODE;
+            $hit['hit_patterns_ss'] = $matched;
+        }
 
         $hit['hit_rules_i'] = self::RULE_VERSION;
         if ($flags !== []) {
@@ -937,6 +963,14 @@ final class Attacks
      * rewritten, then percent-decoded twice — `%252e%252e%252f` is `../` and a detector that
      * decodes once does not see it. Bounded at MAX_SURFACE before any decoding, so a crafted
      * query string cannot make the decode itself expensive.
+     */
+    public static function surfaceOf(string $path, string $query): string
+    {
+        return self::surface($path, $query);
+    }
+
+    /**
+     * The implementation behind surfaceOf(), kept private so the rule tests call one name.
      */
     private static function surface(string $path, string $query): string
     {

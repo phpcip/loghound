@@ -496,9 +496,20 @@ final class Reader
             return null;
         }
 
-        $doc = Attacks::apply($doc);
+        $doc = Attacks::apply($doc, $this->attackPatterns());
 
         return $this->shape($doc, $src, $index, $offset);
+    }
+
+    /** The operator's attack patterns, loaded the first time a line needs them. */
+    private ?\Loghound\AttackPatterns $attackPatterns = null;
+
+    /**
+     * The operator's attack patterns, so the live page flags a line exactly as ingest will.
+     */
+    private function attackPatterns(): \Loghound\AttackPatterns
+    {
+        return $this->attackPatterns ??= \Loghound\AttackPatterns::fromConfig($this->cfg);
     }
 
     /**

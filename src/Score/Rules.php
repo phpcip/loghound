@@ -23,7 +23,8 @@
  * question for every rule is not "how suspicious is this" but "am I willing to publish a
  * verdict on this evidence and nothing else". The rules that clear that bar are
  * automation_marker, ua_declared_bot, rdns_claim_failed, headless_renderer, beacon_forged,
- * ua_claim_failed, hostile_probe, fp_cluster_proxy_fleet and never_served — and each one is a
+ * ua_claim_failed, hostile_probe, refused_attack, ua_not_a_browser, fp_cluster_proxy_fleet and
+ * never_served — and each one is a
  * fact about the client that has no innocent explanation.
  *
  * Everything below 80 is designed to STACK. Three 30-point behavioural rules reaching 90
@@ -80,7 +81,7 @@ final class Rules
      * under 2 and 3 — but the condition this field records is "would a past session score
      * differently today", and a provisional one would.
      */
-    public const RULE_VERSION = 3;
+    public const RULE_VERSION = 4;
 
     /**
      * Rules that may not be evaluated until the session has ENDED.
@@ -190,6 +191,8 @@ final class Rules
         'periodic_timing',
         'hostile_probe',
         'probe_sweep',
+        'refused_attack',
+        'refused_403',
 
         /* Both count status classes, which exist only where there is a request log. On a
            beacon-only session every counter is absent and reads back as zero, and "nothing was
@@ -379,6 +382,7 @@ final class Rules
            click: a declared crawler running a headless browser can press things, and taking its
            word for what it is costs nothing and is right every time. */
         'ua_declared_bot',
+        'ua_not_a_browser',
     ];
 
     /** Scroll depth, in percent, that counts as a person reading rather than a fetch. */
@@ -424,6 +428,7 @@ final class Rules
         'beacon_forged',
         'rdns_claim_failed',
         'ua_claim_failed',
+        'ua_not_a_browser',
     ];
 
     /**
@@ -441,11 +446,13 @@ final class Rules
     public const WEIGHTS = [
         'automation_marker'      => 100,
         'ua_declared_bot'        => 100,
+        'ua_not_a_browser'       => 100,
         'rdns_claim_failed'      => 95,
         'headless_renderer'      => 90,
         'beacon_forged'          => 90,
         'ua_claim_failed'        => 85,
         'hostile_probe'          => 85,
+        'refused_attack'         => 85,
         'fp_cluster_proxy_fleet' => 80,
         'never_served'           => 80,
 
@@ -455,6 +462,7 @@ final class Rules
 
         'probe_sweep'            => 50,
         'mostly_refused'         => 45,
+        'refused_403'            => 40,
         'hosting_asn_browser_ua' => 45,
         'periodic_timing'        => 45,
         'no_interaction'         => 40,
@@ -695,6 +703,14 @@ final class Rules
             'severity' => 'info',
             'why' => 'It said it was a bot and it was telling the truth. Verdict bot, threat none.',
         ],
+        'ua_not_a_browser' => [
+            'label' => 'Not a browser',
+            'severity' => 'high',
+            'why' => 'The User-Agent is not any browser a person uses — desktop, mobile, regional, in-app, '
+                . 'text-mode, TV, console or feature phone — and it does not declare itself a known crawler '
+                . 'either. Every browser announces itself; an empty header, a bare "Mozilla/5.0" or a name '
+                . 'like "WordPress/6.4.3" is software that did not say what it is.',
+        ],
         'rdns_claim_failed' => [
             'label' => 'rDNS claim failed',
             'severity' => 'high',
@@ -729,6 +745,13 @@ final class Rules
                 . 'explanation count here — the noisy ones are listed on the Attacks view and are not worth a '
                 . 'verdict on their own.',
         ],
+        'refused_attack' => [
+            'label' => 'Refused attack',
+            'severity' => 'high',
+            'why' => 'The site answered a request that matched an attack pattern with 403 or 406: its own '
+                . 'defences recognised the probe and refused it. Sign-in requests do not count, because a '
+                . 'person can be refused at a login form.',
+        ],
         'probe_sweep' => [
             'label' => 'Refused probe sweep',
             'severity' => 'med',
@@ -748,10 +771,17 @@ final class Rules
         'mostly_refused' => [
             'label' => 'Mostly refused',
             'severity' => 'med',
-            'why' => 'This session opened with a refusal and the great majority of everything it asked for '
-                . 'afterwards was refused too, with only occasional success. That is the shape of something '
-                . 'enumerating paths until one works, rather than of a visitor who happened to find a dead '
-                . 'link partway through reading.',
+            'why' => 'At least half of this session\'s page and endpoint requests — five or more of them, '
+                . 'assets not counted — were refused, with only occasional success. That is the shape of '
+                . 'something enumerating paths until one works. Broken images and sign-in or rate-limit '
+                . 'responses do not count towards it.',
+        ],
+        'refused_403' => [
+            'label' => 'Got a 403',
+            'severity' => 'med',
+            'why' => 'The site answered this client with 403 Forbidden. Visitors almost never meet one on a '
+                . 'public site, but a captcha wall or an address rule can refuse a person too, so this adds '
+                . 'points and never convicts on its own.',
         ],
         'ua_secch_mismatch' => [
             'label' => 'Sec-CH-UA mismatch',
@@ -961,15 +991,18 @@ final class Rules
         switch ($code) {
             case 'automation_marker':      return $this->ruleAutomationMarker($s);
             case 'ua_declared_bot':        return $this->ruleUaDeclaredBot($s);
+            case 'ua_not_a_browser':       return $this->ruleUaNotABrowser($s);
             case 'rdns_claim_failed':      return $this->ruleRdnsClaimFailed($s);
             case 'headless_renderer':      return $this->ruleHeadlessRenderer($s);
             case 'beacon_forged':          return $this->ruleBeaconForged($s);
             case 'ua_claim_failed':        return $this->ruleUaClaimFailed($s);
             case 'fp_cluster_proxy_fleet': return $this->ruleFpClusterProxyFleet($s);
             case 'hostile_probe':          return $this->ruleHostileProbe($s);
+            case 'refused_attack':         return $this->ruleRefusedAttack($s);
             case 'probe_sweep':            return $this->ruleProbeSweep($s);
             case 'never_served':           return $this->ruleNeverServed($s);
             case 'mostly_refused':         return $this->ruleMostlyRefused($s);
+            case 'refused_403':            return $this->ruleRefused403($s);
             case 'ua_secch_mismatch':      return $this->ruleUaSecChMismatch($s);
             case 'platform_mismatch':      return $this->rulePlatformMismatch($s);
             case 'no_js_on_html':          return $this->ruleNoJsOnHtml($s, $ctx);
@@ -1646,6 +1679,10 @@ final class Rules
             return 'declared_crawler';
         }
 
+        if (isset($fired['ua_not_a_browser'])) {
+            return 'undeclared_client';
+        }
+
         if (isset($fired['fp_cluster_proxy_fleet'])) {
             return 'proxy_fleet';
         }
@@ -1714,6 +1751,37 @@ final class Rules
         $cat  = (string) ($s['ua_bot_cat'] ?? 'other');
         return 'The User-Agent declares itself a bot (' . $name . ', category ' . $cat . '). '
             . 'Self-declaring crawlers are honest traffic and are classified separately from evasive clients.';
+    }
+
+    /**
+     * ua_not_a_browser — the User-Agent is neither a browser nor a declared crawler.
+     *
+     * WEIGHT 100, decisive alone. Every browser a person uses announces itself, and
+     * Enrich\Ua::isBrowserLike() is built to recognise all of them — engines, desktop, mobile,
+     * regional, in-app, privacy and text-mode browsers, TVs, consoles and feature phones — erring
+     * towards "browser" wherever a string could plausibly be one. Honest software names itself and
+     * is caught by ua_declared_bot instead. What remains — an empty header, a bare `Mozilla/5.0`,
+     * `WordPress/6.4.3`, a home-made client — is software that did not say what it is.
+     *
+     * ONLY WHERE THE LOG FORMAT RECORDS THE USER-AGENT. A format without it never asked the
+     * question, and an unasked question is not an empty header, so `ua_logged` must be true.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleUaNotABrowser(array $s): ?string
+    {
+        if (empty($s['ua_logged']) || !empty($s['ua_bot']) || !empty($s['browser_like'])) {
+            return null;
+        }
+
+        $ua = (string) ($s['ua'] ?? '');
+        if ($ua === '') {
+            return 'The request carried no User-Agent at all. Every browser sends one.';
+        }
+
+        return 'The User-Agent "' . substr($ua, 0, 80) . '" is not a browser and does not declare itself '
+            . 'a known crawler. Every browser a person uses announces itself; this is software that did '
+            . 'not say what it is.';
     }
 
     /**
@@ -2013,52 +2081,85 @@ final class Rules
     }
 
     /**
-     * mostly_refused — it opened with a refusal and almost everything after that was refused too.
+     * mostly_refused — half or more of what it asked for was refused.
      *
      * WEIGHT 45, designed to corroborate, and it is the middle of the range never_served leaves
      * open: a client enumerating paths until one of them works has a 2xx in it somewhere, so the
      * decisive rule correctly declines, and without this the session would be judged as though
-     * the fifteen refusals had not happened.
+     * the refusals had not happened.
      *
-     * TWO CONDITIONS DO THE WORK, and the second is the one that makes the rule safe.
+     * COUNTED ON PAGE AND ENDPOINT REQUESTS ONLY. The earlier form required the session's FIRST
+     * request to be refused and four fifths of everything to be refused, and a WordPress sweep
+     * that opened on `/?rest_route=…` (answered with the homepage) and was then refused on 72 of
+     * 126 requests sailed through at 57%. Counting only non-asset requests is what makes a lower
+     * ratio safe: the human case the old gate protected — a reader who meets a few dead links —
+     * mostly produces refused images and stylesheets, and those are not counted here at all.
+     * Sign-in and rate-limit refusals (401, 407, 429) are not counted either.
      *
-     * The RATIO says most of what was asked for was refused. A threshold rather than a slope
-     * because a rule an operator cannot check by hand is a rule they cannot disagree with, and
-     * four fifths is a number somebody can hold against a session in the explorer.
-     *
-     * THE FIRST REQUEST HAVING BEEN REFUSED is what separates the two shapes a ratio alone
-     * conflates. A person reads twenty pages, then follows a stale link and collects a 404: the
-     * session OPENED with a 200 and this rule stays silent no matter what the tail looks like. A
-     * scanner's first request is refused, because its first request is a guess. That single fact
-     * removes the entire "human who found some dead links" population from the rule, which is
-     * why the ratio can be as low as four fifths without being reckless.
-     *
-     * A floor of five requests keeps it away from the small numbers where a ratio means nothing:
-     * one refusal out of one is 100% and is a single dead link.
+     * A floor of five requests keeps it away from the small numbers where a ratio means nothing,
+     * and a session where EVERYTHING was refused belongs to never_served.
      *
      * @param array<string,mixed> $s
      */
     private function ruleMostlyRefused(array $s): ?string
     {
-        $hits = (int) ($s['hits'] ?? 0);
-        if ($hits < 5) {
+        $asked = (int) ($s['nonasset_hits'] ?? 0);
+        if ($asked < 5) {
             return null;
         }
-        $first = $s['first_status'] ?? null;
-        if ($first === null || (int) $first < 400) {
+        $refused = (int) ($s['nonasset_refused'] ?? 0);
+        if ($refused >= $asked) {
             return null;
         }
-        $refused = (int) ($s['refused'] ?? 0);
-        if ($refused >= $hits) {
-            return null;
-        }
-        if (($refused / $hits) < 0.8) {
+        if (($refused / $asked) < 0.5) {
             return null;
         }
 
-        return 'This session opened with a refusal (' . (int) $first . ') and ' . $refused . ' of its '
-            . $hits . ' requests were refused — ' . (int) round(($refused / $hits) * 100)
-            . '% — with only occasional success. That is something trying paths until one works.';
+        return $refused . ' of this session\'s ' . $asked . ' page and endpoint requests were refused — '
+            . (int) round(($refused / $asked) * 100) . '% — with only occasional success. That is '
+            . 'something trying paths until one works.';
+    }
+
+    /**
+     * refused_attack — the site refused a request that matched an attack pattern.
+     *
+     * WEIGHT 85, decisive alone. A 403 or a 406 is the site's own defences saying no — a WAF, a
+     * ban list, a rewrite rule — and a request that ALSO matched a named attack pattern, built in
+     * or the operator's own, is a probe those defences recognised. Two independent judgements
+     * agreeing about one request is not a guess. Sign-in requests are not counted, because a
+     * person can be refused at a login form.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleRefusedAttack(array $s): ?string
+    {
+        $n = (int) ($s['refused_attacks'] ?? 0);
+        if ($n < 1) {
+            return null;
+        }
+
+        return 'The site refused ' . $n . ' request' . ($n === 1 ? '' : 's') . ' from this client that '
+            . 'matched an attack pattern, answering 403 or 406. The site\'s own defences caught it probing.';
+    }
+
+    /**
+     * refused_403 — the site answered this client with 403 Forbidden.
+     *
+     * WEIGHT 40, meant to stack. Measured on a production index: of 2,158 visits, 473 received a
+     * 403 and 469 of those were bots. A person almost never meets a 403 on a public site, but a
+     * captcha wall or an address rule can refuse one, so this adds points and never convicts on
+     * its own. Silent when refused_attack fired, which already accounts for the refusal.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleRefused403(array $s): ?string
+    {
+        if (empty($s['got_403']) || (int) ($s['refused_attacks'] ?? 0) > 0) {
+            return null;
+        }
+
+        return 'The site answered this client with 403 Forbidden. Visitors almost never meet one on a '
+            . 'public site.';
     }
 
     /**

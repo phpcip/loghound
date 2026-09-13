@@ -81,6 +81,7 @@ namespace Loghound\Bin;
 
 use Loghound\Config;
 use Loghound\Exclusions;
+use Loghound\AttackPatterns;
 use Loghound\Security;
 use Loghound\Tail;
 
@@ -1253,6 +1254,9 @@ final class Pipeline
     /** Traffic this installation refuses to record at all. Read once, applied per line. */
     private Exclusions $exclusions;
 
+    /** The operator's attack patterns. Read once, applied per line. */
+    private AttackPatterns $attackPatterns;
+
     public function __construct(Config $cfg, bool $dryRun, bool $verbose, ?object $state = null)
     {
         $this->cfg      = $cfg;
@@ -1261,6 +1265,7 @@ final class Pipeline
         $this->hitsCore = (string) $cfg->get('solr.hits_core', 'loghound_hits');
         $this->indexAssets = (bool) $cfg->get('ingest.index_assets', false);
         $this->exclusions = Exclusions::fromConfig($cfg);
+        $this->attackPatterns = AttackPatterns::fromConfig($cfg);
 
         $this->initParser();
         $this->initEnrichers($state);
@@ -1626,7 +1631,7 @@ final class Pipeline
            Guarded by class_exists for the same reason the enrichers are: a partial deployment
            must degrade to "no attack flags" rather than to "no ingest at all". */
         if (class_exists('\\Loghound\\Score\\Attacks')) {
-            $hit = \Loghound\Score\Attacks::apply($hit);
+            $hit = \Loghound\Score\Attacks::apply($hit, $this->attackPatterns);
         }
 
         if ($this->sessionizer !== null) {

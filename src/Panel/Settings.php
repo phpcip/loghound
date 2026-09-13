@@ -45,6 +45,7 @@ use Loghound\Cache;
 use Loghound\Config;
 use Loghound\Diagnostics;
 use Loghound\Exclusions;
+use Loghound\AttackPatterns;
 use Loghound\Install\OpensolrTeardown;
 use Loghound\LogDetect;
 use Loghound\Opensolr;
@@ -951,6 +952,9 @@ final class Settings extends Controller implements JobHost, Sections
 
             case 'exclusions':
                 return $this->saveExclusions();
+
+            case 'attack_patterns':
+                return $this->saveAttackPatterns();
 
             case 'beacon_hosts':
                 return $this->saveBeaconHosts();
@@ -3075,6 +3079,8 @@ final class Settings extends Controller implements JobHost, Sections
             'exclusions_saved' => 'Exclusions saved. The beacon collector applies them from the very '
                 . 'next request; the reader picks them up when it is next reloaded, not mid-file. '
                 . 'Anything already indexed is untouched — this decides what is recorded from now on.',
+            'patterns_saved'   => 'Attack patterns saved. The reader applies them from its next reload, and '
+                . 'the live page immediately. Requests already indexed keep the flags they were written with.',
             'hosts_saved'      => 'Measured sites saved. The collector applies the list on its very next '
                 . 'request, so a site added now can create visits immediately. Beacons already staged '
                 . 'from a host that was not listed are not reprocessed.',
@@ -3092,6 +3098,9 @@ final class Settings extends Controller implements JobHost, Sections
             'exclusion_refused' => 'Some rules were not saved, because a pattern is not a regular '
                 . 'expression PCRE will accept or a hostname is not a hostname. Everything valid was '
                 . 'kept: the rows missing from the list below are the ones that were refused.',
+            'pattern_refused' => 'Some attack patterns were not saved: a regular expression PCRE will not '
+                . 'accept, a pattern longer than ' . AttackPatterns::MAX_PATTERN . ' characters, or a hostname '
+                . 'that is not a hostname. Everything valid was kept.',
             'solr_down'       => 'Solr did not answer. Check the base URL, credentials and firewall.',
             'no_such_source'  => 'That log source is not in the detection report or the configuration any '
                 . 'more. Run a scan to rebuild the list.',
@@ -3206,6 +3215,7 @@ final class Settings extends Controller implements JobHost, Sections
         ['set-check', 'System check', 'systemCheckSection'],
         ['set-sources', 'Log sources', 'sourcesSection'],
         ['set-exclusions', 'Exclusions', 'exclusionsSection'],
+        ['set-attack-patterns', 'Attack patterns', 'attackPatternsSection'],
         ['set-solr', 'Solr', 'solrSection'],
         ['set-cache', 'Cached queries', 'cacheSection'],
         ['set-beacon', 'Beacon', 'beaconSection'],
@@ -4969,6 +4979,184 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         return '?v=settings&ok=exclusions_saved' . $back;
+    }
+
+    /**
+     * The attack patterns card: shipped defaults that can be switched off, and the operator's own
+     * patterns for every host or for one.
+     *
+     * A match writes `atk_custom_pattern`, which convicts a session on its own, so the card says
+     * so plainly and says which requests the defaults cover. Everything request-derived on this
+     * page is the operator's own configuration, and every value is escaped for its context.
+     */
+    private function attackPatternsSection(): void
+    {
+        $patterns = AttackPatterns::fromConfig($this->cfg);
+
+        self::cardOpen(
+            'set-attack-patterns',
+            self::sectionNum('set-attack-patterns'),
+            'Attack patterns',
+            'Requests that are an attack on your sites, on top of the built-in detector.'
+        );
+
+        echo '<div class="note"><p><strong>A match is a verdict.</strong> A request matching a pattern '
+            . 'here is flagged as <em>Your attack pattern</em> on the Attacks page, and the visit that made '
+            . 'it is scored a bot on that alone. Add only what no real visitor of that host could ever '
+            . 'request &mdash; for example <code class="mono">/wp-json/</code> on a site that runs no '
+            . 'WordPress.</p></div>';
+
+        echo '<form method="post" action="?v=settings">';
+        self::csrfField();
+        echo '<input type="hidden" name="action" value="attack_patterns">';
+
+        echo '<h3>Your patterns</h3>';
+        echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
+            . '<col style="width:24%"><col style="width:18%"><col style="width:36%">'
+            . '<col style="width:11%"><col style="width:11%"></colgroup><thead><tr>'
+            . '<th scope="col">Hostname</th>'
+            . '<th scope="col">Kind</th>'
+            . '<th scope="col">Pattern</th>'
+            . '<th scope="col">On</th>'
+            . '<th scope="col">Remove</th>'
+            . '</tr></thead><tbody>';
+
+        $i = 0;
+        foreach ($patterns->rules() as $rule) {
+            self::attackPatternRow($i, $rule);
+            $i++;
+        }
+        self::attackPatternRow($i, ['host' => '', 'kind' => 'text', 'pattern' => '', 'enabled' => true]);
+
+        echo '</tbody></table></div>';
+
+        echo '<p class="muted">Leave the hostname empty to apply a pattern to <strong>every</strong> host. '
+            . '<em>Text</em> matches anywhere in the request path and query string, decoded and ignoring '
+            . 'case. <em>Regular expression</em> is a pattern body &mdash; no slashes, no flags, matching '
+            . 'ignores case &mdash; and is refused on save if it does not compile.</p>';
+
+        echo '<h3>Shipped with Loghound</h3>';
+        echo '<p class="muted">Requests that are an attack on any website. They apply to every host; '
+            . 'untick one to switch it off. A default you switch off stays off after an update.</p>';
+
+        echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
+            . '<col style="width:36%"><col style="width:48%"><col style="width:16%"></colgroup><thead><tr>'
+            . '<th scope="col">Pattern</th>'
+            . '<th scope="col">What it is</th>'
+            . '<th scope="col">On</th>'
+            . '</tr></thead><tbody>';
+        foreach (AttackPatterns::DEFAULTS as $id => $default) {
+            echo '<tr><td class="mono">' . Security::esc($default['pattern']) . '</td>'
+                . '<td>' . Security::esc($default['what']) . '</td>'
+                . '<td><input type="hidden" name="defaults[' . Security::esc($id) . ']" value="0">'
+                . '<input type="checkbox" name="defaults[' . Security::esc($id) . ']" value="1"'
+                . ($patterns->isOff($id) ? '' : ' checked') . '></td></tr>';
+        }
+        echo '</tbody></table></div>';
+
+        echo '<p class="muted"><strong>The reader picks these up when it is next reloaded</strong>, not '
+            . 'mid-file. Flags are written when a request is read, so a change applies from then on and '
+            . 'never rewrites what is already indexed.</p>';
+
+        echo '<p><button type="submit" class="small">Save attack patterns</button> '
+            . '<span class="muted">' . Security::esc((string) $patterns->activeCount())
+            . ' in force now.</span></p>';
+        echo '</form>';
+
+        self::cardEnd();
+    }
+
+    /**
+     * One editable attack pattern, rendered like an exclusion row.
+     *
+     * @param array{host:string,kind:string,pattern:string,enabled:bool} $rule
+     */
+    private static function attackPatternRow(int $i, array $rule): void
+    {
+        $name = 'patterns[' . $i . ']';
+
+        echo '<tr>';
+        echo '<td><select name="' . $name . '[host]" data-smart="Hostname" data-free="1" data-lh-hosts="1">';
+        echo '<option value=""' . ($rule['host'] === '' ? ' selected' : '') . '>every host</option>';
+        if ($rule['host'] !== '') {
+            echo '<option value="' . Security::esc($rule['host']) . '" selected>'
+                . Security::esc($rule['host']) . '</option>';
+        }
+        echo '</select></td>';
+
+        echo '<td><select name="' . $name . '[kind]">';
+        foreach (AttackPatterns::KINDS as $slug => $label) {
+            echo '<option value="' . Security::esc($slug) . '"'
+                . ($rule['kind'] === $slug ? ' selected' : '') . '>'
+                . Security::esc($label) . '</option>';
+        }
+        echo '</select></td>';
+
+        echo '<td><input type="text" name="' . $name . '[pattern]" value="'
+            . Security::esc($rule['pattern']) . '" placeholder="/wp-json/" autocomplete="off"'
+            . ' spellcheck="false" maxlength="' . AttackPatterns::MAX_PATTERN . '" class="live-find mono"></td>';
+
+        echo '<td><input type="hidden" name="' . $name . '[enabled]" value="0">'
+            . '<input type="checkbox" name="' . $name . '[enabled]" value="1"'
+            . ($rule['enabled'] ? ' checked' : '') . '></td>';
+
+        echo '<td><input type="checkbox" name="' . $name . '[remove]" value="1"></td>';
+        echo '</tr>';
+    }
+
+    /**
+     * Save the attack patterns: the operator's rows rewritten whole, and the switched-off defaults.
+     *
+     * A default is off only when its box was posted as "0"; a default the form did not carry
+     * (added by a later release) stays on. A pattern the engine refuses is reported by comparing
+     * counts, as exclusions do, rather than vanishing in silence.
+     */
+    private function saveAttackPatterns(): string
+    {
+        $back = '&s=attack-patterns';
+        $posted = is_array($_POST['patterns'] ?? null) ? $_POST['patterns'] : [];
+
+        $wanted = [];
+        foreach ($posted as $row) {
+            if (!is_array($row) || !empty($row['remove'])) {
+                continue;
+            }
+            $pattern = is_string($row['pattern'] ?? null) ? trim($row['pattern']) : '';
+            if ($pattern === '') {
+                continue;
+            }
+            $wanted[] = [
+                'host'    => is_string($row['host'] ?? null) ? $row['host'] : '',
+                'kind'    => is_string($row['kind'] ?? null) ? $row['kind'] : 'text',
+                'pattern' => $pattern,
+                'enabled' => !empty($row['enabled']),
+            ];
+        }
+
+        $off = [];
+        $defaults = is_array($_POST['defaults'] ?? null) ? $_POST['defaults'] : [];
+        foreach ($defaults as $id => $value) {
+            if (is_string($id) && isset(AttackPatterns::DEFAULTS[$id]) && (string) $value === '0') {
+                $off[] = $id;
+            }
+        }
+
+        $clean = AttackPatterns::sanitise($wanted);
+        $this->cfg->set(AttackPatterns::CONFIG_KEY, [
+            'rules' => $clean,
+            'off'   => AttackPatterns::sanitiseOff($off),
+        ]);
+
+        $err = $this->persist();
+        if ($err !== null) {
+            return '?v=settings&err=' . $err . $back;
+        }
+
+        if (count($clean) < count($wanted)) {
+            return '?v=settings&err=pattern_refused' . $back;
+        }
+
+        return '?v=settings&ok=patterns_saved' . $back;
     }
 
     /**

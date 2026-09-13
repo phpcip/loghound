@@ -407,6 +407,9 @@ final class Signals
                 'chrome', 'firefox', 'safari', 'edge', 'opera', 'samsung internet', 'brave',
             ], true);
 
+        $s['ua_logged']    = array_key_exists('ua_bot_b', $first);
+        $s['browser_like'] = \Loghound\Enrich\Ua::isBrowserLike($s['ua']);
+
         $s['rdns']    = isset($first['rdns_s']) ? (string) $first['rdns_s'] : null;
         $s['rdns_ok'] = array_key_exists('rdns_ok_b', $first) ? (bool) $first['rdns_ok_b'] : null;
 
@@ -443,6 +446,11 @@ final class Signals
         $s['first_status'] = isset($session['first_status']) && is_numeric($session['first_status'])
             ? (int) $session['first_status']
             : null;
+
+        $s['nonasset_hits']    = (int) ($session['nonasset_hits'] ?? 0);
+        $s['nonasset_refused'] = (int) ($session['nonasset_refused'] ?? 0);
+        $s['refused_attacks']  = (int) ($session['refused_attacks'] ?? 0);
+        $s['got_403']          = in_array(403, array_map('intval', (array) ($session['status_codes'] ?? [])), true);
 
         $s['attack_codes'] = array_values(array_filter(
             array_map('strval', (array) ($session['atk_flags'] ?? [])),

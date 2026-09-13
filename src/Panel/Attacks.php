@@ -569,7 +569,7 @@ final class Attacks extends Controller implements Sections
                Both are docValues, so they return in `fl` despite stored="false". Added here
                rather than to hitFl() because the other caller is a timeline already scoped to
                one session, where a session id on every row is dead weight. */
-            'fl'   => Query::hitFl() . ',session_id_s,ip_s,country_s,city_s',
+            'fl'   => Query::hitFl() . ',session_id_s,ip_s,country_s,city_s,hit_patterns_ss',
         ]);
 
         $out = [];
@@ -578,6 +578,10 @@ final class Attacks extends Controller implements Sections
             $labels = [];
             foreach ($codes as $code) {
                 $labels[] = Rules::describe($code)['label'];
+            }
+            $matched = array_values(array_map('strval', (array) ($doc['hit_patterns_ss'] ?? [])));
+            if ($matched !== []) {
+                $labels[] = 'matched ' . implode(', ', $matched);
             }
 
             $out[] = [
