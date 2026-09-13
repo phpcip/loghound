@@ -456,6 +456,12 @@ final class Signals
         $s['fp_ips_24h'] = $fpIps;
 
         $s['beacon']         = (bool) ($beacon['beacon_b'] ?? false);
+        /* THE SITE SAID WHO THIS IS. Written by Beacon only when a payload actually declared one
+           way or the other, so null means "the site never told us" and is not evidence either
+           way. It is the strongest positive statement about a visitor available anywhere in the
+           product — an application that has authenticated somebody — and until now the scorer
+           could not see it at all. */
+        $s['signed_in']      = array_key_exists('signed_in_b', $beacon) ? (bool) $beacon['signed_in_b'] : null;
         $s['js']             = array_key_exists('js_b', $beacon) ? (bool) $beacon['js_b'] : null;
         $s['headless']       = array_key_exists('headless_b', $beacon) ? (bool) $beacon['headless_b'] : null;
         $s['ua_claim_ok']    = array_key_exists('ua_claim_ok_b', $beacon) ? (bool) $beacon['ua_claim_ok_b'] : null;

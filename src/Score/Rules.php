@@ -305,6 +305,51 @@ final class Rules
     public const PROVISIONAL_REASON = 'provisional_session';
 
     /**
+     * The verdict a session carrying positive, measured proof of a person may not be worse than.
+     *
+     * ------------------------------------------------------------------------------------
+     * THE HOLE THIS CLOSES: ONE REQUEST OUTVOTING A THOUSAND
+     * ------------------------------------------------------------------------------------
+     * Every rule in this file adds. Nothing subtracts, and the floors below only ever move a
+     * verdict further towards bot. So a single decisive code — hostile_probe is 85 and the bot
+     * threshold is 80 — convicts on its own, and no quantity of evidence on the other side can
+     * reach the result.
+     *
+     * That is not a hypothetical. A signed-in administrator, with 1,758 requests, 9,609 recorded
+     * interactions, twenty minutes of measured engaged time, a real GPU and a User-Agent that
+     * checked out, was published as `bot` because ONE of those requests was a database query
+     * whose URL contained backticks. The dashboard told its owner he was automation.
+     *
+     * The ceiling is deliberately not an acquittal. It stops at `unknown`, which is the verdict
+     * that means "this needs a person to look": the attack line is still recorded, still counted
+     * on the Attacks view, and still listed as a reason. What it refuses to do is let one line
+     * of a log outrank a plane of positive measurement. A client that genuinely is automation
+     * does not accumulate thousands of interactions and twenty minutes of engagement, and if it
+     * ever does, every deliberate marker — a driver artefact, a software rasteriser, a forged
+     * token — is exempt below and still convicts outright.
+     */
+    public const HUMAN_EVIDENCE_CEILING = 'unknown';
+
+    /** The reason recorded when that ceiling is applied, so the softening is never silent. */
+    public const HUMAN_EVIDENCE_REASON = 'strong_human_evidence';
+
+    /**
+     * Codes the ceiling does NOT soften.
+     *
+     * Each is a deliberate act by the client rather than an inference about it: a driver
+     * announcing itself, a software rasteriser where a screen should be, a forged dwell time, a
+     * crawler impersonating Google. Engagement figures come from the same beacon these clients
+     * control, so letting measured time excuse them would make the measurement its own alibi.
+     */
+    private const CEILING_EXEMPT = [
+        'automation_marker',
+        'headless_renderer',
+        'beacon_forged',
+        'rdns_claim_failed',
+        'ua_claim_failed',
+    ];
+
+    /**
      * Default weights (SPEC §7). Overridable per rule from scoring.weights.
      *
      * The per-rule justification for each number is in the method that implements it —
@@ -379,6 +424,19 @@ final class Rules
      * "this was a person" a conclusion instead of a guess.
      */
     private const HUMAN_FLOOR_MS = 30000;
+
+    /**
+     * Engaged milliseconds that count as a plane having MEASURED a person.
+     *
+     * Four times the floor a short visit is judged against, deliberately. The floor answers "was
+     * there enough of this visit to call it human"; this answers the harder question "is there
+     * enough to overrule an accusation", and the bar for overruling evidence has to be higher
+     * than the bar for accepting it.
+     */
+    private const HUMAN_EVIDENCE_MS = 120000;
+
+    /** Recorded interactions that count as real use rather than an incidental event. */
+    private const HUMAN_EVIDENCE_INTERACTIONS = 20;
 
     /** The reason code the floor records, so the verdict is never unexplained. */
     private const SHORT_VISIT_REASON = 'short_visit';
@@ -522,6 +580,14 @@ final class Rules
      * @var array<string,array{label:string,why:string,severity:string}>
      */
     public const REASONS = [
+        'strong_human_evidence' => [
+            'label' => 'Measured as a person',
+            'severity' => 'info',
+            'why' => 'The beacon recorded real interaction and substantial engaged time on this session, '
+                . 'or the site reported the visitor as signed in. The signals that fired are still listed '
+                . 'and still counted; they are simply not allowed to outrank a plane that actively measured '
+                . 'a human, so the verdict is held at "unknown" for a person to judge.',
+        ],
         'automation_marker' => [
             'label' => 'Automation marker',
             'severity' => 'high',
@@ -1004,6 +1070,28 @@ final class Rules
             ];
         }
 
+        /* POSITIVE EVIDENCE OUTRANKS A SINGLE ACCUSATION. Applied last of the adjustments, so it
+           sees the verdict every rule and every floor has already produced. See
+           HUMAN_EVIDENCE_CEILING for what this is for and what it deliberately does not do. */
+        if (self::worseThan(self::HUMAN_EVIDENCE_CEILING, $verdict)
+            && array_intersect($reasons, self::CEILING_EXEMPT) === []
+            && self::provedHumanStrongly($s)
+        ) {
+            $was = $verdict;
+            $verdict = self::HUMAN_EVIDENCE_CEILING;
+            $reasons[] = self::HUMAN_EVIDENCE_REASON;
+            $detail[self::HUMAN_EVIDENCE_REASON] = [
+                'weight' => 0,
+                'why'    => 'This session carries positive, measured evidence of a person — the beacon '
+                    . 'ran, it recorded real interaction and at or above '
+                    . (self::HUMAN_EVIDENCE_MS / 1000) . ' seconds of engaged time'
+                    . (!empty($s['signed_in']) ? ', and the site itself says this visitor is signed in' : '')
+                    . '. The signals that fired are still recorded and still counted, but they do not '
+                    . 'outrank a plane that actively measured a human, so the verdict is held at '
+                    . '"unknown" rather than published as ' . $was . '.',
+            ];
+        }
+
         if (!empty($ctx['no_transport'])) {
             $reasons[] = self::SINGLE_PLANE_REASON;
             $detail[self::SINGLE_PLANE_REASON] = [
@@ -1082,6 +1170,52 @@ final class Rules
      * evidence puts it, exactly as before. The floor still applies in full to every session
      * with no beacon, a silent beacon, or under half a minute of engagement.
      */
+    /**
+     * Is one verdict worse — further towards bot — than another?
+     *
+     * Compared by rank in VERDICT_ORDER rather than by score, because the ceiling has to hold
+     * whatever an operator has configured the thresholds to be.
+     */
+    private static function worseThan(string $than, string $verdict): bool
+    {
+        $a = array_search($verdict, self::VERDICT_ORDER, true);
+        $b = array_search($than, self::VERDICT_ORDER, true);
+
+        return $a !== false && $b !== false && $a > $b;
+    }
+
+    /**
+     * Has a plane actively MEASURED a person on this session?
+     *
+     * Every condition is a positive reading rather than the absence of a suspicion, and all of
+     * the first three must hold together: the beacon ran, it recorded real interaction, and it
+     * accumulated engaged time well past the floor a short visit is judged against. Engaged time
+     * alone is a clock a script could drive; interaction alone can be synthesised; the pair of
+     * them at this scale is a person reading a site.
+     *
+     * Being signed in is accepted as an alternative to the engagement threshold, not as a
+     * replacement for the beacon: an application that has authenticated somebody has said more
+     * about who this is than any heuristic in this file can.
+     */
+    private static function provedHumanStrongly(array $s): bool
+    {
+        if (empty($s['beacon'])) {
+            return false;
+        }
+
+        $interactions = (int) ($s['interactions'] ?? 0);
+        if ($interactions < self::HUMAN_EVIDENCE_INTERACTIONS) {
+            return false;
+        }
+
+        $engaged = $s['engaged_ms'] ?? null;
+        if ($engaged !== null && (int) $engaged >= self::HUMAN_EVIDENCE_MS) {
+            return true;
+        }
+
+        return !empty($s['signed_in']);
+    }
+
     private static function provedHumanLive(array $s): bool
     {
         if (!empty($s['beacon'])) {

@@ -860,10 +860,17 @@
             sw: SC.width | 0,
             sh: SC.height | 0,
             aw: SC.availWidth | 0,
-            ah: SC.availHeight | 0,
-            ow: w.outerWidth | 0,
-            oh: w.outerHeight | 0
+            ah: SC.availHeight | 0
         };
+
+        /* SENT ONLY WHEN THE WINDOW CAN ANSWER. outerWidth is 0 in a background tab and while a
+           page is being torn down, which is most of what a beacon reports from — and the server
+           read that 0 as a headless browser. Omitting the pair says "not reported", which is the
+           truth, and leaves the signal meaning what it was written to mean. */
+        if (!d.hidden && (w.outerWidth | 0) > 0 && (w.outerHeight | 0) > 0) {
+            out.ow = w.outerWidth | 0;
+            out.oh = w.outerHeight | 0;
+        }
 
         if (xIdent) { out.xi = xIdent; }
         if (xSigned !== undefined) { out.xs = xSigned; }

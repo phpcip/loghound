@@ -543,7 +543,12 @@ final class Attacks
      * @var array<int,string>
      */
     private const CMDI = [
-        '$(', ';cat ', ';ls ', ';id', '|id', '|cat ', '&&whoami', ';whoami', '`id`', '`whoami`',
+        /* `id` and `whoami` were literals here, which meant a SELECT of a column named `id` —
+           the most common column name there is — matched command injection outright. The
+           backtick forms are backtickPair()'s job now, and it requires a verb AND a surface
+           that is not SQL. The unquoted `;id` and `|id` shapes below stay: a semicolon or a
+           pipe in front of a command word has no innocent reading. */
+        '$(', ';cat ', ';ls ', ';id', '|id', '|cat ', '&&whoami', ';whoami',
         '/bin/sh', '/bin/bash', 'bin/busybox', 'nc -e', 'ncat ', 'wget http', 'curl http',
         'chmod 777', 'rm -rf', 'python -c', 'perl -e', '>/dev/tcp/',
     ];
@@ -995,8 +1000,80 @@ final class Attacks
     private static function backtickPair(string $surface): bool
     {
         $first = strpos($surface, '`');
-        return $first !== false && strpos($surface, '`', $first + 1) !== false;
+        if ($first === false) {
+            return false;
+        }
+        $second = strpos($surface, '`', $first + 1);
+        if ($second === false) {
+            return false;
+        }
+
+        /* A BACKTICK IS MySQL's QUOTE BEFORE IT IS A SHELL'S. Two of them anywhere in the surface
+           used to be enough on their own, which made this rule fire on every query any database
+           tool sends: phpMyAdmin writes `table`.`column` on every SELECT, percent-encoded as %60,
+           and surface() decodes it. That match reached DECISIVE, which is worth 85 points and an
+           instant bot verdict — so one signed-in administrator running one SELECT on their own
+           server was published as an exploit probe.
+
+           The rule's own description always said "shell metacharacters combined with a shell
+           VERB". This restores that: the text between the ticks has to name a command, and a
+           surface that is plainly SQL is not command substitution at all. */
+        if (self::any($surface, self::SQL_CONTEXT)) {
+            return false;
+        }
+
+        /* `+` IS A SPACE HERE AND rawurldecode DOES NOT KNOW IT. surface() decodes with
+           rawurldecode, which leaves `+` alone — so a scanner's `%60echo+GSCAN%60` arrives as
+           "echo+gscan" and a verb list looking for "echo " misses it. Measured against the real
+           flagged requests in the index: without this line, twelve genuine probes stopped
+           matching. */
+        $inside = str_replace('+', ' ', substr($surface, $first + 1, $second - $first - 1));
+        $inside = trim($inside);
+        if ($inside === '') {
+            return false;
+        }
+
+        /* A BARE WORD HAS TO BE THE WHOLE THING. `id` and `pwd` are commands, and they are also
+           inside "grid", "video" and "password" — so those match the entire contents or not at
+           all. The rest carry their own separator and can appear anywhere in the substitution. */
+        if (in_array($inside, self::SHELL_WORDS, true)) {
+            return true;
+        }
+
+        return self::any($inside, self::SHELL_VERBS);
     }
+
+    /**
+     * Command words that make a backtick pair command substitution rather than a quoted name.
+     *
+     * Deliberately verbs only. A bare identifier — `id`, `name`, `user` — is what a column is
+     * called on half the tables in the world, so matching those is matching ordinary SQL.
+     */
+    private const SHELL_VERBS = [
+        'echo ', 'cat ', 'ls ', 'curl ', 'wget ', 'nc ', 'ncat ', 'ping ', 'sleep ',
+        'python', 'perl ', 'bash', 'sh -', 'printf ', 'nslookup ', 'dig ', 'busybox',
+        'whoami', 'uname', 'hostname', '/etc/', '/bin/', '$(',
+    ];
+
+    /**
+     * Commands that are ordinary words elsewhere, so they must BE the whole substitution.
+     *
+     * `id` is a command and also three letters inside "grid" and "video"; `pwd` is a command and
+     * also the start of "password". Matched whole or not at all.
+     */
+    private const SHELL_WORDS = ['id', 'pwd', 'w', 'ps', 'env', 'date'];
+
+    /**
+     * Signs that the surface is a database query, where backticks quote identifiers.
+     *
+     * Checked before the shell test rather than after: on a surface that is demonstrably SQL,
+     * a backtick is punctuation and no amount of what sits between two of them changes that.
+     */
+    private const SQL_CONTEXT = [
+        'select ', ' from ', 'sql_query=', 'route=/sql', 'order by', 'group by',
+        'insert into', 'delete from', 'show tables', 'show columns', 'describe ',
+        'information_schema', 'phpmyadmin', 'adminer',
+    ];
 
     /**
      * A `/.well-known/` request for a suffix nobody registered.

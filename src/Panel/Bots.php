@@ -54,9 +54,45 @@ final class Bots extends Controller
      *
      * @return array<string,array{label:string,why:string,severity:string}>
      */
+    /**
+     * The scorer's own reason table, in the shape the panel renders.
+     *
+     * Read from \Loghound\Score\Rules::REASONS rather than copied, because a copy is what this
+     * was and a copy is what fell five codes behind. Anything the scorer can emit is described
+     * here the moment it exists, and a rule added tomorrow needs no second edit in this file.
+     *
+     * @return array<string,array{label:string,severity:string,why:string}>
+     */
+    private static function fromScorer(): array
+    {
+        $out = [];
+
+        foreach (\Loghound\Score\Rules::REASONS as $code => $meta) {
+            $out[(string) $code] = [
+                'label'    => (string) ($meta['label'] ?? $code),
+                'severity' => (string) ($meta['severity'] ?? 'info'),
+                'why'      => (string) ($meta['why'] ?? ''),
+            ];
+        }
+
+        return $out;
+    }
+
     public static function reasonCatalogue(): array
     {
-        return [
+        /* DERIVED FIRST, SO THE TWO COPIES CANNOT DRIFT AGAIN. This was a second, hand-written
+           table of the same rules, and it had fallen five codes behind: hostile_probe,
+           probe_sweep, never_served, mostly_refused and desktop_on_mobile_asn were all missing,
+           so a session convicted by any of them rendered as "no description for this rule code
+           in this panel version" — a verdict with no reason attached, which is the one thing
+           this panel exists not to do.
+
+           Score\Rules::REASONS is the scorer's own table and is public, so it is read straight
+           from there. The literal below is unioned UNDER it, which means the scorer always wins
+           for a shared code and the literal supplies only what it alone has: the floor reasons
+           (short_visit, no_page_requested, no_duration_measured, short_visit_no_beacon), which
+           are recorded by the verdict floors rather than by a weighted rule. */
+        return self::fromScorer() + [
             'automation_marker'      => ['label' => 'Automation marker', 'severity' => 'high', 'why' => 'The page exposed a definitive driver artefact — navigator.webdriver, a chromedriver global, Puppeteer/Playwright/Selenium hooks. Browsers do not have these; drivers do.'],
             'headless_renderer'      => ['label' => 'Headless renderer', 'severity' => 'high', 'why' => 'WebGL reported SwiftShader, llvmpipe, Mesa OffScreen or Microsoft Basic Render: software rasterisation, which is what you get when there is no screen.'],
             'ua_claim_failed'        => ['label' => 'UA claim failed', 'severity' => 'high', 'why' => 'The User-Agent claimed a Chrome version whose engine features the page does not actually have. A spoofed UA string cannot retrofit V8.'],

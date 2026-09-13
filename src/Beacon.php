@@ -741,8 +741,12 @@ final class Beacon
             'screen_h'     => (int) $this->num($in['sh'] ?? 0, 0, 100000),
             'avail_w'      => (int) $this->num($in['aw'] ?? 0, 0, 100000),
             'avail_h'      => (int) $this->num($in['ah'] ?? 0, 0, 100000),
-            'outer_w'      => (int) $this->num($in['ow'] ?? 0, 0, 100000),
-            'outer_h'      => (int) $this->num($in['oh'] ?? 0, 0, 100000),
+            /* -1 IS "NOT REPORTED", AND IT IS NOT THE SAME AS ZERO. b.js omits these entirely
+               unless the window can actually answer, because a background tab and a page being
+               torn down both report an outer size of 0 in an ordinary browser — and reading that
+               0 as evidence is what labelled a signed-in Mac with a Metal GPU as headless. */
+            'outer_w'      => array_key_exists('ow', $in) ? (int) $this->num($in['ow'], 0, 100000) : -1,
+            'outer_h'      => array_key_exists('oh', $in) ? (int) $this->num($in['oh'], 0, 100000) : -1,
         ];
     }
 
@@ -951,6 +955,10 @@ final class Beacon
         $oh = (int) ($p['outer_h'] ?? 0);
 
         if ($sw <= 0 || $sh <= 0) {
+            return $out;
+        }
+
+        if ($ow < 0 || $oh < 0) {
             return $out;
         }
 
