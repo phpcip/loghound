@@ -7,6 +7,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.9] — 2026-09-13
+
+### Changed
+
+- **The attackers table leads each address with its country's flag.** The country was a two-letter
+  code under the network, where it read as part of the network's name. It is the flag in front of
+  the address now, as in every visit table, with the country's name on hover and a filter behind a
+  click.
+
+### Fixed
+
+- **A website measured by the beacon alone opened to an empty dialog.** The dialog borrowed the
+  Recent visitors rule that a visit must reach an HTML page, and a site with no access log behind it
+  has no page count at all, so a host listed with 129 visits opened to 0. A dialog now counts every
+  visit the value has, and the Recent visitors table keeps its rule.
+
+- **A dialog opened from the attack views said 0 without saying why.** Those tables are built from
+  the request log, which cannot apply a verdict filter, so they list addresses and networks the
+  dialog, which can, then hid entirely. The dialog now says how many visits there are without that
+  filter and that the table it came from may not apply it.
+
+---
+
 ## [1.1.8] — 2026-09-13
 
 ### Added
