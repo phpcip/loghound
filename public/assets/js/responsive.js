@@ -394,8 +394,39 @@ function restack() {
     }
 
     sortBars(on);
+    reorderVisits(on);
 
     stamping = false;
+}
+
+/**
+ * Put the email beside the flag on a phone, and back where it was on a desktop.
+ *
+ * Who they were is one question — a country and a name — and on a narrow screen the two halves
+ * of it were separated by the page path, which is the longest value on the row. A table cell
+ * cannot be moved with CSS `order`, so it is moved here, and moved back when the viewport is
+ * wide again. Idempotent: this runs on every resize and after every re-render.
+ *
+ * @param {boolean} on Whether the viewport is narrow.
+ */
+function reorderVisits(on) {
+    for (const table of document.querySelectorAll('table.visits')) {
+        for (const body of table.tBodies) {
+            for (const row of body.rows) {
+                const who = row.querySelector('.visit-who');
+                const mail = row.querySelector('.visit-email');
+                const path = row.querySelector('.urlcell');
+                if (!who || !mail || !path) {
+                    continue;
+                }
+
+                const wanted = on ? who.nextSibling : path.nextSibling;
+                if (wanted !== mail) {
+                    row.insertBefore(mail, wanted);
+                }
+            }
+        }
+    }
 }
 
 /**

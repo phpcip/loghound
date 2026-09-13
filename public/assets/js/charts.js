@@ -1024,7 +1024,13 @@ export function geoScatter(id, points, onPick) {
             bottom: 6,
             left: 6,
             right: 6,
-            boundingCoords: [[-180, 84], [180, -58]],
+            /* CROPPED TO WHERE PEOPLE ARE. The projection is fitted to this box, so the box's
+               shape decides how much of the card the map fills — and 84°N to 58°S is far taller
+               than the card is, which is why raising the card's height only bought empty bands
+               above and below rather than a larger map. The Arctic above 72° and everything past
+               52°S hold no visitors and no bubbles; dropping them brings the box close to the
+               card's own proportion, so the landmass fills the space instead of floating in it. */
+            boundingCoords: [[-180, 72], [180, -52]],
             itemStyle: { areaColor: t.sunken, borderColor: t.border, borderWidth: 0.6 },
             emphasis: { disabled: true },
             select: { disabled: true }

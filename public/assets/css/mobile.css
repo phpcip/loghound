@@ -800,6 +800,22 @@ textarea {
 
     table.visits .visit-ip { display: none; }
 
+    /* THE PATH GETS THE ROOM, AND BREAKS RATHER THAN TRUNCATES. It is the longest value on the
+       row and the one worth reading; a bounded width keeps it from taking the whole screen while
+       `anywhere` lets it wrap mid-path instead of ending in an ellipsis. */
+    table.visits td.urlcell {
+        max-width: 46vw;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+
+    table.visits td.visit-email {
+        max-width: 28vw;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+
     /* SCOPED TO THE VISIT TABLES, NOT TO THE CLASS. `.visit-verdict` is worn by the Attacks
        table's Verdict column too — it borrows the visit table's styling — so hiding the class
        outright would delete a column nobody asked to lose. `.visits` with six columns is the
@@ -873,23 +889,39 @@ textarea {
 
     .card:has(.table-wrap) > .card-head > h2 { display: none; }
 
+    /* ON THE TOOLS' OWN ROW, NOT UNDER IT. `flex: 1 1 100%` put the selects on a line of their
+       own, which is the line the hidden title was supposed to free up. `order: -1` sets them
+       where the title was — left of refresh and CSV, on the same row. */
     .card-head:has(> .lh-sortbar) {
-        flex-wrap: wrap;
-        row-gap: 8px;
+        flex-wrap: nowrap;
+        gap: 6px;
+        padding-bottom: 4px;
+        margin-bottom: 6px;
     }
 
     .lh-sortbar {
         display: flex;
-        gap: 8px;
-        flex: 1 1 100%;
-        order: 2;
+        gap: 6px;
+        order: -1;
+        flex: 1 1 auto;
+        min-width: 0;
         padding: 0;
+        margin: 0;
     }
+    /* AS TIGHT AS A CONTROL CAN BE AND STILL BE PRESSED. No padding of its own, no minimum tap
+       height — the row it shares is already tall enough for a thumb, and every pixel here is a
+       pixel taken from the table underneath. */
     .lh-sortbar select {
         flex: 1 1 0;
         min-width: 0;
-        min-height: var(--lh-tap);
-        font-size: 14px;
+        min-height: 0;
+        height: 28px;
+        padding: 0 18px 0 6px;
+        margin: 0;
+        font-size: 13px;
+        line-height: 1;
+        border-radius: 2px;
+        background-position: right 4px center;
     }
 }
 

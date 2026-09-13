@@ -7,6 +7,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.1.3] — 2026-09-13
+
+### Changed
+
+- **The sort controls join the tools instead of taking a line.** They were dropping onto a row of
+  their own below refresh and CSV — which is the row hiding the card's title was meant to free.
+  They sit where the title was now, left of the tools on the same row, with no padding of their
+  own and no minimum height: the row is already tall enough for a thumb, and every pixel there is
+  a pixel taken from the table underneath.
+
+- **Who they were reads as one thing.** On a phone the flag and the email were separated by the
+  page path, which is the longest value on the row. The email moves next to the flag, and moves
+  back when the screen is wide again.
+
+- **The path breaks instead of truncating.** It gets a bounded but generous share of the width and
+  wraps mid-path, so a long URL reads over two lines rather than ending in an ellipsis.
+
+- **The map fills its card.** Raising the card's height had bought empty bands above and below
+  rather than a bigger map: the projection is fitted to a bounding box, and that box — 84°N to
+  58°S — is far taller in proportion than the card. Cropping the Arctic above 72° and everything
+  past 52°S, neither of which holds a visitor or a bubble, brings the box close to the card's own
+  shape so the landmass fills the space.
+
+---
+
 ## [1.1.2] — 2026-09-13
 
 ### Changed
