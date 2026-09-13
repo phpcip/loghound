@@ -106,7 +106,11 @@ while (true) {
     $updated = 0;
     foreach ($docs as $doc) {
         $id = (string) ($doc['id'] ?? '');
-        $tsMs = Parser::epochMs((string) ($doc['ts_start'] ?? ''));
+        $ts = (string) ($doc['ts_start'] ?? '');
+        $tsMs = Parser::epochMs($ts);
+        if ($tsMs <= 0 && ($unix = strtotime($ts)) !== false) {
+            $tsMs = $unix * 1000;
+        }
         if ($id === '' || $tsMs <= 0) {
             continue;
         }
