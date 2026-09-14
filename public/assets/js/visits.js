@@ -350,6 +350,40 @@ export function visitCaption(page) {
 
 
 /**
+ * The instant of a visit as a calendar date followed by a little LED watch face.
+ *
+ * when() gives `mm/dd/yyyy hh:mm:ss` as one string; this splits it so the three parts can be
+ * read differently: the date in bold monospace, the hour and minute as the big red digits of an
+ * old digital watch, the seconds a step smaller beside them. An instant it cannot read comes
+ * back from when() as a dash, which has no time half, so that case renders as the date span
+ * alone rather than an empty watch window.
+ *
+ * @param {string|null} seen The instant to show.
+ * @returns {HTMLElement}
+ */
+function stampLine(seen) {
+    const text = when(seen);
+    const half = text.split(' ');
+    const clock = half.length > 1 ? half[1].split(':') : [];
+
+    if (clock.length < 3) {
+        return el('div', { class: 'vbox-line vbox-when' }, [
+            glyph('calendar'),
+            el('span', { class: 'when-date', text: text })
+        ]);
+    }
+
+    return el('div', { class: 'vbox-line vbox-when' }, [
+        glyph('calendar'),
+        el('span', { class: 'when-date', text: half[0] }),
+        el('span', { class: 'when-led' }, [
+            el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] }),
+            el('span', { class: 'led-s', text: clock[2] })
+        ])
+    ]);
+}
+
+/**
  * The same visit as a box of up to four lines, which mobile.css shows on a phone instead of the cells.
  *
  * Line one is a calendar mark and the instant the visit was last seen, mm/dd/yyyy hh:mm:ss, the
@@ -367,10 +401,7 @@ export function visitCaption(page) {
  * @returns {HTMLElement}
  */
 function visitBox(v, seen, shown, unmeasured) {
-    const stamp = el('div', { class: 'vbox-line vbox-when' }, [
-        glyph('calendar'),
-        el('span', { class: 'mono', text: when(seen) })
-    ]);
+    const stamp = stampLine(seen);
 
     const meta = el('div', { class: 'vbox-line vbox-meta' }, [
         el('span', { class: 'vbox-item' }, [
