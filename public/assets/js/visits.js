@@ -349,6 +349,25 @@ export function visitCaption(page) {
 }
 
 /**
+ * The day of the month of an instant as an ordinal, `1st` `2nd` `3rd` `14th` `31st`.
+ *
+ * Taken from dayOnly(), so it is the day in the panel's display timezone, the same one every
+ * other date on the page is in. An instant it cannot read comes back as its dash.
+ *
+ * @param {string|null} iso
+ * @returns {string}
+ */
+function dayOrdinal(iso) {
+    const day = parseInt(String(dayOnly(iso)).split('/')[1], 10);
+    if (!Number.isFinite(day)) {
+        return '—';
+    }
+    const teen = day % 100 >= 11 && day % 100 <= 13;
+    const suffix = teen ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[day % 10] || 'th');
+    return day + suffix;
+}
+
+/**
  * The same visit as a box of three lines, which mobile.css shows on a phone instead of the cells.
  *
  * Line one is the date, the flag and address, the session time and the bounce, on one line that
@@ -367,7 +386,7 @@ function visitBox(v, seen, shown, unmeasured) {
     const meta = el('div', { class: 'vbox-line vbox-meta' }, [
         el('span', { class: 'vbox-item' }, [
             glyph('calendar'),
-            el('span', { class: 'mono', text: when(seen) })
+            el('span', { class: 'mono', text: dayOrdinal(seen) })
         ]),
         el('span', { class: 'vbox-item' }, [
             v.country ? countryNode(v.country, { flagOnly: true }) : null,
