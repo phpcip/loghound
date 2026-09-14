@@ -150,6 +150,32 @@ export function initCopyButtons() {
     }
 }
 
+/**
+ * A value that scrolls sideways inside its own line and copies itself when tapped.
+ *
+ * Plain text in a span, not a form field: no border, no caret, nothing that reads as editable.
+ * Built with createElement and textContent, so a value off the wire can never become markup,
+ * and without core.js's el() because core.js imports this module.
+ *
+ * @param {string} value
+ * @param {Object} [opts] {cls: extra classes, end: start scrolled to the end, label: what it is}
+ * @returns {HTMLElement}
+ */
+export function copyValue(value, opts) {
+    const options = opts || {};
+    const text = value === null || value === undefined ? '' : String(value);
+    const node = document.createElement('span');
+    node.className = 'lh-copy' + (options.cls ? ' ' + options.cls : '');
+    node.textContent = text;
+    node.setAttribute('role', 'button');
+    node.setAttribute('tabindex', '0');
+    node.setAttribute('aria-label', (options.label ? options.label + ' ' : '') + text + ', activate to copy');
+    if (options.end) {
+        node.setAttribute('data-lh-end', '1');
+    }
+    return node;
+}
+
 /** How far above a copyable field its note sits, and how near the window edge it may go. */
 const NOTE_GAP = 4;
 const NOTE_EDGE = 8;
@@ -166,7 +192,7 @@ function noteOff() {
     if (note) {
         note.hidden = true;
     }
-    for (const field of document.querySelectorAll('input.lh-copy.is-copied')) {
+    for (const field of document.querySelectorAll('.lh-copy.is-copied')) {
         field.classList.remove('is-copied');
     }
 }
@@ -177,7 +203,7 @@ function noteOff() {
  * One note for the whole page, created on first use and moved to whichever field was tapped
  * last. It takes no pointer events and is out of flow, so it covers nothing it could block.
  *
- * @param {HTMLInputElement} field
+ * @param {HTMLElement} field
  * @param {string} message
  */
 function noteOn(field, message) {
@@ -201,12 +227,13 @@ function noteOn(field, message) {
 }
 
 /**
- * Copy a read-only `input.lh-copy` to the clipboard when it is tapped.
+ * Copy an `.lh-copy` value to the clipboard when it is tapped, or activated from the keyboard.
  *
  * The clipboard write starts inside the tap itself, which is what mobile browsers require of
  * it. A refused write selects the value instead, so it can be copied by hand, and the note says
- * which of the two happened. A swipe scrolls the field and fires no click, so reading a long
- * value never copies it. Idempotent.
+ * which of the two happened. A swipe scrolls the value and fires no click, so reading a long
+ * one never copies it. Captured at the document and stopped there, so the row the value sits in
+ * does not also open its record from the same tap. Idempotent.
  */
 export function initCopyFields() {
     const root = document.documentElement;
@@ -215,22 +242,29 @@ export function initCopyFields() {
     }
     root.dataset.lhCopyFields = '1';
 
-    document.addEventListener('click', (event) => {
+    const onCopy = (event) => {
+        if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') {
+            return;
+        }
         const target = event.target;
-        const field = target && typeof target.closest === 'function' ? target.closest('input.lh-copy') : null;
+        const field = target && typeof target.closest === 'function' ? target.closest('.lh-copy') : null;
         if (!field) {
             return;
         }
-        const attempt = canWriteClipboard() ? writeClipboard(field.value) : Promise.resolve(false);
+        event.preventDefault();
+        event.stopPropagation();
+
+        const attempt = canWriteClipboard() ? writeClipboard(field.textContent || '') : Promise.resolve(false);
         attempt.then((ok) => {
             if (!ok) {
-                field.focus();
-                field.select();
+                selectContents(field);
             }
             noteOn(field, ok ? 'Copied' : 'Selected, copy manually');
         });
-    });
+    };
 
+    document.addEventListener('click', onCopy, true);
+    document.addEventListener('keydown', onCopy, true);
     window.addEventListener('scroll', noteOff, { passive: true, capture: true });
 }
 
@@ -242,7 +276,7 @@ export function initCopyFields() {
  * again the next time a phone layout shows it.
  */
 export function endCopyFields() {
-    for (const field of document.querySelectorAll('input.lh-copy[data-lh-end]')) {
+    for (const field of document.querySelectorAll('.lh-copy[data-lh-end]')) {
         if (field.offsetWidth === 0) {
             delete field.dataset.lhEnded;
             continue;

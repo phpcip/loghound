@@ -195,10 +195,10 @@ textarea {
    never cut an address of any plausible length. */
 table.visits td.visit-email { max-width: none; }
 
-/* The copyable fields exist for the phone layout only; a desktop keeps the filter link and the
-   path text. */
-table.visits .visit-email-copy,
-.path-copy { display: none; }
+/* The copyable page scroller and the visit box exist for the phone layout only; a desktop keeps
+   its cells, its path text and its filter links. */
+.path-copy,
+table.visits td.visit-box { display: none; }
 
 /* The note a tap on a copyable field leaves for a moment, placed above the field by copy.js. */
 .lh-copied {
@@ -849,39 +849,90 @@ table.visits .visit-email-copy,
         white-space: nowrap;
     }
 
-    /* THE EMAIL IS A NARROW READ-ONLY FIELD ON A PHONE, NOT A LINK. 14ch leaves the page column
-       its room; a long address is swiped through inside the field and can be copied. 16px because
-       iOS zooms the whole page on focusing any input set smaller, read-only included. */
-    /* A PAGE IN A CRAMPED TABLE IS THE SAME KIND OF FIELD, as wide as its column, scrolled to
-       the end by copy.js so the part that names the page shows. The request timeline is cramped
-       the same way, so its list stops being one wide scroller and each path scrolls itself. */
-    table.visits td.visit-email > .dim,
+    /* A PAGE IN A CRAMPED TABLE IS A SIDEWAYS SCROLLER, as wide as its column and scrolled to the
+       end by copy.js so the part that names the page shows. No border and no field look: it is
+       text that scrolls and copies itself on a tap. The request timeline is cramped the same
+       way, so its list stops being one wide scroller and each path scrolls itself. */
     td .urlwrap > .urlpath,
     .timeline .urlwrap > .urlpath { display: none; }
     td .urlwrap > .path-copy,
     .timeline .urlwrap > .path-copy {
+        display: block;
         flex: 1 1 auto;
-        width: 100%;
         min-width: 0;
     }
     .lh-dialog .timeline-scroll > .timeline { width: auto; }
-    input.lh-copy.is-copied { border-color: var(--accent); }
 
-    table.visits .visit-email-copy,
-    td .urlwrap > .path-copy,
-    .timeline .urlwrap > .path-copy {
-        display: block;
-        margin: 0;
-        padding: 2px 6px;
-        font: 400 16px/1.3 var(--font-ui);
-        color: var(--ink);
-        background: transparent;
-        border: 1px solid var(--hairline);
-        border-radius: var(--radius);
-        -webkit-appearance: none;
-        appearance: none;
+    .lh-copy {
+        overflow-x: auto;
+        overflow-y: hidden;
+        white-space: nowrap;
         text-overflow: clip;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior-x: contain;
+        cursor: copy;
     }
+    .lh-copy::-webkit-scrollbar { display: none; }
+    .lh-copy.is-copied { color: var(--accent-ink); }
+
+    /* A VISIT IS A BOX OF THREE LINES ON A PHONE. The row's own cells are hidden and the box cell
+       visits.js appends is shown instead: date, flag and address, session time and bounce on one
+       line that scrolls sideways; the page on the second, scrolled to its end, with its link; the
+       email on the third, only when there is one. The table stops being a table so the box can
+       take the full width. The verdict tint stays on the cell; the edge is restated below because
+       panel.css draws it on the first cell, which is hidden here. */
+    table.visits,
+    table.visits > tbody,
+    table.visits > tbody > tr { display: block; width: 100%; }
+    table.visits > colgroup,
+    table.visits > tbody > tr > td { display: none; }
+    table.visits > tbody > tr > td.visit-box {
+        display: block;
+        padding: 10px 12px;
+        border-top: 1px solid var(--hairline);
+    }
+    table.visits .vbox-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+    table.visits .vbox-line + .vbox-line { margin-top: 6px; }
+    table.visits .vbox-meta {
+        gap: 16px;
+        overflow-x: auto;
+        white-space: nowrap;
+        scrollbar-width: none;
+        overscroll-behavior-x: contain;
+    }
+    table.visits .vbox-meta::-webkit-scrollbar { display: none; }
+    table.visits .vbox-item {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    table.visits .vbox-meta .lh-copy { overflow: visible; }
+    table.visits .vbox-page > .lh-copy,
+    table.visits .vbox-mail > .lh-copy {
+        display: block;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+    table.visits .vbox-line .vglyph { flex: none; color: var(--faint); }
+    table.visits .vbox-line > .urlout,
+    table.visits .vbox-line > .urlamb { flex: none; }
+
+    tbody tr[data-verdict="bot"] > td.visit-box { box-shadow: inset 2px 0 0 var(--c-bot); }
+    tbody tr[data-verdict="likely_bot"] > td.visit-box {
+        box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c-bot) 55%, transparent);
+    }
+    tbody tr[data-verdict="human"] > td.visit-box { box-shadow: inset 2px 0 0 var(--c-human); }
+    tbody tr[data-verdict="likely_human"] > td.visit-box {
+        box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c-likely) 75%, transparent);
+    }
+    tbody tr[data-verdict="unknown"] > td.visit-box { box-shadow: inset 2px 0 0 var(--c-axis); }
 
     /* SCOPED TO THE VISIT TABLES, NOT TO THE CLASS. `.visit-verdict` is worn by the Attacks
        table's Verdict column too — it borrows the visit table's styling — so hiding the class

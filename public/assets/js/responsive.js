@@ -918,7 +918,7 @@ function setUpTapTips() {
 
     document.addEventListener('click', (event) => {
         const target = event.target;
-        const wrap = touch.matches && target && typeof target.closest === 'function' && !target.closest('a, button, input')
+        const wrap = touch.matches && target && typeof target.closest === 'function' && !target.closest('a, button, input, .lh-copy')
             ? target.closest('.urlwrap[data-lh-tip]')
             : null;
         if (!wrap) {

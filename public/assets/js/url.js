@@ -46,6 +46,7 @@
 'use strict';
 
 import { el } from './core.js';
+import { copyValue } from './copy.js';
 
 /** The scheme every link is built with, and the sentence that admits it is an assumption. */
 export const SCHEME = 'https://';
@@ -703,27 +704,16 @@ function upgrade(job) {
 }
 
 /**
- * A path as a read-only field, which mobile.css shows in a cramped table in place of the text.
+ * A path as a sideways scroller, which mobile.css shows in a cramped table in place of the text.
  *
  * The whole path is in it: copy.js scrolls it to the end so the segment that names the page is
- * what shows, a swipe reads the rest, and a tap copies it. The value is an attribute, never
- * markup.
+ * what shows, a swipe reads the rest, and a tap copies it. The value is text, never markup.
  *
  * @param {string} path
  * @returns {HTMLElement}
  */
 export function pathCopy(path) {
-    const value = path === null || path === undefined ? '' : String(path);
-    return el('input', {
-        class: 'lh-copy path-copy',
-        type: 'text',
-        readonly: true,
-        value: value,
-        spellcheck: 'false',
-        autocomplete: 'off',
-        'data-lh-end': '1',
-        'aria-label': 'Path ' + value
-    });
+    return copyValue(path, { cls: 'mono path-copy', end: true, label: 'Path' });
 }
 
 /**

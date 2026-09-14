@@ -28,8 +28,10 @@
 'use strict';
 
 import { dayOnly, dur, el, num, timeOnly, when } from './core.js';
+import { copyValue } from './copy.js';
+import { glyph } from './icons.js';
 import { countryNode, dimValue, drillRow, openButton } from './identity.js';
-import { pathCell } from './url.js';
+import { pathCell, urlMark } from './url.js';
 
 /**
  * The column classes, one per column, in order.
@@ -142,8 +144,7 @@ export function visitRow(v) {
         title: v.ident || 'No identity was sent for this visit',
         'data-sort': v.ident || ''
     }, [
-        v.ident ? dimValue('ident_s', v.ident) : el('span', { class: 'muted', text: 'N/A' }),
-        v.ident ? emailCopy(v.ident) : null
+        v.ident ? dimValue('ident_s', v.ident) : el('span', { class: 'muted', text: 'N/A' })
     ]));
 
     /* TIME ON SITE, AND WHICH CLOCK IT CAME FROM. The engaged clock is the honest one and it
@@ -184,6 +185,8 @@ export function visitRow(v) {
     }, [
         bounceMark(v)
     ]));
+
+    tr.appendChild(visitBox(v, seen, shown, unmeasured));
 
     return tr;
 }
@@ -346,23 +349,49 @@ export function visitCaption(page) {
 }
 
 /**
- * The email as a narrow read-only field, which mobile.css shows in place of the filter link.
+ * The same visit as a box of three lines, which mobile.css shows on a phone instead of the cells.
  *
- * On a phone the address is copied or swiped through inside a fixed width instead of taking
- * the page column's room, and pressing it goes nowhere. The value is set as an attribute, never
- * as markup. dialog.js ignores presses inside an input, so the row does not open either.
+ * Line one is the date, the flag and address, the session time and the bounce, on one line that
+ * scrolls sideways when it does not fit. Line two is the page, scrolled to its end, with the
+ * open-in-new-tab link. Line three is the email, and is left out entirely when there is none.
+ * The address, the page and the email copy themselves on a tap. It is one more cell at the end
+ * of the row, so sorting by column index and the desktop layout are untouched.
  *
- * @param {string} ident
+ * @param {Object}      v          The visit.
+ * @param {string|null} seen       The instant the date line shows.
+ * @param {number|null} shown      The duration in milliseconds.
+ * @param {boolean}     unmeasured Whether no duration was measured.
  * @returns {HTMLElement}
  */
-function emailCopy(ident) {
-    return el('input', {
-        class: 'visit-email-copy lh-copy',
-        type: 'text',
-        readonly: true,
-        value: String(ident),
-        spellcheck: 'false',
-        autocomplete: 'off',
-        'aria-label': 'Email ' + String(ident)
-    });
+function visitBox(v, seen, shown, unmeasured) {
+    const meta = el('div', { class: 'vbox-line vbox-meta' }, [
+        el('span', { class: 'vbox-item' }, [
+            glyph('calendar'),
+            el('span', { class: 'mono', text: when(seen) })
+        ]),
+        el('span', { class: 'vbox-item' }, [
+            v.country ? countryNode(v.country, { flagOnly: true }) : null,
+            v.ip
+                ? copyValue(v.ip, { cls: 'mono', label: 'IP address' })
+                : el('span', { class: 'muted', text: 'not recorded' })
+        ]),
+        el('span', { class: 'vbox-item' }, [
+            glyph('clock'),
+            el('span', { class: unmeasured ? 'muted' : 'mono', text: unmeasured ? 'not measured' : dur(shown) })
+        ]),
+        el('span', { class: 'vbox-item' }, [
+            glyph('bounce'),
+            bounceMark(v)
+        ])
+    ]);
+
+    const page = el('div', { class: 'vbox-line vbox-page' }, v.entry
+        ? [glyph('page'), copyValue(v.entry, { cls: 'mono', end: true, label: 'Page' }), urlMark(v.entry, { host: v.host })]
+        : [glyph('page'), noPageMark()]);
+
+    const mail = v.ident
+        ? el('div', { class: 'vbox-line vbox-mail' }, [glyph('mail'), copyValue(v.ident, { label: 'Email' })])
+        : null;
+
+    return el('td', { class: 'visit-box', colspan: '6' }, [meta, page, mail]);
 }

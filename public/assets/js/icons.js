@@ -262,6 +262,53 @@ export function hasIcons(field) {
     return Object.prototype.hasOwnProperty.call(MARKS, field);
 }
 
+/**
+ * Marks that name a kind of fact rather than a value of a dimension.
+ *
+ * The date, the duration, the bounce, the page and the email in a phone visit box. Same 16x16
+ * grid and the same stroke as MARKS, and kept apart from it because no producer emits these.
+ */
+const GLYPHS = {
+    calendar: ['M2.75 4.25h10.5v9.5H2.75z', 'M2.75 7.25h10.5', 'M5.5 2.25v3.5', 'M10.5 2.25v3.5'],
+    clock: ['M8 2.25a5.75 5.75 0 1 0 0 11.5a5.75 5.75 0 1 0 0-11.5z', 'M8 5v3.25l2.25 1.5'],
+    bounce: ['M9.5 2.75h3.75v3.75', 'M13.25 2.75L7.5 8.5', 'M11.25 9.5v3.75h-8.5v-8.5h3.75'],
+    page: ['M4 1.75h5l3 3v9.5H4z', 'M9 1.75v3h3', 'M6 8.25h4', 'M6 10.75h4'],
+    mail: ['M2.25 3.75h11.5v8.5H2.25z', 'M2.25 4.25L8 8.75l5.75-4.5']
+};
+
+/**
+ * A named glyph from GLYPHS, drawn like every other mark, or null for a name it does not have.
+ *
+ * @param {string} name
+ * @returns {SVGElement|null}
+ */
+export function glyph(name) {
+    const paths = GLYPHS[name];
+    if (!paths) {
+        return null;
+    }
+
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('class', 'vicon vglyph');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+
+    for (const d of paths) {
+        const path = document.createElementNS(NS, 'path');
+        path.setAttribute('d', d);
+        svg.appendChild(path);
+    }
+    return svg;
+}
+
 /** Lower-cased index per dimension, built on first use. */
 const loose = new Map();
 
