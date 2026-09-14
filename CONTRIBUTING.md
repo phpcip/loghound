@@ -95,7 +95,6 @@ it back into something that silently loses data every night.
 - **PSR-12.**
 - `declare(strict_types=1);` at the top of every PHP file.
 - Namespace `Loghound\`, PSR-4 onto `src/`.
-- No AI-assistant attribution in commits, comments or documentation.
 
 ---
 
@@ -164,7 +163,6 @@ Files are found by glob — no registration step, no central list to keep in syn
   New config key → `Config::defaults()` *and* wherever it is documented. New field →
   `SPEC.md` §4.
 - **Add a `CHANGELOG.md` entry** under Unreleased.
-- No AI-assistant attribution anywhere in the commit or the diff.
 
 ### Changing a scoring weight
 
