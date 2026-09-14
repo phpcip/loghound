@@ -947,6 +947,20 @@ table.visits td.visit-box { display: none; }
     table.visits .vbox-line > .urlout,
     table.visits .vbox-line > .urlamb { flex: none; }
 
+    /* THE OPEN-PAGE ARROW IS A SMALL BUTTON in the box: a visible border and a fill so it reads as
+       a control, and 26px instead of the 44px tap floor the general `.urlout` rule gives it,
+       because it leads its own line and nothing else on that line competes for the tap. */
+    table.visits .vbox-line > .urlout {
+        width: 26px;
+        height: 26px;
+        min-width: 0;
+        min-height: 0;
+        color: var(--ink);
+        background: var(--page);
+        border-color: var(--field-border);
+    }
+    table.visits .vbox-line > .urlout .urlout-mark { font-size: 12px; }
+
     tbody tr[data-verdict="bot"] > td.visit-box { box-shadow: inset 2px 0 0 var(--c-bot); }
     tbody tr[data-verdict="likely_bot"] > td.visit-box {
         box-shadow: inset 2px 0 0 color-mix(in srgb, var(--c-bot) 55%, transparent);

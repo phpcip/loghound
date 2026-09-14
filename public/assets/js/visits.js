@@ -412,5 +412,5 @@ function visitBox(v, seen, shown, unmeasured) {
         ? el('div', { class: 'vbox-line vbox-mail' }, [glyph('mail'), copyValue(v.ident, { label: 'Email' })])
         : null;
 
-    return el('td', { class: 'visit-box', colspan: '6' }, [meta, page, mail]);
+    return el('td', { class: 'visit-box', colspan: '6' }, [meta, mail, page]);
 }
