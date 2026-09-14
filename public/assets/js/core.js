@@ -678,7 +678,11 @@ export function durClock(ms) {
 }
 
 /**
- * The same duration as a node, on the segmented face, so a visit's length reads like its clock.
+ * The same duration as a node: the digits on the segmented face, everything else in plain type.
+ *
+ * ONLY DIGITS AND THE COLON GO ON THE FACE. A segmented `s` is drawn out of the same bars as a
+ * 5, so `5 s` read as `55` — the unit has to leave the display or the number is read wrong. The
+ * same applies to `Days`, which is why this splits the string rather than styling all of it.
  *
  * The precise figure — tenths, or milliseconds under a second — stays on the title, which is
  * where anyone who actually needs it will look.
@@ -687,9 +691,12 @@ export function durClock(ms) {
  * @returns {HTMLElement}
  */
 export function durStamp(ms) {
-    return el('span', { class: 'stamp', title: dur(ms) }, [
-        el('span', { class: 'led-hm', text: durClock(ms) })
-    ]);
+    const parts = String(durClock(ms)).match(/[0-9:]+|[^0-9:]+/g) || [];
+
+    return el('span', { class: 'stamp stamp-dur', title: dur(ms) }, parts.map((part) => el('span', {
+        class: /[0-9:]/.test(part) ? 'led-hm' : 'stamp-unit',
+        text: part
+    })));
 }
 
 /** Just the clock part, for dense axis labels where the date is implied. */

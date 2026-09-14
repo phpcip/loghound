@@ -5612,3 +5612,11 @@ button.stat:hover .stat-go { color: var(--accent); }
 }
 .stamp > .led-hm:first-child { margin-left: 0; }
 
+/* A DURATION IS DIGITS PLUS A UNIT, and only the digits are on the display face: a segmented
+   `s` is built from the same bars as a 5, so "5 s" read as "55" until the unit was moved off
+   it. The unit takes the panel's own type and the secondary tone, which is also what stops it
+   competing with the number it qualifies. The face's own spacing is dropped here because the
+   unit carries its spaces in its text. */
+.stamp-dur .led-hm { margin: 0; }
+.stamp-dur .stamp-unit { font-family: var(--font-ui); color: var(--muted); }
+
