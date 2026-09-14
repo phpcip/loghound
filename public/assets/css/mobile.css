@@ -1060,7 +1060,11 @@ table.visits td.visit-box { display: none; }
     .table-wrap > table > thead { display: none; }
     .table-wrap > table > tbody > tr:first-child > td { border-top: 0; }
 
-    .card:has(.table-wrap) > .card-head > h2 { display: none; }
+    /* KEYED ON THE SORT BAR ITSELF, on every page. It was keyed on `.card:has(.table-wrap) >
+       .card-head`, which only some cards match, so on the others the selects landed on top of a
+       title that was still there. responsive.js appends the bar straight into `.card-head`, so a
+       head that holds one drops its title, whatever shape the card around it has. */
+    .card-head:has(> .lh-sortbar) > h2 { display: none; }
 
     /* ON THE TOOLS' OWN ROW, NOT UNDER IT. `flex: 1 1 100%` put the selects on a line of their
        own, which is the line the hidden title was supposed to free up. `order: -1` sets them
