@@ -950,6 +950,16 @@ table.visits td.visit-box { display: none; }
         gap: 6px;
     }
     table.visits .vbox-meta .lh-copy { overflow: visible; }
+
+    /* BOUNCED SITS AT THE RIGHT EDGE, SMALL. The last item takes the free space on its left, so it
+       lines up down the list; when the line overflows the auto margin collapses and it simply
+       follows the others. Its chip loses most of its padding so it reads as a quiet mark. */
+    table.visits .vbox-meta > .vbox-item:last-child { margin-left: auto; }
+    table.visits .vbox-meta > .vbox-item:last-child .chip {
+        padding: 0 4px;
+        font-size: 12px;
+        line-height: 1.4;
+    }
     table.visits .vbox-mail > .lh-copy { font-weight: 700; }
 
     /* The flag in the box is sized to the text beside it, not the 22px a mark-only flag gets. */
