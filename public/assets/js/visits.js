@@ -27,7 +27,7 @@
 
 'use strict';
 
-import { clockStamp, dayOnly, dur, el, num, when } from './core.js';
+import { clockStamp, dayOnly, durStamp, el, num, when } from './core.js';
 import { copyValue } from './copy.js';
 import { glyph } from './icons.js';
 import { countryNode, dimValue, drillRow, openButton } from './identity.js';
@@ -185,7 +185,7 @@ export function visitRow(v) {
                 : 'Log span: first request to last. Blind to the final page.'),
         'data-sort': String(shown === null ? -1 : shown)
     }, [
-        el('span', { text: unmeasured ? 'not measured' : dur(shown) }),
+        unmeasured ? el('span', { text: 'not measured' }) : durStamp(shown),
         openButton('session', { id: v.id }, 'Open this visit')
     ]));
 
@@ -418,8 +418,8 @@ function dayOrdinal(iso) {
  * `14th 14:07 09` rather than `09/14/2026 14:07:09`. A list of visits is almost always one day
  * deep, so the month and the year repeated down every box said nothing the day did not; the
  * full instant is kept as the line's tooltip for the case where the list does span days.
- * mobile.css puts all three parts on a segmented LED face, which is why the seconds are their
- * own element rather than part of the clock string.
+ * mobile.css puts both parts on a segmented LED face. The seconds are not shown at all: the
+ * exact instant is on the line's title, and a visit list is not read to the second.
  *
  * An instant when() cannot read has no clock half, so that case renders the dash alone rather
  * than an empty watch face.
@@ -445,8 +445,7 @@ function stampLine(seen, v) {
         glyph('calendar'),
         el('span', { class: 'when-led' }, [
             el('span', { class: 'led-day', text: dayOrdinal(seen) }),
-            el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] }),
-            el('span', { class: 'led-s', text: clock[2] })
+            el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] })
         ]),
         openMark(v)
     ]);
@@ -484,7 +483,7 @@ function visitBox(v, seen, shown, unmeasured) {
         ]),
         el('span', { class: 'vbox-item' }, [
             glyph('clock'),
-            el('span', { class: unmeasured ? 'muted' : 'mono', text: unmeasured ? 'not measured' : dur(shown) })
+            unmeasured ? el('span', { class: 'muted', text: 'not measured' }) : durStamp(shown)
         ]),
         el('span', { class: 'vbox-item' }, [
             bounceMark(v)

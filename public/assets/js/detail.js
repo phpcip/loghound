@@ -1258,7 +1258,7 @@ function requestRow(r) {
     tr.appendChild(el('td', {
         class: 'mono nowrap visit-when',
         'data-sort': r.ts || ''
-    }, [stamp(r.ts, true)]));
+    }, [stamp(r.ts)]));
 
     tr.appendChild(el('td', { class: 'mono clip', title: r.ip || 'Address not recorded' }, [
         r.ip ? dimValue('ip_s', r.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })

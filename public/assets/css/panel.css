@@ -69,7 +69,7 @@
     --accent:        #c05520;
     --accent-ink:    #9e340f;
     --c-open:        #2f7a4f;
-    --c-open-row:    #c9971a;
+    --c-open-row:    #1f5c3a;
     --on-accent:     #ffffff;
 
     /* VERDICT HUES. The panel is otherwise the accent plus a grey ramp, deliberately, and
@@ -124,7 +124,7 @@
         --accent:        #c05520;
         --accent-ink:    #e0763f;
     --c-open:        #5aa877;
-    --c-open-row:    #e0b53c;
+    --c-open-row:    #2f6b48;
         --on-accent:     #ffffff;
 
         --c-bot:      #d0655f;
@@ -157,7 +157,7 @@
     --accent:        #c05520;
     --accent-ink:    #e0763f;
     --c-open:        #5aa877;
-    --c-open-row:    #e0b53c;
+    --c-open-row:    #2f6b48;
     --on-accent:     #ffffff;
 
     --c-bot:      #d0655f;
@@ -1435,10 +1435,15 @@ tbody tr[data-verdict="likely_human"] > td { background: color-mix(in srgb, var(
 tbody tr[data-verdict="unknown"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-axis); }
 tbody tr[data-verdict="unknown"] > td { background: color-mix(in srgb, var(--c-unknown) 16%, transparent); }
 
-/* STILL OPEN, IN YELLOW, AND IT SITS AFTER THE VERDICT TINTS ON PURPOSE: same specificity, so
-   the later rule is the one that paints, and a row whose numbers are still moving says that
-   FIRST. The verdict is not lost — it owns the coloured edge on the first cell, which this rule
-   does not touch — so the row still answers "who" while its background answers "is this final".
+/* STILL OPEN, IN A GREEN DARKER THAN THE HUMAN ONE, AND IT SITS AFTER THE VERDICT TINTS ON
+   PURPOSE: same specificity, so the later rule is the one that paints, and a row whose numbers
+   are still moving says that FIRST. The verdict is not lost — it owns the coloured edge on the
+   first cell, which this rule does not touch — so the row still answers "who" while its
+   background answers "is this final".
+
+   NOT YELLOW, and that was the first attempt: the hedged verdicts already tint their rows amber
+   (--c-likely), so a yellow open row read as "probably a bot" at a glance. Deeper than
+   --c-human on purpose too, so "a person" and "still here" stay two different statements.
 
    `:not(.visit-box)` keeps it off the phone, where the same fact is already a green OPEN chip
    inside the box and a second yellow ground under it would be the same thing said twice. */
@@ -5606,4 +5611,4 @@ button.stat:hover .stat-go { color: var(--accent); }
     margin: 0 0.1em 0 0.45em;
 }
 .stamp > .led-hm:first-child { margin-left: 0; }
-.stamp .stamp-sec { color: var(--faint); }
+

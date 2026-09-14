@@ -591,18 +591,20 @@ export function when(iso, withSeconds) {
  * ONE PLACE DECIDES WHAT A TIMESTAMP LOOKS LIKE. when() still returns the plain string, and
  * that is what titles, `data-sort` and exported text want; this is for the visible value in a
  * cell, a dialog row or a label, where the clock is the part being read and gets the display
- * face while the date stays in the panel's own type. The seconds follow in the secondary tone,
- * still attached to the minute they belong to.
+ * face while the date stays in the panel's own type.
+ *
+ * NO SECONDS ON SCREEN. A second is never what the reader of a visit list is after, and at
+ * `mm/dd/yyyy hh:mm:ss` the column was wide enough to push the page path out of the table. The
+ * full instant, seconds and all, stays one hover away as the title, so nothing is lost.
  *
  * An instant when() cannot read has no clock half; that case comes back as its dash, not as an
  * empty watch face.
  *
  * @param {string|null} iso
- * @param {boolean} [withSeconds] Passed straight to when().
  * @returns {HTMLElement}
  */
-export function stamp(iso, withSeconds) {
-    const text = when(iso, withSeconds);
+export function stamp(iso) {
+    const text = when(iso, false);
     const half = String(text).split(' ');
     const clock = half.length > 1 ? half[1].split(':') : [];
 
@@ -610,18 +612,17 @@ export function stamp(iso, withSeconds) {
         return el('span', { class: 'stamp', text: text });
     }
 
-    return el('span', { class: 'stamp' }, [
+    return el('span', { class: 'stamp', title: when(iso) }, [
         el('span', { class: 'stamp-date', text: half[0] }),
-        el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] }),
-        clock[2] ? el('span', { class: 'stamp-sec', text: ':' + clock[2] }) : null
+        el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] })
     ]);
 }
 
 /**
  * The clock half of an instant as a node, for the columns that show no date.
  *
- * Same split as stamp(), from timeOnly() rather than when(): hour and minute on the segmented
- * face, seconds beside them in the secondary tone.
+ * Same rule as stamp(): hour and minute on the segmented face, no seconds on screen, the exact
+ * instant on the title.
  *
  * @param {string|null} iso
  * @returns {HTMLElement}
@@ -633,9 +634,61 @@ export function clockStamp(iso) {
         return el('span', { class: 'stamp', text: timeOnly(iso) });
     }
 
-    return el('span', { class: 'stamp' }, [
-        el('span', { class: 'led-hm', text: parts[0] + ':' + parts[1] }),
-        parts[2] ? el('span', { class: 'stamp-sec', text: ':' + parts[2] }) : null
+    return el('span', { class: 'stamp', title: when(iso) }, [
+        el('span', { class: 'led-hm', text: parts[0] + ':' + parts[1] })
+    ]);
+}
+
+/**
+ * How long a visit lasted, read the way a watch reads it, with no fractions.
+ *
+ * `45 s` under a minute, `12:30` minutes and seconds under an hour, `03:07` hours and minutes
+ * above one, and `2 Days 04:12` for the rare visit that outlives a day. A tenth of a second was
+ * precision nobody acted on, and it made a column of times impossible to scan down.
+ *
+ * The two-group forms are deliberately the same shape: on a watch face the larger unit is
+ * always on the left, and the exact figure is one hover away on the node durStamp() builds.
+ *
+ * @param {number|null} ms
+ * @returns {string}
+ */
+export function durClock(ms) {
+    const v = Number(ms);
+    if (ms === null || ms === undefined || !Number.isFinite(v) || v <= 0) {
+        return '\u2014';
+    }
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const total = Math.round(v / 1000);
+
+    if (total < 60) {
+        return total + ' s';
+    }
+
+    const days = Math.floor(total / 86400);
+    if (days > 0) {
+        const h = Math.floor((total % 86400) / 3600);
+        return days + (days === 1 ? ' Day ' : ' Days ') + pad(h) + ':' + pad(Math.floor((total % 3600) / 60));
+    }
+    if (total < 3600) {
+        return pad(Math.floor(total / 60)) + ':' + pad(total % 60);
+    }
+
+    return pad(Math.floor(total / 3600)) + ':' + pad(Math.floor((total % 3600) / 60));
+}
+
+/**
+ * The same duration as a node, on the segmented face, so a visit's length reads like its clock.
+ *
+ * The precise figure — tenths, or milliseconds under a second — stays on the title, which is
+ * where anyone who actually needs it will look.
+ *
+ * @param {number|null} ms
+ * @returns {HTMLElement}
+ */
+export function durStamp(ms) {
+    return el('span', { class: 'stamp', title: dur(ms) }, [
+        el('span', { class: 'led-hm', text: durClock(ms) })
     ]);
 }
 

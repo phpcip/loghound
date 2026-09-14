@@ -274,7 +274,7 @@ function renderRequests(data) {
     tbody(byId('atk-requests-table'), data.requests.map((row) => ({
         attrs: row.session ? drillRow('session', { id: row.session }) : {},
         cells: [
-            { node: stamp(row.ts, true), mono: true, nowrap: true, sort: row.ts || '' },
+            { node: stamp(row.ts), mono: true, nowrap: true, sort: row.ts || '' },
             {
                 node: row.ip
                     ? dimValue('ip_s', row.ip, { mono: true })
