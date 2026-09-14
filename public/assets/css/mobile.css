@@ -69,16 +69,16 @@
  */
 
 /*
- * THE WATCH FACE. Jersey 25, the segmented display font this install ships in assets/fonts,
- * used for the hour and minute of a visit in the phone visit box — the digits an old digital
- * watch showed. It is served from here and not from Google because the panel's CSP is
+ * THE WATCH FACE. DSEG7 Classic, a true seven-segment face — the digits of an old LED watch,
+ * segment gaps and all — used for the hour and minute of a visit in the phone visit box.
+ * It is served from this install and not from a font CDN because the panel's CSP is
  * `font-src 'self'` and the docs promise the panel makes no external request; the licence
- * (SIL OFL 1.1) sits next to the file. Static weight 400 only — never ask it for bold, the
- * browser would synthesise it and thicken the segments unevenly.
+ * (SIL OFL 1.1, keshikan) sits next to the file. Regular weight only: a seven-segment face
+ * has no business being emboldened, and a synthesised bold closes the gaps between segments.
  */
 @font-face {
-    font-family: "Jersey 25";
-    src: url("../fonts/jersey25.woff2") format("woff2");
+    font-family: "DSEG7 Classic";
+    src: url("../fonts/dseg7classic.woff2") format("woff2");
     font-weight: 400;
     font-style: normal;
     font-display: swap;
@@ -950,8 +950,9 @@ table.visits td.visit-box { display: none; }
     }
     table.visits .vbox-line + .vbox-line { margin-top: 4px; }
     /* THE TIMESTAMP LEADS THE BOX on its own line, so the visit's instant is read before the
-       address: the calendar date in bold monospace, then the hour and minute in the Jersey 25
-       watch face declared at the top of this file, with the seconds beside them a step smaller.
+       address: the calendar date in bold monospace, then the hour and minute on the seven-segment
+       face declared at the top of this file, with the seconds beside them a step smaller. It is
+       sized to sit level with the date and no louder than it — a watch on the line, not a banner.
        One red for both themes — bright enough on the dark page, dark enough on the light one.
 
        The monospace stack is declared here, on this line only. The panel's --font-mono is Space
@@ -973,23 +974,15 @@ table.visits td.visit-box { display: none; }
         align-items: baseline;
         gap: 4px;
     }
-    /* No font-weight: Jersey 25 ships one weight, and a synthesised bold smears the segments. */
+    /* No font-weight: the face ships one, and a synthesised bold closes the segment gaps. */
     table.visits .vbox-when .led-hm,
     table.visits .vbox-when .led-s {
-        font-family: "Jersey 25", var(--font-watch);
+        font-family: "DSEG7 Classic", var(--font-watch);
         color: var(--c-led);
-    }
-    table.visits .vbox-when .led-hm {
-        font-size: 21px;
         line-height: 1;
-        letter-spacing: 0.04em;
     }
-    table.visits .vbox-when .led-s {
-        font-size: 14px;
-        line-height: 1;
-        letter-spacing: 0.03em;
-        opacity: 0.72;
-    }
+    table.visits .vbox-when .led-hm { font-size: 14px; }
+    table.visits .vbox-when .led-s { font-size: 10px; opacity: 0.75; }
     /* SIDEWAYS ONLY. `overflow-x: auto` turns an unset `overflow-y` into `auto` as well, and the
        flag and the bounce chip stand taller than the line, so it scrolled up and down too. The
        vertical axis is shut and the line given the few pixels those marks need. */

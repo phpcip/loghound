@@ -1,7 +1,0 @@
-Jersey 25
-Copyright 2024 The Jersey Project Authors (https://github.com/sarahtypes/jersey)
-
-Licensed under the SIL Open Font License, Version 1.1.
-https://openfontlicense.org
-
-Downloaded from Google Fonts and served from this install, so the panel makes no external request for it.
