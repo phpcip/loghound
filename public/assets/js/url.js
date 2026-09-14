@@ -713,7 +713,7 @@ function upgrade(job) {
  * @returns {HTMLElement}
  */
 export function pathCopy(path) {
-    return copyValue(path, { cls: 'mono path-copy', end: true, label: 'Path' });
+    return copyValue(path, { cls: 'mono path-copy', end: true, url: true, label: 'Page' });
 }
 
 /**

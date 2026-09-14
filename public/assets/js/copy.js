@@ -157,8 +157,12 @@ export function initCopyButtons() {
  * Built with createElement and textContent, so a value off the wire can never become markup,
  * and without core.js's el() because core.js imports this module.
  *
+ * A page passes `url: true`, and a tap then copies the full URL of the open-in-new-tab link that
+ * sits beside it rather than the bare path; see copyTextOf().
+ *
  * @param {string} value
- * @param {Object} [opts] {cls: extra classes, end: start scrolled to the end, label: what it is}
+ * @param {Object} [opts] {cls: extra classes, end: start scrolled to the end, label: what it is,
+ *                         url: copy the neighbouring link's full URL}
  * @returns {HTMLElement}
  */
 export function copyValue(value, opts) {
@@ -173,7 +177,31 @@ export function copyValue(value, opts) {
     if (options.end) {
         node.setAttribute('data-lh-end', '1');
     }
+    if (options.url) {
+        node.setAttribute('data-lh-copy-url', '1');
+    }
     return node;
+}
+
+/**
+ * What a tap on a copyable value puts on the clipboard.
+ *
+ * A page copies the href of the `a.urlout` beside it: url.js built and vetted that URL from a
+ * validated host and path, it carries the query string, and it is swapped in when the host list
+ * arrives. Where there is no such link — a path seen on several hosts, or one with no host at all
+ * — there is no URL to give without guessing a host, so the path itself is copied.
+ *
+ * @param {HTMLElement} field
+ * @returns {string}
+ */
+function copyTextOf(field) {
+    if (field.hasAttribute('data-lh-copy-url') && field.parentElement) {
+        const link = field.parentElement.querySelector('a.urlout[href]');
+        if (link && /^https?:\/\//i.test(link.href)) {
+            return link.href;
+        }
+    }
+    return field.textContent || '';
 }
 
 /** How far above a copyable field its note sits, and how near the window edge it may go. */
@@ -254,7 +282,7 @@ export function initCopyFields() {
         event.preventDefault();
         event.stopPropagation();
 
-        const attempt = canWriteClipboard() ? writeClipboard(field.textContent || '') : Promise.resolve(false);
+        const attempt = canWriteClipboard() ? writeClipboard(copyTextOf(field)) : Promise.resolve(false);
         attempt.then((ok) => {
             if (!ok) {
                 selectContents(field);

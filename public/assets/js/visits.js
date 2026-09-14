@@ -405,7 +405,7 @@ function visitBox(v, seen, shown, unmeasured) {
     ]);
 
     const page = el('div', { class: 'vbox-line vbox-page' }, v.entry
-        ? [urlMark(v.entry, { host: v.host }), copyValue(v.entry, { cls: 'mono', end: true, label: 'Page' })]
+        ? [urlMark(v.entry, { host: v.host }), copyValue(v.entry, { cls: 'mono', end: true, url: true, label: 'Page' })]
         : [glyph('page'), noPageMark()]);
 
     const mail = v.ident
