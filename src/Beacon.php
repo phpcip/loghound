@@ -479,6 +479,12 @@ final class Beacon
         if ($v === '' || mb_strlen($v) > self::MAX_TERM) {
             return '';
         }
+        /* A match-all is not a search. `*:*`, `*` and the like are what a search page sends
+           before anybody types anything, so they are dropped here, where the log and the beacon
+           both pass, rather than counted as the most searched term. */
+        if (preg_match('/^[\s*?:]+$/u', $v) === 1) {
+            return '';
+        }
         return mb_strtolower($v, 'UTF-8');
     }
 
