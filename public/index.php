@@ -205,7 +205,7 @@ if ($restored !== []
     } else {
         $_GET['s'] = Controller::sectionSlug($section);
     }
-    header('Location: ?' . http_build_query($_GET), true, 303);
+    header('Location: ?' . Layout::query($_GET), true, 303);
     exit;
 }
 

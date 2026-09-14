@@ -487,7 +487,17 @@ if (phoneMedia !== null) {
  */
 export function scopeHost() {
     const params = new URLSearchParams(window.location.search);
-    const values = params.getAll(FILTER_NS + '[' + HOST_FIELD + '][]').filter((v) => v !== '');
+    const spelled = new RegExp('^' + FILTER_NS + '\\[' + HOST_FIELD + '\\]\\[[0-9]*\\]$');
+    const values = [];
+    for (const key of new Set(params.keys())) {
+        if (spelled.test(key)) {
+            for (const v of params.getAll(key)) {
+                if (v !== '' && !values.includes(v)) {
+                    values.push(v);
+                }
+            }
+        }
+    }
     if (values.length !== 1) {
         return null;
     }

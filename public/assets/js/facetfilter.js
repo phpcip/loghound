@@ -141,6 +141,11 @@ function opKey(field, ns) {
 /**
  * Read the whole selection out of the current URL.
  *
+ * Values are ACCUMULATED across every key of a dimension. In the numbered spelling each value
+ * has its own key (`f[field][0]`, `f[field][1]`), so taking one key's values as the whole
+ * dimension kept only the last one — and the next filter link rewrote the URL, and the
+ * remembered scope, with the rest silently gone.
+ *
  * @returns {Map<string, {values: string[], op: string}>}
  */
 export function readSelection(ns) {
@@ -165,8 +170,9 @@ export function readSelection(ns) {
             continue;
         }
         const op = params.get(opKey(field, prefix));
+        const held = out.has(field) ? out.get(field).values : [];
         out.set(field, {
-            values: chosen,
+            values: held.concat(chosen.filter((v) => !held.includes(v))),
             op: op === OP_ALL || op === OP_NONE ? op : OP_ANY
         });
     }

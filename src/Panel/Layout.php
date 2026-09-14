@@ -810,7 +810,7 @@ final class Layout
             }
         }
 
-        foreach (self::flatten($params) as $name => $value) {
+        foreach (self::flatten($params) as [$name, $value]) {
             echo '<input type="hidden" name="' . Security::esc($name) . '"'
                 . ' value="' . Security::esc($value) . '">';
         }
@@ -838,7 +838,7 @@ final class Layout
         }
 
         $out = '';
-        foreach (self::flatten($params) as $name => $value) {
+        foreach (self::flatten($params) as [$name, $value]) {
             $out .= '<input type="hidden" name="' . Security::esc($name) . '"'
                 . ' value="' . Security::esc($value) . '">';
         }
@@ -846,31 +846,57 @@ final class Layout
     }
 
     /**
-     * A nested parameter array flattened into the `name=value` pairs a form submits.
+     * A nested parameter array flattened into the `[name, value]` pairs a form or a URL carries.
      *
-     * `f[host_s][0]` rather than `f[host_s][]`, because a hidden field has to name its index for
-     * the browser to send more than one of them in a stable order, and PHP reads both spellings
-     * into the same array.
+     * ONE SPELLING, EVERYWHERE: a value under a numeric key is written `f[host_s][]`, never
+     * `f[host_s][0]`. The browser-side readers and builders (facetfilter.js, url.js) speak the
+     * empty-bracket form, and a URL mixing both is parsed by PHP with `[]` and `[0]` landing on
+     * the same slot — one value overwriting another. A form submits its fields in document order,
+     * so repeated names keep their order without an index. A pair list rather than a map, because
+     * repeated names are the whole point.
      *
      * @param array<string,mixed> $params
-     * @return array<string,string>
+     * @return array<int,array{0:string,1:string}>
      */
     private static function flatten(array $params, string $prefix = ''): array
     {
         $out = [];
         foreach ($params as $key => $value) {
-            $name = $prefix === '' ? (string) $key : $prefix . '[' . $key . ']';
+            if ($prefix === '') {
+                $name = (string) $key;
+            } elseif (is_int($key) && !is_array($value)) {
+                $name = $prefix . '[]';
+            } else {
+                $name = $prefix . '[' . $key . ']';
+            }
             if (is_array($value)) {
-                foreach (self::flatten($value, $name) as $k => $v) {
-                    $out[$k] = $v;
+                foreach (self::flatten($value, $name) as $pair) {
+                    $out[] = $pair;
                 }
                 continue;
             }
             if (is_string($value) || is_int($value)) {
-                $out[$name] = (string) $value;
+                $out[] = [$name, (string) $value];
             }
         }
         return $out;
+    }
+
+    /**
+     * A parameter array as a query string, in the panel's one spelling (see flatten()).
+     *
+     * Used for every URL the server composes from request state — the scope redirect and
+     * urlWith() — so no server-built URL can ever carry the numbered spelling.
+     *
+     * @param array<string,mixed> $params
+     */
+    public static function query(array $params): string
+    {
+        $pairs = [];
+        foreach (self::flatten($params) as [$name, $value]) {
+            $pairs[] = rawurlencode($name) . '=' . rawurlencode($value);
+        }
+        return implode('&', $pairs);
     }
 
     /**
@@ -1105,27 +1131,7 @@ final class Layout
             $params[$k] = $v;
         }
 
-        /* `f[field][]`, NEVER `f[field][0]`. http_build_query() numbers every array it is given,
-           and the browser reads the filter state back with a parser that matches the empty-bracket
-           spelling this product writes everywhere else (Panel\Facets::urlFor). A numbered key
-           parsed as no selection at all, so after following one of these links the sidebar could
-           switch a value on and never off again. The operator keeps its literal key. */
-        $pairs = [];
-        foreach ($params as $key => $value) {
-            if (!is_array($value)) {
-                $pairs[] = rawurlencode((string) $key) . '=' . rawurlencode((string) $value);
-                continue;
-            }
-            foreach ($value as $field => $entries) {
-                $base = (string) $key . '[' . (string) $field . ']';
-                foreach ((array) $entries as $k => $entry) {
-                    $suffix = $k === 'op' ? '[op]' : '[]';
-                    $pairs[] = rawurlencode($base . $suffix) . '=' . rawurlencode((string) $entry);
-                }
-            }
-        }
-
-        return '?' . implode('&', $pairs);
+        return '?' . self::query($params);
     }
 
     /** The footer: honest about where the numbers came from and what they cost. */
