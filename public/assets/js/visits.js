@@ -91,7 +91,7 @@ export function visitRow(v) {
        here and in every other table that shows a scored session, so the judgement is legible
        down the whole table at a glance instead of being read one chip at a time. */
     const attrs = drillRow('session', { id: v.id });
-    attrs.dataset = Object.assign({}, attrs.dataset, { verdict: v.verdict || 'unknown' });
+    attrs.dataset = Object.assign({}, attrs.dataset, { verdict: v.verdict || 'unknown' }, v.ident ? { ident: '1' } : {});
     const tr = el('tr', attrs);
 
     /* LAST SEEN, FALLING BACK TO ARRIVAL. `ts_end` is what the server now orders and filters

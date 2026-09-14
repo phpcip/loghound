@@ -971,6 +971,11 @@ table.visits td.visit-box { display: none; }
     }
     tbody tr[data-verdict="unknown"] > td.visit-box { box-shadow: inset 2px 0 0 var(--c-axis); }
 
+    /* A VISIT WITH AN EMAIL STANDS OUT FROM THE CROWD. The site told us who it was, which is the
+       rarest and most useful thing a row can say, so its box takes a clearer green than any
+       verdict tint; the verdict still reads on the edge stripe. visits.js sets `data-ident`. */
+    tbody tr[data-ident] > td.visit-box { background: color-mix(in srgb, var(--c-human) 18%, transparent); }
+
     /* SCOPED TO THE VISIT TABLES, NOT TO THE CLASS. `.visit-verdict` is worn by the Attacks
        table's Verdict column too — it borrows the visit table's styling — so hiding the class
        outright would delete a column nobody asked to lose. `.visits` with six columns is the
