@@ -575,6 +575,29 @@ final class State
                 ':p'   => self::encode($payload),
             ]
         );
+
+        /* THE BEACON MAKES THE SESSION DIRTY, so a reader who is still reading is republished.
+           An open session is rewritten only when listDirtyOpenSessions() sees `scored_ts` behind
+           `last_ts`, and `last_ts` moves only on a new LOG line — so a visitor who loaded one
+           page and then read it for twenty minutes kept the short span its first request had
+           until the session finally closed, even though the beacon was reporting engagement the
+           whole time. Clearing `scored_ts` marks the row dirty exactly once per beacon, and the
+           next scorer run rebuilds the document with the staged rows merged in.
+
+           `last_ts` IS DELIBERATELY NOT TOUCHED. It is what closeIdle() measures idleness
+           against, so advancing it on a heartbeat would keep a session open for as long as a
+           browser tab exists, which is a different thing from a visit and would never settle.
+
+           MATCHED ON client_key, NEVER ON session_id: the collector mints a provisional id of
+           its own and never learns the real one, which is the same reason beaconsFor() matches
+           on the key. Both sides build it as ip_net|sha1(ua). */
+        if ($clientKey !== null && $clientKey !== '') {
+            $this->run(
+                'UPDATE sessions_open SET scored_ts = NULL
+                  WHERE client_key = :ck AND closed_at IS NULL',
+                [':ck' => $clientKey]
+            );
+        }
     }
 
     /**

@@ -69,6 +69,7 @@
     --accent:        #c05520;
     --accent-ink:    #9e340f;
     --c-open:        #2f7a4f;
+    --c-open-row:    #c9971a;
     --on-accent:     #ffffff;
 
     /* VERDICT HUES. The panel is otherwise the accent plus a grey ramp, deliberately, and
@@ -123,6 +124,7 @@
         --accent:        #c05520;
         --accent-ink:    #e0763f;
     --c-open:        #5aa877;
+    --c-open-row:    #e0b53c;
         --on-accent:     #ffffff;
 
         --c-bot:      #d0655f;
@@ -155,6 +157,7 @@
     --accent:        #c05520;
     --accent-ink:    #e0763f;
     --c-open:        #5aa877;
+    --c-open-row:    #e0b53c;
     --on-accent:     #ffffff;
 
     --c-bot:      #d0655f;
@@ -1431,6 +1434,17 @@ tbody tr[data-verdict="likely_human"] > td { background: color-mix(in srgb, var(
 /* Unjudged stays grey, deliberately: no hue means no claim. */
 tbody tr[data-verdict="unknown"] > td:first-child { box-shadow: inset 2px 0 0 var(--c-axis); }
 tbody tr[data-verdict="unknown"] > td { background: color-mix(in srgb, var(--c-unknown) 16%, transparent); }
+
+/* STILL OPEN, IN YELLOW, AND IT SITS AFTER THE VERDICT TINTS ON PURPOSE: same specificity, so
+   the later rule is the one that paints, and a row whose numbers are still moving says that
+   FIRST. The verdict is not lost — it owns the coloured edge on the first cell, which this rule
+   does not touch — so the row still answers "who" while its background answers "is this final".
+
+   `:not(.visit-box)` keeps it off the phone, where the same fact is already a green OPEN chip
+   inside the box and a second yellow ground under it would be the same thing said twice. */
+tbody tr[data-open] > td:not(.visit-box) {
+    background: color-mix(in srgb, var(--c-open-row) 16%, transparent);
+}
 
 /* The engaged clock is the measured one, so it is inked; the log-span fallback stays muted. */
 table.visits td.visit-engaged { color: var(--ink); }

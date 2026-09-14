@@ -91,7 +91,17 @@ export function visitRow(v) {
        here and in every other table that shows a scored session, so the judgement is legible
        down the whole table at a glance instead of being read one chip at a time. */
     const attrs = drillRow('session', { id: v.id });
-    attrs.dataset = Object.assign({}, attrs.dataset, { verdict: v.verdict || 'unknown' }, v.ident ? { ident: '1' } : {});
+    /* AND WHETHER IT HAS ENDED. The phone shows this as the OPEN chip inside the visit box; a
+       desktop row has no room for a chip in the 175px date column — it renders, but the next
+       cell paints its own background over what hangs out of the cell — so the row is tinted
+       instead. One flag, two presentations, both driven from here. */
+    attrs.dataset = Object.assign(
+        {},
+        attrs.dataset,
+        { verdict: v.verdict || 'unknown' },
+        v.ident ? { ident: '1' } : {},
+        v.open === true ? { open: '1' } : {}
+    );
     const tr = el('tr', attrs);
 
     /* LAST SEEN, FALLING BACK TO ARRIVAL. `ts_end` is what the server now orders and filters
@@ -109,8 +119,7 @@ export function visitRow(v) {
         el('span', { class: 'visit-day', text: dayOnly(seen) }),
         /* The clock wears the segmented face; clockStamp() decides that shape for the whole
            panel, so this column cannot drift from the dialogs and the other tables. */
-        el('span', { class: 'visit-clock' }, [clockStamp(seen)]),
-        openMark(v)
+        el('span', { class: 'visit-clock' }, [clockStamp(seen)])
     ]));
 
     /* THE FLAG RIDES WITH THE ADDRESS. They answer one question — who, and from where — so
@@ -205,6 +214,10 @@ export function visitRow(v) {
  * Green, and it is deliberately not one of the verdict colours: this says something about the
  * clock, not about whether the visitor is a person, and the row already carries the verdict as
  * its colour.
+ *
+ * THE PHONE BOX ONLY. A desktop row says the same thing by being tinted, from `data-open` on
+ * the row: the date column is 175px and the neighbouring cell paints its own background, so a
+ * chip placed there rendered underneath it and was never visible.
  *
  * @param {Object} v The visit.
  * @returns {HTMLElement|null}
