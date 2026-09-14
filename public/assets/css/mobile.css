@@ -917,8 +917,13 @@ table.visits td.visit-box { display: none; }
         min-width: 0;
     }
     table.visits .vbox-line + .vbox-line { margin-top: 6px; }
+    /* SIDEWAYS ONLY. `overflow-x: auto` turns an unset `overflow-y` into `auto` as well, and the
+       flag and the bounce chip stand taller than the line, so it scrolled up and down too. The
+       vertical axis is shut and the line given the few pixels those marks need. */
     table.visits .vbox-meta {
         gap: 16px;
+        padding-block: 3px;
+        overflow-y: hidden;
         overflow-x: auto;
         white-space: nowrap;
         scrollbar-width: none;
