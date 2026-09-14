@@ -1081,6 +1081,25 @@ table.visits td.visit-box { display: none; }
         margin-bottom: 6px;
     }
 
+    /* THE CARD'S OWN TABS GO ON A LINE UNDER THE SORT ROW. Pages, Overview, Rhythm, SEO Tools and
+       Sources put a `.toggle` in the card head, and with the head held to one line the selects,
+       reload and CSV were drawn over it. A head carrying both wraps: the sort row stays first,
+       the tabs take the whole next line on one line of their own, and scroll sideways if they
+       still do not fit. */
+    .card-head:has(> .lh-sortbar):has(> .toggle) { flex-wrap: wrap; }
+    .card-head:has(> .lh-sortbar) > .toggle {
+        order: 10;
+        flex: 1 1 100%;
+        min-width: 0;
+        flex-wrap: nowrap;
+        gap: 16px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+    }
+    .card-head:has(> .lh-sortbar) > .toggle::-webkit-scrollbar { display: none; }
+    .card-head:has(> .lh-sortbar) > .toggle > * { flex: none; white-space: nowrap; }
+
     .lh-sortbar {
         display: flex;
         gap: 6px;
