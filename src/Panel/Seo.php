@@ -1116,8 +1116,7 @@ final class Seo extends Controller
             'Visits that loaded at least one page, counted in the period they arrived in, under every filter in force.',
             '',
             '',
-            '<div class="seo-tiles" id="seo-scorecard-tiles"></div>'
-            . '<div class="seo-subhead"><h3>Over time</h3>'
+            '<div class="seo-subhead"><h3>Over time</h3>'
             . self::toggle('seo-metric', 'metric', 'What the chart draws', [
                 'visits'    => 'Visits',
                 'pageviews' => 'Pageviews',
@@ -1126,7 +1125,8 @@ final class Seo extends Controller
             ], 'visits')
             . '</div>'
             . '<div class="chart" id="seo-timeline" style="height:320px"></div>'
-            . '<p class="seo-note" id="seo-timeline-note"></p>',
+            . '<p class="seo-note" id="seo-timeline-note"></p>'
+            . '<div class="seo-tiles" id="seo-scorecard-tiles"></div>',
             'Comparing the two periods'
         );
 

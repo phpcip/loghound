@@ -96,6 +96,9 @@
     --warn: #6b6560;
     --bad:  #c05520;
 
+    --trend-up:   #2f7d4f;
+    --trend-down: #c53030;
+
     --font-ui:   "Space Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     /* NO MONOSPACE ANYWHERE IN THIS PANEL. The variable stays — some 140 rules and call sites
        across the CSS, the PHP views and the JS renderers ask for it, and rewriting all of them
@@ -141,6 +144,9 @@
         --mid:  #7d766d;
         --warn: #a7a099;
         --bad:  #d4693a;
+
+        --trend-up:   #5aa877;
+        --trend-down: #e0605a;
     }
 }
 
@@ -174,6 +180,9 @@
     --mid:  #7d766d;
     --warn: #a7a099;
     --bad:  #d4693a;
+
+    --trend-up:   #5aa877;
+    --trend-down: #e0605a;
 }
 
 /* Base */
@@ -5304,9 +5313,9 @@ button.stat:hover .stat-go { color: var(--accent); }
     background: var(--accent);
 }
 
-/* A movement, coloured only where it is worth colouring: the accent is spent on growth. */
-.trend-up { color: var(--accent-ink); }
-.trend-down { color: var(--faint); }
+/* A movement reads at a glance: growth green, decline red. */
+.trend-up { color: var(--trend-up); }
+.trend-down { color: var(--trend-down); }
 
 /* ---------------------------------------------------------------------------
    ONE COLOUR PER VIRTUAL HOST
@@ -5574,6 +5583,9 @@ button.stat:hover .stat-go { color: var(--accent); }
 .seo-subhead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 18px; margin: 26px 0 10px; }
 .seo-subhead h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
 .seo-note { margin: 10px 0 0; max-width: 96ch; font-size: 14px; color: var(--muted); }
+/* The chart leads the scorecard: no gap above its heading, and the tiles sit clear of its note. */
+.seo-subhead:first-child { margin-top: 0; }
+.seo-note + .seo-tiles { margin-top: 26px; }
 
 .seo-table td, .seo-table th { white-space: nowrap; }
 .seo-dual { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
