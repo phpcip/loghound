@@ -664,8 +664,14 @@ table.visits td.visit-box { display: none; }
        because a phone has no hover and a sentence explaining what a view answers is worth
        more there than anywhere. */
 
-    .lh-nav-js .side.is-open li a {
+    /* `button.navlink` IS NAMED TOO. The Visitors group heading is a button, not a link, so it
+       missed this rule and kept the rail's flex row: its hint ran on beside the label, with the
+       rail's padding and no rule under it, unlike every row around it. */
+    .lh-nav-js .side.is-open li a,
+    .lh-nav-js .side.is-open li button.navlink {
         display: block;
+        width: 100%;
+        text-align: left;
         min-height: 48px;
         padding: 11px 4px;
         border-left: 0;
