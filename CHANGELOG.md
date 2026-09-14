@@ -7,6 +7,43 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.4.0] — 2026-09-14
+
+### Added
+
+- **Table order is a Solr sort.** A column header, or the sort selects on a phone, now orders the
+  whole result in Solr, so paging follows the order instead of reordering only the rows on screen.
+  The order is kept per card in the session, like the filters. It covers the visit list, Overview,
+  Pages, Engagement, Sources, Searches, Performance, Websites, Attacks, Bot forensics,
+  Fingerprints and Networks. Columns computed after Solr answers keep the on-screen reordering,
+  and the older sort parameter still works when no order is stated.
+
+- **On a phone every visit table is a list of compact boxes.** Date, flag, IP, session time and
+  bounce on the first line, then the email and the page with a button that opens it. IP, page and
+  email copy on a tap, and a page copies its full URL.
+
+- **Long paths on a phone show their last segments**, prefixed with `...`, with the whole path in
+  the tooltip.
+
+### Changed
+
+- **Navigation.** A main item with a list expands it instead of opening a page, only main items
+  carry an icon, Visitors has its own mark, and each level is one shade darker in the accent.
+
+- **On a phone** a card's tabs sit on their own line under the sort row, and a card carrying the
+  sort selects drops its title on every page.
+
+### Fixed
+
+- **Filters no longer lose values between pages.** Every server-built link and form uses one URL
+  spelling, and the browser reads both.
+
+- **A shut rail flyout no longer opens** when the pointer crosses the facet column.
+
+- **The Attacks request table is no longer empty on a phone.**
+
+---
+
 ## [1.3.4] — 2026-09-13
 
 ### Fixed
