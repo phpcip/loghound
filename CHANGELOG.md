@@ -7,6 +7,45 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.5.0] — 2026-09-14
+
+### Added
+
+- **A visit that has not ended yet is marked as still open.** On a phone it carries a green OPEN
+  chip beside its date; on a desktop the whole row is tinted a green darker than the one a human
+  verdict uses. Nothing is drawn on a settled visit. The mark reads the provisional document the
+  scorer already publishes, so no row is judged final while its counts are still moving.
+
+- **The clock wears a segmented LED display face.** DSEG14 Classic Bold ships with the panel and
+  is served from the install itself, so the page still makes no external request and the content
+  security policy stays `font-src 'self'`. Fourteen segments rather than seven because seven
+  cannot draw an `s` distinct from a 5, which a day of the month needs.
+
+### Changed
+
+- **Timestamps show the hour and minute, and no seconds.** Every table, dialog and label builds
+  its timestamp the same way now, with the date in the panel's own type and the clock on the
+  display face. The exact instant, seconds included, is the value's tooltip.
+
+- **Session time is read like a watch, without decimals.** `45 s` under a minute, `12:30` minutes
+  and seconds under an hour, `03:07` hours and minutes above one, and `2 Days 04:12` for a visit
+  that outlives a day. Only the digits sit on the display face: a segmented unit letter reads as
+  another digit, so `s` and `Days` stay in plain type. The precise figure is on the tooltip.
+
+- **A visit box on a phone leads with the instant it was last seen**, as the day of the month and
+  the clock, so the visit is placed in time before its address is read.
+
+### Fixed
+
+- **A visitor who is still reading no longer sits at the duration of their first request.** An
+  open visit was only rewritten when a new line reached the access log, so someone who opened one
+  page and read it kept that page's opening span until the visit closed, even while the beacon
+  was reporting engagement. A beacon now marks its own visit for republishing, and the next
+  scorer run rebuilds the document with the engagement merged in. The idle clock is untouched, so
+  a heartbeat still cannot keep a visit open for as long as a browser tab exists.
+
+---
+
 ## [1.4.0] — 2026-09-14
 
 ### Added
