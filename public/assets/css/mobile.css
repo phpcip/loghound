@@ -940,6 +940,9 @@ table.visits td.visit-box { display: none; }
     }
     table.visits .vbox-meta .lh-copy { overflow: visible; }
     table.visits .vbox-mail > .lh-copy { font-weight: 700; }
+
+    /* The flag in the box is sized to the text beside it, not the 22px a mark-only flag gets. */
+    table.visits .vbox-item .flag { margin-right: 0; font-size: 15px; }
     table.visits .vbox-page > .lh-copy,
     table.visits .vbox-mail > .lh-copy {
         display: block;
