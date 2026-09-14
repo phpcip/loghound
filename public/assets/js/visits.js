@@ -352,8 +352,8 @@ export function visitCaption(page) {
 /**
  * The same visit as a box of up to four lines, which mobile.css shows on a phone instead of the cells.
  *
- * Line one is the instant the visit was last seen, mm/dd/yyyy hh:mm:ss, the same shape every
- * other date on the page has. Line two is the open-visit control, the flag and address, the
+ * Line one is a calendar mark and the instant the visit was last seen, mm/dd/yyyy hh:mm:ss, the
+ * same shape every other date on the page has. Line two is the open-visit control, the flag and address, the
  * session time and the bounce, on one line that scrolls sideways when it does not fit. Line
  * three is the page, scrolled to its end, with the open-in-new-tab link. Line four is the email,
  * and is left out entirely when there is none. The address, the page and the email copy
@@ -368,6 +368,7 @@ export function visitCaption(page) {
  */
 function visitBox(v, seen, shown, unmeasured) {
     const stamp = el('div', { class: 'vbox-line vbox-when' }, [
+        glyph('calendar'),
         el('span', { class: 'mono', text: when(seen) })
     ]);
 
