@@ -882,9 +882,20 @@ table.visits td.visit-box { display: none; }
        email on the third, only when there is one. The table stops being a table so the box can
        take the full width. The verdict tint stays on the cell; the edge is restated below because
        panel.css draws it on the first cell, which is hidden here. */
+    /* THE BOX IS THE SCREEN'S WIDTH, NEVER THE CONTENT'S. `.table-wrap > table.table-fixed` sizes a
+       phone table to `max-content` and panel.css gives it a 680px minimum, so a long page widened
+       the whole table and the page scrolled sideways instead of the page line. Named with both
+       classes so it outranks both rules; the page and email lines then scroll inside themselves. */
     table.visits,
+    table.visits.table-fixed,
+    .table-wrap > table.visits.table-fixed,
     table.visits > tbody,
-    table.visits > tbody > tr { display: block; width: 100%; }
+    table.visits > tbody > tr {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+    }
     table.visits > colgroup,
     table.visits > tbody > tr > td { display: none; }
     /* `height: auto` AND `overflow: visible` ARE THE BOX. panel.css gives every visit cell a 26px
