@@ -68,6 +68,23 @@
  * of this one.
  */
 
+/*
+ * THE WATCH FACE. Jersey 25, the segmented display font this install ships in assets/fonts,
+ * used for the hour and minute of a visit in the phone visit box — the digits an old digital
+ * watch showed. It is served from here and not from Google because the panel's CSP is
+ * `font-src 'self'` and the docs promise the panel makes no external request; the licence
+ * (SIL OFL 1.1) sits next to the file. Static weight 400 only — never ask it for bold, the
+ * browser would synthesise it and thicken the segments unevenly.
+ */
+@font-face {
+    font-family: "Jersey 25";
+    src: url("../fonts/jersey25.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+
 /* ===========================================================================
    Tokens this file introduces.
 
@@ -933,17 +950,17 @@ table.visits td.visit-box { display: none; }
     }
     table.visits .vbox-line + .vbox-line { margin-top: 4px; }
     /* THE TIMESTAMP LEADS THE BOX on its own line, so the visit's instant is read before the
-       address: the calendar date in bold monospace, then the hour and minute on a small LED watch
-       face — dark window, slanted red digits with their own glow — and the seconds beside them a
-       step smaller and dimmer, the way the old digital watches showed them.
+       address: the calendar date in bold monospace, then the hour and minute in the Jersey 25
+       watch face declared at the top of this file, with the seconds beside them a step smaller.
+       One red for both themes — bright enough on the dark page, dark enough on the light one.
 
        The monospace stack is declared here, on this line only. The panel's --font-mono is Space
-       Grotesk on purpose (no monospace anywhere in the UI); a watch face is the one place digits
-       have to sit in fixed columns, so it gets its own token instead of changing that rule.
-       The red is a display colour, not a verdict: it never appears outside this window. */
+       Grotesk on purpose (no monospace anywhere in the UI); a timestamp is the one place digits
+       have to sit in fixed columns, so it gets its own token instead of changing that rule. */
     table.visits .vbox-when {
         --font-watch: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-        gap: 6px;
+        --c-led: #e0341a;
+        gap: 7px;
     }
     table.visits .vbox-when .when-date {
         font: 700 13px/1.2 var(--font-watch);
@@ -955,34 +972,23 @@ table.visits td.visit-box { display: none; }
         display: inline-flex;
         align-items: baseline;
         gap: 4px;
-        padding: 1px 7px 2px;
-        border-radius: 3px;
-        background: #14100f;
-        border: 1px solid #2c211c;
     }
-    /* `display: inline-block` IS WHAT MAKES THE SLANT APPEAR — an inline box ignores transform,
-       and the slant is most of what reads as an LED watch rather than just red text. */
+    /* No font-weight: Jersey 25 ships one weight, and a synthesised bold smears the segments. */
     table.visits .vbox-when .led-hm,
     table.visits .vbox-when .led-s {
-        display: inline-block;
-        font-family: var(--font-watch);
-        font-variant-numeric: tabular-nums;
-        font-weight: 700;
-        transform: skewX(-8deg);
+        font-family: "Jersey 25", var(--font-watch);
+        color: var(--c-led);
     }
     table.visits .vbox-when .led-hm {
-        font-size: 15px;
+        font-size: 21px;
         line-height: 1;
-        letter-spacing: 0.09em;
-        color: #ff3b26;
-        text-shadow: 0 0 5px rgba(255, 59, 38, 0.80), 0 0 12px rgba(255, 59, 38, 0.35);
+        letter-spacing: 0.04em;
     }
     table.visits .vbox-when .led-s {
-        font-size: 11px;
+        font-size: 14px;
         line-height: 1;
-        letter-spacing: 0.06em;
-        color: #c1301b;
-        text-shadow: 0 0 4px rgba(255, 59, 38, 0.40);
+        letter-spacing: 0.03em;
+        opacity: 0.72;
     }
     /* SIDEWAYS ONLY. `overflow-x: auto` turns an unset `overflow-y` into `auto` as well, and the
        flag and the bounce chip stand taller than the line, so it scrolled up and down too. The
