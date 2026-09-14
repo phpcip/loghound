@@ -385,7 +385,7 @@ function dayOrdinal(iso) {
 function visitBox(v, seen, shown, unmeasured) {
     const meta = el('div', { class: 'vbox-line vbox-meta' }, [
         el('span', { class: 'vbox-item' }, [
-            glyph('calendar'),
+            openButton('session', { id: v.id }, 'Open this visit'),
             el('span', { class: 'mono', text: dayOrdinal(seen) })
         ]),
         el('span', { class: 'vbox-item' }, [
@@ -399,7 +399,6 @@ function visitBox(v, seen, shown, unmeasured) {
             el('span', { class: unmeasured ? 'muted' : 'mono', text: unmeasured ? 'not measured' : dur(shown) })
         ]),
         el('span', { class: 'vbox-item' }, [
-            glyph('bounce'),
             bounceMark(v)
         ])
     ]);

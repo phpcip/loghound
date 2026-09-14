@@ -950,15 +950,23 @@ table.visits td.visit-box { display: none; }
     /* THE OPEN-PAGE ARROW IS A SMALL BUTTON in the box: a visible border and a fill so it reads as
        a control, and 26px instead of the 44px tap floor the general `.urlout` rule gives it,
        because it leads its own line and nothing else on that line competes for the tap. */
-    table.visits .vbox-line > .urlout {
+    /* The open-visit chevron at the head of the first line is the same small button, so the two
+       controls in the box look and size alike. */
+    table.visits .vbox-line > .urlout,
+    table.visits .vbox-item > .rowopen {
+        flex: none;
         width: 26px;
         height: 26px;
         min-width: 0;
         min-height: 0;
+        padding: 0;
+        margin: 0;
         color: var(--ink);
         background: var(--page);
-        border-color: var(--field-border);
+        border: 1px solid var(--field-border);
+        border-radius: var(--radius);
     }
+    table.visits .vbox-item > .rowopen { font: 700 14px/1 var(--font-ui); }
     table.visits .vbox-line > .urlout .urlout-mark { font-size: 12px; }
 
     tbody tr[data-verdict="bot"] > td.visit-box { box-shadow: inset 2px 0 0 var(--c-bot); }
