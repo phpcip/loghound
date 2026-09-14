@@ -350,13 +350,35 @@ export function visitCaption(page) {
 
 
 /**
- * The instant of a visit as a calendar date followed by a little LED watch face.
+ * The day of the month of an instant as an ordinal — `1st` `2nd` `3rd` `14th` `31st`.
  *
- * when() gives `mm/dd/yyyy hh:mm:ss` as one string; this splits it so the three parts can be
- * read differently: the date in bold monospace, the hour and minute as the big red digits of an
- * old digital watch, the seconds a step smaller beside them. An instant it cannot read comes
- * back from when() as a dash, which has no time half, so that case renders as the date span
- * alone rather than an empty watch window.
+ * Taken from dayOnly(), so it is the day in the panel's display timezone, the same one every
+ * other date on the page is in. An instant it cannot read comes back as its dash.
+ *
+ * @param {string|null} iso
+ * @returns {string}
+ */
+function dayOrdinal(iso) {
+    const day = parseInt(String(dayOnly(iso)).split('/')[1], 10);
+    if (!Number.isFinite(day)) {
+        return '\u2014';
+    }
+    const teen = day % 100 >= 11 && day % 100 <= 13;
+    const suffix = teen ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[day % 10] || 'th');
+    return day + suffix;
+}
+
+/**
+ * The instant of a visit as a watch reads it: the day of the month, then the clock.
+ *
+ * `14th 14:07 09` rather than `09/14/2026 14:07:09`. A list of visits is almost always one day
+ * deep, so the month and the year repeated down every box said nothing the day did not; the
+ * full instant is kept as the line's tooltip for the case where the list does span days.
+ * mobile.css puts all three parts on a segmented LED face, which is why the seconds are their
+ * own element rather than part of the clock string.
+ *
+ * An instant when() cannot read has no clock half, so that case renders the dash alone rather
+ * than an empty watch face.
  *
  * @param {string|null} seen The instant to show.
  * @returns {HTMLElement}
@@ -369,14 +391,14 @@ function stampLine(seen) {
     if (clock.length < 3) {
         return el('div', { class: 'vbox-line vbox-when' }, [
             glyph('calendar'),
-            el('span', { class: 'when-date', text: text })
+            el('span', { class: 'when-led' }, [el('span', { class: 'led-day', text: text })])
         ]);
     }
 
-    return el('div', { class: 'vbox-line vbox-when' }, [
+    return el('div', { class: 'vbox-line vbox-when', title: text }, [
         glyph('calendar'),
-        el('span', { class: 'when-date', text: half[0] }),
         el('span', { class: 'when-led' }, [
+            el('span', { class: 'led-day', text: dayOrdinal(seen) }),
             el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] }),
             el('span', { class: 'led-s', text: clock[2] })
         ])
