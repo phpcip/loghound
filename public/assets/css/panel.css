@@ -3623,9 +3623,18 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         background: var(--page);
         border: 1px solid var(--hairline);
         border-radius: var(--radius);
+        /* A SHUT FLYOUT LINGERS 400ms BEFORE IT GOES. Closing the instant the pointer left a
+           group punished every slip: cutting diagonally to a second-level entry crossed a
+           neighbouring row, and the whole menu vanished before the pointer arrived. The panel
+           stays drawn and reachable for the delay, and re-entering it re-hovers its group.
+           Transitions cannot delay `display` or `pointer-events`, so the panel is laid out
+           here permanently (`!important` against the `[hidden]` reset, as before) and
+           `visibility`, which does transition and blocks the pointer while hidden, does the
+           closing on its own. */
+        display: block !important;
         opacity: 0;
         visibility: hidden;
-        pointer-events: none;
+        transition: opacity 0s linear 400ms, visibility 0s linear 400ms;
     }
     :root.lh-rail-collapsed .side .navsub-link { padding: 6px 14px; }
 
@@ -3676,19 +3685,21 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
        `:hover` still holds on the parent while the pointer is inside a nested panel — hover
        follows the DOM, not the drawn position — so walking out to a second-level entry does
        not shut the panel it came from. */
+    /* Opens at once; only closing waits. The open panel is lifted one step so a lingering
+       sibling panel at the same coordinate cannot sit over the one just reached. */
     :root.lh-rail-collapsed .navgroup:focus-within > .navsub {
-        display: block !important;
+        z-index: 39;
         opacity: 1;
         visibility: visible;
-        pointer-events: auto;
+        transition-delay: 0s;
     }
 
     @media (hover: hover) and (pointer: fine) {
         :root.lh-rail-collapsed .navgroup:hover > .navsub {
-            display: block !important;
+            z-index: 39;
             opacity: 1;
             visibility: visible;
-            pointer-events: auto;
+            transition-delay: 0s;
         }
     }
     :root.lh-rail-collapsed .theme-toggle {
