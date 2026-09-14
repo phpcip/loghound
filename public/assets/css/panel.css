@@ -3687,7 +3687,11 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
        not shut the panel it came from. */
     /* Opens at once; only closing waits. The open panel is lifted one step so a lingering
        sibling panel at the same coordinate cannot sit over the one just reached. */
-    :root.lh-rail-collapsed .navgroup:focus-within > .navsub {
+    /* KEYBOARD FOCUS ONLY. `:focus-within` also matched the focus a MOUSE CLICK leaves on the
+       sub-link it clicked, so the current group's panel stayed open for good and a second
+       panel opened beside it whenever the pointer reached another group. `:focus-visible` is
+       set by tabbing and not by clicking, so the keyboard keeps the panel and the mouse does not. */
+    :root.lh-rail-collapsed .navgroup:has(:focus-visible) > .navsub {
         z-index: 39;
         opacity: 1;
         visibility: visible;
@@ -3806,7 +3810,7 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
        label the moment the pointer reached it. */
     :root.lh-rail-collapsed .side .navsub .navlink .navlabel,
     :root.lh-rail-collapsed .side .navsub .navgroup.has-sub:hover > .navrow > .navlink .navlabel,
-    :root.lh-rail-collapsed .side .navsub .navgroup.has-sub:focus-within > .navrow > .navlink .navlabel {
+    :root.lh-rail-collapsed .side .navsub .navgroup.has-sub:has(:focus-visible) > .navrow > .navlink .navlabel {
         position: static;
         z-index: auto;
         display: inline;
@@ -3864,7 +3868,8 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
        where it reads as a title rather than as a second tooltip. Groups with no sections keep
        the bubble: they have no flyout to collide with, which is why this is keyed on `has-sub`
        rather than on the group. */
-    :root.lh-rail-collapsed .navgroup.has-sub:focus-within > .navrow > .navlink .navlabel {
+    /* Same keyboard-only trigger as the flyout it pairs with (see `:has(:focus-visible)` above). */
+    :root.lh-rail-collapsed .navgroup.has-sub:has(:focus-visible) > .navrow > .navlink .navlabel {
         opacity: 0;
         visibility: hidden;
     }
