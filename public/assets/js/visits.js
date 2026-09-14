@@ -142,9 +142,8 @@ export function visitRow(v) {
         title: v.ident || 'No identity was sent for this visit',
         'data-sort': v.ident || ''
     }, [
-        v.ident
-            ? dimValue('ident_s', v.ident)
-            : el('span', { class: 'muted', text: 'N/A' })
+        v.ident ? dimValue('ident_s', v.ident) : el('span', { class: 'muted', text: 'N/A' }),
+        v.ident ? emailCopy(v.ident) : null
     ]));
 
     /* TIME ON SITE, AND WHICH CLOCK IT CAME FROM. The engaged clock is the honest one and it
@@ -344,4 +343,26 @@ export function visitCaption(page) {
         return 'No visit in scope.';
     }
     return num(total) + (total === 1 ? ' visit.' : ' visits, all of them reachable.');
+}
+
+/**
+ * The email as a narrow read-only field, which mobile.css shows in place of the filter link.
+ *
+ * On a phone the address is copied or swiped through inside a fixed width instead of taking
+ * the page column's room, and pressing it goes nowhere. The value is set as an attribute, never
+ * as markup. dialog.js ignores presses inside an input, so the row does not open either.
+ *
+ * @param {string} ident
+ * @returns {HTMLElement}
+ */
+function emailCopy(ident) {
+    return el('input', {
+        class: 'visit-email-copy',
+        type: 'text',
+        readonly: true,
+        value: String(ident),
+        spellcheck: 'false',
+        autocomplete: 'off',
+        'aria-label': 'Email ' + String(ident)
+    });
 }

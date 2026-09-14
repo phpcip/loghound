@@ -195,6 +195,9 @@ textarea {
    never cut an address of any plausible length. */
 table.visits td.visit-email { max-width: none; }
 
+/* The copyable email field exists for the phone layout only; a desktop keeps the filter link. */
+table.visits .visit-email-copy { display: none; }
+
 .lh-navhint { display: none; }
 
 /* A chart drawn above an aggregate table (assets/js/tablecharts.js): room above the table so
@@ -828,6 +831,26 @@ table.visits td.visit-email { max-width: none; }
     table.visits td.visit-email {
         max-width: none;
         white-space: nowrap;
+    }
+
+    /* THE EMAIL IS A NARROW READ-ONLY FIELD ON A PHONE, NOT A LINK. 14ch leaves the page column
+       its room; a long address is swiped through inside the field and can be copied. 16px because
+       iOS zooms the whole page on focusing any input set smaller, read-only included. */
+    table.visits td.visit-email > .dim { display: none; }
+    table.visits .visit-email-copy {
+        display: block;
+        width: 14ch;
+        max-width: 100%;
+        margin: 0;
+        padding: 2px 6px;
+        font: 400 16px/1.3 var(--font-ui);
+        color: var(--ink);
+        background: transparent;
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius);
+        -webkit-appearance: none;
+        appearance: none;
+        text-overflow: clip;
     }
 
     /* SCOPED TO THE VISIT TABLES, NOT TO THE CLASS. `.visit-verdict` is worn by the Attacks
