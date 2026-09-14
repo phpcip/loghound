@@ -37,6 +37,7 @@
  * @module responsive
  */
 
+import { endCopyFields, initCopyFields } from './copy.js';
 import { icon } from './icons.js';
 import { sortBy } from './sorttable.js';
 
@@ -917,7 +918,7 @@ function setUpTapTips() {
 
     document.addEventListener('click', (event) => {
         const target = event.target;
-        const wrap = touch.matches && target && typeof target.closest === 'function' && !target.closest('a, button')
+        const wrap = touch.matches && target && typeof target.closest === 'function' && !target.closest('a, button, input')
             ? target.closest('.urlwrap[data-lh-tip]')
             : null;
         if (!wrap) {
@@ -1708,6 +1709,7 @@ function refresh() {
         if (remeasureTips) {
             remeasureTips();
         }
+        endCopyFields();
         restack();
     });
 }
@@ -1812,7 +1814,9 @@ function start() {
     remeasureTips = markValueTips;
     setUpControlTips();
     setUpTapTips();
+    initCopyFields();
     markValueTips();
+    endCopyFields();
     restack();
     watch();
 

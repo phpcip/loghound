@@ -357,7 +357,7 @@ export function visitCaption(page) {
  */
 function emailCopy(ident) {
     return el('input', {
-        class: 'visit-email-copy',
+        class: 'visit-email-copy lh-copy',
         type: 'text',
         readonly: true,
         value: String(ident),

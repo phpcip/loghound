@@ -51,7 +51,7 @@ import {
 } from './identity.js';
 import { markSortable } from './sorttable.js';
 import { countryName } from './geo.js';
-import { bindPath, claimPath, hrefLink, outLink, pathCell, urlMark } from './url.js';
+import { bindPath, claimPath, hrefLink, outLink, pathCell, pathCopy, urlMark } from './url.js';
 import { renderPager } from './pager.js';
 import { fillVisits, visitCaption, visitTable } from './visits.js';
 
@@ -333,6 +333,7 @@ function trailBlock(id, data, host) {
                     el('span', { class: 'urlpath' }, [
                         bindPath(el('span'), hit.path)
                     ]),
+                    pathCopy(hit.path),
                     urlMark(hit.path, { host: hit.host, fallback: host, query: hit.query })
                 ])),
                 el('span', { class: statusClass + ' mono', text: hit.status === null ? '—' : String(hit.status) }),

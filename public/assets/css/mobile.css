@@ -195,8 +195,24 @@ textarea {
    never cut an address of any plausible length. */
 table.visits td.visit-email { max-width: none; }
 
-/* The copyable email field exists for the phone layout only; a desktop keeps the filter link. */
-table.visits .visit-email-copy { display: none; }
+/* The copyable fields exist for the phone layout only; a desktop keeps the filter link and the
+   path text. */
+table.visits .visit-email-copy,
+.path-copy { display: none; }
+
+/* The note a tap on a copyable field leaves for a moment, placed above the field by copy.js. */
+.lh-copied {
+    position: fixed;
+    z-index: 41;
+    padding: 4px 8px;
+    font: 500 14px/1.3 var(--font-ui);
+    white-space: nowrap;
+    color: var(--page);
+    background: var(--ink);
+    border: 1px solid var(--ink);
+    border-radius: var(--radius);
+    pointer-events: none;
+}
 
 .lh-navhint { display: none; }
 
@@ -836,11 +852,25 @@ table.visits .visit-email-copy { display: none; }
     /* THE EMAIL IS A NARROW READ-ONLY FIELD ON A PHONE, NOT A LINK. 14ch leaves the page column
        its room; a long address is swiped through inside the field and can be copied. 16px because
        iOS zooms the whole page on focusing any input set smaller, read-only included. */
-    table.visits td.visit-email > .dim { display: none; }
-    table.visits .visit-email-copy {
+    /* A PAGE IN A CRAMPED TABLE IS THE SAME KIND OF FIELD, as wide as its column, scrolled to
+       the end by copy.js so the part that names the page shows. The request timeline is cramped
+       the same way, so its list stops being one wide scroller and each path scrolls itself. */
+    table.visits td.visit-email > .dim,
+    td .urlwrap > .urlpath,
+    .timeline .urlwrap > .urlpath { display: none; }
+    td .urlwrap > .path-copy,
+    .timeline .urlwrap > .path-copy {
+        flex: 1 1 auto;
+        width: 100%;
+        min-width: 0;
+    }
+    .lh-dialog .timeline-scroll > .timeline { width: auto; }
+    input.lh-copy.is-copied { border-color: var(--accent); }
+
+    table.visits .visit-email-copy,
+    td .urlwrap > .path-copy,
+    .timeline .urlwrap > .path-copy {
         display: block;
-        width: 14ch;
-        max-width: 100%;
         margin: 0;
         padding: 2px 6px;
         font: 400 16px/1.3 var(--font-ui);

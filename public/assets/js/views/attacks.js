@@ -25,7 +25,7 @@ import { lines, stackedBars, tokens } from '../charts.js';
 import { clearTableChart, splitChart } from '../tablecharts.js';
 import { countryNode, dimRow, dimValue, drillRow, openButton, valueText, valueWords } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
-import { bindPath, claimPath } from '../url.js';
+import { bindPath, claimPath, pathCopy } from '../url.js';
 import { pagedCard } from '../cardtable.js';
 
 /**
@@ -350,7 +350,8 @@ function requestCell(row) {
         el('div', { class: 'clip-line' }, [
             claimPath(el('span', { class: 'urlwrap' }, [
                 row.method ? el('span', { class: 'mono', text: row.method }) : null,
-                bindPath(el('span', { class: 'urlpath mono' }), row.path || '/')
+                bindPath(el('span', { class: 'urlpath mono' }), row.path || '/'),
+                pathCopy(row.path || '/')
             ]))
         ]),
         el('div', { class: 'sub clip-line' }, lower.length ? lower : [el('span', { text: '\u2014' })])

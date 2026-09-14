@@ -149,3 +149,108 @@ export function initCopyButtons() {
         });
     }
 }
+
+/** How far above a copyable field its note sits, and how near the window edge it may go. */
+const NOTE_GAP = 4;
+const NOTE_EDGE = 8;
+
+/** The timer that takes the note down again. */
+let noteTimer = 0;
+
+/**
+ * Take the copy note down and clear the mark on the field it belonged to.
+ */
+function noteOff() {
+    window.clearTimeout(noteTimer);
+    const note = document.querySelector('.lh-copied');
+    if (note) {
+        note.hidden = true;
+    }
+    for (const field of document.querySelectorAll('input.lh-copy.is-copied')) {
+        field.classList.remove('is-copied');
+    }
+}
+
+/**
+ * Show a short note above a copyable field for a moment, right-aligned to it, and mark the field.
+ *
+ * One note for the whole page, created on first use and moved to whichever field was tapped
+ * last. It takes no pointer events and is out of flow, so it covers nothing it could block.
+ *
+ * @param {HTMLInputElement} field
+ * @param {string} message
+ */
+function noteOn(field, message) {
+    noteOff();
+    let note = document.querySelector('.lh-copied');
+    if (!note) {
+        note = document.createElement('div');
+        note.className = 'lh-copied';
+        note.setAttribute('role', 'status');
+        document.body.appendChild(note);
+    }
+    note.textContent = message;
+    note.hidden = false;
+
+    const box = field.getBoundingClientRect();
+    note.style.left = Math.max(NOTE_EDGE, box.right - note.offsetWidth) + 'px';
+    note.style.top = Math.max(NOTE_EDGE, box.top - note.offsetHeight - NOTE_GAP) + 'px';
+
+    field.classList.add('is-copied');
+    noteTimer = window.setTimeout(noteOff, CONFIRM_MS);
+}
+
+/**
+ * Copy a read-only `input.lh-copy` to the clipboard when it is tapped.
+ *
+ * The clipboard write starts inside the tap itself, which is what mobile browsers require of
+ * it. A refused write selects the value instead, so it can be copied by hand, and the note says
+ * which of the two happened. A swipe scrolls the field and fires no click, so reading a long
+ * value never copies it. Idempotent.
+ */
+export function initCopyFields() {
+    const root = document.documentElement;
+    if (root.dataset.lhCopyFields === '1') {
+        return;
+    }
+    root.dataset.lhCopyFields = '1';
+
+    document.addEventListener('click', (event) => {
+        const target = event.target;
+        const field = target && typeof target.closest === 'function' ? target.closest('input.lh-copy') : null;
+        if (!field) {
+            return;
+        }
+        const attempt = canWriteClipboard() ? writeClipboard(field.value) : Promise.resolve(false);
+        attempt.then((ok) => {
+            if (!ok) {
+                field.focus();
+                field.select();
+            }
+            noteOn(field, ok ? 'Copied' : 'Selected, copy manually');
+        });
+    });
+
+    window.addEventListener('scroll', noteOff, { passive: true, capture: true });
+}
+
+/**
+ * Scroll every visible path field to its end, once per time it becomes visible.
+ *
+ * A field is scrolled the first time it has a width, so a swipe the reader makes is not undone
+ * by the next re-render pass; a field hidden again (the window widened) forgets, and is scrolled
+ * again the next time a phone layout shows it.
+ */
+export function endCopyFields() {
+    for (const field of document.querySelectorAll('input.lh-copy[data-lh-end]')) {
+        if (field.offsetWidth === 0) {
+            delete field.dataset.lhEnded;
+            continue;
+        }
+        if (field.dataset.lhEnded === '1') {
+            continue;
+        }
+        field.scrollLeft = field.scrollWidth;
+        field.dataset.lhEnded = '1';
+    }
+}

@@ -703,6 +703,30 @@ function upgrade(job) {
 }
 
 /**
+ * A path as a read-only field, which mobile.css shows in a cramped table in place of the text.
+ *
+ * The whole path is in it: copy.js scrolls it to the end so the segment that names the page is
+ * what shows, a swipe reads the rest, and a tap copies it. The value is an attribute, never
+ * markup.
+ *
+ * @param {string} path
+ * @returns {HTMLElement}
+ */
+export function pathCopy(path) {
+    const value = path === null || path === undefined ? '' : String(path);
+    return el('input', {
+        class: 'lh-copy path-copy',
+        type: 'text',
+        readonly: true,
+        value: value,
+        spellcheck: 'false',
+        autocomplete: 'off',
+        'data-lh-end': '1',
+        'aria-label': 'Path ' + value
+    });
+}
+
+/**
  * A whole table cell: the path, truncated if it must be, with its affordance pinned beside it.
  *
  * The affordance is a flex item that never shrinks, so the ellipsis eats the path and never the
@@ -736,6 +760,7 @@ export function pathCell(path, opts) {
 
     return claimPath(el('span', { class: 'urlwrap' }, [
         cell,
+        raw !== '' ? pathCopy(shown) : null,
         urlMark(raw, options)
     ]));
 }
