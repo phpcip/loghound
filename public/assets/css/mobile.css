@@ -887,9 +887,16 @@ table.visits td.visit-box { display: none; }
     table.visits > tbody > tr { display: block; width: 100%; }
     table.visits > colgroup,
     table.visits > tbody > tr > td { display: none; }
+    /* `height: auto` AND `overflow: visible` ARE THE BOX. panel.css gives every visit cell a 26px
+       height and `table-fixed` clips every cell; a table cell treats that height as a minimum, a
+       block treats it as the height, so the box showed its first line and cut the other two. */
     table.visits > tbody > tr > td.visit-box {
         display: block;
+        height: auto;
+        overflow: visible;
+        white-space: normal;
         padding: 10px 12px;
+        line-height: 1.45;
         border-top: 1px solid var(--hairline);
     }
     table.visits .vbox-line {
