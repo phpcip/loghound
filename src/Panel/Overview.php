@@ -456,7 +456,7 @@ final class Overview extends Controller
             'q'  => '*:*',
             'fq' => $fqs,
         ], [
-            'paths' => Paging::terms('path_s', Paging::start(), Paging::rows(), 'count desc', [
+            'paths' => Paging::terms('path_s', Paging::start(), Paging::rows(), self::pagesOrder()['sort'], [
                 'facet' => SiteUrl::hostSubFacet() + ['sessions' => 'unique(session_id_s)'],
             ]),
         ]);
@@ -517,7 +517,7 @@ final class Overview extends Controller
             'q'  => '*:*',
             'fq' => $this->sessionFqs(),
         ], [
-            'terms'    => Paging::terms('search_terms_ss', Paging::start(), Paging::rows()),
+            'terms'    => Paging::terms('search_terms_ss', Paging::start(), Paging::rows(), self::searchesOrder()['sort']),
             'searched' => ['type' => 'query', 'q' => 'search_terms_ss:*'],
         ]);
 
@@ -594,12 +594,13 @@ final class Overview extends Controller
         );
         self::skeleton('ov-searches', 'rows', 0, 'Faceting search terms');
 
-        echo '<div class="table-wrap"><table id="ov-searches-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="ov-searches-table" class="table-fixed"'
+            . Sorting::tableAttrs('ov-searches', self::searchesOrder()) . '><colgroup>'
             . '<col style="width:18%"><col style="width:42%"><col style="width:16%"><col style="width:24%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Parameter</th>'
+            . '<th scope="col"' . Sorting::th('term') . '>Parameter</th>'
             . '<th scope="col">Search term</th>'
-            . '<th scope="col" class="num">Sessions</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
@@ -762,18 +763,39 @@ final class Overview extends Controller
         self::cardOpen('ov-pages', '04', 'Top pages', '', $tools);
         self::skeleton('ov-pages', 'rows', 0, 'Counting requests by path');
 
-        echo '<div class="table-wrap"><table id="ov-pages-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="ov-pages-table" class="table-fixed"'
+            . Sorting::tableAttrs('ov-pages', self::pagesOrder()) . '><colgroup>'
             . '<col style="width:46%"><col style="width:18%"><col style="width:18%"><col style="width:18%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Path</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">Sessions</th>'
+            . '<th scope="col"' . Sorting::th('path') . '>Path</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="ov-pages-pager"></div>';
 
         self::cardClose('ov-pages');
     }
+    /**
+     * The order of Top pages: path, requests or sessions, in Solr; most requests first by default.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function pagesOrder(): array
+    {
+        return Sorting::pick('ov-pages', ['path' => 'index', 'requests' => 'count', 'sessions' => 'sessions'], 'requests');
+    }
+
+    /**
+     * The order of the search terms: the stored term or its session count, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function searchesOrder(): array
+    {
+        return Sorting::pick('ov-searches', ['term' => 'index', 'sessions' => 'count'], 'sessions');
+    }
+
     /**
      * Why there are no sessions yet, when there is traffic.
      *

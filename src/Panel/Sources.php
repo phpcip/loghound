@@ -224,7 +224,7 @@ final class Sources extends Controller
             'q'  => '*:*',
             'fq' => array_merge($this->sessionFqs(), $extra),
         ], [
-            'hosts'    => Paging::terms('referer_host_s', $start, $rows),
+            'hosts'    => Paging::terms('referer_host_s', $start, $rows, self::referrersOrder()['sort']),
             'referred' => ['type' => 'query', 'q' => 'referer_host_s:*'],
         ]);
 
@@ -355,14 +355,25 @@ final class Sources extends Controller
             $this->popToggle() . $this->exportTool('referrers')
         );
         self::skeleton('an-referrers', 'rows', 0, 'Faceting referring sites');
-        echo '<div class="table-wrap"><table id="an-referrers-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="an-referrers-table" class="table-fixed"'
+            . Sorting::tableAttrs('an-referrers', self::referrersOrder()) . '><colgroup>'
             . '<col style="width:58%"><col style="width:16%"><col style="width:26%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Referring site</th>'
-            . '<th scope="col" class="num">Visits</th>'
+            . '<th scope="col"' . Sorting::th('site') . '>Referring site</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
             . '<th scope="col" class="bar-col">Share of referred visits</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-referrers-pager"></div>';
         self::cardClose('an-referrers');
+    }
+
+    /**
+     * The order of the referring sites: the site or its visit count, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function referrersOrder(): array
+    {
+        return Sorting::pick('an-referrers', ['site' => 'index', 'visits' => 'count'], 'visits');
     }
 }

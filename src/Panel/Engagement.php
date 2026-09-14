@@ -143,7 +143,7 @@ final class Engagement extends Controller
             'q'  => '*:*',
             'fq' => $this->settledSessionFqs(),
         ], [
-            'paths' => Paging::terms('entry_path_s', $start, $rows, 'count desc', [
+            'paths' => Paging::terms('entry_path_s', $start, $rows, self::bouncePagesOrder()['sort'], [
                 'facet' => array_merge(SiteUrl::hostSubFacet(), Bounce::subFacets()),
             ]),
         ]);
@@ -195,19 +195,47 @@ final class Engagement extends Controller
         );
         self::skeleton('an-people', 'rows', 0, 'Counting visits per signed-in visitor');
 
-        echo '<div class="table-wrap"><table id="an-people-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="an-people-table" class="table-fixed"'
+            . Sorting::tableAttrs('an-people', self::peopleOrder()) . '><colgroup>'
             . '<col style="width:32%"><col style="width:11%"><col style="width:11%">'
             . '<col style="width:11%"><col style="width:12%"><col style="width:23%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Who</th>'
-            . '<th scope="col" class="num">Visits</th>'
-            . '<th scope="col" class="num">Pages</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">Addresses</th>'
-            . '<th scope="col">Last seen</th>'
+            . '<th scope="col"' . Sorting::th('who') . '>Who</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
+            . '<th scope="col" class="num"' . Sorting::th('pages', 'desc') . '>Pages</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
+            . '<th scope="col" class="num"' . Sorting::th('addresses', 'desc') . '>Addresses</th>'
+            . '<th scope="col"' . Sorting::th('last', 'desc') . '>Last seen</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('an-people');
+    }
+
+    /**
+     * The order of the landing-page bounce list: the page, in Solr; most visits first by default.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function bouncePagesOrder(): array
+    {
+        return Sorting::pick('an-bouncepages', ['page' => 'index', 'visits' => 'count'], 'visits');
+    }
+
+    /**
+     * The order of the signed-in people: name, visits, pages, requests, addresses or last seen, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function peopleOrder(): array
+    {
+        return Sorting::pick('an-people', [
+            'who'       => 'index',
+            'visits'    => 'count',
+            'pages'     => 'pages',
+            'requests'  => 'hits',
+            'addresses' => 'uniq_ips',
+            'last'      => 'last',
+        ], 'visits');
     }
 
     /**
@@ -235,7 +263,7 @@ final class Engagement extends Controller
                     'type'       => 'terms',
                     'field'      => 'ident_s',
                     'limit'      => self::PEOPLE_LIMIT,
-                    'sort'       => 'count desc',
+                    'sort'       => self::peopleOrder()['sort'],
                     'numBuckets' => true,
                     'facet'      => [
                         'pages'   => 'sum(pages_i)',
@@ -287,10 +315,11 @@ final class Engagement extends Controller
         );
         self::skeleton('an-bouncepages', 'rows', 0, 'Measuring engagement per landing page');
 
-        echo '<div class="table-wrap"><table id="an-bouncepages-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="an-bouncepages-table" class="table-fixed"'
+            . Sorting::tableAttrs('an-bouncepages', self::bouncePagesOrder()) . '><colgroup>'
             . '<col style="width:45%"><col style="width:15%"><col style="width:40%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Landing page</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>Landing page</th>'
             . '<th scope="col" class="num">Bounce rate</th>'
             . '<th scope="col" class="bar-col">Bounced against engaged</th>'
             . '</tr></thead><tbody></tbody></table></div>';

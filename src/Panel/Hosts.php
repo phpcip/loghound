@@ -227,7 +227,7 @@ final class Hosts extends Controller
                 'field'    => Query::HOST_FIELD,
                 'limit'    => self::MAX_HOSTS,
                 'mincount' => 1,
-                'sort'     => 'count desc',
+                'sort'     => self::hostsOrder()['sort'],
                 'facet'    => $nested,
             ],
         ]);
@@ -337,7 +337,8 @@ final class Hosts extends Controller
         );
         self::skeleton('hosts-table', 'rows', 0, 'Grouping sessions by virtual host');
 
-        echo '<div class="table-wrap"><table id="hosts-table-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="hosts-table-table" class="table-fixed"'
+            . Sorting::tableAttrs('hosts-table', self::hostsOrder()) . '><colgroup>'
             /* THE UNKNOWN COLUMN IS HERE BECAUSE THE CAPTION CLAIMS THE ROW ADDS UP. Four of
                the five populations were on screen and the caption said "the five populations
                are mutually exclusive, so they add up to the session count on each row" — a sum
@@ -349,8 +350,8 @@ final class Hosts extends Controller
             . '<col style="width:10%"><col style="width:10%"><col style="width:10%">'
             . '<col style="width:10%"><col style="width:10%"><col style="width:10%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Host</th>'
-            . '<th scope="col" class="num">Sessions</th>'
+            . '<th scope="col"' . Sorting::th('host') . '>Host</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
             . '<th scope="col" class="num">Humans</th>'
             . '<th scope="col" class="num">Unknown</th>'
             . '<th scope="col" class="num">Evasive</th>'
@@ -361,6 +362,16 @@ final class Hosts extends Controller
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('hosts-table');
+    }
+
+    /**
+     * The order of the host comparison: the host or its session count, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function hostsOrder(): array
+    {
+        return Sorting::pick('hosts-table', ['host' => 'index', 'sessions' => 'count'], 'sessions');
     }
 
     /**

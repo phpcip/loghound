@@ -377,7 +377,7 @@ final class Performance extends Controller
                 'type'  => 'terms',
                 'field' => 'path_s',
                 'limit' => Security::clampInt($_GET['limit'] ?? null, 5, 100, 25),
-                'sort'  => 'count desc',
+                'sort'  => self::pathsOrder()['sort'],
                 'facet' => $percentiles + SiteUrl::hostSubFacet() + [
                     'bytes'    => 'avg(bytes_l)',
                     'errors'   => ['type' => 'query', 'q' => 'status_i:[500 TO 599]'],
@@ -444,7 +444,7 @@ final class Performance extends Controller
                     's5' => ['type' => 'query', 'q' => 'status_i:[500 TO 599]'],
                 ],
             ],
-            'statuses' => ['type' => 'terms', 'field' => 'status_i', 'limit' => 20, 'sort' => 'count desc'],
+            'statuses' => ['type' => 'terms', 'field' => 'status_i', 'limit' => 20, 'sort' => self::statusOrder()['sort']],
         ], $scope['scope']));
 
         $f = self::unscope($raw, $scope['scope']);
@@ -701,15 +701,16 @@ final class Performance extends Controller
         self::skeleton('pf-paths', 'rows', 0, 'Computing per-path percentiles');
 
         echo '<div class="table-wrap"><table id="pf-paths-table" class="table-fixed"'
+            . Sorting::tableAttrs('pf-paths', self::pathsOrder())
             . ' style="--table-min:940px"><colgroup>'
             . '<col style="width:28%"><col style="width:10%"><col style="width:9%"><col style="width:9%">'
             . '<col style="width:9%"><col style="width:17%"><col style="width:9%"><col style="width:9%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Path</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">p50</th>'
-            . '<th scope="col" class="num">p95</th>'
-            . '<th scope="col" class="num">p99</th>'
+            . '<th scope="col"' . Sorting::th('path') . '>Path</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
+            . '<th scope="col" class="num"' . Sorting::th('p50', 'desc') . '>p50</th>'
+            . '<th scope="col" class="num"' . Sorting::th('p95', 'desc') . '>p95</th>'
+            . '<th scope="col" class="num"' . Sorting::th('p99', 'desc') . '>p99</th>'
             . '<th scope="col" class="bar-col">p50 vs p99</th>'
             . '<th scope="col" class="num">4xx</th>'
             . '<th scope="col" class="num">5xx</th>'
@@ -731,15 +732,42 @@ final class Performance extends Controller
         self::skeleton('pf-status', 'chart', 320, 'Faceting response codes');
 
         echo '<div class="chart" id="pf-heat" style="height:320px"></div>';
-        echo '<div class="table-wrap"><table id="pf-status-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="pf-status-table" class="table-fixed"'
+            . Sorting::tableAttrs('pf-status', self::statusOrder()) . '><colgroup>'
             . '<col style="width:12%"><col style="width:44%"><col style="width:18%"><col style="width:26%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Status</th>'
+            . '<th scope="col"' . Sorting::th('status') . '>Status</th>'
             . '<th scope="col">Meaning</th>'
-            . '<th scope="col" class="num">Requests</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('pf-status');
+    }
+
+    /**
+     * The order of the per-path table: path, requests or a latency percentile, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function pathsOrder(): array
+    {
+        return Sorting::pick('pf-paths', [
+            'path'     => 'index',
+            'requests' => 'count',
+            'p50'      => 'p50',
+            'p95'      => 'p95',
+            'p99'      => 'p99',
+        ], 'requests');
+    }
+
+    /**
+     * The order of the status-code table: the code or its request count, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function statusOrder(): array
+    {
+        return Sorting::pick('pf-status', ['status' => 'index', 'requests' => 'count'], 'requests');
     }
 }

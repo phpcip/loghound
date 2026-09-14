@@ -222,7 +222,7 @@ final class Pages extends Controller
             'q'  => '*:*',
             'fq' => array_merge($this->sessionFqs(), $extra),
         ], [
-            'paths' => Paging::terms('entry_path_s', $start, $rows, 'count desc', [
+            'paths' => Paging::terms('entry_path_s', $start, $rows, self::pathOrder('an-entry')['sort'], [
                 'facet' => array_merge(SiteUrl::hostSubFacet(), [
                     'single' => ['type' => 'query', 'q' => 'hits_i:[* TO 1]'],
                 ]),
@@ -275,7 +275,7 @@ final class Pages extends Controller
             'q'  => '*:*',
             'fq' => array_merge($this->settledSessionFqs(), $extra),
         ], [
-            'paths' => Paging::terms('exit_path_s', $start, $rows, 'count desc', [
+            'paths' => Paging::terms('exit_path_s', $start, $rows, self::pathOrder('an-exit')['sort'], [
                 'facet' => SiteUrl::hostSubFacet(),
             ]),
             'beacon' => ['type' => 'query', 'q' => Query::POP_BEACON],
@@ -416,17 +416,29 @@ final class Pages extends Controller
         );
         self::skeleton('an-entry', 'rows', 0, 'Faceting entry pages');
 
-        echo '<div class="table-wrap"><table id="an-entry-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="an-entry-table" class="table-fixed"'
+            . Sorting::tableAttrs('an-entry', self::pathOrder('an-entry')) . '><colgroup>'
             . '<col style="width:52%"><col style="width:14%"><col style="width:16%">'
             . '<col style="width:18%"></colgroup><thead><tr>'
-            . '<th scope="col">Page</th>'
-            . '<th scope="col" class="num">Visits</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>Page</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
             . '<th scope="col" class="num">Left straight away</th>'
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-entry-pager"></div>';
 
         self::cardClose('an-entry');
+    }
+
+    /**
+     * The order of an entry or exit page list: the page or its visit count, in Solr.
+     *
+     * @param string $card The card the list is drawn in.
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function pathOrder(string $card): array
+    {
+        return Sorting::pick($card, ['page' => 'index', 'visits' => 'count'], 'visits');
     }
 
     /** CARD 02. Where the log last saw a visit. */
@@ -452,11 +464,12 @@ final class Pages extends Controller
             . 'produces no further log line, and a page served from the browser cache produces none at all. '
             . 'Read a row as "this is where the trail goes cold".</p></div>';
 
-        echo '<div class="table-wrap"><table id="an-exit-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="an-exit-table" class="table-fixed"'
+            . Sorting::tableAttrs('an-exit', self::pathOrder('an-exit')) . '><colgroup>'
             . '<col style="width:60%"><col style="width:16%"><col style="width:24%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Page</th>'
-            . '<th scope="col" class="num">Visits</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>Page</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-exit-pager"></div>';

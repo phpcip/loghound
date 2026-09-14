@@ -152,6 +152,16 @@ final class Searches extends Controller
     }
 
     /**
+     * The order of the search terms: the stored term or its visit count, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function termsOrder(): array
+    {
+        return Sorting::pick('an-terms', ['term' => 'index', 'visits' => 'count'], 'visits');
+    }
+
+    /**
      * The most searched-for terms.
      *
      * @return array<string,mixed>
@@ -165,7 +175,7 @@ final class Searches extends Controller
             'q'  => '*:*',
             'fq' => $this->sessionFqs(),
         ], [
-            'terms'    => Paging::terms('search_terms_ss', $start, $rows),
+            'terms'    => Paging::terms('search_terms_ss', $start, $rows, self::termsOrder()['sort']),
             'searched' => ['type' => 'query', 'q' => 'search_terms_ss:*'],
         ]);
 
@@ -264,12 +274,13 @@ final class Searches extends Controller
             $this->exportTool('terms')
         );
         self::skeleton('an-terms', 'rows', 0, 'Faceting search terms');
-        echo '<div class="table-wrap"><table id="an-terms-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="an-terms-table" class="table-fixed"'
+            . Sorting::tableAttrs('an-terms', self::termsOrder()) . '><colgroup>'
             . '<col style="width:18%"><col style="width:42%"><col style="width:16%"><col style="width:24%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Parameter</th>'
+            . '<th scope="col"' . Sorting::th('term') . '>Parameter</th>'
             . '<th scope="col">Search term</th>'
-            . '<th scope="col" class="num">Visits</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
             . '<th scope="col" class="bar-col">Share</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-terms-pager"></div>';
