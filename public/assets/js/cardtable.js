@@ -15,7 +15,7 @@
 
 'use strict';
 
-import { byId, el, loadCard, noDataYet, num, pct } from './core.js';
+import { byId, el, loadCard, noDataYet, num, pct, registerCardReset } from './core.js';
 import { renderPager } from './pager.js';
 
 /**
@@ -63,6 +63,7 @@ export function pagedCard(spec) {
         renderPager(pagerMount(), data.page, load);
     });
 
+    registerCardReset(spec.id, () => load(0));
     load(0);
 
     return load;

@@ -1077,17 +1077,35 @@ final class Solr
     }
 
     /**
+     * Function sort clauses the panel itself uses, accepted only as these exact strings.
+     *
+     * The session list orders its Session time column by what the cell shows — engaged time
+     * where the beacon measured some, otherwise the log span — which only a function can express.
+     * Nothing is parsed or assembled: a clause is let through only if it is byte-for-byte one of
+     * these, so a request can never widen what Solr is asked to evaluate.
+     */
+    private const SORT_FUNCTIONS = [
+        'if(gt(engaged_ms_l,0),engaged_ms_l,log_span_ms_l)',
+    ];
+
+    /**
      * Validate a sort specification and return it normalised.
      *
-     * Exactly "<field> <asc|desc>" is accepted. A sort clause in Solr also accepts function
-     * queries, which is why nothing looser is allowed through.
+     * Exactly "<field> <asc|desc>" is accepted, plus a clause from SORT_FUNCTIONS verbatim. A sort
+     * clause in Solr also accepts arbitrary function queries, which is why nothing looser is
+     * allowed through.
      */
     public static function assertSafeSort(string $sort): string
     {
         $clauses = [];
-        foreach (explode(',', $sort) as $clause) {
+        foreach (self::sortClauses($sort) as $clause) {
             $clause = trim($clause);
             if ($clause === '') {
+                continue;
+            }
+            if (preg_match('/^(\S+)\s+(asc|desc)$/iD', $clause, $f) === 1
+                && in_array($f[1], self::SORT_FUNCTIONS, true)) {
+                $clauses[] = $f[1] . ' ' . strtolower($f[2]);
                 continue;
             }
             if (!preg_match('/^([A-Za-z0-9_]{1,64})\s+(asc|desc)$/iD', $clause, $m)) {
@@ -1102,6 +1120,36 @@ final class Solr
             throw new \InvalidArgumentException('Solr: empty sort specification.');
         }
         return implode(',', $clauses);
+    }
+
+    /**
+     * Split a sort specification on the commas that separate clauses, not those inside a function.
+     *
+     * @return array<int,string>
+     */
+    private static function sortClauses(string $sort): array
+    {
+        $out = [];
+        $current = '';
+        $depth = 0;
+        $length = strlen($sort);
+        for ($i = 0; $i < $length; $i++) {
+            $ch = $sort[$i];
+            if ($ch === '(') {
+                $depth++;
+            } elseif ($ch === ')') {
+                $depth = max(0, $depth - 1);
+            }
+            if ($ch === ',' && $depth === 0) {
+                $out[] = $current;
+                $current = '';
+                continue;
+            }
+            $current .= $ch;
+        }
+        $out[] = $current;
+
+        return $out;
     }
 
     /**

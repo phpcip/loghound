@@ -92,6 +92,7 @@ function mark(root) {
             button.appendChild(mark);
             th.appendChild(button);
         }
+        markServerOrder(table);
     }
 }
 
@@ -177,10 +178,22 @@ export function sortBy(table, index, direction) {
     }
     body.appendChild(fragment);
 
-    /* ONLY THE COLUMNS THAT SORT. `aria-sort="none"` on every header announced the
-       expander column and the screen-reader-only "Open" header as sortable-but-unsorted, so a
-       reader was told there are more ways to order this table than there are, and two of them
-       do nothing. A header that cannot be sorted carries no aria-sort at all. */
+    markOrder(table, index, direction);
+}
+
+/**
+ * Show on the headers which column a table is ordered by and which way, without moving a row.
+ *
+ * ONLY THE COLUMNS THAT SORT. `aria-sort="none"` on every header announced the expander column
+ * and the screen-reader-only "Open" header as sortable-but-unsorted, so a reader was told there
+ * are more ways to order this table than there are. A header that cannot be sorted carries no
+ * aria-sort at all.
+ *
+ * @param {HTMLTableElement} table
+ * @param {number} index
+ * @param {string} direction
+ */
+function markOrder(table, index, direction) {
     for (const th of table.tHead.querySelectorAll('th')) {
         th.classList.remove('sorted-asc', 'sorted-desc');
         if (th.classList.contains('sortable')) {
@@ -196,6 +209,65 @@ export function sortBy(table, index, direction) {
     }
     table.dataset.sortCol = String(index);
     table.dataset.sortDir = direction;
+}
+
+/**
+ * Order a table by one column: in Solr when the column can be, on screen otherwise.
+ *
+ * A header carrying `data-order`, in a table carrying `data-order-card`, is ordered by the
+ * server. The order goes into the address bar as `o[<card>]=<column>:<direction>`, the offsets
+ * the table names in `data-order-reset` are dropped so the reader lands on the first page of the
+ * new order, and core.js reloads the card; its action turns the parameter into a Solr sort and
+ * Panel\Scope keeps it in the session beside the filters. Every other column keeps the on-screen
+ * reordering, which is all a value computed after Solr answered can have.
+ *
+ * @param {HTMLTableElement} table
+ * @param {number} index
+ * @param {string} direction
+ */
+export function orderTable(table, index, direction) {
+    const head = table.tHead;
+    const row = head ? head.rows[head.rows.length - 1] : null;
+    const th = row ? row.cells[index] : null;
+    const card = table.dataset.orderCard || '';
+    const column = th ? (th.dataset.order || '') : '';
+    const dir = direction === 'desc' ? 'desc' : 'asc';
+
+    if (card === '' || column === '') {
+        sortBy(table, index, dir);
+        return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    params.set('o[' + card + ']', column + ':' + dir);
+    for (const name of (table.dataset.orderReset || '').split(',')) {
+        if (name !== '') {
+            params.delete(name);
+        }
+    }
+    window.history.replaceState(window.history.state, '', '?' + params.toString());
+
+    markOrder(table, index, dir);
+    document.dispatchEvent(new CustomEvent('lh:order', { detail: { card: card } }));
+}
+
+/**
+ * Show the order the server rendered a table in, once its headers have their controls.
+ *
+ * @param {HTMLTableElement} table
+ */
+function markServerOrder(table) {
+    const head = table.tHead;
+    const key = table.dataset.orderKey || '';
+    if (!head || !table.dataset.orderCard || key === '') {
+        return;
+    }
+    for (const th of head.rows[head.rows.length - 1].cells) {
+        if (th.dataset.order === key) {
+            markOrder(table, th.cellIndex, table.dataset.orderDir === 'asc' ? 'asc' : 'desc');
+            return;
+        }
+    }
 }
 
 /**
@@ -222,14 +294,14 @@ function onActivate(event) {
 
     const index = th.cellIndex;
     const same = String(table.dataset.sortCol || '') === String(index);
-    const numeric = th.classList.contains('num');
+    const numeric = th.classList.contains('num') || th.dataset.orderFirst === 'desc';
     let direction;
     if (same) {
         direction = table.dataset.sortDir === 'asc' ? 'desc' : 'asc';
     } else {
         direction = numeric ? 'desc' : 'asc';
     }
-    sortBy(table, index, direction);
+    orderTable(table, index, direction);
 }
 
 /**

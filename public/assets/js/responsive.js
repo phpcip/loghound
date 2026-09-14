@@ -39,7 +39,7 @@
 
 import { endCopyFields, initCopyFields } from './copy.js';
 import { icon } from './icons.js';
-import { sortBy } from './sorttable.js';
+import { orderTable } from './sorttable.js';
 
 const NARROW = 900;
 const RAIL_KEY = 'lh.rail';
@@ -446,7 +446,7 @@ function sortBar(table) {
         dir.value = table.dataset.sortDir;
     }
 
-    const apply = () => sortBy(table, Number(field.value), dir.value === 'desc' ? 'desc' : 'asc');
+    const apply = () => orderTable(table, Number(field.value), dir.value === 'desc' ? 'desc' : 'asc');
     field.addEventListener('change', apply);
     dir.addEventListener('change', apply);
 

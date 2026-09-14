@@ -206,6 +206,39 @@ final class Sessions extends Controller
         'span'    => 'Longest log span first',
     ];
 
+    /** The card the visit list is drawn in, which is also the key its order is kept under. */
+    private const RESULTS = 'se-results';
+
+    /**
+     * The columns of the visit list Solr can order by, keyed as the table's headers name them.
+     *
+     * Session time is ordered by what its cell shows: engaged time where the beacon measured
+     * some, otherwise the log span. Bounce is decided in PHP after Solr answers, so it is not here
+     * and keeps the on-screen reordering.
+     *
+     * @var array<string,string>
+     */
+    private const ORDER = [
+        'date'  => 'ts_end',
+        'ip'    => 'ip_s',
+        'page'  => 'entry_path_s',
+        'email' => 'ident_s',
+        'span'  => 'if(gt(engaged_ms_l,0),engaged_ms_l,log_span_ms_l)',
+    ];
+
+    /**
+     * How each order column is named when an export states the ordering it was written in.
+     *
+     * @var array<string,string>
+     */
+    private const ORDER_LABELS = [
+        'date'  => 'Last seen',
+        'ip'    => 'IP',
+        'page'  => 'Page',
+        'email' => 'Email',
+        'span'  => 'Session time',
+    ];
+
     /**
      * Rows per Solr call while a session export is being streamed.
      *
@@ -480,12 +513,17 @@ final class Sessions extends Controller
     {
         $text = self::text('q', 200);
         $sortKey = self::param('sort', array_keys(Query::sorts()), 'recent');
+        $order = self::resultsOrder();
+        $legacy = !$order['asked'] && $sortKey !== 'recent';
+        $solrSort = $legacy
+            ? Query::sorts()[$sortKey]
+            : $order['sort'] . ($order['key'] === 'date' ? '' : ', ts_end desc');
         $rows = Security::clampInt($rows, 1, Security::MAX_ROWS, 25);
         $start = Security::clampInt($start, 0, Security::MAX_START, 0);
 
         $res = $this->gw->search('sessions.list', $this->gw->sessionsCore(), $text, [
             'fq'    => $this->sessionFqs(),
-            'sort'  => Query::sorts()[$sortKey],
+            'sort'  => $solrSort,
             'rows'  => $rows,
             'start' => $start,
             'fl'    => Query::sessionFl(),
@@ -496,7 +534,11 @@ final class Sessions extends Controller
         return $this->envelope([
             'q'        => $text,
             'sort'     => $sortKey,
-            'sort_label' => self::SORT_LABELS[$sortKey] ?? $sortKey,
+            'sort_label' => $legacy
+                ? (self::SORT_LABELS[$sortKey] ?? $sortKey)
+                : (self::ORDER_LABELS[$order['key']] ?? $order['key'])
+                    . ($order['dir'] === 'desc' ? ', descending' : ', ascending'),
+            'order'    => ['key' => $order['key'], 'dir' => $order['dir']],
             'rows'     => $rows,
             'start'    => $start,
             'numFound' => $res['numFound'],
@@ -504,6 +546,16 @@ final class Sessions extends Controller
             'page'     => Paging::block($start, $rows, (int) $res['numFound'], 'visits', count($docs)),
             'active'   => $this->filters,
         ]);
+    }
+
+    /**
+     * The order the visit list is in: the one the request or the session names, else newest first.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function resultsOrder(): array
+    {
+        return Sorting::pick(self::RESULTS, self::ORDER, 'date', 'desc');
     }
 
     /**
@@ -1708,7 +1760,8 @@ final class Sessions extends Controller
         );
         self::skeleton('se-results', 'rows', 0, 'Searching sessions');
 
-        echo '<div class="table-wrap"><table id="se-table" class="table-fixed visits"><colgroup>'
+        echo '<div class="table-wrap"><table id="se-table" class="table-fixed visits"'
+            . Sorting::tableAttrs(self::RESULTS, self::resultsOrder(), 'start') . '><colgroup>'
             /* THE DATE COLUMN NEVER TRUNCATES. `mm/dd/yyyy hh:mm:ss` is nineteen monospace
                characters, and at 17% of a column already narrowed by the filter sidebar it was
                being cut mid-hour — "09/12/2026 03:1…" — which is the one value on the row a
@@ -1724,11 +1777,11 @@ final class Sessions extends Controller
             . '</colgroup><thead><tr>'
             /* `data-lh-nosort` marks a column a phone does not show, so responsive.js leaves it
                out of the sort control rather than offering an order by something invisible. */
-            . '<th scope="col">Date</th>'
-            . '<th scope="col" data-lh-nosort="1">IP</th>'
-            . '<th scope="col">Page</th>'
-            . '<th scope="col">Email</th>'
-            . '<th scope="col">Sess time</th>'
+            . '<th scope="col"' . Sorting::th('date', 'desc') . '>Date</th>'
+            . '<th scope="col" data-lh-nosort="1"' . Sorting::th('ip') . '>IP</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>Page</th>'
+            . '<th scope="col"' . Sorting::th('email') . '>Email</th>'
+            . '<th scope="col"' . Sorting::th('span', 'desc') . '>Sess time</th>'
             . '<th scope="col" class="visit-verdict" data-lh-nosort="1">Bounce</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="se-pager"></div>';

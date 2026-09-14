@@ -1003,6 +1003,48 @@ function raiseConnectionBanner(message) {
 const cardLoaders = new Map();
 
 /**
+ * How a card starts over from its first page, keyed like cardLoaders.
+ *
+ * A paged card's loader is closed over the offset it last fetched, so re-running it after the
+ * order changed would show page three of the new order. cardtable.js's pagedCard() registers a
+ * reset that loads from the top instead.
+ */
+const cardResets = new Map();
+
+/**
+ * Register how a card starts over from its first page.
+ *
+ * @param {string} id
+ * @param {Function} reset
+ */
+export function registerCardReset(id, reset) {
+    cardResets.set(id, reset);
+}
+
+/**
+ * Reload a card when sorttable.js reports that its Solr order changed.
+ *
+ * The new order is already in the address bar, which api() reads, so the card's own reset or its
+ * last loader fetches the reordered rows with nothing else passed along.
+ */
+function installOrderReload() {
+    document.addEventListener('lh:order', (event) => {
+        const id = event.detail && event.detail.card ? String(event.detail.card) : '';
+        const reset = cardResets.get(id);
+        if (reset) {
+            reset();
+            return;
+        }
+        const entry = cardLoaders.get(id);
+        if (entry) {
+            loadCard(entry.id, entry.label, entry.loader);
+        }
+    });
+}
+
+installOrderReload();
+
+/**
  * What the control does, and the one thing about it that would otherwise be assumed wrongly.
  *
  * It re-runs the card's fetch down the ordinary path — CACHE INCLUDED — so it will happily hand

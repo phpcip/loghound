@@ -69,6 +69,12 @@ final class Scope
      * The SEO Tools period is remembered from wherever it is spoken and restored only on SEO Tools,
      * so it never lands in another view's address bar.
      *
+     * Table orders (Panel\Sorting) are kept per card: an order the URL states for a card replaces
+     * the stored one for that card only, and a stored order for a card the URL is silent on is
+     * put back into `$_GET`. They are restored silently and never reported for the redirect, since
+     * navigation links do not carry them and a redirect for them would cost every page a round trip;
+     * the card fetches restore them on the server the same way.
+     *
      * @return array<string,mixed> The keys that were restored, for the caller's canonical redirect.
      */
     public static function apply(): array
@@ -122,6 +128,18 @@ final class Scope
                 $added[$ns] = $held;
             }
         }
+
+        $spokenOrder = isset($_GET[Sorting::NS]) && is_array($_GET[Sorting::NS])
+            ? Sorting::clean($_GET[Sorting::NS])
+            : [];
+        $heldOrder = isset($stored[Sorting::NS]) && is_array($stored[Sorting::NS])
+            ? Sorting::clean($stored[Sorting::NS])
+            : [];
+        $restoredOrder = array_diff_key($heldOrder, $spokenOrder);
+        if ($restoredOrder !== []) {
+            $_GET[Sorting::NS] = $spokenOrder + $restoredOrder;
+        }
+        $keep[Sorting::NS] = Sorting::clean($spokenOrder + $heldOrder);
 
         $_SESSION[self::KEY] = $keep;
 
