@@ -970,6 +970,8 @@ table.visits td.visit-box { display: none; }
     table.visits .vbox-when .led-hm { font-size: 13px; }
     /* The seconds sit a step down, the way a watch shows them beside the minutes. */
     table.visits .vbox-when .led-s { font-size: 10px; opacity: 0.75; }
+    /* The OPEN mark rides the same line, a step down so the instant stays the loud thing. */
+    table.visits .vbox-when .chip { font-size: 12px; padding: 0 5px; }
     /* SIDEWAYS ONLY. `overflow-x: auto` turns an unset `overflow-y` into `auto` as well, and the
        flag and the bounce chip stand taller than the line, so it scrolled up and down too. The
        vertical axis is shut and the line given the few pixels those marks need. */

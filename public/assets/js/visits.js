@@ -109,7 +109,8 @@ export function visitRow(v) {
         el('span', { class: 'visit-day', text: dayOnly(seen) }),
         /* The clock wears the segmented face; clockStamp() decides that shape for the whole
            panel, so this column cannot drift from the dialogs and the other tables. */
-        el('span', { class: 'visit-clock' }, [clockStamp(seen)])
+        el('span', { class: 'visit-clock' }, [clockStamp(seen)]),
+        openMark(v)
     ]));
 
     /* THE FLAG RIDES WITH THE ADDRESS. They answer one question — who, and from where — so
@@ -191,6 +192,34 @@ export function visitRow(v) {
     tr.appendChild(visitBox(v, seen, shown, unmeasured));
 
     return tr;
+}
+
+/**
+ * The OPEN mark, or nothing at all.
+ *
+ * A visit that has not ended yet is published as a provisional document and republished as it
+ * grows, so its counts, its duration and its verdict are all still moving. That is worth one
+ * word next to the date, and NOTHING when the visit has settled: a chip on every row saying
+ * "closed" would be noise on the 99% of rows that are the normal case.
+ *
+ * Green, and it is deliberately not one of the verdict colours: this says something about the
+ * clock, not about whether the visitor is a person, and the row already carries the verdict as
+ * its colour.
+ *
+ * @param {Object} v The visit.
+ * @returns {HTMLElement|null}
+ */
+function openMark(v) {
+    if (v.open !== true) {
+        return null;
+    }
+
+    return el('span', {
+        class: 'chip chip-open',
+        text: 'OPEN',
+        title: 'Still open: this visitor was last seen less than the idle timeout ago, so the'
+            + ' counts and the verdict on this row are still moving.'
+    });
 }
 
 /**
@@ -383,9 +412,10 @@ function dayOrdinal(iso) {
  * than an empty watch face.
  *
  * @param {string|null} seen The instant to show.
+ * @param {Object}      v    The visit, for the OPEN mark.
  * @returns {HTMLElement}
  */
-function stampLine(seen) {
+function stampLine(seen, v) {
     const text = when(seen);
     const half = text.split(' ');
     const clock = half.length > 1 ? half[1].split(':') : [];
@@ -393,7 +423,8 @@ function stampLine(seen) {
     if (clock.length < 3) {
         return el('div', { class: 'vbox-line vbox-when' }, [
             glyph('calendar'),
-            el('span', { class: 'when-led' }, [el('span', { class: 'led-day', text: text })])
+            el('span', { class: 'when-led' }, [el('span', { class: 'led-day', text: text })]),
+            openMark(v)
         ]);
     }
 
@@ -403,7 +434,8 @@ function stampLine(seen) {
             el('span', { class: 'led-day', text: dayOrdinal(seen) }),
             el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] }),
             el('span', { class: 'led-s', text: clock[2] })
-        ])
+        ]),
+        openMark(v)
     ]);
 }
 
@@ -425,7 +457,7 @@ function stampLine(seen) {
  * @returns {HTMLElement}
  */
 function visitBox(v, seen, shown, unmeasured) {
-    const stamp = stampLine(seen);
+    const stamp = stampLine(seen, v);
 
     const meta = el('div', { class: 'vbox-line vbox-meta' }, [
         el('span', { class: 'vbox-item' }, [

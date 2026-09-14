@@ -68,6 +68,7 @@
 
     --accent:        #c05520;
     --accent-ink:    #9e340f;
+    --c-open:        #2f7a4f;
     --on-accent:     #ffffff;
 
     /* VERDICT HUES. The panel is otherwise the accent plus a grey ramp, deliberately, and
@@ -121,6 +122,7 @@
 
         --accent:        #c05520;
         --accent-ink:    #e0763f;
+    --c-open:        #5aa877;
         --on-accent:     #ffffff;
 
         --c-bot:      #d0655f;
@@ -152,6 +154,7 @@
 
     --accent:        #c05520;
     --accent-ink:    #e0763f;
+    --c-open:        #5aa877;
     --on-accent:     #ffffff;
 
     --c-bot:      #d0655f;
@@ -893,6 +896,13 @@ thead th { padding-top: 0; padding-bottom: 3px; }
    and the faint ink, which is what the panel already uses for "switched off"
    as opposed to "something is wrong". */
 .chip-off    { border-color: var(--hairline); color: var(--faint); }
+
+/* STILL OPEN — the visit had not ended when its document was written, so every number on the
+   row is still moving. Green, and green appears nowhere else on a session row: the verdict owns
+   the row's colour and says who the visitor is, while this says only that the clock is running,
+   so borrowing --c-human would have made a fact about time read as a judgement about a person.
+   Worn only when true; a settled visit carries no chip at all. */
+.chip-open   { border-color: var(--c-open); color: var(--c-open); }
 
 .v-human, .v-likely_human { border-color: var(--ink); color: var(--ink); }
 .v-unknown                { border-color: var(--hairline); color: var(--faint); }

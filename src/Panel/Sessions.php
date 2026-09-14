@@ -1361,6 +1361,14 @@ final class Sessions extends Controller
                recorded in the browser; without one it is the conventional page-count guess,
                and the cell marks it as such rather than presenting the two as one fact. */
             'beacon'      => array_key_exists('beacon_b', $d) ? (bool) $d['beacon_b'] : false,
+
+            /* STILL OPEN, AND THE ABSENCE IS THE ANSWER. bin/loghound-score writes
+               `provisional_b` only as true, on the document it publishes for a session that has
+               not ended yet, and omits the field entirely once the session settles — which is
+               also why every row indexed before the field existed reads as closed rather than as
+               unknown. The row marks it because the counts and the verdict on an open session
+               are still moving, so a reader comparing two rows has to know which one is final. */
+            'open'        => array_key_exists('provisional_b', $d) ? (bool) $d['provisional_b'] : false,
         ];
     }
 
