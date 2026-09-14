@@ -932,6 +932,9 @@ table.visits td.visit-box { display: none; }
         min-width: 0;
     }
     table.visits .vbox-line + .vbox-line { margin-top: 4px; }
+    /* THE TIMESTAMP LEADS THE BOX on its own line, mm/dd/yyyy hh:mm:ss, so the visit's instant
+       is read before the address; it sits quiet, a step smaller than the address beside the flag. */
+    table.visits .vbox-when { font-size: 12px; color: var(--muted); }
     /* SIDEWAYS ONLY. `overflow-x: auto` turns an unset `overflow-y` into `auto` as well, and the
        flag and the bounce chip stand taller than the line, so it scrolled up and down too. The
        vertical axis is shut and the line given the few pixels those marks need. */

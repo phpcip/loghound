@@ -348,45 +348,32 @@ export function visitCaption(page) {
     return num(total) + (total === 1 ? ' visit.' : ' visits, all of them reachable.');
 }
 
-/**
- * The day of the month of an instant as an ordinal, `1st` `2nd` `3rd` `14th` `31st`.
- *
- * Taken from dayOnly(), so it is the day in the panel's display timezone, the same one every
- * other date on the page is in. An instant it cannot read comes back as its dash.
- *
- * @param {string|null} iso
- * @returns {string}
- */
-function dayOrdinal(iso) {
-    const day = parseInt(String(dayOnly(iso)).split('/')[1], 10);
-    if (!Number.isFinite(day)) {
-        return '—';
-    }
-    const teen = day % 100 >= 11 && day % 100 <= 13;
-    const suffix = teen ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[day % 10] || 'th');
-    return day + suffix;
-}
 
 /**
- * The same visit as a box of three lines, which mobile.css shows on a phone instead of the cells.
+ * The same visit as a box of up to four lines, which mobile.css shows on a phone instead of the cells.
  *
- * Line one is the date, the flag and address, the session time and the bounce, on one line that
- * scrolls sideways when it does not fit. Line two is the page, scrolled to its end, with the
- * open-in-new-tab link. Line three is the email, and is left out entirely when there is none.
- * The address, the page and the email copy themselves on a tap. It is one more cell at the end
- * of the row, so sorting by column index and the desktop layout are untouched.
+ * Line one is the instant the visit was last seen, mm/dd/yyyy hh:mm:ss, the same shape every
+ * other date on the page has. Line two is the open-visit control, the flag and address, the
+ * session time and the bounce, on one line that scrolls sideways when it does not fit. Line
+ * three is the page, scrolled to its end, with the open-in-new-tab link. Line four is the email,
+ * and is left out entirely when there is none. The address, the page and the email copy
+ * themselves on a tap. It is one more cell at the end of the row, so sorting by column index and
+ * the desktop layout are untouched.
  *
  * @param {Object}      v          The visit.
- * @param {string|null} seen       The instant the date line shows.
+ * @param {string|null} seen       The instant the first line shows.
  * @param {number|null} shown      The duration in milliseconds.
  * @param {boolean}     unmeasured Whether no duration was measured.
  * @returns {HTMLElement}
  */
 function visitBox(v, seen, shown, unmeasured) {
+    const stamp = el('div', { class: 'vbox-line vbox-when' }, [
+        el('span', { class: 'mono', text: when(seen) })
+    ]);
+
     const meta = el('div', { class: 'vbox-line vbox-meta' }, [
         el('span', { class: 'vbox-item' }, [
-            openButton('session', { id: v.id }, 'Open this visit'),
-            el('span', { class: 'mono', text: dayOrdinal(seen) })
+            openButton('session', { id: v.id }, 'Open this visit')
         ]),
         el('span', { class: 'vbox-item' }, [
             v.country ? countryNode(v.country, { flagOnly: true }) : null,
@@ -411,5 +398,5 @@ function visitBox(v, seen, shown, unmeasured) {
         ? el('div', { class: 'vbox-line vbox-mail' }, [glyph('mail'), copyValue(v.ident, { label: 'Email' })])
         : null;
 
-    return el('td', { class: 'visit-box', colspan: '6' }, [meta, mail, page]);
+    return el('td', { class: 'visit-box', colspan: '6' }, [stamp, meta, mail, page]);
 }
