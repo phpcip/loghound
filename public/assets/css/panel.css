@@ -369,6 +369,15 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
     border-bottom: 0;
     background: none;
 }
+/* THE SAME ROW AS EVERY OTHER MAIN ITEM. The global `button` font shorthand gave this one row a
+   1.2 line-height against the 1.55 the links inherit, so it stood shorter than its neighbours. */
+.side .navlink-parent { line-height: inherit; letter-spacing: inherit; text-align: left; }
+
+/* EACH LEVEL OF THE NAVIGATION ON ITS OWN GROUND. The main items sit on the page; a sub-list is
+   a step darker and a sub-list inside it a step darker again, so the depth reads from the colour
+   and not from the indent alone. Mixed from the ink over transparency, so a nested list adds to
+   its parent's shade and both themes follow with no palette of their own. */
+.side .navsub { background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .navsub-views > li > .navgroup { margin: 0; }
 .navsub-views .navlink { padding-left: 26px; }
 .navsub-views .navsub .navsub-link { padding-left: 40px; }
@@ -3557,6 +3566,11 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         pointer-events: none;
     }
     :root.lh-rail-collapsed .side .navsub-link { padding: 6px 14px; }
+
+    /* A flyout floats over the page, so its level shade is mixed onto the page colour and stays
+       opaque: the first panel one step down, a second-level panel two. */
+    :root.lh-rail-collapsed .side .navsub { background: color-mix(in srgb, var(--ink) 5%, var(--page)); }
+    :root.lh-rail-collapsed .side .navsub .navsub { background: color-mix(in srgb, var(--ink) 10%, var(--page)); }
 
     /* A ROW INSIDE THE FLYOUT IS A ROW, NOT A RAIL ICON. `.side .navlink` is centred with its
        words taken away, which is what the 60px column needs and the opposite of what the panel

@@ -469,6 +469,7 @@ final class Layout
                     echo '<li class="navgroup navgroup-parent has-sub' . ($on ? ' is-current' : '') . '">';
                     echo '<span class="navrow">';
                     echo '<button type="button" class="navlink navlink-parent navtwist-target"'
+                        . ' data-group="' . Security::esc($group) . '"'
                         . ' aria-expanded="' . ($on ? 'true' : 'false') . '"'
                         . ' aria-controls="' . Security::esc($groupId) . '"'
                         . ' title="' . Security::esc((string) $meta['hint']) . '">'

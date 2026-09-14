@@ -326,6 +326,11 @@ table.visits td.visit-box { display: none; }
     #lh-facets-toggle,
     .card-toggle { min-height: var(--lh-tap); }
 
+    /* Every navigation row on the same floor. A group heading is a <button> and already took the
+       44px every button gets on touch, while the links beside it stayed at 40, so the Visitors
+       row stood taller than the rest. */
+    .side .navlink { min-height: var(--lh-tap); }
+
     /* Facet values, in all three places the panel shows them: the explorer rail, the
        Opensolr filter rail, and the identity panel. The whole row is the target. */
 

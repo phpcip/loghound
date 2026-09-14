@@ -608,13 +608,14 @@ function setUpRail() {
     }
 
     for (const link of side.querySelectorAll('.navlink')) {
-        if (link.querySelector('.vicon')) {
-            continue;
-        }
-        const slug = slugOf(link);
-        const mark = icon('view', slug);
-        if (mark) {
-            link.insertBefore(mark, link.firstChild);
+        const main = !link.closest('.navsub');
+        if (main && !link.querySelector('.vicon')) {
+            const mark = link.classList.contains('navlink-parent')
+                ? icon('nav_group', link.dataset.group || '')
+                : icon('view', slugOf(link));
+            if (mark) {
+                link.insertBefore(mark, link.firstChild);
+            }
         }
         /* THE NAME IS THE LABEL, NOT EVERY WORD IN THE LINK. addNavHints() has already
            appended the view's one-sentence hint as a second element, so `link.textContent`

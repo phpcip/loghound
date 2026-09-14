@@ -184,6 +184,13 @@ const MARKS = {
         _:            ['M2.6 4h10.8v8H2.6z'],
     },
 
+    /* A group heading in the rail, which is not a view either: Visitors is two figures, the
+       people every view inside it is about. Kept out of `view` because a group has no slug. */
+    nav_group: {
+        visitors: ['M6 7.4a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z', 'M2.4 13c0-2.2 1.6-3.8 3.6-3.8s3.6 1.6 3.6 3.8', 'M10.6 7a1.8 1.8 0 1 0 0-3.6', 'M11.2 9.3c1.4.3 2.4 1.6 2.4 3.7'],
+        _: ['M5.2 5.6a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2Z', 'M10.8 5.6a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2Z', 'M2.4 12.4c0-1.8 1.2-3 2.8-3s2.8 1.2 2.8 3', 'M8 12.4c0-1.8 1.2-3 2.8-3s2.8 1.2 2.8 3'],
+    },
+
     /* The theme control, which is the one thing in the rail that is not a view. */
     theme: {
         _: ['M8 4.4a3.6 3.6 0 1 1 0 7.2 3.6 3.6 0 0 1 0-7.2Z', 'M8 4.4v7.2a3.6 3.6 0 0 0 0-7.2Z', 'M8 1.8v1.4', 'M8 12.8v1.4', 'M14.2 8h-1.4', 'M3.2 8H1.8'],
