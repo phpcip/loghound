@@ -61,6 +61,26 @@ const HOST_FIELD = 'host_s';
 /** Solr fields that hold a site path rather than, say, a Solr request handler. */
 const PATH_FIELDS = ['paths_ss', 'path_s', 'entry_path_s', 'exit_path_s'];
 
+/** The width the panel lays itself out for a phone at — the line mobile.css and tablecharts.js draw. */
+const PHONE_QUERY = '(max-width: 900px)';
+
+/** Characters of a path a phone shows, counted back from its end. */
+const PHONE_PATH_CHARS = 24;
+
+/** On the element showing a path: the whole path, which its text may be a shortening of. */
+const PATH_ATTR = 'data-lh-path';
+
+/** On the same element: the shortening a wide screen applies, `tail` or none. */
+const PATH_WIDE_ATTR = 'data-lh-path-wide';
+
+/** The elements that own the tooltip for a path drawn inside them. */
+const PATH_MARKERS = '.urlwrap, .facet-opt, .fb-value-url > a';
+
+/** The phone media query, or null where the browser cannot answer one. */
+const phoneMedia = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia(PHONE_QUERY)
+    : null;
+
 /** A registrable hostname: dot-separated labels of letters, digits and inner hyphens. */
 const HOST_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
 
@@ -332,6 +352,131 @@ export function pathTail(path) {
 }
 
 /**
+ * A path as a phone shows it: `...` and the end of it, starting on a segment boundary.
+ *
+ * `/very/long/ass/path/that/goes/to/a/page` becomes `.../goes/to/a/page`. The last
+ * PHONE_PATH_CHARS characters are taken and the cut moves forward to the first `/` inside them,
+ * so no segment starts halfway through a word. A last segment longer than the budget has no
+ * boundary to move to and keeps its last PHONE_PATH_CHARS characters. A path that fits is
+ * returned untouched.
+ *
+ * @param {string} path
+ * @returns {string}
+ */
+export function phonePath(path) {
+    const raw = path === null || path === undefined ? '' : String(path);
+    if (raw.length <= PHONE_PATH_CHARS) {
+        return raw;
+    }
+    const tail = raw.slice(-PHONE_PATH_CHARS);
+    const cut = tail.slice(0, -1).indexOf('/');
+    return '...' + (cut >= 0 ? tail.slice(cut) : tail);
+}
+
+/**
+ * Whether the panel is currently laid out for a phone.
+ *
+ * @returns {boolean}
+ */
+export function isPhone() {
+    return phoneMedia !== null && phoneMedia.matches;
+}
+
+/**
+ * The text a path is drawn with at the current width.
+ *
+ * @param {string}      full The whole path.
+ * @param {string|null} wide `tail` where a wide screen shows it through pathTail(), else null.
+ * @returns {string}
+ */
+export function pathLabel(full, wide) {
+    if (isPhone()) {
+        return phonePath(full);
+    }
+    return wide === 'tail' ? pathTail(full) : String(full);
+}
+
+/**
+ * Draw a path into an element, remembering the whole of it for a later change of width.
+ *
+ * @param {HTMLElement} node The element whose text is the path.
+ * @param {string}      full The whole path.
+ * @param {string}      [wide] `tail` where a wide screen shortens it from the front.
+ * @returns {HTMLElement}
+ */
+export function bindPath(node, full, wide) {
+    const whole = full === null || full === undefined ? '' : String(full);
+    node.setAttribute(PATH_ATTR, whole);
+    if (wide) {
+        node.setAttribute(PATH_WIDE_ATTR, wide);
+    }
+    node.textContent = pathLabel(whole, wide || null);
+    return node;
+}
+
+/**
+ * Give a tooltip owner the whole path when the path drawn inside it is a shortening.
+ *
+ * `data-lh-full` is what responsive.js::markValueTips() treats as authored: cut, and saying
+ * this. When the text is the whole path again the tooltip it caused is withdrawn and a parked
+ * native title handed back, so a rotation back to a wide screen leaves nothing stale behind;
+ * a value the layout still cuts is re-measured on the same frame.
+ *
+ * @param {HTMLElement|null} marker
+ * @returns {HTMLElement|null}
+ */
+export function claimPath(marker) {
+    if (!marker) {
+        return marker;
+    }
+    const node = marker.querySelector('[' + PATH_ATTR + ']');
+    if (!node) {
+        return marker;
+    }
+    const full = node.getAttribute(PATH_ATTR) || '';
+    if (full !== '' && node.textContent !== full) {
+        marker.setAttribute('data-lh-full', full);
+        return marker;
+    }
+    if (marker.hasAttribute('data-lh-full')) {
+        marker.removeAttribute('data-lh-full');
+        marker.removeAttribute('data-lh-tip');
+        marker.removeAttribute('data-full');
+        const parked = marker.getAttribute('data-lh-hint');
+        if (parked !== null) {
+            marker.setAttribute('title', parked);
+            marker.removeAttribute('data-lh-hint');
+        }
+    }
+    return marker;
+}
+
+/**
+ * Redraw every path on the page for the width it now has.
+ *
+ * A phone rotated past the breakpoint, or a window dragged across it, would otherwise keep the
+ * form it was rendered with until the next fetch. The text change is a childList mutation, so
+ * responsive.js's observer re-measures the tooltips on its next frame without being told.
+ */
+function redrawPaths() {
+    for (const node of document.querySelectorAll('[' + PATH_ATTR + ']')) {
+        const text = pathLabel(node.getAttribute(PATH_ATTR) || '', node.getAttribute(PATH_WIDE_ATTR));
+        if (node.textContent !== text) {
+            node.textContent = text;
+        }
+        claimPath(node.closest(PATH_MARKERS));
+    }
+}
+
+if (phoneMedia !== null) {
+    if (typeof phoneMedia.addEventListener === 'function') {
+        phoneMedia.addEventListener('change', redrawPaths);
+    } else if (typeof phoneMedia.addListener === 'function') {
+        phoneMedia.addListener(redrawPaths);
+    }
+}
+
+/**
  * The one host the whole dashboard is currently scoped to, or null.
  *
  * Exactly one selected value and an operator that is not "None of": two hosts scope to two, and
@@ -586,10 +731,11 @@ export function pathCell(path, opts) {
         cell.setAttribute('data-lh-tip', '1');
         /* The path alone, as on screen. The query string still travels in the link beside it. */
         cell.setAttribute('data-full', raw);
+        bindPath(cell, shown);
     }
 
-    return el('span', { class: 'urlwrap' }, [
+    return claimPath(el('span', { class: 'urlwrap' }, [
         cell,
         urlMark(raw, options)
-    ]);
+    ]));
 }

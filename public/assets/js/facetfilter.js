@@ -51,7 +51,7 @@
 import { api, dec, el, fill, num } from './core.js';
 import { closeDialog, dialogFail, isCurrent, openDialog } from './dialog.js';
 import { dimValue } from './identity.js';
-import { isPathField, pathTail, urlMark } from './url.js';
+import { bindPath, claimPath, isPathField, pathLabel, urlMark } from './url.js';
 import { exportLink } from './export.js';
 
 /** The query-string prefix for Loghound's own dimensions. The Opensolr log plane uses 'lf'. */
@@ -765,7 +765,11 @@ function valueRow(group, bucket, ns) {
        `data-lh-full` is what stops the shortening from costing the reader the full value, since
        responsive.js would otherwise measure a value that now fits and take the tooltip away. */
     const shown = String(bucket.label || value);
-    const text = path ? pathTail(shown) : shown;
+    const text = path ? pathLabel(shown, 'tail') : shown;
+    const words = el('span', { class: 'facet-val' + (group.mono ? ' mono' : ''), text: text });
+    if (path) {
+        bindPath(words, shown, 'tail');
+    }
 
     const link = el('a', {
         class: 'facet-opt' + (bucket.state === 'on' ? ' is-on' : '') + (bucket.state === 'excluded' ? ' is-excluded' : ''),
@@ -773,12 +777,12 @@ function valueRow(group, bucket, ns) {
         title: bucket.why || value
     }, [
         el('span', { class: 'facet-mark', 'aria-hidden': 'true', text: on ? (bucket.state === 'excluded' ? '−' : '✓') : '' }),
-        el('span', { class: 'facet-val' + (group.mono ? ' mono' : ''), text: text }),
+        words,
         el('span', { class: 'facet-n', text: bucket.count === null ? '—' : num(bucket.count) })
     ]);
 
-    if (text !== shown) {
-        link.setAttribute('data-lh-full', shown);
+    if (path) {
+        claimPath(link);
     }
 
     return el('li', {
@@ -1106,15 +1110,17 @@ function browserRow(bucket, group) {
            all about which facet values are applied, on the control this whole page turns on.
            aria-current="true" is valid on a link and means exactly this: the item in the set
            that is in force. */
-        el('a', {
+        claimPath(el('a', {
             href: stagedUrl(group, value),
             title: bucket.why || value,
             'aria-current': on ? 'true' : 'false'
         }, [
             el('span', { class: 'fb-mark', 'aria-hidden': 'true', text: on ? '✓' : '' }),
-            el('span', { class: 'fb-name' + (group.mono ? ' mono' : ''), text: label }),
+            path
+                ? bindPath(el('span', { class: 'fb-name' + (group.mono ? ' mono' : '') }), label)
+                : el('span', { class: 'fb-name' + (group.mono ? ' mono' : ''), text: label }),
             el('span', { class: 'fb-count', text: bucket.count === null ? '' : '(' + num(bucket.count) + ')' })
-        ]),
+        ])),
         path ? urlMark(value) : null
     ]);
 }

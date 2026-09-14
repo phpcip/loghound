@@ -821,7 +821,10 @@ const CONTROL_TIP_SELECTOR = '.card-refresh[data-lh-tip], .rowopen[data-lh-tip]'
    drawn by one function (pathCell in url.js), so marking that one wrapper puts the full path
    under the pointer in every table at once. */
 const VALUE_TIP_SELECTOR = '.facet-opt[data-lh-tip], .dim[data-lh-tip], .urlwrap[data-lh-tip], '
-    + '.nobeacon[data-lh-tip], .nopage[data-lh-tip]';
+    + '.nobeacon[data-lh-tip], .nopage[data-lh-tip], .fb-value-url > a[data-lh-tip]';
+
+/** The class that holds a path's tooltip open after a tap, on a screen with no hover. */
+const TIP_OPEN = 'is-tip-open';
 
 /**
  * Everything one delegated listener has to recognise, composed rather than written out again.
@@ -889,7 +892,11 @@ const VALUE_TIP_PARTS = [
        whole target the pointer can reach — the trailing open-in-new-tab mark is its sibling, not
        part of the words — while the measurement and the words both come from `.urlpath`, which
        is the element the ellipsis is actually on. */
-    { marker: '.urlwrap', value: '.urlpath' }
+    { marker: '.urlwrap', value: '.urlpath' },
+
+    /* A path in the filter builder, only once url.js has shortened it: every other builder value
+       keeps the native title it always had. */
+    { marker: '.fb-value-url > a[data-lh-full]', value: '.fb-name' }
 ];
 
 /**
@@ -903,6 +910,9 @@ const VALUE_TIP_PARTS = [
  * value wins, and the native title is parked for exactly as long as the value is cut; a value
  * that fits keeps its title untouched and gets no tooltip of ours.
  *
+ * A cut path also parks the title of the table cell around it, which repeats the same path and
+ * would otherwise open a second bubble under the same pointer.
+ *
  * @param {HTMLElement} marker The element the tooltip is attached to.
  * @param {boolean}     cut    Whether the value inside it is truncated.
  */
@@ -912,6 +922,50 @@ function parkValueTitles(marker, cut) {
     if (row && row.classList && row.classList.contains('facet-li')) {
         parkTitle(row, cut);
     }
+    if (marker.classList.contains('urlwrap')) {
+        parkTitle(marker.closest('td'), cut);
+    }
+}
+
+/**
+ * Open a cut path's tooltip on a tap, where a touch screen has no hover to open it with.
+ *
+ * Captured at the document so the row the path sits in does not also open its record from the
+ * same tap. A tap on the open-in-new-tab link, or any other link or button, keeps doing what it
+ * did; a tap anywhere else, or a scroll, closes the box.
+ */
+function setUpTapTips() {
+    if (typeof window.matchMedia !== 'function') {
+        return;
+    }
+    const touch = window.matchMedia('(hover: none)');
+
+    const close = () => {
+        for (const open of document.querySelectorAll('.' + TIP_OPEN)) {
+            open.classList.remove(TIP_OPEN);
+        }
+    };
+
+    document.addEventListener('click', (event) => {
+        const target = event.target;
+        const wrap = touch.matches && target && typeof target.closest === 'function' && !target.closest('a, button')
+            ? target.closest('.urlwrap[data-lh-tip]')
+            : null;
+        if (!wrap) {
+            close();
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const wasOpen = wrap.classList.contains(TIP_OPEN);
+        close();
+        if (!wasOpen) {
+            publishTipBox(wrap);
+            wrap.classList.add(TIP_OPEN);
+        }
+    }, true);
+
+    window.addEventListener('scroll', close, { passive: true, capture: true });
 }
 
 /**
@@ -1788,6 +1842,7 @@ function start() {
        one. */
     remeasureTips = markValueTips;
     setUpControlTips();
+    setUpTapTips();
     markValueTips();
     restack();
     watch();

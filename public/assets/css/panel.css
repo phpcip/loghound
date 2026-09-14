@@ -2472,7 +2472,8 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 .dim[data-lh-tip]::after,
 .urlwrap[data-lh-tip]::after,
 .nobeacon[data-lh-tip]::after,
-.nopage[data-lh-tip]::after {
+.nopage[data-lh-tip]::after,
+.fb-value-url > a[data-lh-tip]::after {
     content: attr(data-full);
     position: fixed;
     z-index: 40;
@@ -2499,7 +2500,12 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
 .dim[data-lh-tip]:focus-visible::after,
 .urlwrap[data-lh-tip]:focus-visible::after,
 .nobeacon[data-lh-tip]:focus-visible::after,
-.nopage[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+.nopage[data-lh-tip]:focus-visible::after,
+.fb-value-url > a[data-lh-tip]:focus-visible::after { opacity: 1; visibility: visible; }
+
+/* A PATH A PHONE SHORTENED OPENS ITS TOOLTIP ON A TAP. A touch screen has no hover, so without
+   this the whole path was unreachable there; responsive.js::setUpTapTips() sets the class. */
+.urlwrap[data-lh-tip].is-tip-open::after { opacity: 1; visibility: visible; }
 
 @media (hover: hover) and (pointer: fine) {
     .card-refresh[data-lh-tip]:hover::after,
@@ -2508,7 +2514,8 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
     .dim[data-lh-tip]:hover::after,
     .urlwrap[data-lh-tip]:hover::after,
     .nobeacon[data-lh-tip]:hover::after,
-    .nopage[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
+    .nopage[data-lh-tip]:hover::after,
+    .fb-value-url > a[data-lh-tip]:hover::after { opacity: 1; visibility: visible; }
 }
 
 /* A card still clears the bar.

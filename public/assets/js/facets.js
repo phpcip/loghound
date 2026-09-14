@@ -62,7 +62,7 @@ import {
     toggleUrl,
     urlFor
 } from './facetfilter.js';
-import { isPathField, pathTail, urlMark } from './url.js';
+import { bindPath, claimPath, isPathField, pathLabel, urlMark } from './url.js';
 
 /** Has the panel-wide dimension list been fetched? One request per page load. */
 let loaded = false;
@@ -220,7 +220,7 @@ function option(group, bucket, largest) {
        names the thing survives. `data-lh-full` below carries the whole path: without it
        responsive.js measures a value that now fits, decides nothing was cut, and takes away the
        tooltip that is the only way to read the rest. */
-    const text = path ? pathTail(shown) : shown;
+    const text = path ? pathLabel(shown, 'tail') : shown;
 
     /* A value the server marked unfilterable is a static row, not a link: it has a real count and
        no filter can be built for it, and a link that does nothing when pressed is worse than a row
@@ -231,13 +231,13 @@ function option(group, bucket, largest) {
             el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
             el('span', { class: 'facet-mark', 'aria-hidden': 'true' }),
             el('span', { class: 'facet-val' + (group.mono ? ' mono' : '') }, [
-                dimValue(group.field, bucket.value, { text: text, mono: group.mono, link: false })
+                pathValue(group, bucket, text, shown, path)
             ]),
             el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
         ]);
 
-        if (text !== shown) {
-            staticOpt.setAttribute('data-lh-full', shown);
+        if (path) {
+            claimPath(staticOpt);
         }
 
         return el('li', { class: 'facet-li' + (path ? ' facet-li-url' : ''), title: bucket.why || '' }, [
@@ -265,12 +265,14 @@ function option(group, bucket, largest) {
             text: state === 'on' ? '\u2713' : (state === 'excluded' ? '\u2212' : '')
         }),
         el('span', { class: 'facet-val' + (group.mono ? ' mono' : '') }, [
-            dimValue(group.field, bucket.value, { text: text, mono: group.mono, link: false })
+            pathValue(group, bucket, text, shown, path)
         ]),
         el('span', { class: 'facet-n', text: count === null ? '\u2014' : num(count) })
     ]);
 
-    if (text !== shown) {
+    if (path) {
+        claimPath(link);
+    } else if (text !== shown) {
         link.setAttribute('data-lh-full', shown);
     }
 
@@ -281,6 +283,25 @@ function option(group, bucket, largest) {
         link,
         path ? urlMark(bucket.value) : null
     ]);
+}
+
+/**
+ * The value inside a facet row, with a path bound to url.js so its shortening follows the width.
+ *
+ * @param {Object}  group
+ * @param {Object}  bucket
+ * @param {string}  text  What the row shows now.
+ * @param {string}  shown The whole value.
+ * @param {boolean} path  Whether the dimension is a site path.
+ * @returns {HTMLElement}
+ */
+function pathValue(group, bucket, text, shown, path) {
+    const node = dimValue(group.field, bucket.value, { text: text, mono: group.mono, link: false });
+    const words = path ? node.querySelector('.dim-val') : null;
+    if (words) {
+        bindPath(words, shown, 'tail');
+    }
+    return node;
 }
 
 /**

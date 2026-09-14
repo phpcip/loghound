@@ -51,7 +51,7 @@ import {
 } from './identity.js';
 import { markSortable } from './sorttable.js';
 import { countryName } from './geo.js';
-import { hrefLink, outLink, pathCell, urlMark } from './url.js';
+import { bindPath, claimPath, hrefLink, outLink, pathCell, urlMark } from './url.js';
 import { renderPager } from './pager.js';
 import { fillVisits, visitCaption, visitTable } from './visits.js';
 
@@ -329,12 +329,12 @@ function trailBlock(id, data, host) {
                 el('span', { class: 't-method muted', text: hit.method || '' }),
                 /* THE PATH ALONE. The query string made every admin row unreadable; the link
                    beside it still carries it, so the exact page requested is one tap away. */
-                el('span', { class: 't-path urlwrap', title: hit.path }, [
+                claimPath(el('span', { class: 't-path urlwrap', title: hit.path }, [
                     el('span', { class: 'urlpath' }, [
-                        el('span', { text: hit.path })
+                        bindPath(el('span'), hit.path)
                     ]),
                     urlMark(hit.path, { host: hit.host, fallback: host, query: hit.query })
-                ]),
+                ])),
                 el('span', { class: statusClass + ' mono', text: hit.status === null ? '—' : String(hit.status) }),
                 el('span', { class: 't-bytes muted mono', text: bytes(hit.bytes) }),
                 el('span', {
