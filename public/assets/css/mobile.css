@@ -896,25 +896,27 @@ table.visits td.visit-box { display: none; }
     /* THE BOX IS THE SCREEN'S WIDTH, NEVER THE CONTENT'S. `.table-wrap > table.table-fixed` sizes a
        phone table to `max-content` and panel.css gives it a 680px minimum, so a long page widened
        the whole table and the page scrolled sideways instead of the page line. Named with both
-       classes so it outranks both rules; the page and email lines then scroll inside themselves. */
-    table.visits,
-    table.visits.table-fixed,
-    .table-wrap > table.visits.table-fixed,
-    table.visits > tbody,
-    table.visits > tbody > tr {
+       classes so it outranks both rules; the page and email lines then scroll inside themselves.
+       SCOPED TO TABLES THAT HOLD A BOX. The Attacks request table wears `visits` for its styling
+       but its rows have no `td.visit-box`, so hiding every other cell emptied it on a phone. */
+    table.visits:has(td.visit-box),
+    table.visits.table-fixed:has(td.visit-box),
+    .table-wrap > table.visits.table-fixed:has(td.visit-box),
+    table.visits:has(td.visit-box) > tbody,
+    table.visits:has(td.visit-box) > tbody > tr {
         display: block;
         width: 100%;
         min-width: 0;
         max-width: 100%;
     }
     /* A small gap under the card head and sort bar, so the first box does not sit against them. */
-    table.visits { margin-top: 10px; }
-    table.visits > colgroup,
-    table.visits > tbody > tr > td { display: none; }
+    table.visits:has(td.visit-box) { margin-top: 10px; }
+    table.visits:has(td.visit-box) > colgroup,
+    table.visits:has(td.visit-box) > tbody > tr > td { display: none; }
     /* `height: auto` AND `overflow: visible` ARE THE BOX. panel.css gives every visit cell a 26px
        height and `table-fixed` clips every cell; a table cell treats that height as a minimum, a
        block treats it as the height, so the box showed its first line and cut the other two. */
-    table.visits > tbody > tr > td.visit-box {
+    table.visits:has(td.visit-box) > tbody > tr > td.visit-box {
         display: block;
         height: auto;
         overflow: visible;

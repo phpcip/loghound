@@ -553,10 +553,11 @@ final class Attacks extends Controller implements Sections
         $fqs = $this->attackFqs();
         $fqs[] = self::FQ_ANSWERED;
 
+        $order = self::requestsOrder();
         $res = $this->gw->select('atk.requests', $this->gw->hitsCore(), [
             'q'     => '*:*',
             'fq'    => $fqs,
-            'sort'  => 'ts desc',
+            'sort'  => $order['sort'] . ($order['key'] === 'date' ? '' : ', ts desc'),
             'rows'  => $rows,
             'start' => $start,
             /* THE TWO FIELDS THIS CARD ACTUALLY READS, which Query::hitFl() does not carry.
@@ -990,22 +991,39 @@ final class Attacks extends Controller implements Sections
            page's entire argument were MERGED rather than dropped: what the server answered and
            which pattern matched are one judgement about one request, which is what a verdict is
            here, and they share the fifth column. */
-        echo '<div class="table-wrap"><table id="atk-requests-table" class="table-fixed visits"><colgroup>'
+        echo '<div class="table-wrap"><table id="atk-requests-table" class="table-fixed visits"'
+            . Sorting::tableAttrs('atk-requests', self::requestsOrder()) . '><colgroup>'
             /* Same cut as the session explorer's table, for the same reason: the timestamp is
                nineteen fixed-width characters and must survive, so Country gives up the room it
                no longer needs now that it draws the flag alone. */
             . '<col style="width:23%"><col style="width:15%"><col style="width:6%">'
             . '<col style="width:35%"><col style="width:21%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Date</th>'
-            . '<th scope="col">IP</th>'
-            . '<th scope="col">Country</th>'
-            . '<th scope="col">Page</th>'
-            . '<th scope="col" class="visit-verdict">Verdict</th>'
+            . '<th scope="col"' . Sorting::th('date', 'desc') . '>Date</th>'
+            . '<th scope="col"' . Sorting::th('ip') . '>IP</th>'
+            . '<th scope="col"' . Sorting::th('country') . '>Country</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>Page</th>'
+            . '<th scope="col" class="visit-verdict"' . Sorting::th('verdict') . '>Verdict</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="atk-requests-pager"></div>';
 
         self::cardClose('atk-requests');
+    }
+
+    /**
+     * The order of the answered requests: date, address, country, path or status code, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function requestsOrder(): array
+    {
+        return Sorting::pick('atk-requests', [
+            'date'    => 'ts',
+            'ip'      => 'ip_s',
+            'country' => 'country_s',
+            'page'    => 'path_s',
+            'verdict' => 'status_i',
+        ], 'date');
     }
 
     /** CARD 04. Addresses and networks. */

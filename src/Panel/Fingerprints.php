@@ -179,6 +179,22 @@ final class Fingerprints extends Controller
     }
 
     /**
+     * The order of the cluster table: signature, addresses, sessions, last activity or score, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function clustersOrder(): array
+    {
+        return Sorting::pick('fp-table', [
+            'signature' => 'index',
+            'ips'       => 'uniq_ips',
+            'sessions'  => 'count',
+            'activity'  => 'last',
+            'verdict'   => 'score',
+        ], 'ips');
+    }
+
+    /**
      * The cluster table.
      *
      * @return array<string,mixed>
@@ -188,13 +204,15 @@ final class Fingerprints extends Controller
         $limit = Security::clampInt($_GET['limit'] ?? null, 5, self::MAX_CLUSTERS, 40);
 
         $sortKey = self::param('sort', ['ips', 'sessions', 'hits', 'score', 'recent'], 'ips');
-        $sort = [
+        $legacySort = [
             'ips'      => 'uniq_ips desc',
             'sessions' => 'count desc',
             'hits'     => 'hits desc',
             'score'    => 'score desc',
             'recent'   => 'last desc',
         ][$sortKey];
+        $order = self::clustersOrder();
+        $sort = !$order['asked'] && $sortKey !== 'ips' ? $legacySort : $order['sort'];
 
         $minIps = Security::clampInt($_GET['min_ips'] ?? null, 1, 500, 1);
 
@@ -446,19 +464,20 @@ final class Fingerprints extends Controller
         );
         self::skeleton('fp-table', 'rows', 0, 'Building fingerprint clusters');
 
-        echo '<div class="table-wrap"><table id="fp-table-el" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="fp-table-el" class="table-fixed"'
+            . Sorting::tableAttrs('fp-table', self::clustersOrder()) . '><colgroup>'
             . '<col style="width:5%"><col style="width:21%"><col style="width:11%">'
             . '<col style="width:9%"><col style="width:16%"><col style="width:21%">'
             . '<col style="width:17%">'
             . '</colgroup><thead><tr>'
             . '<th scope="col" class="w-expand"><span class="sr-only">Expand</span></th>'
-            . '<th scope="col">Signature</th>'
-            . '<th scope="col" class="num" title="Distinct addresses, and under it the netblocks '
+            . '<th scope="col"' . Sorting::th('signature') . '>Signature</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . ' title="Distinct addresses, and under it the netblocks '
             . 'and networks they are spread across">IPs</th>'
-            . '<th scope="col" class="num">Sess.</th>'
-            . '<th scope="col">Activity</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sess.</th>'
+            . '<th scope="col"' . Sorting::th('activity', 'desc') . '>Activity</th>'
             . '<th scope="col">Client</th>'
-            . '<th scope="col">Verdict</th>'
+            . '<th scope="col"' . Sorting::th('verdict', 'desc') . '>Verdict</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         /* THE ORANGE RULE HAS A MEANING AND NOW IT IS WRITTEN DOWN. Some rows in this table carry

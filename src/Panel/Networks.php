@@ -254,7 +254,7 @@ final class Networks extends Controller
                 'type'  => 'terms',
                 'field' => 'asn_i',
                 'limit' => Security::clampInt($_GET['limit'] ?? null, 10, 200, 60),
-                'sort'  => 'count desc',
+                'sort'  => self::asnsOrder()['sort'],
                 'facet' => self::commonFacets() + [
                     'org'     => ['type' => 'terms', 'field' => 'as_org_s', 'limit' => 1],
                     'astype'  => ['type' => 'terms', 'field' => 'as_type_s', 'limit' => 1],
@@ -304,7 +304,7 @@ final class Networks extends Controller
                 'type'  => 'terms',
                 'field' => 'netname_s',
                 'limit' => Security::clampInt($_GET['limit'] ?? null, 10, 200, 60),
-                'sort'  => 'count desc',
+                'sort'  => self::netnamesOrder()['sort'],
                 'facet' => self::commonFacets() + [
                     'org'      => ['type' => 'terms', 'field' => 'as_org_s', 'limit' => 1],
                     'astype'   => ['type' => 'terms', 'field' => 'as_type_s', 'limit' => 1],
@@ -335,7 +335,7 @@ final class Networks extends Controller
                 'type'  => 'terms',
                 'field' => 'country_s',
                 'limit' => 200,
-                'sort'  => 'count desc',
+                'sort'  => self::countriesOrder()['sort'],
                 'facet' => self::commonFacets() + [
                     'cities' => ['type' => 'terms', 'field' => 'city_s', 'limit' => 5],
                 ],
@@ -474,14 +474,15 @@ final class Networks extends Controller
 
         echo '<div id="net-asns-legend" class="controls"></div>';
         echo '<div class="chart" id="net-treemap" style="height:420px"></div>';
-        echo '<div class="table-wrap"><table id="net-asns-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="net-asns-table" class="table-fixed"'
+            . Sorting::tableAttrs('net-asns', self::asnsOrder()) . '><colgroup>'
             . '<col style="width:34%"><col style="width:12%"><col style="width:11%">'
             . '<col style="width:12%"><col style="width:31%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Network</th>'
-            . '<th scope="col" class="num">Sessions</th>'
-            . '<th scope="col" class="num">IPs</th>'
-            . '<th scope="col" class="num">Requests</th>'
+            . '<th scope="col"' . Sorting::th('network') . '>Network</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>IPs</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
             . '<th scope="col">Mix</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
@@ -501,14 +502,15 @@ final class Networks extends Controller
         );
         self::skeleton('net-netnames', 'rows', 0, 'Faceting netblocks');
 
-        echo '<div class="table-wrap"><table id="net-netnames-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="net-netnames-table" class="table-fixed"'
+            . Sorting::tableAttrs('net-netnames', self::netnamesOrder()) . '><colgroup>'
             . '<col style="width:34%"><col style="width:12%"><col style="width:11%">'
             . '<col style="width:12%"><col style="width:31%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Netblock</th>'
-            . '<th scope="col" class="num">Sessions</th>'
-            . '<th scope="col" class="num">IPs</th>'
-            . '<th scope="col" class="num">Prints</th>'
+            . '<th scope="col"' . Sorting::th('netblock') . '>Netblock</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>IPs</th>'
+            . '<th scope="col" class="num"' . Sorting::th('prints', 'desc') . '>Prints</th>'
             . '<th scope="col">Mix</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
@@ -528,18 +530,59 @@ final class Networks extends Controller
         );
         self::skeleton('net-countries', 'rows', 0, 'Faceting countries');
 
-        echo '<div class="table-wrap"><table id="net-countries-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="net-countries-table" class="table-fixed"'
+            . Sorting::tableAttrs('net-countries', self::countriesOrder()) . '><colgroup>'
             . '<col style="width:24%"><col style="width:12%"><col style="width:10%">'
             . '<col style="width:11%"><col style="width:11%"><col style="width:32%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Country</th>'
-            . '<th scope="col" class="num">Sessions</th>'
-            . '<th scope="col" class="num">IPs</th>'
+            . '<th scope="col"' . Sorting::th('country') . '>Country</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>IPs</th>'
             . '<th scope="col" class="num">Human</th>'
             . '<th scope="col" class="num">Evasive</th>'
             . '<th scope="col">Top cities</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('net-countries');
+    }
+
+    /**
+     * The order of the network table: the ASN, sessions, addresses or requests, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function asnsOrder(): array
+    {
+        return Sorting::pick('net-asns', [
+            'network'  => 'index',
+            'sessions' => 'count',
+            'ips'      => 'uniq_ips',
+            'requests' => 'hits',
+        ], 'sessions');
+    }
+
+    /**
+     * The order of the netblock table: the netname, sessions, addresses or fingerprints, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function netnamesOrder(): array
+    {
+        return Sorting::pick('net-netnames', [
+            'netblock' => 'index',
+            'sessions' => 'count',
+            'ips'      => 'uniq_ips',
+            'prints'   => 'uniq_fps',
+        ], 'sessions');
+    }
+
+    /**
+     * The order of the country table: the country code, sessions or addresses, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function countriesOrder(): array
+    {
+        return Sorting::pick('net-countries', ['country' => 'index', 'sessions' => 'count', 'ips' => 'uniq_ips'], 'sessions');
     }
 }

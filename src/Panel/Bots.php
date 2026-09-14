@@ -316,7 +316,7 @@ final class Bots extends Controller
                     'type'  => 'terms',
                     'field' => 'bot_reasons_ss',
                     'limit' => 25,
-                    'sort'  => 'count desc',
+                    'sort'  => self::reasonsOrder()['sort'],
                     'facet' => [
                         'score'    => 'avg(bot_score_f)',
                         'declared' => ['type' => 'query', 'q' => Query::POP_DECLARED_ANY],
@@ -423,6 +423,7 @@ final class Bots extends Controller
                     'type'  => 'terms',
                     'field' => 'bot_class_s',
                     'limit' => 12,
+                    'sort'  => self::classesOrder()['sort'],
                     'facet' => [
                         'uniq_ips' => 'unique(ip_s)',
                         'hits'     => 'sum(hits_i)',
@@ -484,7 +485,7 @@ final class Bots extends Controller
                     'type'  => 'terms',
                     'field' => 'ua_bot_name_s',
                     'limit' => 25,
-                    'sort'  => 'count desc',
+                    'sort'  => self::crawlersOrder()['sort'],
                     'facet' => [
                         'hits'     => 'sum(hits_i)',
                         'uniq_ips' => 'unique(ip_s)',
@@ -608,15 +609,16 @@ final class Bots extends Controller
         self::skeleton('bf-reasons', 'chart', 420, 'Faceting signal codes');
 
         echo '<div class="chart" id="bf-reasons-chart" style="height:460px"></div>';
-        echo '<div class="table-wrap"><table id="bf-reason-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="bf-reason-table" class="table-fixed"'
+            . Sorting::tableAttrs('bf-reasons', self::reasonsOrder()) . '><colgroup>'
             . '<col style="width:24%"><col style="width:40%"><col style="width:12%">'
             . '<col style="width:12%"><col style="width:12%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Signal</th>'
+            . '<th scope="col"' . Sorting::th('signal') . '>Signal</th>'
             . '<th scope="col">What it means</th>'
             . '<th scope="col" class="num">Evasive</th>'
             . '<th scope="col" class="num">Declared</th>'
-            . '<th scope="col" class="num">Avg score</th>'
+            . '<th scope="col" class="num"' . Sorting::th('score', 'desc') . '>Avg score</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('bf-reasons');
@@ -635,16 +637,17 @@ final class Bots extends Controller
         );
         self::skeleton('bf-classes', 'rows', 0, 'Faceting bot classes');
 
-        echo '<div class="table-wrap"><table id="bf-classes-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="bf-classes-table" class="table-fixed"'
+            . Sorting::tableAttrs('bf-classes', self::classesOrder()) . '><colgroup>'
             . '<col style="width:26%"><col style="width:16%"><col style="width:14%">'
             . '<col style="width:16%"><col style="width:14%"><col style="width:14%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Class</th>'
+            . '<th scope="col"' . Sorting::th('class') . '>Class</th>'
             . '<th scope="col">Kind</th>'
-            . '<th scope="col" class="num">Sessions</th>'
-            . '<th scope="col" class="num">Distinct IPs</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">Avg score</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>Distinct IPs</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
+            . '<th scope="col" class="num"' . Sorting::th('score', 'desc') . '>Avg score</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('bf-classes');
@@ -663,20 +666,63 @@ final class Bots extends Controller
         );
         self::skeleton('bf-crawlers', 'rows', 0, 'Faceting crawler names');
 
-        echo '<div class="table-wrap"><table id="bf-crawlers-table" class="table-fixed"><colgroup>'
+        echo '<div class="table-wrap"><table id="bf-crawlers-table" class="table-fixed"'
+            . Sorting::tableAttrs('bf-crawlers', self::crawlersOrder()) . '><colgroup>'
             . '<col style="width:20%"><col style="width:16%"><col style="width:11%">'
             . '<col style="width:12%"><col style="width:9%"><col style="width:12%">'
             . '<col style="width:20%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Crawler</th>'
+            . '<th scope="col"' . Sorting::th('crawler') . '>Crawler</th>'
             . '<th scope="col">Category</th>'
-            . '<th scope="col" class="num">Sessions</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">IPs</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>IPs</th>'
             . '<th scope="col" class="num">Verified</th>'
-            . '<th scope="col">Last seen</th>'
+            . '<th scope="col"' . Sorting::th('last', 'desc') . '>Last seen</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('bf-crawlers');
+    }
+
+    /**
+     * The order of the signal table: the signal code or its average bot score, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function reasonsOrder(): array
+    {
+        return Sorting::pick('bf-reasons', ['signal' => 'index', 'count' => 'count', 'score' => 'score'], 'count');
+    }
+
+    /**
+     * The order of the bot classes: class, sessions, distinct addresses, requests or average score, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function classesOrder(): array
+    {
+        return Sorting::pick('bf-classes', [
+            'class'    => 'index',
+            'sessions' => 'count',
+            'ips'      => 'uniq_ips',
+            'requests' => 'hits',
+            'score'    => 'score',
+        ], 'sessions');
+    }
+
+    /**
+     * The order of the declared crawlers: name, sessions, requests, addresses or last seen, in Solr.
+     *
+     * @return array{key:string,dir:string,sort:string,asked:bool}
+     */
+    private static function crawlersOrder(): array
+    {
+        return Sorting::pick('bf-crawlers', [
+            'crawler'  => 'index',
+            'sessions' => 'count',
+            'requests' => 'hits',
+            'ips'      => 'uniq_ips',
+            'last'     => 'last',
+        ], 'sessions');
     }
 }
