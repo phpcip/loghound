@@ -302,7 +302,7 @@ function setUpNav() {
     });
 
     side.addEventListener('click', (event) => {
-        const link = event.target.closest ? event.target.closest('a[href]') : null;
+        const link = event.target.closest ? event.target.closest('a[href]:not(.navtwist-target)') : null;
         if (link && side.contains(link)) {
             closeNav(side);
         }
@@ -347,10 +347,13 @@ function setUpNavGroups(side) {
         }
         twist.dataset.lhWired = '1';
 
-        twist.addEventListener('click', () => {
+        twist.addEventListener('click', (event) => {
             const list = document.getElementById(twist.getAttribute('aria-controls') || '');
             if (!list) {
                 return;
+            }
+            if (twist.tagName === 'A') {
+                event.preventDefault();
             }
             const open = list.hidden;
             list.hidden = !open;

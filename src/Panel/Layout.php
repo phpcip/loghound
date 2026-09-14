@@ -514,7 +514,14 @@ final class Layout
             echo '<li class="navgroup' . ($current ? ' is-current' : '')
                 . ($sections !== [] ? ' has-sub' : '') . '">';
             echo '<span class="navrow">';
-            echo '<a class="navlink' . ($current ? ' on' : '') . '"'
+            /* A MAIN ITEM WITH A LIST OPENS THE LIST, NOT A PAGE. The href stays for a browser with
+               no script; responsive.js wires `navtwist-target` to expand the list and cancels the
+               navigation. An item inside a group, or one with no list, is still a plain link. */
+            $expands = $group === '' && $sections !== [];
+            echo '<a class="navlink' . ($current ? ' on' : '') . ($expands ? ' navtwist-target' : '') . '"'
+                . ($expands
+                    ? ' aria-controls="' . Security::esc($listId) . '" aria-expanded="' . ($current ? 'true' : 'false') . '"'
+                    : '')
                 . ' href="' . Security::esc($href) . '"'
                 . ($current && $sections === [] ? ' aria-current="page"' : '')
                 . ' title="' . Security::esc($item['hint']) . '">'
