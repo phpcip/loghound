@@ -3735,8 +3735,11 @@ tr:hover .rowopen { color: var(--accent-ink); border-color: var(--hairline); bac
         border: 0;
         border-radius: 0;
         opacity: 1;
-        visibility: visible;
-        pointer-events: auto;
+        /* INHERITED FROM THE FLYOUT, NEVER FORCED ON. `visible` on a child of a `hidden` box
+           makes the child hit-testable again: the current group's shut flyout sat invisible over
+           the facet column, its labels caught the pointer, and hovering a filter opened the menu. */
+        visibility: inherit;
+        pointer-events: inherit;
     }
 
     /* Keyboard first and unconditionally: the rail is tab-navigable, and a
