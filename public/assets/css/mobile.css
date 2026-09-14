@@ -908,7 +908,7 @@ table.visits td.visit-box { display: none; }
         height: auto;
         overflow: visible;
         white-space: normal;
-        padding: 10px 12px;
+        padding: 6px 10px;
         line-height: 1.45;
         border-top: 1px solid var(--hairline);
     }
@@ -918,7 +918,7 @@ table.visits td.visit-box { display: none; }
         gap: 8px;
         min-width: 0;
     }
-    table.visits .vbox-line + .vbox-line { margin-top: 6px; }
+    table.visits .vbox-line + .vbox-line { margin-top: 4px; }
     /* SIDEWAYS ONLY. `overflow-x: auto` turns an unset `overflow-y` into `auto` as well, and the
        flag and the bounce chip stand taller than the line, so it scrolled up and down too. The
        vertical axis is shut and the line given the few pixels those marks need. */
@@ -939,6 +939,7 @@ table.visits td.visit-box { display: none; }
         gap: 6px;
     }
     table.visits .vbox-meta .lh-copy { overflow: visible; }
+    table.visits .vbox-mail > .lh-copy { font-weight: 700; }
     table.visits .vbox-page > .lh-copy,
     table.visits .vbox-mail > .lh-copy {
         display: block;
