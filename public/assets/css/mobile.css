@@ -896,6 +896,8 @@ table.visits td.visit-box { display: none; }
         min-width: 0;
         max-width: 100%;
     }
+    /* A small gap under the card head and sort bar, so the first box does not sit against them. */
+    table.visits { margin-top: 10px; }
     table.visits > colgroup,
     table.visits > tbody > tr > td { display: none; }
     /* `height: auto` AND `overflow: visible` ARE THE BOX. panel.css gives every visit cell a 26px
