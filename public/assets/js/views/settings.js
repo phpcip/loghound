@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { api, byId, dec, el, num, post, reattachJob, runJob, when } from '../core.js';
+import { api, byId, dec, el, num, post, reattachJob, runJob, stamp } from '../core.js';
 
 /** Human titles for the job kinds this view can start. */
 const JOB_TITLES = {
@@ -320,7 +320,7 @@ function beaconDetail(status) {
     ];
     if (status.last) {
         parts.push(document.createTextNode(' · last at '));
-        parts.push(el('span', { class: 'mono', text: when(status.last) }));
+        parts.push(stamp(status.last));
     }
     if (status.coverage !== null && status.coverage !== undefined) {
         parts.push(document.createTextNode(' · '));

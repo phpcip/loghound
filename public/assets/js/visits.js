@@ -27,7 +27,7 @@
 
 'use strict';
 
-import { dayOnly, dur, el, num, timeOnly, when } from './core.js';
+import { clockStamp, dayOnly, dur, el, num, when } from './core.js';
 import { copyValue } from './copy.js';
 import { glyph } from './icons.js';
 import { countryNode, dimValue, drillRow, openButton } from './identity.js';
@@ -107,7 +107,9 @@ export function visitRow(v) {
         'data-sort': seen || ''
     }, [
         el('span', { class: 'visit-day', text: dayOnly(seen) }),
-        el('span', { class: 'visit-clock', text: timeOnly(seen) })
+        /* The clock wears the segmented face; clockStamp() decides that shape for the whole
+           panel, so this column cannot drift from the dialogs and the other tables. */
+        el('span', { class: 'visit-clock' }, [clockStamp(seen)])
     ]));
 
     /* THE FLAG RIDES WITH THE ADDRESS. They answer one question — who, and from where — so

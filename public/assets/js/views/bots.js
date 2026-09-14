@@ -13,7 +13,7 @@
 'use strict';
 
 import {
-    api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, setPop, tbody, when
+    api, byId, cardChart, dec, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, setPop, stamp, tbody
 } from '../core.js';
 import { barsHStacked, donut, histogram, tokens } from '../charts.js';
 import { clearTableChart, splitChart } from '../tablecharts.js';
@@ -234,7 +234,7 @@ function crawlerRow(row) {
                 }),
                 sort: row.sessions ? row.verified / row.sessions : 0
             },
-            { text: when(row.last), mono: true, nowrap: true, sort: row.last || '' }
+            { node: stamp(row.last), mono: true, nowrap: true, sort: row.last || '' }
         ]
     };
 }

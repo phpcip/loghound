@@ -585,6 +585,60 @@ export function when(iso, withSeconds) {
     return parts.month + '/' + parts.day + '/' + parts.year + ' ' + time;
 }
 
+/**
+ * An instant as a node, with the hour and minute on the panel's segmented LED face.
+ *
+ * ONE PLACE DECIDES WHAT A TIMESTAMP LOOKS LIKE. when() still returns the plain string, and
+ * that is what titles, `data-sort` and exported text want; this is for the visible value in a
+ * cell, a dialog row or a label, where the clock is the part being read and gets the display
+ * face while the date stays in the panel's own type. The seconds follow in the secondary tone,
+ * still attached to the minute they belong to.
+ *
+ * An instant when() cannot read has no clock half; that case comes back as its dash, not as an
+ * empty watch face.
+ *
+ * @param {string|null} iso
+ * @param {boolean} [withSeconds] Passed straight to when().
+ * @returns {HTMLElement}
+ */
+export function stamp(iso, withSeconds) {
+    const text = when(iso, withSeconds);
+    const half = String(text).split(' ');
+    const clock = half.length > 1 ? half[1].split(':') : [];
+
+    if (clock.length < 2) {
+        return el('span', { class: 'stamp', text: text });
+    }
+
+    return el('span', { class: 'stamp' }, [
+        el('span', { class: 'stamp-date', text: half[0] }),
+        el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] }),
+        clock[2] ? el('span', { class: 'stamp-sec', text: ':' + clock[2] }) : null
+    ]);
+}
+
+/**
+ * The clock half of an instant as a node, for the columns that show no date.
+ *
+ * Same split as stamp(), from timeOnly() rather than when(): hour and minute on the segmented
+ * face, seconds beside them in the secondary tone.
+ *
+ * @param {string|null} iso
+ * @returns {HTMLElement}
+ */
+export function clockStamp(iso) {
+    const parts = String(timeOnly(iso)).split(':');
+
+    if (parts.length < 2) {
+        return el('span', { class: 'stamp', text: timeOnly(iso) });
+    }
+
+    return el('span', { class: 'stamp' }, [
+        el('span', { class: 'led-hm', text: parts[0] + ':' + parts[1] }),
+        parts[2] ? el('span', { class: 'stamp-sec', text: ':' + parts[2] }) : null
+    ]);
+}
+
 /** Just the clock part, for dense axis labels where the date is implied. */
 export function clockOnly(iso) {
     if (!iso) {

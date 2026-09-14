@@ -42,9 +42,7 @@
 
 'use strict';
 
-import {
-    api, bytes, dec, dur, durUs, el, fill, num, pct, populationLabel, when
-} from './core.js';
+import { api, bytes, clockStamp, dec, dur, durUs, el, fill, num, pct, populationLabel, stamp, when } from './core.js';
 import { closeDialog, dialogFail, isCurrent, openDialog, registerOpener } from './dialog.js';
 import {
     dimLabel, dimValue, flagNode, valueText, verdictChip
@@ -325,7 +323,7 @@ function trailBlock(id, data, host) {
             const gapMs = prev ? Date.parse(prev.ts) - Date.parse(hit.ts) : NaN;
             const gap = Number.isFinite(gapMs) && gapMs > 0 ? dur(gapMs) : '';
             list.appendChild(el('li', {}, [
-                el('span', { class: 'muted mono', text: when(hit.ts).split(' ')[1] || '' }),
+                el('span', { class: 'muted mono' }, [clockStamp(hit.ts)]),
                 el('span', { class: 't-method muted', text: hit.method || '' }),
                 /* THE PATH ALONE. The query string made every admin row unreadable; the link
                    beside it still carries it, so the exact page requested is one tap away. */
@@ -889,8 +887,8 @@ function pageRow(row) {
         el('td', { class: 'num', 'data-sort': String(row.sessions || 0), text: num(row.sessions || 0) }),
         el('td', { class: 'num', 'data-sort': String(hits === null ? -1 : hits),
             text: hits === null ? '—' : num(hits) }),
-        el('td', { class: 'mono nowrap', 'data-sort': row.last || '',
-            text: row.last ? when(row.last) : '—' })
+        el('td', { class: 'mono nowrap', 'data-sort': row.last || '' },
+            [row.last ? stamp(row.last) : el('span', { class: 'muted', text: '—' })])
     ]);
 }
 
@@ -1085,8 +1083,8 @@ function renderDimension(body, data) {
 
         foldSection('dim-when', 'When, and for how long', [
             kv([
-            ['First seen', when(data.first), true],
-            ['Last seen', when(data.last), true],
+            ['First seen', stamp(data.first), true],
+            ['Last seen', stamp(data.last), true],
             ['Typical time spent requesting', data.log_span_p50 === null ? null : dur(data.log_span_p50), true],
             ['Visits a beacon reported on', num(data.beacon.sessions), true],
             ['Typical time actually engaged', data.beacon.sessions
@@ -1259,9 +1257,8 @@ function requestRow(r) {
 
     tr.appendChild(el('td', {
         class: 'mono nowrap visit-when',
-        text: when(r.ts, true),
         'data-sort': r.ts || ''
-    }));
+    }, [stamp(r.ts, true)]));
 
     tr.appendChild(el('td', { class: 'mono clip', title: r.ip || 'Address not recorded' }, [
         r.ip ? dimValue('ip_s', r.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })
@@ -1454,8 +1451,8 @@ function renderHitDimension(body, data, fetchPage) {
 
         foldSection('req-when', 'When, and how much', [
             kv([
-                ['First seen', when(data.first), true],
-                ['Last seen', when(data.last), true],
+                ['First seen', stamp(data.first), true],
+                ['Last seen', stamp(data.last), true],
                 ['Data sent', bytes(data.bytes), true]
             ])
         ]),

@@ -19,7 +19,7 @@
 'use strict';
 
 import {
-    api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, pct, setPop, tbody, when
+    api, byId, cardChart, el, hideEmpty, loadCard, noDataYet, noPivotYet, num, pct, setPop, stamp, tbody
 } from '../core.js';
 import { lines, stackedBars, tokens } from '../charts.js';
 import { clearTableChart, splitChart } from '../tablecharts.js';
@@ -130,9 +130,17 @@ function renderAnswered(data) {
     const scope = byId('atk-answered-content');
     const set = (field, value) => {
         const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
-        if (node) {
-            node.textContent = value;
+        if (!node) {
+            return;
         }
+        /* A NODE OR A STRING. Timestamps arrive as a built element from stamp(), everything
+           else as text; writing textContent for both would print "[object HTMLSpanElement]". */
+        if (value instanceof Node) {
+            node.textContent = '';
+            node.appendChild(value);
+            return;
+        }
+        node.textContent = value;
     };
 
     const s = data.status || {};
@@ -145,7 +153,7 @@ function renderAnswered(data) {
     set('evaluated', num(data.evaluated));
     set('unevaluated', num(data.unevaluated));
     set('uniq_patterns', num(data.uniq_patterns));
-    set('last', data.last ? when(data.last) : '—');
+    set('last', data.last ? stamp(data.last) : '—');
 
     const note = byId('atk-coverage');
     if (!note) {
@@ -219,7 +227,7 @@ function renderPatterns(data) {
             { text: num(row.refused), num: true, sort: row.refused },
             { node: el('div', {}, [statusBar(row), el('div', { class: 'sub clip-line', text: num(row.count) })]), sort: row.count },
             { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
-            { text: row.last ? when(row.last) : '—', sort: row.last || '' }
+            { node: row.last ? stamp(row.last) : null, sort: row.last || '' }
         ]
     })));
 }
@@ -266,7 +274,7 @@ function renderRequests(data) {
     tbody(byId('atk-requests-table'), data.requests.map((row) => ({
         attrs: row.session ? drillRow('session', { id: row.session }) : {},
         cells: [
-            { text: when(row.ts, true), mono: true, nowrap: true, sort: row.ts || '' },
+            { node: stamp(row.ts, true), mono: true, nowrap: true, sort: row.ts || '' },
             {
                 node: row.ip
                     ? dimValue('ip_s', row.ip, { mono: true })
@@ -406,7 +414,7 @@ function renderWho(data) {
                     'paths. One pattern on one path is a misconfigured client; many patterns on many paths ' +
                     'is a scanner walking a list.'
             },
-            { text: row.last ? when(row.last) : '—', sort: row.last || '' }
+            { node: row.last ? stamp(row.last) : null, sort: row.last || '' }
         ]
     })));
 
@@ -456,9 +464,17 @@ function renderImpersonation(data) {
     const scope = byId('atk-impersonation-content');
     const set = (field, value) => {
         const node = scope ? scope.querySelector('[data-field="' + field + '"]') : null;
-        if (node) {
-            node.textContent = value;
+        if (!node) {
+            return;
         }
+        /* A NODE OR A STRING. Timestamps arrive as a built element from stamp(), everything
+           else as text; writing textContent for both would print "[object HTMLSpanElement]". */
+        if (value instanceof Node) {
+            node.textContent = '';
+            node.appendChild(value);
+            return;
+        }
+        node.textContent = value;
     };
     set('declared', num(data.declared));
     set('verified', num(data.verified));
@@ -498,7 +514,7 @@ function renderImpersonation(data) {
                 title: 'Answered from general-purpose cloud tenant address space. A named search or AI ' +
                     'crawler does not run on somebody\'s rented VM.'
             },
-            { text: row.last ? when(row.last) : '—', sort: row.last || '' }
+            { node: row.last ? stamp(row.last) : null, sort: row.last || '' }
         ]
     })));
 

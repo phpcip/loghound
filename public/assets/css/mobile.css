@@ -69,23 +69,10 @@
  */
 
 /*
- * THE WATCH FACE. DSEG14 Classic Bold, a segmented LED display face, used for the whole
- * timestamp line of a visit in the phone visit box — the day of the month and the clock.
- *
- * FOURTEEN SEGMENTS, NOT SEVEN, and the reason is the day: `1st` in a seven-segment face reads
- * as `15t`, because seven segments cannot form an `s` distinct from a 5. Fourteen segments draw
- * the `st` `nd` `rd` `th` legibly and leave the digits looking exactly the same, so one font
- * covers the line. It is served from this install and not from a font CDN because the panel's
- * CSP is `font-src 'self'` and the docs promise the panel makes no external request; the
- * licence (SIL OFL 1.1, keshikan) sits next to the file.
+ * THE WATCH FACE MOVED TO panel.css. It is no longer a phone-only rule — every timestamp in the
+ * panel wears it now — and the @font-face has to be declared where the desktop sees it too.
+ * What stays here is only the size and layout the face takes inside the phone visit box.
  */
-@font-face {
-    font-family: "DSEG14 Classic";
-    src: url("../fonts/dseg14classic-bold.woff2") format("woff2");
-    font-weight: 700;
-    font-style: normal;
-    font-display: swap;
-}
 
 
 /* ===========================================================================
@@ -964,7 +951,6 @@ table.visits td.visit-box { display: none; }
        One red for both themes — bright enough on the dark page, dark enough on the light one. */
     table.visits .vbox-when {
         --font-watch: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-        --c-led: #e0341a;
         gap: 7px;
     }
     table.visits .vbox-when .when-led {

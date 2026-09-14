@@ -14,7 +14,7 @@
 
 'use strict';
 
-import { api, byId, el, hideEmpty, loadCard, num, pct, setPop, tbody, when } from '../core.js';
+import { api, byId, el, hideEmpty, loadCard, num, pct, setPop, stamp, tbody } from '../core.js';
 import { renderBounce } from '../bounce.js';
 import { pagedCard } from '../cardtable.js';
 import { dimRow, dimValue } from '../identity.js';
@@ -145,7 +145,7 @@ function renderPeople(data) {
             { text: num(row.pages), num: true, sort: row.pages },
             { text: num(row.hits), num: true, sort: row.hits },
             { text: num(row.uniq_ips), num: true, sort: row.uniq_ips },
-            { text: row.last ? when(row.last) : '—', mono: true, nowrap: true, sort: row.last || '' }
+            { node: row.last ? stamp(row.last) : null, mono: true, nowrap: true, sort: row.last || '' }
         ]
     })));
 

@@ -16,9 +16,7 @@
 
 'use strict';
 
-import {
-    api, byId, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, shortHash, when
-} from '../core.js';
+import { api, byId, dec, el, hideEmpty, loadCard, noDataYet, num, setPop, shortHash, stamp } from '../core.js';
 import { sparkline, tokens } from '../charts.js';
 import { clientNode, countryNode, dimValue, verdictChip } from '../identity.js';
 import { markSortable } from '../sorttable.js';
@@ -294,7 +292,7 @@ function renderMembers(inner, data, fp) {
                     m.as_type ? el('div', { class: 'sub' }, [dimValue('as_type_s', m.as_type)]) : null
                 ]),
                 el('td', { class: 'num', text: num(m.sessions), 'data-sort': String(m.sessions) }),
-                el('td', { class: 'mono nowrap', text: when(m.last), 'data-sort': m.last || '' })
+                el('td', { class: 'mono nowrap', 'data-sort': m.last || '' }, [stamp(m.last)])
             ]));
         }
     };

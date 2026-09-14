@@ -40,7 +40,7 @@
 
 'use strict';
 
-import { api, boot, byId, el, fill, post, tip, bytes, durUs, num, timeOnly, when } from '../core.js';
+import { api, boot, byId, bytes, clockStamp, durUs, el, fill, num, post, stamp, timeOnly, tip, when } from '../core.js';
 import { draw, shadowPointer } from '../charts.js';
 import { dimValue, drillRow, flagNode, openButton, valueText, valueWords } from '../identity.js';
 import { hostCell } from '../hostcolor.js';
@@ -451,9 +451,8 @@ function buildRow(row) {
 
     tr.appendChild(el('td', {
         class: 'mono nowrap',
-        text: timeOnly(row.ts),
         title: when(row.ts)
-    }));
+    }, [clockStamp(row.ts)]));
 
     /* NOTHING IN THIS TABLE IS A FILTER LINK. Every other view's cells drill into the
        dashboard, but a row here opens the request dialog — and a link inside the row won the
@@ -592,7 +591,7 @@ async function openLine(id) {
     fill(handle.body, [
         el('h3', { text: 'The request' }),
         kv([
-            ['When', when(row.ts)],
+            ['When', stamp(row.ts)],
             ['Virtual host', row.host ? hostCell(row.host) : null],
             ['Method', row.method, true],
             /* SHOWN WITH ITS QUERY STRING. The link always carried it — siteUrl() composes path

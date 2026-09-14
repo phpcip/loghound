@@ -33,8 +33,31 @@
 
 /* Tokens */
 
+/*
+ * THE WATCH FACE. DSEG14 Classic Bold, a segmented LED display face, worn by the hour and
+ * minute of every timestamp in the panel — a cell, a dialog row, a label — while the date
+ * around it stays in the panel's own type.
+ *
+ * FOURTEEN SEGMENTS, NOT SEVEN, and the reason is the day of the month in the phone visit box:
+ * `1st` in a seven-segment face reads as `15t`, because seven segments cannot form an `s`
+ * distinct from a 5. Fourteen segments draw `st` `nd` `rd` `th` legibly and leave the digits
+ * looking exactly the same, so one font covers every timestamp.
+ *
+ * It is served from this install and not from a font CDN because the panel's CSP is
+ * `font-src 'self'` and the docs promise the panel makes no external request; the licence
+ * (SIL OFL 1.1, keshikan) sits next to the file in assets/fonts.
+ */
+@font-face {
+    font-family: "DSEG14 Classic";
+    src: url("../fonts/dseg14classic-bold.woff2") format("woff2");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
 :root {
     --ink:           #111111;
+    --c-led:         #e0341a;
     --muted:         #4a4540;
     --faint:         #6b6560;
     --hairline:      #d9d4cc;
@@ -5538,3 +5561,25 @@ button.stat:hover .stat-go { color: var(--accent); }
     .seo-tile { padding: 12px; }
     .seo-tile-value { font-size: 22px; }
 }
+
+/* -------------------------------------------------------------------------
+ * Timestamps
+ * ---------------------------------------------------------------------- */
+
+/* THE CLOCK IS THE PART BEING READ, so it wears the segmented face and the date does not: a
+   list of visits is usually one day deep, the date repeats down the column and the hour is what
+   the eye is actually looking for. Built by stamp() / clockStamp() in assets/js/core.js, so the
+   shape is decided in one place and every table, dialog and label inherits it.
+
+   No font-weight on the digits: the face ships one, and a synthesised bold closes the gaps
+   between the segments, which is exactly what makes it read as a display. */
+.stamp { white-space: nowrap; }
+.stamp .led-hm {
+    font-family: "DSEG14 Classic", var(--font-mono);
+    font-weight: 700;
+    font-size: 0.92em;
+    color: var(--c-led);
+    margin: 0 0.1em 0 0.45em;
+}
+.stamp > .led-hm:first-child { margin-left: 0; }
+.stamp .stamp-sec { color: var(--faint); }
