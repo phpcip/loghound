@@ -7,6 +7,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.6.0] — 2026-09-15
+
+### Added
+
+- **A visitor's email carries the device they came from.** A desktop, phone or tablet mark sits to
+  the left of the address in the visit table, in the visit box on a phone and in the visit dialog;
+  a visit whose device is a bot, unknown or not recorded keeps the envelope. The mark's tooltip
+  names the device.
+
+### Changed
+
+- **The SEO scorecard leads with its chart.** The tiles follow the chart and its note, and a
+  movement reads at a glance: growth is green and decline is red, in both themes.
+
+### Fixed
+
+- **A match-all query is no longer recorded as a search term.** `*:*`, `*` and similar strings,
+  which a search page sends before anybody types, were counted as the most searched term.
+
+- **The collapsed rail's flyout no longer vanishes on a slip.** It lingers 400ms after the pointer
+  leaves, so cutting diagonally to a second-level entry does not shut the menu.
+
+- **A clicked section no longer keeps its flyout open.** The panel follows keyboard focus only, so
+  the current group stops sitting open beside the one the pointer reaches.
+
+---
+
 ## [1.5.0] — 2026-09-14
 
 ### Added
