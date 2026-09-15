@@ -7,6 +7,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.6.3] — 2026-09-15
+
+### Changed
+
+- **The open-visit control leads a visit box on a phone**, at its top left beside the date.
+
+- **The session time is back beside the address**, without its clock mark.
+
+---
+
 ## [1.6.2] — 2026-09-15
 
 ### Changed
