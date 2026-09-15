@@ -1469,8 +1469,9 @@ table.visits td.visit-who .flag { margin-right: 6px; font-size: 17px; vertical-a
 table.visits td.visit-who .visit-noflag { display: inline-block; width: 22px; text-align: center; }
 table.visits td.visit-email { font-size: 14px; }
 /* Device (or envelope) mark to the left of an email, in the visit table and the visit dialog. */
-.ident-mark { flex: none; color: var(--faint); vertical-align: -3px; margin-right: 6px; }
-table.visits .vbox-line .ident-mark { margin-right: 0; }
+.ident-mark { flex: none; width: 18px; height: 18px; color: var(--faint); vertical-align: -4px; margin-right: 6px; }
+/* The phone visit box gets a larger mark, sized for a touch screen. */
+table.visits .vbox-line .ident-mark { width: 22px; height: 22px; margin-right: 0; }
 
 /* The Attacks "Who is doing it" address: the flag sits tight before the number, as in a visit row. */
 .atk-who-ip .geo { margin-right: 6px; }
