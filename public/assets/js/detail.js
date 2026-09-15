@@ -47,6 +47,7 @@ import { closeDialog, dialogFail, isCurrent, openDialog, registerOpener } from '
 import {
     dimLabel, dimValue, flagNode, valueText, verdictChip
 } from './identity.js';
+import { identMark } from './icons.js';
 import { markSortable } from './sorttable.js';
 import { countryName } from './geo.js';
 import { bindPath, claimPath, hrefLink, outLink, pathCell, pathCopy, urlMark } from './url.js';
@@ -409,7 +410,7 @@ function identStrip(s) {
     const parts = [];
     if (s.ident) {
         parts.push(el('span', { class: 'ident-label', text: 'The site knows them as' }));
-        parts.push(el('span', { class: 'ident-value mono', text: s.ident }));
+        parts.push(el('span', { class: 'ident-value mono' }, [identMark(s.device), s.ident]));
     }
     parts.push(el('span', {
         class: 'chip ' + (s.signed_in === true ? 'chip-good' : ''),

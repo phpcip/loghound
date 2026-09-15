@@ -29,7 +29,7 @@
 
 import { clockStamp, dayOnly, durStamp, el, num, when } from './core.js';
 import { copyValue } from './copy.js';
-import { glyph } from './icons.js';
+import { glyph, identMark } from './icons.js';
 import { countryNode, dimValue, drillRow, openButton } from './identity.js';
 import { pathCell, urlMark } from './url.js';
 
@@ -156,6 +156,7 @@ export function visitRow(v) {
         title: v.ident || 'No identity was sent for this visit',
         'data-sort': v.ident || ''
     }, [
+        v.ident ? identMark(v.device) : null,
         v.ident ? dimValue('ident_s', v.ident) : el('span', { class: 'muted', text: 'N/A' })
     ]));
 
@@ -495,7 +496,7 @@ function visitBox(v, seen, shown, unmeasured) {
         : [glyph('page'), noPageMark()]);
 
     const mail = v.ident
-        ? el('div', { class: 'vbox-line vbox-mail' }, [glyph('mail'), copyValue(v.ident, { label: 'Email' })])
+        ? el('div', { class: 'vbox-line vbox-mail' }, [identMark(v.device), copyValue(v.ident, { label: 'Email' })])
         : null;
 
     return el('td', { class: 'visit-box', colspan: '6' }, [stamp, meta, mail, page]);

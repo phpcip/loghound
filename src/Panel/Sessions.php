@@ -1346,6 +1346,7 @@ final class Sessions extends Controller
             'entry'    => $str('entry_path_s') ?? $str('exit_path_s'),
             'verdict'  => $str('bot_verdict_s'),
             'ident'    => $str('ident_s'),
+            'device'   => $str('device_s'),
 
             /* TIME ON SITE AND WHETHER IT BOUNCED, which the visit table now shows in place of
                the verdict chip — the verdict is the row's colour. Both clocks travel because

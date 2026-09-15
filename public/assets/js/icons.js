@@ -283,6 +283,28 @@ const GLYPHS = {
     mail: ['M2.25 3.75h11.5v8.5H2.25z', 'M2.25 4.25L8 8.75l5.75-4.5']
 };
 
+/** Devices whose own mark replaces the envelope beside an email. */
+const IDENT_DEVICES = ['desktop', 'mobile', 'tablet'];
+
+/**
+ * The mark drawn to the left of a visitor's email: the device they came from when it is a
+ * desktop, a phone or a tablet, and the envelope otherwise (bot, unknown or not recorded).
+ *
+ * @param {string|null|undefined} device The session's `device_s`.
+ * @returns {SVGElement|null}
+ */
+export function identMark(device) {
+    const key = String(device === null || device === undefined ? '' : device).trim();
+    const mark = IDENT_DEVICES.includes(key) ? icon('device_s', key) : glyph('mail');
+    if (mark) {
+        mark.classList.add('vglyph', 'ident-mark');
+        const title = document.createElementNS(NS, 'title');
+        title.textContent = IDENT_DEVICES.includes(key) ? key.charAt(0).toUpperCase() + key.slice(1) : 'Email';
+        mark.appendChild(title);
+    }
+    return mark;
+}
+
 /**
  * A named glyph from GLYPHS, drawn like every other mark, or null for a name it does not have.
  *
