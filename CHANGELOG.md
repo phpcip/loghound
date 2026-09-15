@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.6.1] — 2026-09-15
+
+### Changed
+
+- **The device mark beside an email is larger.** A step up in the visit table and the visit
+  dialog, and larger still in the visit box on a phone, where it has to read at a glance.
+
+---
+
 ## [1.6.0] — 2026-09-15
 
 ### Added
