@@ -320,14 +320,23 @@ function initPeriods() {
     const cmp = byId('seo-cmp');
     const vs = byId('seo-vs');
 
-    const sync = () => {
-        const a = byId('seo-dates-a');
-        const b = byId('seo-dates-b');
-        if (a && cmp) {
-            a.hidden = cmp.value !== 'custom';
+    // A hidden picker is disabled too: hiding does not exempt it from validation, so a derived
+    // date before the earliest one blocked Apply on a field nobody could see.
+    const toggle = (span, on) => {
+        if (!span) {
+            return;
         }
-        if (b && vs) {
-            b.hidden = vs.value !== 'custom';
+        span.hidden = !on;
+        span.querySelectorAll('input').forEach((input) => {
+            input.disabled = !on;
+        });
+    };
+    const sync = () => {
+        if (cmp) {
+            toggle(byId('seo-dates-a'), cmp.value === 'custom');
+        }
+        if (vs) {
+            toggle(byId('seo-dates-b'), vs.value === 'custom');
         }
     };
     const changed = () => {
