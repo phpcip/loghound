@@ -928,7 +928,7 @@ table.visits td.visit-box { display: none; }
         height: auto;
         overflow: visible;
         white-space: normal;
-        padding: 6px 10px;
+        padding: 10px 14px;
         line-height: 1.45;
         border-top: 1px solid var(--hairline);
     }
@@ -989,6 +989,8 @@ table.visits td.visit-box { display: none; }
         gap: 6px;
     }
     table.visits .vbox-meta .lh-copy { overflow: visible; }
+    /* The open-visit control follows the address with extra room, so a tap meant for one does not land on the other. */
+    table.visits .vbox-meta > .vbox-opener { margin-left: 14px; }
 
     /* BOUNCED SITS AT THE RIGHT EDGE, SMALL. The last item takes the free space on its left, so it
        lines up down the list; when the line overflows the auto margin collapses and it simply

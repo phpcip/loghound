@@ -425,29 +425,37 @@ function dayOrdinal(iso) {
  * An instant when() cannot read has no clock half, so that case renders the dash alone rather
  * than an empty watch face.
  *
- * @param {string|null} seen The instant to show.
- * @param {Object}      v    The visit, for the OPEN mark.
+ * The session time follows the clock on the same line, then the OPEN mark.
+ *
+ * @param {string|null} seen       The instant to show.
+ * @param {Object}      v          The visit, for the OPEN mark.
+ * @param {number|null} shown      The duration in milliseconds.
+ * @param {boolean}     unmeasured Whether no duration was measured.
  * @returns {HTMLElement}
  */
-function stampLine(seen, v) {
+function stampLine(seen, v, shown, unmeasured) {
     const text = when(seen);
     const half = text.split(' ');
     const clock = half.length > 1 ? half[1].split(':') : [];
+    const span = el('span', { class: 'vbox-item vbox-span' }, [
+        glyph('clock'),
+        unmeasured ? el('span', { class: 'muted', text: 'not measured' }) : durStamp(shown)
+    ]);
 
     if (clock.length < 3) {
         return el('div', { class: 'vbox-line vbox-when' }, [
-            glyph('calendar'),
             el('span', { class: 'when-led' }, [el('span', { class: 'led-day', text: text })]),
+            span,
             openMark(v)
         ]);
     }
 
     return el('div', { class: 'vbox-line vbox-when', title: text }, [
-        glyph('calendar'),
         el('span', { class: 'when-led' }, [
             el('span', { class: 'led-day', text: dayOrdinal(seen) }),
             el('span', { class: 'led-hm', text: clock[0] + ':' + clock[1] })
         ]),
+        span,
         openMark(v)
     ]);
 }
@@ -455,9 +463,9 @@ function stampLine(seen, v) {
 /**
  * The same visit as a box of up to four lines, which mobile.css shows on a phone instead of the cells.
  *
- * Line one is a calendar mark and the instant the visit was last seen, mm/dd/yyyy hh:mm:ss, the
- * same shape every other date on the page has. Line two is the open-visit control, the flag and address, the
- * session time and the bounce, on one line that scrolls sideways when it does not fit. Line
+ * Line one is the instant the visit was last seen, the session time and the OPEN mark. Line two
+ * is the flag and address, the open-visit control set well clear of the address so a tap on one
+ * does not land on the other, and the bounce, on one line that scrolls sideways when it does not fit. Line
  * three is the page, scrolled to its end, with the open-in-new-tab link. Line four is the email,
  * and is left out entirely when there is none. The address, the page and the email copy
  * themselves on a tap. It is one more cell at the end of the row, so sorting by column index and
@@ -470,21 +478,17 @@ function stampLine(seen, v) {
  * @returns {HTMLElement}
  */
 function visitBox(v, seen, shown, unmeasured) {
-    const stamp = stampLine(seen, v);
+    const stamp = stampLine(seen, v, shown, unmeasured);
 
     const meta = el('div', { class: 'vbox-line vbox-meta' }, [
-        el('span', { class: 'vbox-item' }, [
-            openButton('session', { id: v.id }, 'Open this visit')
-        ]),
         el('span', { class: 'vbox-item' }, [
             v.country ? countryNode(v.country, { flagOnly: true }) : null,
             v.ip
                 ? copyValue(v.ip, { cls: 'mono', label: 'IP address' })
                 : el('span', { class: 'muted', text: 'not recorded' })
         ]),
-        el('span', { class: 'vbox-item' }, [
-            glyph('clock'),
-            unmeasured ? el('span', { class: 'muted', text: 'not measured' }) : durStamp(shown)
+        el('span', { class: 'vbox-item vbox-opener' }, [
+            openButton('session', { id: v.id }, 'Open this visit')
         ]),
         el('span', { class: 'vbox-item' }, [
             bounceMark(v)
