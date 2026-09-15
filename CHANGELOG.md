@@ -7,6 +7,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.6.2] — 2026-09-15
+
+### Changed
+
+- **A visit box on a phone reads its time on one line.** The session time sits beside the day and
+  the clock, ahead of the OPEN mark, and the calendar mark before the date is gone.
+
+- **The open-visit control follows the address** instead of leading it, with enough room between
+  them that a tap meant for the address does not open the visit.
+
+- **Each visit box on a phone has more padding.**
+
+---
+
 ## [1.6.1] — 2026-09-15
 
 ### Changed
