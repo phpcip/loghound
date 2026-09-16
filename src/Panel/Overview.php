@@ -94,23 +94,13 @@ final class Overview extends Controller
                 'label'   => 'Top pages',
                 'action'  => 'toppages',
                 'unit'    => 'paths',
-                'ranked'  => 'ranked by the number of requests made to them',
                 'cap'     => 50,
                 'params'  => ['limit' => 50],
                 'carry'   => ['pop'],
-                'note'    => 'Counted in REQUESTS, from the hits index, with the distinct sessions that '
-                    . 'made them beside each row. Sub-resources — images, stylesheets, scripts, fonts — are '
-                    . 'not stored at all unless ingest.index_assets is on, and Loghound\'s own collector, '
-                    . 'favicons and robots.txt are excluded here because nobody visited those. A verdict is '
-                    . 'a conclusion about a whole SESSION and does not exist on the request plane, so this '
-                    . 'file cannot be scoped to humans; the Sessions export can.',
-                'scope'   => ['population_label' => 'Counting'],
                 'columns' => [
                     ['Path', 'path', 'text'],
                     ['Requests', 'requests', 'number'],
                     ['Sessions', 'sessions', 'number'],
-                    ['Website', 'host', 'text'],
-                    ['Distinct hosts serving this path', 'hosts', 'number'],
                 ],
             ],
 
@@ -118,11 +108,10 @@ final class Overview extends Controller
                 'label'   => 'Search terms',
                 'action'  => 'searches',
                 'unit'    => 'search terms',
-                'ranked'  => 'ranked by the number of sessions that searched for them',
                 'cap'     => 50,
                 'params'  => ['limit' => 50],
-                'scope'   => ['searched' => 'Sessions that ran a search'],
                 'columns' => [
+                    ['Parameter', 'param', 'text'],
                     ['Search term', 'term', 'text'],
                     ['Sessions', 'sessions', 'number'],
                 ],
@@ -135,9 +124,6 @@ final class Overview extends Controller
                 'key'    => 'pivot',
                 'unit'   => 'country and verdict pairs',
                 'cap'    => 400,
-                'note'   => 'One record per pair. The verdict breakdown of a country is a LIMITED facet, '
-                    . 'so its rows do not add up to that country\'s session total — the covered column is '
-                    . 'how much of the total the listed verdicts account for.',
             ],
         ];
     }

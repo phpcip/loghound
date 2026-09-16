@@ -287,10 +287,9 @@ final class Sessions extends Controller
      *
      * `sessions` is the only PAGED export in the panel, and it is paged for the reason the file
      * itself states: the table on screen is twenty-five rows of a result set that can run to
-     * hundreds of thousands, so "export what is on screen" would produce a file named after the
-     * whole population containing its first page. It walks the result set instead, echoing each
-     * page as it arrives, and stops at EXPORT_SESSIONS with the coverage line naming both the
-     * number taken and the number matched.
+     * hundreds of thousands, so exporting only the page on screen would hand over its first page.
+     * It walks the result set instead, echoing each page as it arrives, up to EXPORT_SESSIONS,
+     * with the columns and the values of the Recent visitors table.
      *
      * `values` is the facet value browser — one dimension's values with their counts, which is
      * the answer to "give me every country/path/netblock in this slice". It is capped at the
@@ -314,82 +313,15 @@ final class Sessions extends Controller
                 'page'    => self::EXPORT_PAGE,
                 'cap'     => self::EXPORT_SESSIONS,
                 'unit'    => 'sessions',
-                'ranked'  => 'in the sort order named above',
                 'carry'   => ['q', 'sort'],
-                'note'    => 'Durations are milliseconds. A session still OPEN carries partial counts and a '
-                    . 'provisional verdict, and is included — filter by Planes or narrow the range to exclude '
-                    . 'it. The three beacon clocks are empty for sessions where no beacon ran; they are not '
-                    . 'zero, and averaging them as zero would understate time on site.',
-                'scope'   => [
-                    'sort_label' => 'Sort order',
-                    'q'          => 'Search text',
-                ],
                 'columns' => [
-                    ['Session', 'id', 'id'],
-                    ['Started', 'ts_start', 'date'],
-                    ['Ended', 'ts_end', 'date'],
-                    ['Website', 'host', 'text'],
-                    ['Verdict', 'verdict', 'vocab', 'bot_verdict_s'],
-                    ['Verdict code', 'verdict', 'id'],
-                    ['Bot score', 'score', 'number'],
-                    ['Bot class', 'class', 'vocab', 'bot_class_s'],
-                    ['Signals fired', 'reasons', 'text'],
-                    ['Requests', 'hits', 'number'],
-                    ['Pageviews', 'pages', 'number'],
-                    ['Asset requests', 'assets', 'number'],
-                    ['Distinct paths', 'uniq_paths', 'number'],
-                    ['Bytes', 'bytes', 'number'],
-                    ['Entry path', 'entry', 'text'],
-                    ['Exit path', 'exit', 'text'],
-                    ['2xx responses', 'status.2xx', 'number'],
-                    ['3xx responses', 'status.3xx', 'number'],
-                    ['4xx responses', 'status.4xx', 'number'],
-                    ['5xx responses', 'status.5xx', 'number'],
-                    ['Log span (ms)', 'log_span_ms', 'number'],
-                    ['Wall clock (ms)', 'wall_ms', 'number'],
-                    ['Visible time (ms)', 'visible_ms', 'number'],
-                    ['Engaged time (ms)', 'engaged_ms', 'number'],
-                    ['Beacon reported', 'beacon', 'bool'],
-                    ['Interactions', 'interactions', 'number'],
-                    ['Max scroll (percent)', 'max_scroll', 'number'],
-                    ['Asset ratio', 'asset_ratio', 'number'],
-                    ['Median gap between requests (ms)', 'gap_p50_ms', 'number'],
-                    ['Gap standard deviation (ms)', 'gap_stddev_ms', 'number'],
-                    ['IP', 'ip', 'id'],
-                    ['Netblock', 'ip_net', 'id'],
-                    ['ASN', 'asn', 'id'],
-                    ['AS organisation', 'as_org', 'text'],
-                    ['Network type', 'as_type', 'vocab', 'as_type_s'],
-                    ['Netname', 'netname', 'id'],
-                    ['Reverse DNS', 'rdns', 'text'],
-                    ['Reverse DNS confirmed', 'rdns_ok', 'bool'],
-                    ['Country', 'country', 'id'],
-                    ['Region', 'region', 'text'],
-                    ['City', 'city', 'text'],
-                    ['User-Agent', 'ua', 'text'],
-                    ['Browser', 'browser', 'text'],
-                    ['Browser version', 'browser_ver', 'text'],
-                    ['OS', 'os', 'text'],
-                    ['Device', 'device', 'text'],
-                    ['Declared crawler', 'ua_bot_name', 'text'],
-                    ['Declared bot category', 'ua_bot_cat', 'vocab', 'ua_bot_cat_s'],
-                    ['AI crawler', 'ai_crawler', 'bool'],
-                    ['Referrer', 'referer', 'text'],
-                    ['Referrer host', 'referer_host', 'text'],
-                    ['Referrer type', 'referer_type', 'vocab', 'referer_type_s'],
-                    ['Fingerprint', 'fp', 'id'],
-                    ['Addresses sharing this fingerprint (24h)', 'fp_ips_24h', 'number'],
-                    ['Signed in', 'signed_in', 'bool'],
-                    ['Identity reported by the site', 'ident', 'text'],
-                    ['Transport planes', 'planes', 'vocab', 'planes_s'],
-                    ['Search terms', 'search_terms', 'text'],
-                    ['JavaScript ran', 'js', 'bool'],
-                    ['Headless', 'headless', 'bool'],
-                    ['Automation markers', 'automation', 'text'],
-                    ['User-Agent claim held up', 'ua_claim_ok', 'bool'],
-                    ['Timezone matched the address', 'tz_match', 'bool'],
-                    ['Still open (provisional)', 'provisional', 'bool'],
-                    ['Rule version', 'rule_version', 'number'],
+                    ['Date', static fn (array $v) => $v['ts_end'] ?? $v['ts_start'] ?? null, 'date'],
+                    ['IP', 'ip', 'text', 'not recorded'],
+                    ['Country', 'country', 'country'],
+                    ['Page', 'entry', 'text', 'no page'],
+                    ['Email', 'ident', 'text', 'N/A'],
+                    ['Sess time', static fn (array $v) => self::exportSpan($v), 'clock', 'not measured'],
+                    ['Bounce', 'bounced', 'bool'],
                 ],
             ],
 
@@ -398,28 +330,17 @@ final class Sessions extends Controller
                 'action'  => 'values',
                 'key'     => 'group.buckets',
                 'unit'    => 'values',
-                'ranked'  => 'ranked by session count',
                 'cap'     => self::ALL_BUCKETS,
                 'carry'   => ['field', 'q', 'vq'],
-                'note'    => 'The dimension\'s OWN filter is lifted, exactly as it is in the dialog, so this '
-                    . 'lists every value that would be selectable rather than only the ones already chosen. '
-                    . 'Every other filter applies. On a dimension with a closed vocabulary the listing also '
-                    . 'carries values with NO traffic, at a count of zero, which is why it can hold more rows '
-                    . 'than the distinct count above.',
-                'scope'   => [
-                    'group.label' => 'Dimension',
-                    'group.field' => 'Stored field name',
-                    'group.op'    => ['Operator in force on this dimension', static fn ($op): string =>
-                        is_string($op) && $op !== '' ? Facets::operatorLabel($op) : ''],
-                    'matched'     => 'Sessions matched by the rest of the scope',
-                    'group.distinct' => 'Distinct values Solr found traffic for',
-                ],
+                'prepare' => static fn (array $payload, array $rows): array => array_map(
+                    static fn ($b): array => (array) $b + ['field' => (string) self::exportPick($payload, 'group.field')],
+                    $rows
+                ),
                 'columns' => [
-                    ['Value', 'label', 'text'],
-                    ['Stored value', 'value', 'id'],
+                    ['Value', static fn (array $b): string => ($b['field'] ?? '') === 'country_s'
+                        ? \Loghound\Geo\Countries::name((string) ($b['value'] ?? ''))
+                        : (string) (($b['label'] ?? '') !== '' ? $b['label'] : ($b['value'] ?? '')), 'text'],
                     ['Sessions', 'count', 'number'],
-                    ['What it means', 'why', 'text'],
-                    ['Selected', 'state', 'text'],
                 ],
             ],
         ];
@@ -565,13 +486,26 @@ final class Sessions extends Controller
      */
     private function exportSessionPage(int $start, int $rows): array
     {
-        $payload = $this->listPage($start, $rows, true);
+        $payload = $this->listPage($start, $rows);
 
         return [
             'rows'    => (array) ($payload['docs'] ?? []),
             'total'   => (int) ($payload['numFound'] ?? 0),
             'payload' => $payload,
         ];
+    }
+
+    /**
+     * The time on site the Sess time column shows: engaged time where the beacon measured some,
+     * the log span otherwise (visits.js visitRow()).
+     *
+     * @param array<string,mixed> $v A visit in the shape shapeVisitor() returns.
+     */
+    private static function exportSpan(array $v): ?int
+    {
+        $engaged = isset($v['engaged_ms']) ? (int) $v['engaged_ms'] : 0;
+
+        return $engaged > 0 ? $engaged : (isset($v['log_span_ms']) ? (int) $v['log_span_ms'] : null);
     }
 
     /**

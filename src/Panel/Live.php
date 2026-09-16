@@ -254,10 +254,6 @@ final class Live extends Controller implements JobHost
                 'shape'   => 'custom',
                 'unit'    => 'rules',
                 'cap'     => Rules::MAX_RULES + count(Rules::BUILTIN),
-                'note'    => 'Rules that hide rows from the live stream. Nothing here changes what '
-                    . 'is stored: every request in this file was recorded in full and is present in '
-                    . 'every other view. The built-in groups match the classification the parser '
-                    . 'already made, so one rule covers a whole category.',
                 'columns' => [
                     ['Source', 'source', 'text'],
                     ['Field', 'field', 'text'],

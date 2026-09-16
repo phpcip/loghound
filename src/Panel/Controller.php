@@ -27,6 +27,7 @@ namespace Loghound\Panel;
 
 use Loghound\Config;
 use Loghound\Csv;
+use Loghound\Geo\Countries;
 use Loghound\Security;
 
 abstract class Controller
@@ -952,13 +953,10 @@ abstract class Controller
         'cap'      => 100,
         'params'   => [],
         'unit'     => 'rows',
-        'ranked'   => '',
-        'total'    => '',
-        'scope'    => [],
-        'note'     => '',
         'carry'    => [],
         'key_head' => 'Value',
         'val_head' => 'Requests',
+        'count_head' => 'Sessions',
         'page'     => 500,
         'control'  => 'CSV',
     ];
@@ -983,18 +981,6 @@ abstract class Controller
     public function exports(): array
     {
         return [];
-    }
-
-    /**
-     * The facet layer whose selection describes this view's exports.
-     *
-     * The sessions/hits layer for Loghound's own views; Panel\OpensolrView overrides it with
-     * the request-log layer, because the two planes have disjoint field names and a preamble
-     * that reported the wrong one would name filters the file was never scoped by.
-     */
-    protected function exportFacets(): Facets
-    {
-        return $this->facets;
     }
 
     /**
@@ -1071,16 +1057,10 @@ abstract class Controller
     /**
      * Write a dataset that arrives in one payload: a facet list, a classic facet map, a pivot.
      *
-     * A TERMS FACET THAT RETURNED FEWER BUCKETS THAN ITS LIMIT RETURNED ALL OF THEM, and that
-     * inference is what lets the file claim completeness without a second Solr call for
-     * `numBuckets`: short of the limit means the dimension had nothing more to give, while at the
-     * limit the honest answer is "there may be more", which is what the coverage line then says.
-     *
      * @param array<string,mixed> $set
      */
     private function exportWhole(array $set, int $cap, string $tz): void
     {
-        $payload = [];
         $columns = (array) $set['columns'];
         $rows = [];
 
@@ -1088,14 +1068,10 @@ abstract class Controller
             case 'custom':
                 $source = $set['source'] ?? null;
                 $out = is_callable($source) ? (array) $source() : [];
-                $payload = (array) ($out['payload'] ?? []);
                 $rows = array_values((array) ($out['rows'] ?? []));
                 if (isset($out['columns']) && is_array($out['columns']) && $out['columns'] !== []) {
                     $columns = $out['columns'];
                 }
-                $set['total'] = '';
-                $set['scope'] = (array) ($out['scope'] ?? $set['scope']);
-                $knownTotal = isset($out['total']) && is_int($out['total']) ? $out['total'] : null;
                 break;
 
             case 'map':
@@ -1107,30 +1083,29 @@ abstract class Controller
                     [(string) $set['key_head'], 'value', 'id'],
                     [(string) $set['val_head'], 'count', 'number'],
                 ];
-                $knownTotal = self::exportTotal($payload, (string) $set['total']);
                 break;
 
             case 'pivot':
                 $payload = $this->api((string) $set['action']);
-                [$rows, $columns] = self::exportPivot((array) self::exportPick($payload, (string) $set['key']));
-                $knownTotal = null;
+                [$rows, $columns] = self::exportPivot(
+                    (array) self::exportPick($payload, (string) $set['key']),
+                    (string) $set['count_head']
+                );
                 break;
 
             default:
                 $payload = $this->api((string) $set['action']);
                 $rows = array_values((array) self::exportPick($payload, (string) $set['key']));
-                $knownTotal = self::exportTotal($payload, (string) $set['total']);
+                /* A dataset whose cells need a figure from the payload rather than the row (a
+                   share of the total, the card's overall line) shapes its rows here. */
+                if (isset($set['prepare']) && is_callable($set['prepare'])) {
+                    $rows = array_values((array) $set['prepare']($payload, $rows));
+                }
         }
 
-        $capped = count($rows) > $cap;
-        $rows = array_slice($rows, 0, $cap);
-
-        $complete = !$capped && count($rows) < $cap;
-
-        Csv::put($this->exportPreamble($set, $payload, count($rows), $knownTotal, $complete, $cap, $tz));
         Csv::put(Csv::row(self::exportHeaders($columns)));
 
-        foreach ($rows as $row) {
+        foreach (array_slice($rows, 0, $cap) as $row) {
             Csv::put(Csv::row(self::exportCells($columns, (array) $row, $tz)));
         }
     }
@@ -1141,8 +1116,7 @@ abstract class Controller
      * ECHOED AS IT IS READ, so the memory footprint is one page whatever the total — the
      * session explorer can match hundreds of thousands of documents and assembling them in
      * PHP to write them out afterwards would be a way to exhaust a worker from a URL. The
-     * total comes from the first page's `numFound`, which is exact, so the coverage line can
-     * say "the 2,000 most recent of 284,193" rather than a guess.
+     * first page's `numFound` bounds how many pages are read.
      *
      * @param array<string,mixed> $set
      */
@@ -1161,15 +1135,6 @@ abstract class Controller
         $total = isset($first['total']) ? max(0, (int) $first['total']) : null;
         $wanted = $total === null ? $cap : min($cap, $total);
 
-        Csv::put($this->exportPreamble(
-            $set,
-            (array) ($first['payload'] ?? []),
-            $wanted,
-            $total,
-            $total !== null && $total <= $cap,
-            $cap,
-            $tz
-        ));
         Csv::put(Csv::row(self::exportHeaders($columns)));
 
         $rows = array_values((array) ($first['rows'] ?? []));
@@ -1194,206 +1159,71 @@ abstract class Controller
     }
 
     /**
-     * The provenance block: what this file is, what scoped it, and what it covers.
+     * Flatten a cross-tabulation into one record per pair, in the words the pivot card shows.
      *
-     * Written as ordinary two-column records ahead of a blank line, so a reader that wants the
-     * table alone skips to the first empty record and a person who opens the file sees the
-     * scope before the numbers. The coverage line is the one that matters — see the header of
-     * \Loghound\Csv for why a capped export that does not say so is worse than no export.
-     *
-     * @param array<string,mixed> $set
-     * @param array<string,mixed> $payload
-     */
-    private function exportPreamble(
-        array $set,
-        array $payload,
-        int $rows,
-        ?int $total,
-        bool $complete,
-        int $cap,
-        string $tz
-    ): string {
-        $lines = [
-            ['Loghound export', (string) $set['label']],
-            ['Panel view', $this->title()],
-            ['Taken', Csv::moment(gmdate('Y-m-d\TH:i:s\Z'), $tz)],
-            ['Timezone', $tz],
-        ];
-
-        if ($this->honours(self::SCOPE_RANGE)) {
-            $lines[] = ['Time range', (string) $this->range['label']];
-        }
-
-        $facets = $this->exportFacets();
-        $dimensions = $facets->fields();
-
-        if (isset($dimensions[Query::HOST_FIELD])) {
-            $hosts = $facets->values(Query::HOST_FIELD);
-            $lines[] = ['Website', $hosts === [] ? 'All hosts' : implode('; ', $hosts)];
-        }
-
-        $filters = 0;
-        foreach ($facets->selected() as $field) {
-            if ($field === Query::HOST_FIELD) {
-                continue;
-            }
-            $values = [];
-            foreach ($facets->values($field) as $value) {
-                $values[] = Vocabulary::has($field)
-                    ? Vocabulary::label($field, $value) . ' [' . $value . ']'
-                    : $value;
-            }
-            $lines[] = ['Filter', ($dimensions[$field] ?? $field)
-                . ' — ' . Facets::operatorLabel($facets->op($field))
-                . ' — ' . implode('; ', $values)];
-            $filters++;
-        }
-        if ($filters === 0) {
-            $lines[] = ['Filter', 'None'];
-        }
-
-        foreach ((array) $set['scope'] as $path => $spec) {
-            $label = is_array($spec) ? (string) ($spec[0] ?? '') : (string) $spec;
-            $value = self::exportPick($payload, (string) $path);
-            if (is_array($spec) && isset($spec[1]) && is_callable($spec[1])) {
-                $value = $spec[1]($value);
-            }
-            if (is_array($value)) {
-                $value = implode('; ', array_map(static fn ($v): string => is_scalar($v) ? (string) $v : '', $value));
-            }
-            if ($label !== '' && $value !== null && $value !== '' && $value !== false) {
-                $lines[] = [$label, is_bool($value) ? 'yes' : (string) $value];
-            }
-        }
-
-        if ((string) $set['note'] !== '') {
-            $lines[] = ['Note', (string) $set['note']];
-        }
-
-        $lines[] = ['Coverage', self::exportCoverage($set, $rows, $total, $complete, $cap)];
-
-        $out = '';
-        foreach ($lines as $line) {
-            $out .= Csv::row([Csv::text($line[0]), Csv::text($line[1])]);
-        }
-
-        return $out . Csv::EOL;
-    }
-
-    /**
-     * The one sentence that says whether this file is the whole set.
-     *
-     * Four cases, and none of them is silence. A true total of the same unit is used when the
-     * payload carries one; otherwise the fact that a terms facet came back short of its limit is
-     * the evidence of completeness; otherwise the file admits it is a top-N list and names the N.
-     *
-     * AT THE LIMIT IS THE ONLY CASE THAT HAS TO SHOUT. A terms facet that came back short of its
-     * limit returned everything the dimension had, and a paged read that stopped before its clamp
-     * read everything that matched; either way nothing was left out by the export, and claiming
-     * otherwise would mislead in the opposite direction from the silence this replaces.
-     *
-     * @param array<string,mixed> $set
-     */
-    private static function exportCoverage(array $set, int $rows, ?int $total, bool $complete, int $cap): string
-    {
-        $unit = (string) $set['unit'];
-        $ranked = (string) $set['ranked'];
-        $tail = $ranked === '' ? '' : ', ' . $ranked;
-
-        if ($rows === 0) {
-            return 'This file has no data rows: nothing in scope produced any ' . $unit
-                . '. The lines above say what the scope was.';
-        }
-
-        if ($total !== null && $rows >= $total) {
-            return 'Complete. All ' . number_format($total) . ' ' . $unit . ' in scope are in this file.';
-        }
-
-        if ($rows >= $cap) {
-            $of = $total === null ? '' : ' of ' . number_format($total);
-            return number_format($rows) . $of . ' ' . $unit . $tail . '. That is this export\'s limit of '
-                . number_format($cap) . ' rows, so this is NOT the whole set.';
-        }
-
-        if ($total !== null) {
-            return 'Complete for this scope. All ' . number_format($rows) . ' ' . $unit
-                . ' this card lists are in this file. The selected range holds '
-                . number_format($total) . ' ' . $unit . ' in all; the difference is what this card\'s '
-                . 'own controls exclude.';
-        }
-
-        if ($complete) {
-            return 'Complete. Every one of the ' . number_format($rows) . ' ' . $unit
-                . ' in scope is in this file.';
-        }
-
-        return 'Complete for this scope: all ' . number_format($rows) . ' ' . $unit . ' this card lists '
-            . 'are in this file, short of the export\'s limit of ' . number_format($cap) . ' rows.';
-    }
-
-    /**
-     * A total from the payload, but only when it is a count of the SAME unit as the rows.
-     *
-     * Most of these payloads carry a `total` that counts SESSIONS while the rows are countries
-     * or netblocks, and printing that as the denominator would produce a coverage line that is
-     * arithmetically nonsense. A dataset therefore has to name the path explicitly, and an
-     * absent or non-integer value yields null rather than a number nobody computed.
-     *
-     * @param array<string,mixed> $payload
-     */
-    private static function exportTotal(array $payload, string $path): ?int
-    {
-        if ($path === '') {
-            return null;
-        }
-        $value = self::exportPick($payload, $path);
-
-        return is_int($value) || (is_string($value) && ctype_digit($value)) ? (int) $value : null;
-    }
-
-    /**
-     * Flatten a cross-tabulation into one record per cell.
-     *
-     * A pivot on screen is a row per outer value with its inner breakdown beside it; in a
-     * spreadsheet the useful shape is one row per pair, which pivots and groups without any
-     * unpacking. `covered` rides along per row because the inner facet is LIMITED, so the
-     * cells of one outer value do NOT sum to its total — presenting them as if they did is the
-     * wrong number the on-screen renderer already refuses to print.
+     * The card is a row per outer value with its total and its inner values as chips, each with
+     * its count and its share of the row (facetfilter.js renderPivot()); in a spreadsheet that is
+     * one record per pair with the outer value and its total repeated. The inner facet is
+     * LIMITED, so what it did not list is its own record, "in other values", as on the card.
      *
      * @param array<string,mixed> $node
-     * @return array{0:array<int,array<string,mixed>>,1:array<int,array<int,string>>}
+     * @return array{0:array<int,array<string,mixed>>,1:array<int,array<int,mixed>>}
      */
-    private static function exportPivot(array $node): array
+    private static function exportPivot(array $node, string $unit): array
     {
         $outer = (string) ($node['outer_label'] ?? 'Value');
         $inner = (string) ($node['inner_label'] ?? 'Breakdown');
+        $outerField = (string) ($node['outer'] ?? '');
 
         $rows = [];
         foreach ((array) ($node['rows'] ?? []) as $row) {
             $row = (array) $row;
-            foreach ((array) ($row['cells'] ?? []) as $cell) {
+            $total = is_numeric($row['count'] ?? null) ? (int) $row['count'] : 0;
+            $value = (string) ($row['value'] ?? '');
+            $label = $outerField === 'country_s' && $value !== ''
+                ? Countries::name($value)
+                : (string) (($row['label'] ?? '') !== '' ? $row['label'] : $value);
+
+            $cells = (array) ($row['cells'] ?? []);
+            if (is_numeric($row['covered'] ?? null) && $total - (int) $row['covered'] > 0) {
+                $cells[] = ['label' => 'in other values', 'count' => $total - (int) $row['covered']];
+            }
+            foreach ($cells as $cell) {
                 $cell = (array) $cell;
+                $count = is_numeric($cell['count'] ?? null) ? (int) $cell['count'] : 0;
                 $rows[] = [
-                    'outer'       => $row['value'] ?? '',
-                    'outer_label' => $row['label'] ?? '',
-                    'outer_total' => $row['count'] ?? null,
-                    'covered'     => $row['covered'] ?? null,
-                    'inner'       => $cell['value'] ?? '',
-                    'inner_label' => $cell['label'] ?? '',
-                    'count'       => $cell['count'] ?? null,
+                    'outer' => $label,
+                    'total' => $total,
+                    'inner' => (string) (($cell['label'] ?? '') !== '' ? $cell['label'] : ($cell['value'] ?? '')),
+                    'count' => $count,
+                    'share' => self::exportShare($count, $total),
                 ];
             }
         }
 
         return [$rows, [
-            [$outer, 'outer_label', 'text'],
-            [$outer . ' (stored value)', 'outer', 'id'],
-            [$outer . ' sessions', 'outer_total', 'number'],
-            [$inner, 'inner_label', 'text'],
-            [$inner . ' (stored value)', 'inner', 'id'],
-            ['Sessions', 'count', 'number'],
-            ['Sessions covered by the listed values', 'covered', 'number'],
+            [$outer, 'outer', 'text'],
+            [$unit, 'total', 'number'],
+            [$inner, 'inner', 'text'],
+            [$inner . ' ' . strtolower($unit), 'count', 'number'],
+            ['Share', 'share', 'text'],
         ]];
+    }
+
+    /**
+     * A row share as the pivot chips print it: `0%`, `<0.1%`, `4.2%`, `37%`.
+     */
+    private static function exportShare(int $part, int $total): string
+    {
+        if ($total <= 0 || $part <= 0) {
+            return '0%';
+        }
+        $ratio = $part / $total;
+        if ($ratio < 0.001) {
+            return '<0.1%';
+        }
+
+        return Csv::percent($ratio * 100, $ratio >= 0.095 ? 0 : 1);
     }
 
     /**
@@ -1416,38 +1246,109 @@ abstract class Controller
     }
 
     /**
-     * One record's cells, each formatted for its declared kind.
+     * One record's cells, each formatted the way the table on screen shows it.
      *
-     * The kind is what decides whether formula neutralisation applies: text and identifiers
-     * are attacker-chosen and get it, numbers go through Csv::number() which cannot emit a
-     * formula, dates through Csv::moment() which cannot either.
+     * A column is `[heading, source, kind, extra]`. The source is a dotted path into the row, or
+     * a closure given the row that composes the cell the way the table does. The kind is what
+     * decides whether formula neutralisation applies: text and identifiers are attacker-chosen
+     * and get it; numbers go through Csv::number() and dates through Csv::moment(), which
+     * cannot emit a formula; the duration, size and percentage formatters build their text from
+     * a number and cannot either. `extra` is the vocabulary field for `vocab`, the label key for
+     * `pairs`, the text for an absent value on the other kinds (the "N/A" or "not measured" the
+     * table prints), and the decimal places for `pct`. The `change`, `pchange` and `points` kinds
+     * take a closure returning `[now, before]` and print what cardtable.js changeCell() and
+     * seo.js pctChange() / pointChange() print.
      *
-     * @param array<int,array<int,string>> $columns
-     * @param array<string,mixed>          $row
+     * @param array<int,array<int,mixed>> $columns
+     * @param array<string,mixed>         $row
      * @return array<int,string>
      */
     private static function exportCells(array $columns, array $row, string $tz): array
     {
         $out = [];
         foreach ($columns as $column) {
-            $value = self::exportPick($row, (string) ($column[1] ?? ''));
+            $source = $column[1] ?? '';
+            $value = $source instanceof \Closure ? $source($row) : self::exportPick($row, (string) $source);
             $kind = (string) ($column[2] ?? 'text');
-            $field = (string) ($column[3] ?? '');
+            $extra = $column[3] ?? '';
 
-            $out[] = match ($kind) {
-                'number' => Csv::number($value),
-                'date'   => Csv::moment($value, $tz),
-                'bool'   => Csv::flag($value),
-                'vocab'  => Csv::text(
-                    is_string($value) && $value !== '' && $field !== ''
-                        ? Vocabulary::label($field, $value)
+            $cell = match ($kind) {
+                'number'  => Csv::number($value),
+                'date'    => Csv::moment($value, $tz),
+                'bool'    => Csv::yesNo($value),
+                'clock'   => Csv::clock($value),
+                'millis'  => Csv::millis($value),
+                'micros'  => Csv::micros($value),
+                'bytes'   => Csv::bytes($value),
+                'pct'     => Csv::percent($value, is_int($extra) ? $extra : 1),
+                'change'  => self::exportChange($value, false),
+                'pchange' => self::exportChange($value, true),
+                'points'  => self::exportPoints($value),
+                'country' => Csv::text(is_string($value) && $value !== '' ? Countries::name($value) : ''),
+                'vocab'   => Csv::text(
+                    is_string($value) && $value !== '' && is_string($extra) && $extra !== ''
+                        ? Vocabulary::label($extra, $value)
                         : $value
                 ),
-                'pairs'  => Csv::text(self::exportPairs($value, $field)),
-                default  => Csv::text($value),
+                'pairs'   => Csv::text(self::exportPairs($value, (string) $extra)),
+                default   => Csv::text($value),
             };
+
+            if ($cell === '' && is_string($extra) && $extra !== '' && !in_array($kind, ['vocab', 'pairs'], true)) {
+                $cell = Csv::text($extra);
+            }
+
+            $out[] = $cell;
         }
         return $out;
+    }
+
+    /**
+     * A change between two counts: `new`, `gone`, `no change`, or the signed difference, as a
+     * number (`12`, `-3`); with `$relative` the signed percentage (`12.5%`, `-3.2%`).
+     *
+     * @param mixed $pair `[now, before]`.
+     */
+    private static function exportChange($pair, bool $relative): string
+    {
+        if (!is_array($pair) || !is_numeric($pair[0] ?? null) || !is_numeric($pair[1] ?? null)) {
+            return $relative ? 'not measured' : '';
+        }
+
+        $now = (float) $pair[0];
+        $before = (float) $pair[1];
+        if ($now === $before) {
+            return 'no change';
+        }
+        if ($before == 0.0) {
+            return 'new';
+        }
+        if ($now == 0.0) {
+            return 'gone';
+        }
+
+        return $relative
+            ? Csv::percent(($now - $before) / $before * 100, 1)
+            : Csv::number($pair[0] - $pair[1]);
+    }
+
+    /**
+     * A change between two percentages in points: `no change`, or `2.4 pts`, `-1.1 pts`.
+     *
+     * @param mixed $pair `[now, before]`.
+     */
+    private static function exportPoints($pair): string
+    {
+        if (!is_array($pair) || !is_numeric($pair[0] ?? null) || !is_numeric($pair[1] ?? null)) {
+            return 'not measured';
+        }
+
+        $d = (float) $pair[0] - (float) $pair[1];
+        if (abs($d) < 0.05) {
+            return 'no change';
+        }
+
+        return number_format($d, 1, '.', '') . ' pts';
     }
 
     /**
@@ -1455,7 +1356,7 @@ abstract class Controller
      *
      * The country table's cities column is the case: five `{city, count}` records that are on
      * screen beside the row and would otherwise be silently dropped from the file. Rendered as
-     * `Chicago (26); Newark (18)` so the counts survive — a bare list of names would lose the
+     * `Chicago (26), Newark (18)` so the counts survive — a bare list of names would lose the
      * only thing that makes the order meaningful. It is a top-N inside a top-N and the dataset's
      * note says so.
      *
@@ -1480,7 +1381,17 @@ abstract class Controller
             $out[] = is_numeric($count) ? (string) $name . ' (' . $count . ')' : (string) $name;
         }
 
-        return implode('; ', $out);
+        return implode(', ', $out);
+    }
+
+    /**
+     * A number rounded to the places the table shows, or null when there is none.
+     *
+     * @param mixed $value
+     */
+    protected static function rounded($value, int $places): ?float
+    {
+        return is_numeric($value) ? round((float) $value, $places) : null;
     }
 
     /**
@@ -1492,7 +1403,7 @@ abstract class Controller
      * @param array<string,mixed> $data
      * @return mixed
      */
-    private static function exportPick(array $data, string $path)
+    protected static function exportPick(array $data, string $path)
     {
         if ($path === '') {
             return null;

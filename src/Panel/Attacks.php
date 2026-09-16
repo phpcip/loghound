@@ -228,15 +228,12 @@ final class Attacks extends Controller implements Sections
      */
     public function exports(): array
     {
-        $ignored = [
-            'filters_ignored' => ['Filters this plane could not honour', static function ($v): string {
-                return is_array($v) && $v !== [] ? implode('; ', $v) : 'None';
-            }],
-        ];
-
-        $notClaimed = 'A 2xx means the server returned a body. It does NOT mean anything was '
-            . 'disclosed: a site whose error page is served with a 200 looks identical in a log. '
-            . 'Loghound reads the log after the fact and blocked none of this.';
+        $severity = static fn (array $r): string => match ((string) ($r['severity'] ?? '')) {
+            'high'  => 'High if answered',
+            'med'   => 'Medium if answered',
+            'low'   => 'Low — usually noise',
+            default => 'Informational',
+        };
 
         return [
             'patterns' => [
@@ -244,33 +241,17 @@ final class Attacks extends Controller implements Sections
                 'action'  => 'patterns',
                 'key'     => 'patterns',
                 'unit'    => 'patterns',
-                'ranked'  => 'ranked by how many of their attempts the server answered',
                 'cap'     => 100,
-                'note'    => $notClaimed . ' The four status columns need not sum to the request '
-                    . 'total: a log line whose status did not parse is in none of them and is '
-                    . 'counted under Status not recorded.',
-                'scope'   => $ignored + [
-                    'evaluated'   => 'Requests the detector has evaluated',
-                    'unevaluated' => 'Requests written before detection and never evaluated',
-                ],
                 'columns' => [
-                    ['Pattern', 'label', 'text'],
-                    ['Pattern code', 'code', 'id'],
-                    ['Family', 'family', 'text'],
-                    ['Severity of a match', 'severity', 'text'],
+                    ['Pattern', 'code', 'vocab', 'hit_flags_ss'],
+                    ['Family', static fn (array $r): string => (string) (Rules::families()[$r['family'] ?? ''] ?? ($r['family'] ?? '')), 'text'],
+                    ['Severity', $severity, 'text'],
+                    ['Answered', 'answered', 'number'],
+                    ['Redirected', 'redirect', 'number'],
+                    ['Refused', 'refused', 'number'],
                     ['Requests', 'count', 'number'],
-                    ['Answered (2xx or 3xx)', 'answered', 'number'],
-                    ['Answered with a body (2xx)', 'ok', 'number'],
-                    ['Redirected (3xx)', 'redirect', 'number'],
-                    ['Refused (4xx)', 'refused', 'number'],
-                    ['Server error (5xx)', 'broke', 'number'],
-                    ['Status not recorded', 'unknown', 'number'],
-                    ['Distinct addresses', 'uniq_ips', 'number'],
-                    ['Distinct sessions', 'uniq_sessions', 'number'],
+                    ['Addresses', 'uniq_ips', 'number'],
                     ['Last seen', 'last', 'date'],
-                    ['What this pattern matches', 'what', 'text'],
-                    ['What it misses', 'misses', 'text'],
-                    ['What it over-reports', 'over', 'text'],
                 ],
             ],
 
@@ -279,25 +260,17 @@ final class Attacks extends Controller implements Sections
                 'action'  => 'who',
                 'key'     => 'actors',
                 'unit'    => 'addresses',
-                'ranked'  => 'ranked by how many of their attempts the server answered',
                 'cap'     => 200,
-                'note'    => $notClaimed . ' Distinct-pattern counts come from Solr\'s unique(), '
-                    . 'which is exact for small counts and approximate for large ones. An address '
-                    . 'is not a person: one host can carry many clients and one campaign can rent '
-                    . 'many hosts, which is what the network and fingerprint columns are for.',
-                'scope'   => $ignored,
                 'columns' => [
-                    ['Address', 'ip', 'id'],
-                    ['Reverse DNS', 'rdns', 'id'],
+                    ['Address', 'ip', 'text'],
+                    ['Country', 'country', 'country'],
+                    ['Reverse DNS', 'rdns', 'text'],
                     ['Network', 'org', 'text'],
                     ['Network type', 'as_type', 'vocab', 'as_type_s'],
-                    ['Requests that matched a pattern', 'count', 'number'],
-                    ['Answered (2xx or 3xx)', 'answered', 'number'],
-                    ['Answered with a body (2xx)', 'ok', 'number'],
-                    ['Refused (4xx)', 'refused', 'number'],
-                    ['Distinct patterns tried', 'uniq_patterns', 'number'],
-                    ['Distinct paths tried', 'uniq_paths', 'number'],
-                    ['First seen', 'first', 'date'],
+                    ['Answered', 'answered', 'number'],
+                    ['Refused', 'refused', 'number'],
+                    ['Requests', 'count', 'number'],
+                    ['Patterns', 'uniq_patterns', 'number'],
                     ['Last seen', 'last', 'date'],
                 ],
             ],
@@ -307,41 +280,30 @@ final class Attacks extends Controller implements Sections
                 'action'  => 'requests',
                 'key'     => 'requests',
                 'unit'    => 'requests',
-                'ranked'  => 'most recent first',
                 'cap'     => self::MAX_REQUESTS,
                 'params'  => ['rows' => self::MAX_REQUESTS],
-                'note'    => 'INDIVIDUAL REQUESTS, not aggregates, and every one of them matched a '
-                    . 'pattern AND was answered with a 2xx or a 3xx. ' . $notClaimed . ' The path '
-                    . 'and the query string are reproduced exactly as the client sent them, so '
-                    . 'they are hostile text: they are neutralised against spreadsheet formula '
-                    . 'execution on the way into this file, and they should not be pasted into a '
-                    . 'shell.',
-                'scope'   => $ignored + ['total' => 'Answered requests in scope'],
                 'columns' => [
-                    ['When', 'ts', 'date'],
+                    ['Date', 'ts', 'date'],
+                    ['IP', 'ip', 'text'],
+                    ['Country', 'country', 'country'],
+                    ['Page', static fn (array $r): string => trim((string) ($r['method'] ?? '') . ' ' . (string) ($r['path'] ?? '')
+                        . (($r['query'] ?? null) !== null && $r['query'] !== '' ? '?' . $r['query'] : '')), 'text'],
                     ['Website', 'host', 'text'],
-                    ['Method', 'method', 'id'],
-                    ['Path', 'path', 'text'],
-                    ['Query string', 'query', 'text'],
-                    ['Status', 'status', 'number'],
-                    ['Bytes returned', 'bytes', 'number'],
-                    ['Patterns matched', 'patterns', 'text'],
-                    ['Address', 'ip', 'id'],
-                    ['Country', 'country', 'id'],
-                    ['City', 'city', 'text'],
-                    ['Session', 'session', 'id'],
+                    ['Verdict', static fn (array $r): string => is_int($r['status'] ?? null)
+                        ? Vocabulary::label('status_class_s', intdiv($r['status'], 100) . 'xx')
+                        : 'no status logged', 'text'],
+                    ['Patterns', 'patterns', 'text', 'no pattern named'],
                 ],
             ],
 
             'pivot' => [
-                'label'  => 'Pattern by status class',
-                'action' => 'patterns',
-                'shape'  => 'pivot',
-                'key'    => 'pivot',
-                'unit'   => 'pattern and status pairs',
-                'cap'    => 200,
-                'note'   => 'One record per pair. The status breakdown of a pattern is a LIMITED '
-                    . 'facet, so its rows do not add up to that pattern\'s request total.',
+                'label'      => 'Pattern by status class',
+                'action'     => 'patterns',
+                'shape'      => 'pivot',
+                'key'        => 'pivot',
+                'unit'       => 'pattern and status pairs',
+                'count_head' => 'Requests',
+                'cap'        => 200,
             ],
         ];
     }

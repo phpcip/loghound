@@ -77,21 +77,13 @@ final class Engagement extends Controller
                 'label'   => 'Bounce rate by landing page',
                 'action'  => 'pages',
                 'unit'    => 'landing pages',
-                'ranked'  => 'ranked by the number of human visits that started on them',
                 'cap'     => Paging::MAX_PAGE,
                 'params'  => ['rows' => Paging::MAX_PAGE],
-                'total'   => 'page.total',
-                'note'    => Bounce::definition() . ' Each row carries the measured population as well as the '
-                    . 'human one: a rate over three measurable visits is not a rate, and the denominator is the '
-                    . 'only way to tell.',
                 'columns' => [
                     ['Landing page', 'path', 'text'],
-                    ['Human visits', 'people', 'number'],
-                    ['Of those, measurable', 'measured', 'number'],
-                    ['Bounced', 'bounced', 'number'],
-                    ['One page, but engaged', 'satisfied', 'number'],
-                    ['Website', 'host', 'text'],
-                    ['Distinct hosts serving this path', 'hosts', 'number'],
+                    ['Bounce rate', static fn (array $r) => !empty($r['measured'])
+                        ? (float) ($r['bounced'] ?? 0) / (float) $r['measured'] * 100
+                        : null, 'pct'],
                 ],
             ],
         ];

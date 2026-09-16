@@ -45,14 +45,12 @@
  * (`utf-8-sig`).
  *
  * ---------------------------------------------------------------------------------
- * 3. THE FILE SAYS WHAT IT IS
+ * 3. THE FILE IS THE TABLE
  * ---------------------------------------------------------------------------------
- * A CSV carries no metadata, so the provenance is written as ordinary two-column records
- * ahead of a blank line and the table's own header row: which view and table it came from,
- * the time range, the virtual host, every filter WITH ITS OPERATOR, the sort order, and what
- * the file covers when the table it came from is capped. That last line is the point of the
- * block. A file named "sessions" holding the first page of sessions is a lie somebody builds
- * a report on, and once the file has left the product nothing on screen can correct it.
+ * An export holds the header row and the rows of the table it was taken from, with the same
+ * columns and the same values the reader sees on screen: dates in the panel's timezone, time on
+ * site as a clock, Yes and No, names rather than stored codes. No provenance block, no stored
+ * field names, no raw milliseconds — the scope is the one on screen when the link was pressed.
  *
  * @package Loghound
  * @license MIT
@@ -365,6 +363,125 @@ final class Csv
         }
 
         return $value ? 'yes' : 'no';
+    }
+
+    /**
+     * Yes or No, the words the panel's tables print, and empty where nothing was reported.
+     */
+    public static function yesNo($value): string
+    {
+        $flag = self::flag($value);
+
+        return $flag === '' ? '' : ucfirst($flag);
+    }
+
+    /**
+     * A duration in milliseconds, read the way the visit tables read it (core.js durClock()).
+     *
+     * `45 s` under a minute, `12:30` under an hour, `03:07` above one, `2 Days 04:12` past a day.
+     * Absent or zero is empty: an unmeasured visit is not a visit of no length.
+     */
+    public static function clock($ms): string
+    {
+        if (!is_numeric($ms) || (float) $ms <= 0) {
+            return '';
+        }
+
+        $total = (int) round((float) $ms / 1000);
+        if ($total < 60) {
+            return $total . ' s';
+        }
+
+        $pad = static fn (int $n): string => str_pad((string) $n, 2, '0', STR_PAD_LEFT);
+        $days = intdiv($total, 86400);
+        if ($days > 0) {
+            return $days . ($days === 1 ? ' Day ' : ' Days ')
+                . $pad(intdiv($total % 86400, 3600)) . ':' . $pad(intdiv($total % 3600, 60));
+        }
+        if ($total < 3600) {
+            return $pad(intdiv($total, 60)) . ':' . $pad($total % 60);
+        }
+
+        return $pad(intdiv($total, 3600)) . ':' . $pad(intdiv($total % 3600, 60));
+    }
+
+    /**
+     * A duration in milliseconds at the resolution core.js dur() shows: `850 ms`, `4.2 s`, `3m 07s`, `1h 04m`.
+     */
+    public static function millis($ms): string
+    {
+        if (!is_numeric($ms)) {
+            return '';
+        }
+
+        $v = (float) $ms;
+        if ($v < 1000) {
+            return (int) round($v) . ' ms';
+        }
+        if ($v < 60000) {
+            return number_format($v / 1000, 1, '.', '') . ' s';
+        }
+
+        $total = (int) round($v / 1000);
+        $h = intdiv($total, 3600);
+        $m = intdiv($total % 3600, 60);
+        if ($h > 0) {
+            return $h . 'h ' . str_pad((string) $m, 2, '0', STR_PAD_LEFT) . 'm';
+        }
+
+        return $m . 'm ' . str_pad((string) ($total % 60), 2, '0', STR_PAD_LEFT) . 's';
+    }
+
+    /**
+     * A duration in microseconds, as core.js durUs() shows it: `640 µs`, `12.4 ms`, `1.25 s`.
+     */
+    public static function micros($us): string
+    {
+        if (!is_numeric($us)) {
+            return '';
+        }
+
+        $v = (float) $us;
+        if ($v < 1000) {
+            return (int) round($v) . ' µs';
+        }
+        if ($v < 1000000) {
+            return number_format($v / 1000, 1, '.', '') . ' ms';
+        }
+
+        return number_format($v / 1000000, 2, '.', '') . ' s';
+    }
+
+    /**
+     * A byte count in binary units, as core.js bytes() shows it: `512 B`, `3.4 MiB`.
+     */
+    public static function bytes($value): string
+    {
+        if (!is_numeric($value)) {
+            return '';
+        }
+
+        $n = (float) $value;
+        $units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+        $i = 0;
+        while ($n >= 1024 && $i < count($units) - 1) {
+            $n /= 1024;
+            $i++;
+        }
+
+        return ($i === 0 ? (string) (int) round($n) : number_format($n, 1, '.', '')) . ' ' . $units[$i];
+    }
+
+    /**
+     * A percentage with its sign, `12.3%`, which every spreadsheet reads back as a number.
+     */
+    public static function percent($value, int $places = 1): string
+    {
+        if (!is_numeric($value)) {
+            return '';
+        }
+
+        return number_format((float) $value, $places, '.', '') . '%';
     }
 
     /**

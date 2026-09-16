@@ -4790,9 +4790,6 @@ final class Settings extends Controller implements JobHost, Sections
                 'shape'   => 'custom',
                 'unit'    => 'rules',
                 'cap'     => Exclusions::MAX_RULES,
-                'note'    => 'Requests this installation refuses to record. A rule here is not a '
-                    . 'filter: a matched request is never written, on either plane, and cannot be '
-                    . 'recovered afterwards. An empty hostname means the rule applies to every host.',
                 'columns' => [
                     ['Hostname', 'host', 'text'],
                     ['Field', 'field', 'text'],
@@ -4817,9 +4814,6 @@ final class Settings extends Controller implements JobHost, Sections
                 'shape'   => 'custom',
                 'unit'    => 'patterns',
                 'cap'     => AttackPatterns::MAX_RULES + count(AttackPatterns::DEFAULTS),
-                'note'    => 'Requests that are an attack on your sites. A match flags the request and '
-                    . 'scores the visit a bot. Shipped rows are the defaults Loghound comes with and apply '
-                    . 'to every host; Yours are the patterns added on this installation.',
                 'columns' => [
                     ['Source', 'source', 'text'],
                     ['Hostname', 'host', 'text'],

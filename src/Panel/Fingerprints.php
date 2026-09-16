@@ -121,46 +121,37 @@ final class Fingerprints extends Controller
                 'label'   => 'Fingerprint clusters',
                 'action'  => 'clusters',
                 'unit'    => 'fingerprint clusters',
-                'ranked'  => 'in the order the table is sorted',
                 'cap'     => self::MAX_CLUSTERS,
                 'params'  => ['limit' => self::MAX_CLUSTERS],
                 'carry'   => ['sort', 'min_ips'],
-                'total'   => 'total_fps',
-                'note'    => 'Distinct-IP, netblock and network counts come from Solr\'s unique(), which is '
-                    . 'exact for small counts and approximate for large ones. Mobile carrier networks are '
-                    . 'excluded from the proxy-fleet flag, because a carrier gateway legitimately puts many '
-                    . 'people behind one fingerprint.',
-                'scope'   => [
-                    'sort'    => ['Sort order', static fn ($v): string =>
-                        is_string($v) ? (self::SORT_LABELS[$v] ?? '') : ''],
-                    'min_ips' => 'Minimum distinct IPs',
-                ],
                 'columns' => [
-                    ['Fingerprint', 'fp', 'id'],
-                    ['Sessions', 'sessions', 'number'],
-                    ['Distinct IPs', 'uniq_ips', 'number'],
-                    ['Distinct netblocks', 'uniq_nets', 'number'],
-                    ['Distinct networks (ASNs)', 'uniq_asns', 'number'],
-                    ['Requests', 'hits', 'number'],
-                    ['Average bot score', 'avg_score', 'number'],
-                    ['First seen', 'first', 'date'],
-                    ['Last seen', 'last', 'date'],
-                    ['Browser', 'browser', 'text'],
-                    ['Browser version', 'browser_ver', 'text'],
-                    ['OS', 'os', 'text'],
-                    ['Device', 'device', 'text'],
-                    ['Declared crawler', 'ua_bot_name', 'text'],
-                    ['Declared bot category', 'ua_bot_cat', 'vocab', 'ua_bot_cat_s'],
-                    ['AS organisation', 'org', 'text'],
-                    ['Network type', 'as_type', 'vocab', 'as_type_s'],
-                    ['Network type code', 'as_type', 'id'],
-                    ['Country', 'country', 'id'],
+                    ['Signature', static fn (array $r): string => substr((string) ($r['fp'] ?? ''), 0, 8), 'text'],
+                    ['Fleet', 'fleet', 'bool'],
+                    ['IPs', 'uniq_ips', 'number'],
+                    ['Nets', 'uniq_nets', 'number'],
+                    ['AS', 'uniq_asns', 'number'],
+                    ['Sess.', 'sessions', 'number'],
+                    ['Client', static fn (array $r): string => ($r['ua_bot_name'] ?? '') !== ''
+                        ? (string) $r['ua_bot_name']
+                        : (($r['browser'] ?? '') !== ''
+                            ? trim($r['browser'] . ' ' . ($r['browser_ver'] ?? ''))
+                            : 'unknown client'), 'text'],
+                    ['OS · Device', static fn (array $r): string => ($r['ua_bot_name'] ?? '') !== ''
+                        ? (($r['ua_bot_cat'] ?? '') !== ''
+                            ? Vocabulary::label('ua_bot_cat_s', (string) $r['ua_bot_cat'])
+                            : 'declared crawler')
+                        : implode(' · ', array_filter([
+                            ($r['os'] ?? '') !== '' ? Vocabulary::label('os_s', (string) $r['os']) : '',
+                            ($r['device'] ?? '') !== '' ? Vocabulary::label('device_s', (string) $r['device']) : '',
+                        ])), 'text'],
+                    ['Network', static fn (array $r): string => implode(' · ', array_filter([
+                        (string) ($r['org'] ?? ''),
+                        ($r['as_type'] ?? '') !== '' ? Vocabulary::label('as_type_s', (string) $r['as_type']) : '',
+                        ($r['country'] ?? '') !== '' ? \Loghound\Geo\Countries::name((string) $r['country']) : '',
+                    ])), 'text'],
                     ['Verdict', 'verdict', 'vocab', 'bot_verdict_s'],
-                    ['Verdict code', 'verdict', 'id'],
-                    ['Bot class', 'class', 'vocab', 'bot_class_s'],
-                    ['Sessions with beacon data', 'beacon', 'number'],
-                    ['Declared itself', 'declared', 'bool'],
-                    ['Flagged as a proxy fleet', 'fleet', 'bool'],
+                    ['Declared', 'declared', 'bool'],
+                    ['Score', static fn (array $r) => self::rounded($r['avg_score'] ?? null, 0), 'number'],
                 ],
             ],
         ];

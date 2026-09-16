@@ -238,9 +238,14 @@ final class Seo extends Controller
      */
     public function exports(): array
     {
-        $scope = ['period.a_label' => 'Period', 'period.b_label' => 'Compared with'];
-        $note = 'Visits that loaded at least one page, counted in the period they arrived in, under every '
-            . 'filter in force.';
+        $pair = static fn (string $a, string $b): \Closure => static fn (array $r): array => [
+            self::exportPick($r, $a),
+            self::exportPick($r, $b),
+        ];
+        $share = static fn (string $side, string $total): \Closure => static fn (array $r): string =>
+            is_numeric($r[$side] ?? null) && !empty($r[$total]) && (float) $r[$side] > 0
+                ? \Loghound\Csv::percent((float) $r[$side] / (float) $r[$total] * 100, 1)
+                : 'no visits';
 
         return [
             'channels' => [
@@ -248,53 +253,79 @@ final class Seo extends Controller
                 'action'  => 'channels',
                 'unit'    => 'channels',
                 'cap'     => 50,
-                'scope'   => $scope,
-                'note'    => $note . ' Direct means no referrer arrived.',
+                'prepare' => static fn (array $payload, array $rows): array => array_map(
+                    static fn ($r): array => (array) $r + [
+                        'total_a' => $payload['total_a'] ?? null,
+                        'total_b' => $payload['total_b'] ?? null,
+                    ],
+                    $rows
+                ),
                 'columns' => [
-                    ['Channel', 'label', 'text'],
-                    ['Stored value', 'value', 'id'],
-                    ['Visits in the period', 'a', 'number'],
-                    ['Visits in the comparison period', 'b', 'number'],
-                    ['Change', 'delta', 'number'],
+                    ['Channel', 'value', 'vocab', 'referer_type_s'],
+                    ['This period', 'a', 'number'],
+                    ['Compared with', 'b', 'number'],
+                    ['Change', $pair('a', 'b'), 'change'],
+                    ['% change', $pair('a', 'b'), 'pchange'],
+                    ['Share now', $share('a', 'total_a'), 'text'],
+                    ['Share before', $share('b', 'total_b'), 'text'],
                 ],
             ],
             'movers' => [
                 'label'   => 'Movers, period against period',
-                'action'  => 'movers',
+                'shape'   => 'custom',
                 'unit'    => 'values',
                 'cap'     => Paging::MAX_PAGE,
                 'params'  => ['rows' => Paging::MAX_PAGE],
-                'total'   => 'page.total',
                 'carry'   => ['panel', 'dim', 'chan', 'sort'],
-                'scope'   => $scope + ['dim_label' => 'Dimension', 'chan_label' => 'Channel', 'sort_label' => 'Showing'],
-                'note'    => $note,
-                'columns' => [
-                    ['Value', 'value', 'text'],
-                    ['Visits in the period', 'a', 'number'],
-                    ['Visits in the comparison period', 'b', 'number'],
-                    ['Change', 'delta', 'number'],
-                ],
+                'source'  => function () use ($pair): array {
+                    $payload = $this->api('movers');
+                    $dim = (string) ($payload['dim'] ?? '');
+                    $rows = array_values((array) ($payload['rows'] ?? []));
+                    $columns = [[
+                        (string) ($payload['dim_label'] ?? 'Value'),
+                        'value',
+                        $dim === 'country_s' ? 'country' : 'vocab',
+                        $dim === 'country_s' ? '' : $dim,
+                    ]];
+                    if ($dim === 'referer_host_s') {
+                        $columns[] = ['Channel', static fn (array $r): string => implode(', ', array_map(
+                            static fn ($k): string => Vocabulary::label('referer_type_s', (string) $k),
+                            (array) ($r['kinds'] ?? [])
+                        )), 'text', 'not recorded'];
+                    }
+                    array_push(
+                        $columns,
+                        ['This period', 'a', 'number'],
+                        ['Compared with', 'b', 'number'],
+                        ['Change', $pair('a', 'b'), 'change'],
+                        ['% change', $pair('a', 'b'), 'pchange']
+                    );
+                    return ['rows' => $rows, 'columns' => $columns];
+                },
             ],
             'quality' => [
                 'label'   => 'Engagement by channel',
                 'action'  => 'quality',
                 'unit'    => 'channels',
-                'cap'     => 50,
-                'scope'   => $scope,
-                'note'    => $note . ' Engaged time is the median over finished visits the beacon measured; an '
-                    . 'empty cell means none were measured.',
+                'cap'     => 51,
+                'prepare' => static fn (array $payload, array $rows): array =>
+                    isset($payload['overall']) ? array_merge([$payload['overall']], $rows) : $rows,
                 'columns' => [
-                    ['Channel', 'label', 'text'],
-                    ['Visits in the period', 'a.visits', 'number'],
-                    ['Visits in the comparison period', 'b.visits', 'number'],
-                    ['Pages per visit in the period', 'a.pages_per_visit', 'number'],
-                    ['Pages per visit in the comparison period', 'b.pages_per_visit', 'number'],
-                    ['One-page visits in the period (%)', 'a.one_page_share', 'number'],
-                    ['One-page visits in the comparison period (%)', 'b.one_page_share', 'number'],
-                    ['Median engaged ms in the period', 'a.engaged_p50', 'number'],
-                    ['Visits measured in the period', 'a.engaged_n', 'number'],
-                    ['Median engaged ms in the comparison period', 'b.engaged_p50', 'number'],
-                    ['Visits measured in the comparison period', 'b.engaged_n', 'number'],
+                    ['Channel', static fn (array $r): string => (string) (($r['value'] ?? '') === ''
+                        ? ($r['label'] ?? '')
+                        : Vocabulary::label('referer_type_s', (string) $r['value'])), 'text'],
+                    ['Visits', 'a.visits', 'number'],
+                    ['Visits before', 'b.visits', 'number'],
+                    ['Visits change', $pair('a.visits', 'b.visits'), 'pchange'],
+                    ['Pages per visit', static fn (array $r) => self::rounded(self::exportPick($r, 'a.pages_per_visit'), 2), 'number', 'not measured'],
+                    ['Pages per visit before', static fn (array $r) => self::rounded(self::exportPick($r, 'b.pages_per_visit'), 2), 'number', 'not measured'],
+                    ['Pages per visit change', $pair('a.pages_per_visit', 'b.pages_per_visit'), 'pchange'],
+                    ['One-page visits', 'a.one_page_share', 'pct', 'not measured'],
+                    ['One-page visits before', 'b.one_page_share', 'pct', 'not measured'],
+                    ['One-page visits change', $pair('a.one_page_share', 'b.one_page_share'), 'points'],
+                    ['Median engaged time', 'a.engaged_p50', 'millis', 'not measured'],
+                    ['Median engaged time before', 'b.engaged_p50', 'millis', 'not measured'],
+                    ['Median engaged time change', $pair('a.engaged_p50', 'b.engaged_p50'), 'pchange'],
                 ],
             ],
             'crawlers' => [
@@ -303,23 +334,27 @@ final class Seo extends Controller
                 'unit'    => 'crawlers',
                 'cap'     => self::CRAWLER_LIMIT,
                 'carry'   => ['cat'],
-                'scope'   => $scope + ['category_label' => 'Crawlers'],
-                'note'    => 'Requests from clients that declared themselves crawlers, from the access log. Forward-confirmed '
-                    . 'reverse DNS means the address\'s PTR name resolves back to the same address; it does not by itself '
-                    . 'prove the name belongs to the company the crawler claims.',
                 'columns' => [
                     ['Crawler', 'name', 'text'],
-                    ['Category', 'category', 'id'],
-                    ['Requests in the period', 'a.requests', 'number'],
-                    ['Requests in the comparison period', 'b.requests', 'number'],
-                    ['Pages crawled in the period', 'a.paths', 'number'],
-                    ['Pages crawled in the comparison period', 'b.paths', 'number'],
-                    ['4xx in the period', 'a.e4', 'number'],
-                    ['4xx in the comparison period', 'b.e4', 'number'],
-                    ['5xx in the period', 'a.e5', 'number'],
-                    ['5xx in the comparison period', 'b.e5', 'number'],
-                    ['Forward-confirmed reverse DNS in the period', 'a.verified', 'number'],
-                    ['Reverse DNS looked up in the period', 'a.checked', 'number'],
+                    ['Category', static fn (array $r): string => ($r['category'] ?? '') === ''
+                        ? 'not recorded'
+                        : Vocabulary::label('ua_bot_cat_s', (string) $r['category']), 'text'],
+                    ['Requests', 'a.requests', 'number'],
+                    ['Requests before', 'b.requests', 'number'],
+                    ['Requests change', $pair('a.requests', 'b.requests'), 'pchange'],
+                    ['Pages crawled', 'a.paths', 'number'],
+                    ['Pages crawled before', 'b.paths', 'number'],
+                    ['Pages crawled change', $pair('a.paths', 'b.paths'), 'pchange'],
+                    ['4xx answers', 'a.e4', 'number'],
+                    ['4xx answers before', 'b.e4', 'number'],
+                    ['4xx answers change', $pair('a.e4', 'b.e4'), 'pchange'],
+                    ['5xx answers', 'a.e5', 'number'],
+                    ['5xx answers before', 'b.e5', 'number'],
+                    ['5xx answers change', $pair('a.e5', 'b.e5'), 'pchange'],
+                    ['Reverse DNS confirmed', static fn (array $r): string => is_numeric(self::exportPick($r, 'a.checked'))
+                        && (int) self::exportPick($r, 'a.checked') > 0
+                        ? (int) self::exportPick($r, 'a.verified') . ' of ' . (int) self::exportPick($r, 'a.checked')
+                        : 'not checked', 'text'],
                 ],
             ],
             'crawlgap' => [
@@ -328,15 +363,11 @@ final class Seo extends Controller
                 'unit'    => 'pages',
                 'cap'     => self::GAP_PATHS,
                 'carry'   => ['engine', 'sort'],
-                'scope'   => ['period.a_label' => 'Period', 'engine_label' => 'Matching', 'sort_label' => 'Showing'],
-                'note'    => 'The pages declared crawlers fetched most with a 2xx answer, against visits that arrived on '
-                    . 'the same path from the matching channel. An empty visits cell means the path was not looked up.',
                 'columns' => [
                     ['Page', 'path', 'text'],
-                    ['Website', 'host', 'text'],
                     ['Crawler requests', 'crawl', 'number'],
-                    ['Distinct crawlers', 'crawlers', 'number'],
-                    ['Visits from the channel', 'visits', 'number'],
+                    ['Crawlers', 'crawlers', 'number'],
+                    ['Visits from the channel', 'visits', 'number', 'not checked'],
                 ],
             ],
         ];

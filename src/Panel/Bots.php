@@ -157,27 +157,21 @@ final class Bots extends Controller
      */
     public function exports(): array
     {
+        $score = static fn (array $r) => is_numeric($r['avg_score'] ?? null) ? (int) round((float) $r['avg_score']) : null;
+
         return [
             'signals' => [
                 'label'   => 'Signals fired',
                 'action'  => 'reasons',
                 'key'     => 'reasons',
                 'unit'    => 'signals',
-                'ranked'  => 'ranked by the number of sessions they fired on',
                 'cap'     => 25,
-                'note'    => 'A session fires several signals, so these counts sum to more than the '
-                    . 'session total. The population is sessions judged Bot or Likely bot.',
-                'scope'   => ['botlike' => 'Sessions judged Bot or Likely bot'],
                 'columns' => [
-                    ['Signal', 'label', 'text'],
-                    ['Signal code', 'code', 'id'],
+                    ['Signal', 'code', 'vocab', 'bot_reasons_ss'],
                     ['What it means', 'why', 'text'],
-                    ['Severity', 'severity', 'text'],
-                    ['Sessions', 'count', 'number'],
-                    ['Of which declared', 'declared', 'number'],
-                    ['Of which evasive', 'evasive', 'number'],
-                    ['Average bot score', 'avg_score', 'number'],
-                    ['Distinct IPs', 'uniq_ips', 'number'],
+                    ['Evasive', 'evasive', 'number'],
+                    ['Declared', 'declared', 'number'],
+                    ['Avg score', $score, 'number'],
                 ],
             ],
 
@@ -186,17 +180,14 @@ final class Bots extends Controller
                 'action'  => 'classes',
                 'key'     => 'classes',
                 'unit'    => 'bot classes',
-                'ranked'  => 'ranked by session count',
                 'cap'     => 20,
-                'scope'   => ['botlike' => 'Sessions judged Bot or Likely bot'],
                 'columns' => [
                     ['Class', 'class', 'vocab', 'bot_class_s'],
-                    ['Class code', 'class', 'id'],
-                    ['Declared itself', 'declared', 'bool'],
+                    ['Kind', static fn (array $r): string => !empty($r['declared']) ? 'declared' : 'evasive', 'text'],
                     ['Sessions', 'count', 'number'],
                     ['Distinct IPs', 'uniq_ips', 'number'],
                     ['Requests', 'hits', 'number'],
-                    ['Average bot score', 'avg_score', 'number'],
+                    ['Avg score', $score, 'number'],
                 ],
             ],
 
@@ -205,22 +196,14 @@ final class Bots extends Controller
                 'action'  => 'crawlers',
                 'key'     => 'crawlers',
                 'unit'    => 'crawlers',
-                'ranked'  => 'ranked by session count',
                 'cap'     => 40,
-                'note'    => 'Verified counts the sessions whose crawler claim passed forward-confirmed '
-                    . 'reverse DNS. A name with sessions and no verified ones is an impersonator. The '
-                    . 'unspecified rows at the end are not crawler names: they are User-Agents that '
-                    . 'declared themselves a crawler and named nothing recognisable.',
-                'scope'   => ['declared' => 'Sessions that declared themselves'],
                 'columns' => [
-                    ['Crawler', 'name', 'text'],
-                    ['Category', 'category', 'vocab', 'ua_bot_cat_s'],
-                    ['Category code', 'category', 'id'],
-                    ['AI crawler', 'ai', 'bool'],
+                    ['Crawler', static fn (array $r): string => (string) ($r['name'] ?? '') . (!empty($r['ai']) ? ' AI' : ''), 'text'],
+                    ['Category', static fn (array $r): string => (string) (($r['category'] ?? '') !== '' ? $r['category'] : 'other'), 'vocab', 'ua_bot_cat_s'],
                     ['Sessions', 'sessions', 'number'],
                     ['Requests', 'hits', 'number'],
-                    ['Distinct IPs', 'uniq_ips', 'number'],
-                    ['Verified sessions', 'verified', 'number'],
+                    ['IPs', 'uniq_ips', 'number'],
+                    ['Verified', static fn (array $r): string => (int) ($r['verified'] ?? 0) . ' of ' . (int) ($r['sessions'] ?? 0), 'text'],
                     ['Last seen', 'last', 'date'],
                 ],
             ],
@@ -232,8 +215,6 @@ final class Bots extends Controller
                 'key'    => 'pivot',
                 'unit'   => 'class and network type pairs',
                 'cap'    => 200,
-                'note'   => 'One record per pair. The network-type breakdown of a class is a LIMITED '
-                    . 'facet, so its rows do not add up to that class\'s session total.',
             ],
         ];
     }

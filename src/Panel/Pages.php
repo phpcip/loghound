@@ -104,21 +104,16 @@ final class Pages extends Controller
                 'label'   => 'Entry pages',
                 'action'  => 'entry',
                 'unit'    => 'entry pages',
-                'ranked'  => 'ranked by the number of visits that started on them',
                 'cap'     => Paging::MAX_PAGE,
                 'params'  => ['rows' => Paging::MAX_PAGE],
-                'total'   => 'page.total',
                 'carry'   => ['scope'],
-                'note'    => 'The entry page is the first request of the visit, taken straight from the access '
-                    . 'log. A visit with a single request has the same page as its entry and its exit, and the '
-                    . 'one-request column says how many of each row\'s landings those were.',
-                'scope'   => ['scope_label' => 'Visits counted'],
                 'columns' => [
-                    ['Path', 'path', 'text'],
-                    ['Visits that started here', 'sessions', 'number'],
-                    ['Of those, one request only', 'single', 'number'],
-                    ['Website', 'host', 'text'],
-                    ['Distinct hosts serving this path', 'hosts', 'number'],
+                    ['Page', 'path', 'text'],
+                    ['Visits', 'sessions', 'number'],
+                    ['Left straight away', static fn (array $r): string => (int) ($r['single'] ?? 0)
+                        . (!empty($r['sessions'])
+                            ? ' · ' . \Loghound\Csv::percent((float) ($r['single'] ?? 0) / (float) $r['sessions'] * 100, 0)
+                            : ''), 'text'],
                 ],
             ],
 
@@ -126,21 +121,12 @@ final class Pages extends Controller
                 'label'   => 'Exit pages',
                 'action'  => 'exit',
                 'unit'    => 'exit pages',
-                'ranked'  => 'ranked by the number of visits the log last saw on them',
                 'cap'     => Paging::MAX_PAGE,
                 'params'  => ['rows' => Paging::MAX_PAGE],
-                'total'   => 'page.total',
                 'carry'   => ['scope'],
-                'note'    => 'The exit page is the LAST REQUEST THE LOG SAW, which is not the same as the last '
-                    . 'page the visitor looked at: a page read for ten minutes and then abandoned produces no '
-                    . 'further log line, and a page served from the browser cache produces none at all. Treat '
-                    . 'this as evidence, not as a measurement.',
-                'scope'   => ['scope_label' => 'Visits counted'],
                 'columns' => [
-                    ['Path', 'path', 'text'],
-                    ['Visits the log last saw here', 'sessions', 'number'],
-                    ['Website', 'host', 'text'],
-                    ['Distinct hosts serving this path', 'hosts', 'number'],
+                    ['Page', 'path', 'text'],
+                    ['Visits', 'sessions', 'number'],
                 ],
             ],
 
@@ -148,22 +134,13 @@ final class Pages extends Controller
                 'label'   => 'Trending pages',
                 'action'  => 'trending',
                 'unit'    => 'paths',
-                'ranked'  => 'ranked by the change against the equivalent window immediately before',
                 'cap'     => Paging::MAX_PAGE,
                 'params'  => ['rows' => Paging::MAX_PAGE],
-                'total'   => 'page.total',
-                'note'    => 'The baseline is the window of the same length immediately before the selected '
-                    . 'one. The selected window runs up to the moment the file was taken while the baseline is '
-                    . 'complete, so a period that has only just begun makes everything look down. Candidates '
-                    . 'are the busiest paths across both windows, so a path with very little traffic in either '
-                    . 'is absent regardless of how much it grew.',
                 'columns' => [
-                    ['Path', 'path', 'text'],
-                    ['Visits this period', 'now', 'number'],
-                    ['Visits the period before', 'prev', 'number'],
-                    ['Change', 'delta', 'number'],
-                    ['Website', 'host', 'text'],
-                    ['Distinct hosts serving this path', 'hosts', 'number'],
+                    ['Page', 'path', 'text'],
+                    ['This period', 'now', 'number'],
+                    ['Before', 'prev', 'number'],
+                    ['Change', static fn (array $r): array => [$r['now'] ?? null, $r['prev'] ?? null], 'change'],
                 ],
             ],
         ];

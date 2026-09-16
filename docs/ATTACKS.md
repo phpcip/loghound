@@ -444,9 +444,10 @@ looking like it merely narrowed.
 
 ### Exports
 
-`patterns`, `actors`, `requests` and the cross-tab are all exportable as CSV. The `requests`
-file carries the full path *and* query string, because that is the row you forward to somebody
-else. Both are attacker-chosen text: they are neutralised against spreadsheet formula execution
+`patterns`, `actors`, `requests` and the cross-tab are all exportable as CSV, with the columns
+and values of the table on screen. The `requests` file's Page column carries the method, the full
+path *and* query string, because that is the row you forward to somebody else. Both are
+attacker-chosen text: they are neutralised against spreadsheet formula execution
 on the way into the file, and **you should not paste one into a shell**.
 
 ---

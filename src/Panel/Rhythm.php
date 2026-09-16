@@ -99,22 +99,18 @@ final class Rhythm extends Controller
                 'unit'    => 'hour-of-week cells',
                 'cap'     => 200,
                 'carry'   => ['pop'],
-                'note'    => 'One record per hour of the week. "Times observed" is how often that hour actually '
-                    . 'occurred inside the selected window — a nine-day window holds one Monday at 09:00 and two '
-                    . 'Wednesdays at 09:00 — and the average is the total divided by it. An hour that never '
-                    . 'occurred carries a zero observation count and no average, which is not the same as no '
-                    . 'traffic. Times are in the panel\'s display timezone, not UTC.',
-                'scope'   => [
-                    'population_label' => 'Population',
-                    'timezone'         => 'Timezone the hours are in',
-                    'hours_observed'   => 'Hours of observation in the window',
-                ],
+                'prepare' => static function (array $payload, array $rows): array {
+                    $rows = array_values(array_filter($rows, static fn ($c): bool =>
+                        (int) ($c['observed'] ?? 0) > 0 && (int) ($c['total'] ?? 0) > 0));
+                    usort($rows, static fn ($a, $b): int => (float) ($b['avg'] ?? 0) <=> (float) ($a['avg'] ?? 0));
+                    return $rows;
+                },
                 'columns' => [
-                    ['Day', 'day', 'text'],
-                    ['Hour', 'hour', 'number'],
+                    ['Hour of the week', static fn (array $c): string => (string) ($c['day'] ?? '') . ' '
+                        . str_pad((string) (int) ($c['hour'] ?? 0), 2, '0', STR_PAD_LEFT) . ':00', 'text'],
+                    ['Average visits', static fn (array $c) => self::rounded($c['avg'] ?? null, 1), 'number'],
                     ['Visits in all', 'total', 'number'],
                     ['Times observed', 'observed', 'number'],
-                    ['Average per occurrence', 'avg', 'number'],
                 ],
             ],
         ];

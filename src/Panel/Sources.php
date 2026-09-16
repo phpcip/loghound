@@ -83,14 +83,8 @@ final class Sources extends Controller
                 'unit'    => 'channels',
                 'cap'     => 50,
                 'carry'   => ['pop'],
-                'note'    => 'A referrer is a header the client chose to send, so every row is a claim rather '
-                    . 'than a measurement. "Direct" is the residual — no referrer arrived at all — which covers '
-                    . 'bookmarks, typed addresses, apps that open links without one, and any browser that '
-                    . 'stripped it. It is not a count of people who typed your name in.',
-                'scope'   => ['population_label' => 'Population'],
                 'columns' => [
-                    ['Channel', 'label', 'text'],
-                    ['Stored value', 'value', 'id'],
+                    ['Channel', 'value', 'vocab', 'referer_type_s'],
                     ['Visits', 'sessions', 'number'],
                     ['What it means', 'why', 'text'],
                 ],
@@ -100,15 +94,9 @@ final class Sources extends Controller
                 'label'   => 'Referring sites',
                 'action'  => 'referrers',
                 'unit'    => 'referring sites',
-                'ranked'  => 'ranked by the number of visits they sent',
                 'cap'     => Paging::MAX_PAGE,
                 'params'  => ['rows' => Paging::MAX_PAGE],
-                'total'   => 'page.total',
                 'carry'   => ['pop'],
-                'note'    => 'The host out of the referrer header, which the client chose to send. A visit with '
-                    . 'no referrer at all is absent from this table entirely rather than appearing as a blank '
-                    . 'row; the channel table above is where that population is counted.',
-                'scope'   => ['population_label' => 'Population'],
                 'columns' => [
                     ['Referring site', 'host', 'text'],
                     ['Visits', 'sessions', 'number'],

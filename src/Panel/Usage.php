@@ -116,6 +116,31 @@ final class Usage extends Controller
      */
     public function exports(): array
     {
+        $days = static function ($v): string {
+            if (!is_numeric($v)) {
+                return '';
+            }
+            $v = (float) $v;
+            if ($v < 1) {
+                $hours = max(1, (int) round($v * 24));
+                return $hours . ($hours === 1 ? ' hour' : ' hours');
+            }
+            return ($v < 10 ? number_format($v, 1, '.', '') : (string) (int) round($v)) . ' days';
+        };
+        $mb = static function ($v): string {
+            if (!is_numeric($v)) {
+                return '';
+            }
+            $v = (float) $v;
+            if ($v >= 1048576) {
+                return number_format($v / 1048576, 1, '.', '') . ' TB';
+            }
+            if ($v >= 1024) {
+                return number_format($v / 1024, 1, '.', '') . ' GB';
+            }
+            return ($v >= 10 ? (string) (int) round($v) : number_format($v, 1, '.', '')) . ' MB';
+        };
+
         return [
             'plan' => [
                 'label'   => 'Plan usage by index',
@@ -123,35 +148,16 @@ final class Usage extends Controller
                 'key'     => 'cores',
                 'unit'    => 'indexes',
                 'cap'     => 50,
-                'note'    => 'Bandwidth is the traffic served since the 1st and is the one limit that cannot '
-                    . 'be reclaimed by deleting anything. An empty figure means Opensolr has not reported '
-                    . 'usage for that index yet; it is not zero. The projected window is an estimate from '
-                    . 'observed growth and is a different kind of number from the span actually held.',
-                'scope'   => [
-                    'retention_days' => 'Age limit in days (privacy.retention_days)',
-                    'rollup_forever' => 'Daily rollups kept for ever',
-                    'managed'        => 'Indexes managed by Opensolr',
-                ],
                 'columns' => [
-                    ['Index', 'core', 'id'],
+                    ['Index', 'core', 'text'],
                     ['Role', 'role', 'text'],
-                    ['Bandwidth used (MB)', 'bandwidth.used_mb', 'number'],
-                    ['Plan bandwidth (MB)', 'bandwidth.limit_mb', 'number'],
-                    ['Bandwidth used (percent)', 'bandwidth.percent', 'number'],
-                    ['Warning threshold (percent)', 'bandwidth.warn_at', 'number'],
-                    ['Bandwidth level', 'bandwidth.level', 'text'],
-                    ['Span held now (days, measured)', 'span.days', 'number'],
-                    ['Oldest document held', 'span.oldest', 'date'],
-                    ['Newest document held', 'span.newest', 'date'],
-                    ['Projected plan window (days, estimated)', 'window.plan_days', 'number'],
-                    ['Index size (MB)', 'window.size_mb', 'number'],
-                    ['Plan disk quota (MB)', 'window.max_size_mb', 'number'],
-                    ['Observed ingest (MB per day)', 'window.ingest_mb_day', 'number'],
-                    ['Index size is projected rather than reported', 'window.estimated', 'bool'],
-                    ['Deleting for size is switched on', 'window.enabled', 'bool'],
-                    ['Retention limit in effect', 'window.limited_by', 'text'],
-                    ['Quotas over limit (Opensolr is blocking this index)', 'blocked.over', 'text'],
-                    ['Disk used against the plan quota (ratio)', 'window.disk_ratio', 'number'],
+                    ['Held now', static fn (array $r): string => $days(self::exportPick($r, 'span.days')), 'text'],
+                    ['Oldest document', static fn (array $r) => self::exportPick($r, 'span.oldest'), 'date'],
+                    ['Plan window', static fn (array $r): string => $days(self::exportPick($r, 'window.plan_days')), 'text'],
+                    ['Ingest', static fn (array $r): string => is_numeric(self::exportPick($r, 'window.ingest_mb_day'))
+                        ? $mb(self::exportPick($r, 'window.ingest_mb_day')) . '/day'
+                        : '', 'text'],
+                    ['Index size', static fn (array $r): string => $mb(self::exportPick($r, 'window.size_mb')), 'text'],
                 ],
             ],
         ];

@@ -69,6 +69,21 @@ final class Performance extends Controller
 
 
     /**
+     * What each status code means, in the words the status table prints (views/performance.js).
+     *
+     * @var array<int,string>
+     */
+    private const STATUS_MEANING = [
+        200 => 'OK', 201 => 'Created', 204 => 'No content',
+        301 => 'Moved permanently', 302 => 'Found', 304 => 'Not modified (cache hit)',
+        400 => 'Bad request', 401 => 'Unauthorised', 403 => 'Forbidden', 404 => 'Not found',
+        405 => 'Method not allowed', 408 => 'Request timeout', 413 => 'Payload too large',
+        429 => 'Too many requests',
+        500 => 'Internal server error', 502 => 'Bad gateway', 503 => 'Service unavailable',
+        504 => 'Gateway timeout',
+    ];
+
+    /**
      * The two tables on this view.
      *
      * BOTH CARRY THE TWO SCOPE SELECTS, and that is the load-bearing part. `kind` and `who` live
@@ -89,41 +104,23 @@ final class Performance extends Controller
      */
     public function exports(): array
     {
-        $scope = [
-            'filters_ignored' => ['Filters this plane could not honour', static function ($v): string {
-                return is_array($v) && $v !== [] ? implode('; ', $v) : 'None';
-            }],
-        ];
-
         return [
             'paths' => [
                 'label'   => 'Path latency',
                 'action'  => 'paths',
                 'key'     => 'paths',
                 'unit'    => 'paths',
-                'ranked'  => 'ranked by request count',
                 'cap'     => 100,
                 'params'  => ['limit' => 100],
                 'carry'   => ['kind', 'who'],
-                'note'    => 'Durations are MICROSECONDS, as the access log records them. Percentiles cover '
-                    . 'the requests on that path that carry a duration, which is the timed column — a server '
-                    . 'not logging %D leaves it at zero and the percentiles empty. Unlike a Top pages export, '
-                    . 'this reads the hits index, so Loghound\'s own beacon and collector requests are present.',
-                'scope'   => $scope + ['timed' => 'Matched requests carrying a duration'],
                 'columns' => [
                     ['Path', 'path', 'text'],
-                    ['Website', 'host', 'text'],
-                    ['Distinct hosts serving this path', 'hosts', 'number'],
                     ['Requests', 'requests', 'number'],
-                    ['Requests with a duration', 'timed', 'number'],
-                    ['p50 (microseconds)', 'p50', 'number'],
-                    ['p95 (microseconds)', 'p95', 'number'],
-                    ['p99 (microseconds)', 'p99', 'number'],
-                    ['Mean (microseconds)', 'avg', 'number'],
-                    ['Slowest (microseconds)', 'max', 'number'],
-                    ['Mean bytes', 'bytes', 'number'],
-                    ['5xx responses', 'errors', 'number'],
-                    ['404 responses', 'notfound', 'number'],
+                    ['p50', 'p50', 'micros'],
+                    ['p95', 'p95', 'micros'],
+                    ['p99', 'p99', 'micros'],
+                    ['4xx', static fn (array $r) => empty($r['notfound']) ? null : $r['notfound'], 'number'],
+                    ['5xx', static fn (array $r) => empty($r['errors']) ? null : $r['errors'], 'number'],
                 ],
             ],
 
@@ -132,12 +129,11 @@ final class Performance extends Controller
                 'action'  => 'status',
                 'key'     => 'statuses',
                 'unit'    => 'status codes',
-                'ranked'  => 'ranked by request count',
                 'cap'     => 20,
                 'carry'   => ['kind', 'who'],
-                'scope'   => $scope,
                 'columns' => [
                     ['Status', 'status', 'number'],
+                    ['Meaning', static fn (array $r): string => self::STATUS_MEANING[(int) ($r['status'] ?? 0)] ?? '', 'text'],
                     ['Requests', 'count', 'number'],
                 ],
             ],

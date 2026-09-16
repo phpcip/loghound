@@ -108,28 +108,18 @@ final class Hosts extends Controller
                 'label'   => 'Traffic by virtual host',
                 'action'  => 'compare',
                 'unit'    => 'virtual hosts',
-                'ranked'  => 'ranked by session count',
                 'cap'     => self::MAX_HOSTS,
-                'note'    => 'The host selector is deliberately NOT applied to this table: it compares '
-                    . 'every host side by side, which is what the view is for. Every other filter and the '
-                    . 'time range are applied. The five population columns are mutually exclusive and add '
-                    . 'up to the session count on each row.',
                 'columns' => [
-                    ['Host', 'host', 'id'],
+                    ['Host', static fn (array $r): string => (string) ($r['host'] ?? '') . (empty($r['beacon_only'])
+                        ? ''
+                        : (!empty($r['single_plane']) ? ' (beacon only)' : ' (part beacon only)')), 'text'],
                     ['Sessions', 'sessions', 'number'],
                     ['Humans', 'counts.human', 'number'],
                     ['Unknown', 'counts.unknown', 'number'],
-                    ['Declared crawlers', 'counts.declared', 'number'],
+                    ['Evasive', 'counts.evasive', 'number'],
                     ['AI crawlers', 'counts.ai', 'number'],
-                    ['Evasive bots', 'counts.evasive', 'number'],
-                    ['Automation share (percent)', 'bot_share', 'number'],
-                    ['Evasive share (percent)', 'evasive_share', 'number'],
-                    ['Requests', 'hits', 'number'],
-                    ['Pageviews', 'pages', 'number'],
-                    ['Bytes', 'bytes', 'number'],
-                    ['Beacon-only sessions', 'beacon_only', 'number'],
-                    ['Seen on one transport plane only', 'single_plane', 'bool'],
-                    ['Seen on both transport planes', 'mixed_planes', 'bool'],
+                    ['Declared', 'counts.declared', 'number'],
+                    ['Automation', 'bot_share', 'pct', 1],
                 ],
             ],
         ];

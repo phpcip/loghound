@@ -85,18 +85,8 @@ final class Searches extends Controller
                 'label'   => 'Search terms',
                 'action'  => 'terms',
                 'unit'    => 'search terms',
-                'ranked'  => 'ranked by the number of visits that searched for them',
                 'cap'     => Paging::MAX_PAGE,
                 'params'  => ['rows' => Paging::MAX_PAGE],
-                'total'   => 'page.total',
-                'note'    => 'Counted as VISITS that searched for the term at least once, not as the number '
-                    . 'of searches: somebody who ran the same search six times counts once. Terms are '
-                    . 'collected only from the query parameters this installation has been told to read.',
-                'scope'   => [
-                    'searched'   => 'Visits that ran a search',
-                    'configured' => ['Query parameters being read', static fn ($v): string =>
-                        is_array($v) ? implode('; ', array_map('strval', $v)) : ''],
-                ],
                 'columns' => [
                     ['Parameter', 'param', 'text'],
                     ['Search term', 'term', 'text'],
@@ -108,19 +98,14 @@ final class Searches extends Controller
                 'label'   => 'Trending searches',
                 'action'  => 'trending',
                 'unit'    => 'search terms',
-                'ranked'  => 'ranked by the change against the equivalent window immediately before',
                 'cap'     => Paging::MAX_PAGE,
                 'params'  => ['rows' => Paging::MAX_PAGE],
-                'total'   => 'page.total',
-                'note'    => 'The baseline is the window of the same length immediately before the selected '
-                    . 'one. The selected window runs up to the moment the file was taken while the baseline '
-                    . 'is complete, so a period that has only just begun makes everything look down.',
                 'columns' => [
                     ['Parameter', 'param', 'text'],
                     ['Search term', 'term', 'text'],
-                    ['Visits this period', 'now', 'number'],
-                    ['Visits the period before', 'prev', 'number'],
-                    ['Change', 'delta', 'number'],
+                    ['This period', 'now', 'number'],
+                    ['Before', 'prev', 'number'],
+                    ['Change', static fn (array $r): array => [$r['now'] ?? null, $r['prev'] ?? null], 'change'],
                 ],
             ],
         ];

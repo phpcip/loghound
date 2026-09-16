@@ -90,20 +90,26 @@ final class Networks extends Controller
      */
     public function exports(): array
     {
-        $mix = [
-            ['Sessions', 'sessions', 'number'],
-            ['Distinct IPs', 'uniq_ips', 'number'],
-            ['Requests', 'hits', 'number'],
-            ['Bytes', 'bytes', 'number'],
-            ['Average bot score', 'score', 'number'],
-            ['Human sessions', 'human', 'number'],
-            ['Declared crawler sessions', 'declared', 'number'],
-            ['Evasive bot sessions', 'evasive', 'number'],
-        ];
-
-        $caveat = 'Distinct-IP counts come from Solr\'s unique(), which is exact for small counts and '
-            . 'approximate for large ones. The three population columns are counted separately and do '
-            . 'not have to sum to the session total: Unknown sessions are in neither.';
+        $mix = ['Mix', static function (array $r): string {
+            $human = (int) ($r['human'] ?? 0);
+            $declared = (int) ($r['declared'] ?? 0);
+            $evasive = (int) ($r['evasive'] ?? 0);
+            $unknown = (int) ($r['sessions'] ?? 0) - $human - $declared - $evasive;
+            $parts = ['Humans ' . $human];
+            if ($declared > 0) {
+                $parts[] = 'Declared crawlers ' . $declared;
+            }
+            if ($evasive > 0) {
+                $parts[] = 'Evasive bots ' . $evasive;
+            }
+            if ($unknown > 0) {
+                $parts[] = 'Unknown ' . $unknown;
+            }
+            return implode(' · ', $parts);
+        }, 'text'];
+        $type = static fn (array $r): string => ($r['as_type'] ?? '') !== ''
+            ? Vocabulary::label('as_type_s', (string) $r['as_type'])
+            : '';
 
         return [
             'asns' => [
@@ -111,17 +117,17 @@ final class Networks extends Controller
                 'action'  => 'asns',
                 'key'     => 'asns',
                 'unit'    => 'autonomous systems',
-                'ranked'  => 'ranked by session count',
                 'cap'     => 200,
                 'params'  => ['limit' => 200],
-                'note'    => $caveat,
-                'columns' => array_merge([
-                    ['Network', 'org', 'text'],
-                    ['ASN', 'asn', 'id'],
-                    ['Network type', 'as_type', 'vocab', 'as_type_s'],
-                    ['Network type code', 'as_type', 'id'],
-                    ['Country', 'country', 'id'],
-                ], $mix),
+                'columns' => [
+                    ['Network', static fn (array $r): string => ($r['org'] ?? '') !== '' ? (string) $r['org'] : 'AS' . ($r['asn'] ?? ''), 'text'],
+                    ['ASN', static fn (array $r): string => 'AS' . ($r['asn'] ?? ''), 'text'],
+                    ['Network type', $type, 'text'],
+                    ['Sessions', 'sessions', 'number'],
+                    ['IPs', 'uniq_ips', 'number'],
+                    ['Requests', 'hits', 'number'],
+                    $mix,
+                ],
             ],
 
             'netnames' => [
@@ -129,18 +135,17 @@ final class Networks extends Controller
                 'action'  => 'netnames',
                 'key'     => 'netnames',
                 'unit'    => 'netblocks',
-                'ranked'  => 'ranked by session count',
                 'cap'     => 200,
                 'params'  => ['limit' => 200],
-                'note'    => $caveat,
-                'columns' => array_merge([
-                    ['Netblock', 'netname', 'id'],
+                'columns' => [
+                    ['Netblock', 'netname', 'text'],
                     ['Network', 'org', 'text'],
-                    ['ASN', 'asn', 'id'],
-                    ['Network type', 'as_type', 'vocab', 'as_type_s'],
-                ], $mix, [
-                    ['Distinct fingerprints', 'uniq_fps', 'number'],
-                ]),
+                    ['Network type', $type, 'text'],
+                    ['Sessions', 'sessions', 'number'],
+                    ['IPs', 'uniq_ips', 'number'],
+                    ['Prints', 'uniq_fps', 'number'],
+                    $mix,
+                ],
             ],
 
             'countries' => [
@@ -148,16 +153,15 @@ final class Networks extends Controller
                 'action'  => 'geo',
                 'key'     => 'countries',
                 'unit'    => 'countries',
-                'ranked'  => 'ranked by session count',
                 'cap'     => 250,
-                'note'    => $caveat . ' Geolocating a datacentre address says where the machine is, not '
-                    . 'where its operator is. The cities column is the five busiest per country, not all '
-                    . 'of them.',
-                'columns' => array_merge([
-                    ['Country', 'country', 'id'],
-                ], $mix, [
-                    ['Busiest cities', 'cities', 'pairs', 'city'],
-                ]),
+                'columns' => [
+                    ['Country', 'country', 'country'],
+                    ['Sessions', 'sessions', 'number'],
+                    ['IPs', 'uniq_ips', 'number'],
+                    ['Human', 'human', 'number'],
+                    ['Evasive', 'evasive', 'number'],
+                    ['Top cities', 'cities', 'pairs', 'city'],
+                ],
             ],
 
             'pivot' => [
@@ -167,8 +171,6 @@ final class Networks extends Controller
                 'key'    => 'pivot',
                 'unit'   => 'network type and verdict pairs',
                 'cap'    => 200,
-                'note'   => 'One record per pair. The verdict breakdown of a network type is a LIMITED '
-                    . 'facet, so its rows do not add up to that type\'s session total.',
             ],
         ];
     }

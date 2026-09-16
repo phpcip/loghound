@@ -360,51 +360,6 @@ abstract class OpensolrView extends Controller implements Sections
     }
 
     /**
-     * The facet layer an export's preamble describes on this plane.
-     *
-     * THE REQUEST-LOG LAYER, not the sessions one, and the override is load-bearing rather than
-     * tidy. The two planes have disjoint field names — `bot_verdict_s` and `country_s` exist on
-     * Loghound's own cores and nowhere on the platform's analytics shards, `path` and
-     * `http_status` the other way round — so a preamble built from the sessions layer would list
-     * filters this file was never scoped by, and would omit every filter it actually was.
-     */
-    protected function exportFacets(): Facets
-    {
-        return $this->logFacets();
-    }
-
-    /**
-     * The scope lines every export on an Opensolr view carries.
-     *
-     * Three things the filter list alone does not say: which index was read, which outcome slice
-     * was in force, and which sidebar filters this plane could not honour. The last is the one
-     * that matters most — a verdict or a country chip is real on Loghound's own views and inert
-     * here, because the platform records who called and never what they are — and the views
-     * already tell the reader through `ignored`, so the file has to as well.
-     *
-     * The outcome is spoken through OUTCOMES rather than printed as its stored key, because a
-     * stored slug is never shown to a person in this product.
-     *
-     * @return array<string,mixed>
-     */
-    protected function logExportScope(): array
-    {
-        return [
-            'core'    => 'Opensolr index',
-            'outcome' => ['Outcome slice', static function ($value): string {
-                return is_string($value) && isset(self::OUTCOMES[$value])
-                    ? self::OUTCOMES[$value]
-                    : 'All requests';
-            }],
-            'ignored' => ['Filters this plane could not honour', static function ($value): string {
-                return is_array($value) && $value !== [] ? implode('; ', $value) : 'None';
-            }],
-            'requests' => 'Requests matched by this scope',
-            'note'     => 'Why this file may be empty',
-        ];
-    }
-
-    /**
      * Is this a value the filter machinery will carry at all?
      *
      * THE FAILURE THIS PREVENTS is not an injection — OpensolrLog::termsFq() quotes and escapes

@@ -107,10 +107,8 @@ final class Indexes extends OpensolrView
                 'val_head' => 'Requests',
                 'control'  => 'Handlers CSV',
                 'unit'     => 'handlers',
-                'ranked'   => 'ranked by request count',
                 'cap'      => 30,
                 'carry'    => ['core', 'outcome'],
-                'scope'    => $this->logExportScope(),
             ],
 
             'statuses' => [
@@ -122,11 +120,8 @@ final class Indexes extends OpensolrView
                 'val_head' => 'Requests',
                 'control'  => 'Statuses CSV',
                 'unit'     => 'status codes',
-                'ranked'   => 'ranked by request count',
                 'cap'      => 30,
                 'carry'    => ['core', 'outcome'],
-                'note'     => 'Anything other than 200 is the index refusing or failing.',
-                'scope'    => $this->logExportScope(),
             ],
 
         ];

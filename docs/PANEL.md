@@ -810,7 +810,7 @@ five), and `atk_custom_pattern` is decisive. Patterns load when the reader start
 loads them on first use, so the live page flags a line exactly as ingest will.
 
 **CSV, both directions.** Both cards, and the live-exclusions dialog, export through the `custom`
-export shape and import through `Csv::readTable()`, which skips the provenance preamble, finds the
+export shape and import through `Csv::readTable()`, which skips anything before the header, finds the
 header row by name, maps columns case-insensitively and undoes the export's formula neutralisation.
 The browser reads the file and posts its text in a hidden `csv` field on a form that carries its own
 token, so no upload reaches the server and `open_basedir` never matters; the server refuses more than
