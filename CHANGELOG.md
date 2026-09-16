@@ -7,6 +7,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.7.0] — 2026-09-16
+
+### Changed
+
+- **A CSV export is the table it was taken from.** The header row and the rows, with the columns
+  the table shows and the values as they read on screen: names instead of stored codes, country
+  names, Yes and No, time on site as a clock, durations, sizes and percentages as the table prints
+  them, and the table's own words where a value is absent. The provenance block at the top, the
+  stored field names, the raw milliseconds and the extra code columns are gone.
+
+- **A cross-tab exports one row per pair** in the card's words: the row value and its total, the
+  breakdown value, its count and its share of the row.
+
+### Fixed
+
+- **SEO Tools applies a period again when the comparison dates are hidden.** A comparison date
+  derived before the start of the history no longer blocks Apply.
+
+---
+
 ## [1.6.3] — 2026-09-15
 
 ### Changed
