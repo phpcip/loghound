@@ -2642,8 +2642,8 @@ button.danger:hover { background: var(--bad); border-color: var(--bad); color: v
        are desk work — a search box above a table that is already the whole screen, and a
        five-way analysis of engagement — so on a phone they are noise in front of the visits.
        The one number worth carrying is the bounce rate itself, which views/sessions.js prints
-       above the table instead. */
-    #se-search-card,
+       above the table instead. The search card's rule moved to the coarse-pointer / 900px
+       block below (2026-09-18): it is a desk control, so a tablet does without it too. */
     #se-bounce-card { display: none; }
 }
 
@@ -4746,6 +4746,12 @@ details > summary:focus-visible { outline: 2px solid var(--accent); outline-offs
 @media (pointer: coarse), (max-width: 900px) {
     .fold > summary { min-height: var(--lh-tap); }
     .filepath { font-size: 16px; }
+
+    /* THE SESSION SEARCH CARD IS A DESK CONTROL (2026-09-18). It came off the page on
+       2026-09-12 because it pushed the visit list below a phone's fold; on a desk it costs one
+       row. The card is rendered on every device — its #se-q and #se-sort feed the CSV export —
+       and hidden here, under the same query the rest of the phone treatment already uses. */
+    #se-search-card { display: none; }
 }
 
 /* ---------------------------------------------------------------------------

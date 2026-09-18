@@ -1585,6 +1585,43 @@ final class Sessions extends Controller
     }
 
     /**
+     * The search form.
+     *
+     * A GET form, so every search is a bookmarkable URL and the view works with JavaScript
+     * disabled. The page's state — duration and every applied filter — rides along as hidden
+     * fields from Layout::hiddenFields(), the same fields the top bar submits, so a search
+     * cannot lose a filter; `q`, `sort` and `start` are left out because this form owns the
+     * first two and a new query starts on page one.
+     *
+     * The ordering is a hidden field rather than the select it used to be: since 2026-09-13 the
+     * order is chosen on the column headers and remembered per card, so a second control for
+     * it would be two interfaces onto one setting. The field stays because the CSV export reads
+     * #se-sort.
+     */
+    private function searchCard(): void
+    {
+        self::cardOpen(
+            'se-search',
+            '01',
+            'Search',
+            'Matched across path, User-Agent, AS organisation, netname, reverse DNS, city and country.'
+        );
+
+        echo '<form class="searchbar" method="get" action="" id="se-form">';
+        echo Layout::hiddenFields(['v' => 'sessions'], ['q', 'sort', 'start']);
+        echo '<label class="sr-only" for="se-q">Search sessions</label>';
+        echo '<input type="search" id="se-q" name="q" '
+            . 'placeholder="Search paths, User-Agents, organisations, netnames, cities" '
+            . 'value="' . Security::esc(self::text('q', 200)) . '" autocomplete="off" spellcheck="false">';
+        echo '<input type="hidden" id="se-sort" name="sort" value="'
+            . Security::esc(self::param('sort', array_keys(Query::sorts()), 'recent')) . '">';
+        echo '<button type="submit" class="primary">Search</button>';
+        echo '</form>';
+
+        self::cardEnd();
+    }
+
+    /**
      * The static skeleton.
      *
      * The session detail used to be a third card at the bottom of this page, which meant
@@ -1594,17 +1631,15 @@ final class Sessions extends Controller
      */
     public function body(): void
     {
-        /* THE SEARCH AND BOUNCE CARDS ARE GONE FROM THIS VIEW. Both sat above the fold and
-           pushed the thing the page exists for — the list of visits — below it. The bounce
-           figure is not lost: it is stated in the results caption, in one line, from the same
-           facet the card read. The search box survives as the two hidden inputs below, because
-           the CSV export reads #se-q and #se-sort to carry the query and ordering into the
-           file; deleting them outright would have quietly stripped both from every export. */
-        echo '<form id="se-form" hidden>';
-        echo '<input type="hidden" id="se-q" name="q" value="' . Security::esc(self::text('q', 200)) . '">';
-        echo '<input type="hidden" id="se-sort" name="sort" value="'
-            . Security::esc(self::param('sort', array_keys(Query::sorts()), 'recent')) . '">';
-        echo '</form>';
+        /* THE SEARCH CARD IS BACK, ON A DESKTOP ONLY (2026-09-18). It left on 2026-09-12 because
+           it pushed the visit list below the fold — a phone-sized fold. On a desk it costs one
+           row, and it is the one control that answers "where did this address come from"
+           without walking the filter rail. It renders unconditionally; panel.css hides the card
+           under the coarse-pointer / 900px query the rest of the phone treatment already uses,
+           so the phone keeps the fold it was given. #se-q and #se-sort stay inside it because
+           the CSV export reads both to carry the query and the ordering into the file. The
+           bounce card is still gone: its figure is in the results caption. */
+        $this->searchCard();
 
         /* ONE FILTER PANEL, AND IT IS THE SHARED ONE (2026-09-12). This view used to carry a
            rail of its own beside the table — the same renderFacetPanel() the shared panel uses,
