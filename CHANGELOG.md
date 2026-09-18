@@ -7,6 +7,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.8.0] — 2026-09-18
+
+### Added
+
+- **The search box is back on the session explorer, on a desk.** The same free-text search as
+  before, matched across path, User-Agent, AS organisation, netname, reverse DNS, city and
+  country, with the duration and every applied filter carried along. A phone or tablet does
+  without it, so the visit list keeps the fold it was given.
+
+### Changed
+
+- **The visit list sits right under the search bar** instead of a card's width below it.
+
+---
+
 ## [1.7.0] — 2026-09-16
 
 ### Changed
