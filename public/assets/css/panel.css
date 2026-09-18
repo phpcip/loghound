@@ -1332,6 +1332,13 @@ tr.members > td { padding: 0; background: var(--band); }
 .searchbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
 .searchbar input[type="search"] { flex: 1 1 340px; min-width: 0; }
 
+/* THE VISITS SIT RIGHT UNDER THE SEARCH BAR (2026-09-18). The explorer is two cards, and the
+   28px the view puts between cards plus the bar's own 10px read as a hole between a control
+   and the table it drives. The view's gap is dropped only where the search card is present,
+   and the bar keeps 4px so the next heading does not touch the input. */
+.view:has(> #se-search-card) { gap: 0; }
+#se-search-card .searchbar { margin-bottom: 4px; }
+
 /* THE SESSION EXPLORER'S OWN RAIL IS GONE (2026-09-12). It was a second implementation of the
    shared filter panel — same renderFacetPanel(), its own endpoint, its own fold buttons — so the
    two drew side by side whenever the shared panel was open and could disagree about what was in
