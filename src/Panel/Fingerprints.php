@@ -225,7 +225,7 @@ final class Fingerprints extends Controller
                         'type'  => 'range',
                         'field' => 'ts_start',
                         'start' => $this->range['start'],
-                        'end'   => 'NOW',
+                        'end'   => Query::filterEnd($this->range),
                         'gap'   => Query::sparkGap($this->range),
                     ],
                     'browser' => ['type' => 'terms', 'field' => 'browser_s', 'limit' => 1],

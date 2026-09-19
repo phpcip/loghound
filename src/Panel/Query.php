@@ -288,7 +288,7 @@ final class Query
      */
     public static function ranges(): array
     {
-        return [
+        return self::calendarDays() + [
             '1h'  => ['label' => 'Last hour',    'short' => '1H',  'start' => 'NOW-1HOUR/MINUTE',  'secs' => 3600,    'gap' => '+2MINUTE', 'fmt' => 'time'],
             '3h'  => ['label' => 'Last 3 hours', 'short' => '3H',  'start' => 'NOW-3HOUR/MINUTE',  'secs' => 10800,   'gap' => '+5MINUTE', 'fmt' => 'time'],
             '6h'  => ['label' => 'Last 6 hours', 'short' => '6H',  'start' => 'NOW-6HOUR/MINUTE',  'secs' => 21600,   'gap' => '+15MINUTE','fmt' => 'time'],
@@ -300,8 +300,62 @@ final class Query
         ];
     }
 
+    /** The zone calendar-day ranges are cut in; see setTimezone(). */
+    private static string $zone = 'UTC';
+
     /**
-     * Resolve a caller-supplied range token to a range definition, defaulting to 24h.
+     * Set the zone Today, Yesterday and 2 days ago start their midnight in (`ui.timezone`).
+     *
+     * Called once by public/index.php. An unknown name falls back to UTC, as Period does.
+     */
+    public static function setTimezone(string $name): void
+    {
+        self::$zone = Period::timezone($name)->getName();
+    }
+
+    /**
+     * Today, Yesterday and 2 days ago, as calendar days in the panel's timezone.
+     *
+     * Bounds are absolute UTC instants computed here, which Solr takes as date math directly.
+     * Today runs from local midnight to now, with the end rounded to the minute like the rolling
+     * ranges (see rangeEnd()); the two past days are closed intervals ending one millisecond
+     * before the next midnight, so a document at exactly 00:00 belongs to one day only. `secs`
+     * is the real length of the day, which differs from 86400 on a DST change. `baseline` names
+     * the window previousRangeFq() compares against, for the cards that print it.
+     *
+     * @return array<string,array<string,mixed>>
+     */
+    private static function calendarDays(): array
+    {
+        $tz = new \DateTimeZone(self::$zone);
+        $midnight = (new \DateTimeImmutable('now', $tz))->setTime(0, 0);
+        $iso = static fn (int $ts, int $ms = 0): string => gmdate('Y-m-d\\TH:i:s', $ts) . ($ms > 0 ? '.' . $ms : '') . 'Z';
+
+        $out = [];
+        $defs = [
+            'today'     => ['Today', 0],
+            'yesterday' => ['Yesterday', 1],
+            '2daysago'  => ['2 days ago', 2],
+        ];
+        foreach ($defs as $key => [$label, $back]) {
+            $start = $back === 0 ? $midnight : $midnight->modify('-' . $back . ' day');
+            $next  = $start->modify('+1 day');
+            $out[$key] = [
+                'label'    => $label,
+                'short'    => $label,
+                'start'    => $iso($start->getTimestamp()),
+                'end'      => $back === 0 ? 'NOW/MINUTE+1MINUTE' : $iso($next->getTimestamp() - 1, 999),
+                'secs'     => $next->getTimestamp() - $start->getTimestamp(),
+                'gap'      => '+1HOUR',
+                'fmt'      => 'hour',
+                'baseline' => 'the day before',
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Resolve a caller-supplied range token to a range definition, defaulting to Today.
      *
      * Anything not in the table is silently replaced with the default rather than
      * rejected, because a bad `range` in a bookmarked URL should show a dashboard, not
@@ -310,7 +364,7 @@ final class Query
     public static function range(?string $token): array
     {
         $ranges = self::ranges();
-        $key = is_string($token) && isset($ranges[$token]) ? $token : '24h';
+        $key = is_string($token) && isset($ranges[$token]) ? $token : 'today';
         $def = $ranges[$key];
         $def['key'] = $key;
         return $def;
@@ -378,6 +432,9 @@ final class Query
      */
     public static function rangeEnd(array $range): string
     {
+        if (isset($range['end']) && is_string($range['end']) && $range['end'] !== '') {
+            return $range['end'];
+        }
         $start = (string) ($range['start'] ?? '');
         $slash = strrpos($start, '/');
         if ($slash === false) {
@@ -403,6 +460,17 @@ final class Query
     public static function filterStart(array $range): string
     {
         return empty($range['unbounded']) ? (string) $range['start'] : '*';
+    }
+
+    /**
+     * The upper bound for the Opensolr request-log plane and for every range facet's `end`.
+     *
+     * `NOW` for the rolling ranges, as before; a calendar day that is over (Yesterday, 2 days
+     * ago) ends at its own last millisecond, so neither its filter nor its chart runs into today.
+     */
+    public static function filterEnd(array $range): string
+    {
+        return isset($range['end']) && is_string($range['end']) && $range['end'] !== '' ? $range['end'] : 'NOW';
     }
 
     /**
@@ -453,7 +521,7 @@ final class Query
         }
         $secs = max(60, (int) $range['secs']);
 
-        return $field . ':[' . $range['start'] . '-' . $secs . 'SECOND TO NOW]';
+        return $field . ':[' . $range['start'] . '-' . $secs . 'SECOND TO ' . self::filterEnd($range) . ']';
     }
 
     /**

@@ -318,7 +318,7 @@ final class Performance extends Controller
                 'type'  => 'range',
                 'field' => 'ts',
                 'start' => $this->range['start'],
-                'end'   => 'NOW',
+                'end'   => Query::filterEnd($this->range),
                 'gap'   => $this->range['gap'],
                 'facet' => ['p50' => 'percentile(dur_us_l,50)', 'p95' => 'percentile(dur_us_l,95)'],
             ],
@@ -431,7 +431,7 @@ final class Performance extends Controller
                 'type'  => 'range',
                 'field' => 'ts',
                 'start' => $this->range['start'],
-                'end'   => 'NOW',
+                'end'   => Query::filterEnd($this->range),
                 'gap'   => $this->range['gap'],
                 'facet' => [
                     's2' => ['type' => 'query', 'q' => 'status_i:[200 TO 299]'],

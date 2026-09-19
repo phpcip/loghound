@@ -338,7 +338,7 @@ final class Overview extends Controller
                 'type'  => 'range',
                 'field' => 'ts_start',
                 'start' => $this->range['start'],
-                'end'   => 'NOW',
+                'end'   => Query::filterEnd($this->range),
                 'gap'   => $this->range['gap'],
                 'facet' => $perBucket,
             ],

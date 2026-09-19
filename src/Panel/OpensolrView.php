@@ -413,7 +413,12 @@ abstract class OpensolrView extends Controller implements Sections
      */
     protected function logFqs(): array
     {
-        return self::logFqsFor(Query::filterStart($this->range), $this->logFacets()->selection(), $this->outcome());
+        return self::logFqsFor(
+            Query::filterStart($this->range),
+            $this->logFacets()->selection(),
+            $this->outcome(),
+            Query::filterEnd($this->range)
+        );
     }
 
     /**
@@ -428,10 +433,10 @@ abstract class OpensolrView extends Controller implements Sections
      *        logFilters() or decodeLogFilters().
      * @return array<int,string>
      */
-    protected static function logFqsFor(string $rangeStart, array $filters, string $outcome): array
+    protected static function logFqsFor(string $rangeStart, array $filters, string $outcome, string $rangeEnd = 'NOW'): array
     {
         $fqs = array_merge(
-            [OpensolrLog::dateFq($rangeStart)],
+            [OpensolrLog::dateFq($rangeStart, $rangeEnd)],
             Facets::logFor($filters, self::logFilterFields())->fqs()
         );
 
@@ -467,7 +472,7 @@ abstract class OpensolrView extends Controller implements Sections
     protected function logFqsExcept(string $field): array
     {
         $fqs = array_merge(
-            [OpensolrLog::dateFq(Query::filterStart($this->range))],
+            [OpensolrLog::dateFq(Query::filterStart($this->range), Query::filterEnd($this->range))],
             $this->logFacets()->fqs(null, $field)
         );
 
@@ -719,7 +724,7 @@ abstract class OpensolrView extends Controller implements Sections
     {
         $range = ['date' => [
             'start' => (string) $this->range['start'],
-            'end'   => 'NOW',
+            'end'   => Query::filterEnd($this->range),
             'gap'   => (string) $this->range['gap'],
             'other' => 'none',
         ]];

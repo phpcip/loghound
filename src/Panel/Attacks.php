@@ -787,7 +787,7 @@ final class Attacks extends Controller implements Sections
                 'type'  => 'range',
                 'field' => 'ts',
                 'start' => $this->range['start'],
-                'end'   => 'NOW',
+                'end'   => Query::filterEnd($this->range),
                 'gap'   => $this->range['gap'],
                 'facet' => [
                     'answered' => ['type' => 'query', 'q' => self::FQ_ANSWERED],

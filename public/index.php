@@ -116,6 +116,7 @@ header('Cache-Control: no-store, private');
 
 $configPath = __DIR__ . '/../config/loghound.php';
 $cfg = Config::load($configPath);
+Query::setTimezone((string) $cfg->get('ui.timezone', 'UTC'));
 
 /* The trusted-proxy list is read once and handed to the two places that need it before any
    session or cookie exists. Security::isHttps() is what decides whether a cookie is marked

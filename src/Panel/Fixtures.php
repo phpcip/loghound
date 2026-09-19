@@ -1105,16 +1105,18 @@ final class Fixtures
     }
 
     /**
-     * Evaluate the subset of Solr date math the panel emits: `NOW`, `NOW-<n><UNIT>` and
-     * an optional trailing `/UNIT` rounding.
+     * Evaluate the subset of Solr date math the panel emits: a base of `NOW` or an ISO instant
+     * (the calendar-day ranges), an optional `-<n><UNIT>` and an optional trailing `/UNIT`.
      */
     private static function dateMath(string $expr): int
     {
         $expr = trim($expr);
-        if (preg_match('/^\d{4}-\d{2}-\d{2}T/', $expr)) {
-            return (int) strtotime($expr);
+        if (preg_match('/^(\d{4}-\d{2}-\d{2}T[0-9:.]+Z)(.*)$/', $expr, $iso)) {
+            $t = (int) strtotime($iso[1]);
+            $expr = 'NOW' . $iso[2];
+        } else {
+            $t = self::now();
         }
-        $t = self::now();
         if (preg_match('/^NOW\s*-\s*(\d+)(SECOND|MINUTE|HOUR|DAY)/i', $expr, $m)) {
             $mult = ['SECOND' => 1, 'MINUTE' => 60, 'HOUR' => 3600, 'DAY' => 86400];
             $t -= ((int) $m[1]) * $mult[strtoupper($m[2])];

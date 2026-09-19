@@ -240,7 +240,7 @@ final class Searches extends Controller
             'configured' => $this->configured(),
             'candidates' => self::TREND_CANDIDATES,
             'considered' => count($candidates),
-            'baseline'   => 'the ' . mb_strtolower((string) $this->range['label']) . ' immediately before this one',
+            'baseline'   => (string) ($this->range['baseline'] ?? 'the ' . mb_strtolower((string) $this->range['label']) . ' immediately before this one'),
             'rows'       => array_values($page),
             'page'       => Paging::block($start, $rows, count($candidates), 'search terms', count($page)),
         ]);
