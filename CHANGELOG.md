@@ -7,6 +7,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.9.0] — 2026-09-20
+
+### Added
+
+- **A signed-in email can be excluded.** Settings, Exclusions, field "Signed-in email": one exact
+  address, matched without regard to case. When a beacon arrives carrying that address in
+  `data-ident`, the whole visit it belongs to is excluded on both planes: the beacon is not
+  stored, the reader writes nothing more of that visit, and what it had already written is
+  deleted within a minute. Only a beacon from an allowlisted site whose Origin matches counts,
+  and only the sender's own visit is touched.
+
+- **Today, Yesterday and 2 days ago in the duration selector**, first in the list. They are
+  calendar days in the panel's timezone: Today runs from midnight to now, the two past days are
+  whole days, and their charts and comparisons stay inside the day.
+
+### Changed
+
+- **Today is the default duration** instead of the last 24 hours.
+
+---
+
 ## [1.8.0] — 2026-09-18
 
 ### Added
