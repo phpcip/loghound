@@ -318,10 +318,7 @@ if (Security::isPrivateAddress($ip)) {
     lh_end();
 }
 
-if ($state !== null && $exclusions->excludesIdent(
-    $site !== '' ? $site : (string) ($payload['hostname'] ?? ''),
-    (string) $payload['ident']
-)) {
+if ($state !== null && $site !== '' && $exclusions->excludesIdent($site, (string) $payload['ident'])) {
     lh_exclude($state, $clientKey);
     lh_end();
 }
@@ -513,8 +510,9 @@ function lh_site(Beacon $beacon, array $payload, string $origin): string
 /**
  * Exclude the visit this signed-in beacon belongs to; the beacon itself is never staged.
  *
- * Only the sender's own client key (network + User-Agent) is touched, so a forged email can
- * only ever hide the forger's own visit.
+ * Called only for a site that passed lh_site() (Origin agrees with the page, host on
+ * `beacon.allowed_hosts`). Only the sender's own client key (network + User-Agent) is
+ * touched, so a forged email can only ever hide the forger's own visit.
  */
 function lh_exclude(object $state, string $clientKey): void
 {
