@@ -4910,6 +4910,13 @@ final class Settings extends Controller implements JobHost, Sections
             . 'and carries no status of its own, so a rule on either cannot match a host measured by the '
             . 'beacon alone &mdash; it is not ignored quietly, it simply has nothing to test.</p>';
 
+        echo '<p class="muted"><strong>' . Security::esc(Exclusions::FIELDS['email']) . '</strong> takes one exact '
+            . 'address, not a pattern, and matching ignores case. It works through the beacon: when a '
+            . 'payload arrives carrying that address in <code class="mono">data-ident</code>, the whole '
+            . 'visit it belongs to is excluded on both planes. Nothing more of it is written, and what the '
+            . 'reader had already written for it is deleted within a minute. Without the beacon running '
+            . 'on the page, or without <code class="mono">data-ident</code>, it has nothing to match.</p>';
+
         echo '<p class="muted"><strong>The reader picks these up when it is next reloaded</strong>, not '
             . 'mid-file, so a rule added now applies from the next restart or reload of the ingest '
             . 'daemon. The beacon collector applies them immediately, because it reads the '

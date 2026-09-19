@@ -318,6 +318,14 @@ if (Security::isPrivateAddress($ip)) {
     lh_end();
 }
 
+if ($state !== null && $exclusions->excludesIdent(
+    $site !== '' ? $site : (string) ($payload['hostname'] ?? ''),
+    (string) $payload['ident']
+)) {
+    lh_exclude($state, $clientKey);
+    lh_end();
+}
+
 $sessionId = (string) $payload['session_id'];
 $token     = (string) $payload['token'];
 $isHello   = ($sessionId === '' || $token === '');
@@ -500,6 +508,21 @@ function lh_site(Beacon $beacon, array $payload, string $origin): string
     }
 
     return $beacon->hostAllowed($claimed) ? $claimed : '';
+}
+
+/**
+ * Exclude the visit this signed-in beacon belongs to; the beacon itself is never staged.
+ *
+ * Only the sender's own client key (network + User-Agent) is touched, so a forged email can
+ * only ever hide the forger's own visit.
+ */
+function lh_exclude(object $state, string $clientKey): void
+{
+    try {
+        $state->excludeClient($clientKey);
+    } catch (\Throwable $e) {
+        error_log('loghound/collect.php: excludeClient failed: ' . $e->getMessage());
+    }
 }
 
 /**

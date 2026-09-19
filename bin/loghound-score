@@ -297,6 +297,8 @@ if ((bool) $cfg->get('beacon.enabled') && class_exists('\\Loghound\\Beacon')) {
 $sessionizer = new Sessionizer($state, $all);
 $now = time();
 
+purgeExcluded($state, $solr, $hitsCore, $sessionCore, $cfg, $now, $log);
+
 try {
     $closed = $sessionizer->closeIdle($now * 1000);
 } catch (\Throwable $e) {
@@ -748,6 +750,47 @@ foreach (array_keys($days) as $day) {
 
 exit(0);
 
+
+/**
+ * Delete everything indexed for visits excluded by a signed-in email.
+ *
+ * State::excludeClient() flags the open session when the collector sees an excluded email;
+ * keys that arrived before the tailer opened the session are applied here first. Each flagged
+ * session is purged twice at most: once when flagged, and once when it goes idle, which
+ * catches hits that were already in the tailer's batch when the flag was set. One
+ * delete-by-query per core per chunk of 100 sessions, never per hit.
+ *
+ * Session ids are sha1 hex minted by State::openSession(); anything else is skipped before a
+ * filter is built. A failed delete leaves the flag as it was, so the next run retries.
+ */
+function purgeExcluded(\Loghound\State $state, Solr $solr, string $hitsCore, string $sessionCore, Config $cfg, int $now, callable $log): void
+{
+    try {
+        $state->applyPendingExclusions();
+        $idleSec = \Loghound\Security::clampInt($cfg->get('ingest.session_idle_sec'), 60, 86400, 1800);
+        $sessions = $state->excludedToPurge($idleSec, $now * 1000);
+    } catch (\Throwable $e) {
+        $log('excluded sessions: listing failed: ' . $e->getMessage());
+        return;
+    }
+
+    $sessions = array_values(array_filter(
+        $sessions,
+        static fn (array $s): bool => preg_match('/^[0-9a-f]{40}$/D', $s['session_id']) === 1
+    ));
+
+    foreach (array_chunk($sessions, 100) as $chunk) {
+        $ids = implode(' ', array_column($chunk, 'session_id'));
+        try {
+            $solr->deleteByQuery($hitsCore, 'session_id_s:(' . $ids . ')');
+            $solr->deleteByQuery($sessionCore, 'id:(' . $ids . ')');
+            $state->markExclusionsPurged($chunk);
+            $log('excluded sessions: purged ' . count($chunk));
+        } catch (\Throwable $e) {
+            $log('excluded sessions: purge failed: ' . $e->getMessage());
+        }
+    }
+}
 
 /**
  * Turn a session aggregate into the BASE Solr document.

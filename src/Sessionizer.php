@@ -278,6 +278,10 @@ final class Sessionizer
      * which made it an HTML PAGEVIEW. The path comes from Config::selfEndpoints(), like
      * everything else here, and is set on a copy so the key never travels on the returned hit.
      *
+     * A SESSION EXCLUDED BY A SIGNED-IN EMAIL (State::excludeClient()) keeps its last_ts moving,
+     * so the visit stays one session, but nothing is accumulated and the hit comes back marked
+     * `_excluded`: the tailer refuses it before the batch.
+     *
      * @param array<string,mixed> $hit A normalised hit from Parser.php.
      * @return array<string,mixed>
      */
@@ -311,6 +315,13 @@ final class Sessionizer
         $isSelf    = $this->isSelfRequest($hit);
 
         $row = $this->state->findOpenSession($clientKey, $this->idleSeconds, $tsMs);
+
+        if ($row !== null && (int) ($row['excluded'] ?? 0) > 0) {
+            $this->state->updateSession((string) $row['session_id'], $tsMs, 0);
+            $hit['_excluded'] = true;
+
+            return $hit;
+        }
 
         if ($row === null && $isSelf) {
             return $hit;

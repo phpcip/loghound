@@ -131,10 +131,12 @@ final class State
                 hits        INTEGER NOT NULL DEFAULT 0,
                 data        TEXT NOT NULL DEFAULT ' . "'{}'" . ',
                 closed_at   INTEGER,
-                scored_ts   INTEGER
+                scored_ts   INTEGER,
+                excluded    INTEGER NOT NULL DEFAULT 0
             )'
         );
         $this->addColumn('sessions_open', 'scored_ts', 'INTEGER');
+        $this->addColumn('sessions_open', 'excluded', 'INTEGER NOT NULL DEFAULT 0');
         $this->db->exec(
             'CREATE INDEX IF NOT EXISTS idx_sessions_client
                 ON sessions_open (client_key, closed_at)'
@@ -146,6 +148,18 @@ final class State
         $this->db->exec(
             'CREATE INDEX IF NOT EXISTS idx_sessions_dirty
                 ON sessions_open (closed_at, scored_ts, last_ts)'
+        );
+
+        $this->db->exec(
+            'CREATE INDEX IF NOT EXISTS idx_sessions_excluded
+                ON sessions_open (closed_at, excluded) WHERE excluded > 0'
+        );
+
+        $this->db->exec(
+            'CREATE TABLE IF NOT EXISTS excluded_pending (
+                client_key  TEXT PRIMARY KEY,
+                expires_at  INTEGER NOT NULL
+            )'
         );
 
         $this->db->exec(
@@ -323,7 +337,7 @@ final class State
     public function findOpenSession(string $clientKey, int $idleSec, int $nowMs): ?array
     {
         $row = $this->one(
-            'SELECT session_id, client_key, host, first_ts, last_ts, hits, data
+            'SELECT session_id, client_key, host, first_ts, last_ts, hits, data, excluded
                FROM sessions_open
               WHERE client_key = :ck AND closed_at IS NULL AND last_ts >= :cutoff
               ORDER BY last_ts DESC LIMIT 1',
@@ -415,7 +429,7 @@ final class State
         $rows = $this->all(
             'SELECT session_id, client_key, host, first_ts, last_ts, hits, data
                FROM sessions_open
-              WHERE closed_at IS NULL AND last_ts < :cutoff
+              WHERE closed_at IS NULL AND excluded = 0 AND last_ts < :cutoff
               ORDER BY last_ts ASC
               LIMIT :lim',
             [
@@ -452,7 +466,7 @@ final class State
         $rows = $this->all(
             'SELECT session_id, client_key, host, first_ts, last_ts, hits, data
                FROM sessions_open
-              WHERE closed_at IS NULL
+              WHERE closed_at IS NULL AND excluded = 0
                 AND (scored_ts IS NULL OR scored_ts < last_ts)
               ORDER BY last_ts DESC
               LIMIT :lim',
@@ -552,7 +566,115 @@ final class State
             'last_ts'    => (int) $row['last_ts'],
             'hits'       => (int) $row['hits'],
             'data'       => is_array($data) ? $data : [],
+            'excluded'   => (int) ($row['excluded'] ?? 0),
         ];
+    }
+
+    /**
+     * Exclude the visit a signed-in beacon belongs to, because its email is on the exclusion list.
+     *
+     * The open session is found by `client_key`, exactly as a beacon row is bound to its session
+     * at merge time, and flagged `excluded = 1` (purge pending). A flagged session is never
+     * published, the tailer refuses its further hits, and loghound-score deletes whatever was
+     * already indexed for it.
+     *
+     * The key is also held in `excluded_pending` for $ttl seconds, because the beacon can reach
+     * the collector before the tailer has read the page request and opened the session; the
+     * scorer applies pending keys to sessions opened in that window.
+     */
+    public function excludeClient(string $clientKey, int $ttl = 120): void
+    {
+        if ($clientKey === '') {
+            return;
+        }
+        $this->run(
+            'UPDATE sessions_open SET excluded = 1
+              WHERE client_key = :ck AND closed_at IS NULL AND excluded = 0',
+            [':ck' => $clientKey]
+        );
+        $this->run(
+            'INSERT INTO excluded_pending (client_key, expires_at) VALUES (:ck, :exp)
+             ON CONFLICT(client_key) DO UPDATE SET expires_at = excluded.expires_at',
+            [':ck' => $clientKey, ':exp' => time() + Security::clampInt($ttl, 10, 3600, 120)]
+        );
+    }
+
+    /**
+     * Flag the open sessions of every still-pending excluded client, and drop expired keys.
+     *
+     * Two statements for the whole table, whatever its size; both run on indexed columns.
+     */
+    public function applyPendingExclusions(): void
+    {
+        $now = time();
+        $this->run(
+            'UPDATE sessions_open SET excluded = 1
+              WHERE excluded = 0 AND closed_at IS NULL
+                AND client_key IN (SELECT client_key FROM excluded_pending WHERE expires_at >= :now)',
+            [':now' => $now]
+        );
+        $this->run('DELETE FROM excluded_pending WHERE expires_at < :now', [':now' => $now]);
+    }
+
+    /**
+     * Excluded sessions whose indexed documents must be deleted now.
+     *
+     * Newly flagged ones (`excluded = 1`), and flagged ones that have gone idle and are about to
+     * be closed — the second purge catches hits that were already in the tailer's batch when
+     * the flag was set.
+     *
+     * @return array<int,array{session_id:string,idle:bool}>
+     */
+    public function excludedToPurge(int $idleSec, int $nowMs, int $limit = 500): array
+    {
+        $cutoff = $nowMs - (max(1, $idleSec) * 1000);
+        $rows = $this->all(
+            'SELECT session_id, last_ts FROM sessions_open
+              WHERE excluded > 0 AND closed_at IS NULL
+                AND (excluded = 1 OR last_ts < :cutoff)
+              LIMIT :lim',
+            [':cutoff' => $cutoff, ':lim' => Security::clampInt($limit, 1, 5000, 500)]
+        );
+
+        $out = [];
+        foreach ($rows as $row) {
+            $out[] = [
+                'session_id' => (string) $row['session_id'],
+                'idle'       => (int) $row['last_ts'] < $cutoff,
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Record a completed purge: flagged sessions become `excluded = 2`, idle ones are closed.
+     *
+     * One transaction for the batch.
+     *
+     * @param array<int,array{session_id:string,idle:bool}> $sessions From excludedToPurge().
+     */
+    public function markExclusionsPurged(array $sessions): void
+    {
+        if ($sessions === []) {
+            return;
+        }
+
+        $now = time();
+        $this->db->exec('BEGIN IMMEDIATE');
+        try {
+            foreach ($sessions as $session) {
+                $this->run(
+                    'UPDATE sessions_open
+                        SET excluded = 2, closed_at = CASE WHEN :idle = 1 THEN :now ELSE closed_at END
+                      WHERE session_id = :id',
+                    [':idle' => $session['idle'] ? 1 : 0, ':now' => $now, ':id' => $session['session_id']]
+                );
+            }
+            $this->db->exec('COMMIT');
+        } catch (\Throwable $e) {
+            $this->db->exec('ROLLBACK');
+            throw $e;
+        }
     }
 
     /**

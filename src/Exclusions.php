@@ -53,6 +53,7 @@ final class Exclusions
         'method' => 'Method',
         'status' => 'Status',
         'query'  => 'Query string',
+        'email'  => 'Signed-in email',
     ];
 
     /**
@@ -64,6 +65,15 @@ final class Exclusions
      * settings card names them and this list is what it names them from.
      */
     public const LOG_ONLY_FIELDS = ['method', 'status', 'client'];
+
+    /**
+     * Fields only a beacon payload carries, so a rule on one of them is beacon-only.
+     *
+     * The signed-in email exists only in what the page hands the beacon (`data-ident`). It is
+     * an exact address, never a pattern: a rule on it excludes the visit that beacon belongs
+     * to, on both planes — see excludesIdent() and State::excludeClient().
+     */
+    public const BEACON_ONLY_FIELDS = ['email'];
 
     /** Where the rules live in the configuration file. */
     public const CONFIG_KEY = 'exclusions';
@@ -89,6 +99,9 @@ final class Exclusions
     /** @var array<string,bool> Hostnames excluded outright. */
     private array $whole = [];
 
+    /** @var array<string,array<string,bool>> Lower-case host ('' = every host) to lower-case excluded emails. */
+    private array $emails = [];
+
     /**
      * @param array<int,array{host:string,field:string,pattern:string,enabled:bool}> $rules Sanitised.
      */
@@ -102,6 +115,10 @@ final class Exclusions
             }
 
             $host = $rule['host'];
+            if ($rule['field'] === 'email') {
+                $this->emails[$host][$rule['pattern']] = true;
+                continue;
+            }
             if ($rule['field'] === 'path' && $rule['pattern'] === self::ALL) {
                 $this->whole[$host] = true;
                 continue;
@@ -159,7 +176,12 @@ final class Exclusions
             }
 
             $whole = $field === 'path' && $pattern === self::ALL;
-            if (!$whole && !self::compiles($pattern)) {
+            if ($field === 'email') {
+                $pattern = strtolower(Beacon::email($pattern));
+                if ($pattern === '') {
+                    continue;
+                }
+            } elseif (!$whole && !self::compiles($pattern)) {
                 continue;
             }
 
@@ -239,7 +261,30 @@ final class Exclusions
     /** Is anything configured at all? The callers skip the work entirely when not. */
     public function isEmpty(): bool
     {
-        return $this->byHost === [] && $this->whole === [];
+        return $this->byHost === [] && $this->whole === [] && $this->emails === [];
+    }
+
+    /**
+     * Is this signed-in email excluded on this host?
+     *
+     * Exact, case-insensitive comparison against the stored addresses; a rule with an empty
+     * hostname applies to every host. An empty or invalid email never matches.
+     *
+     * @param string $host  The hostname the beacon reported.
+     * @param string $email The `data-ident` the page sent.
+     */
+    public function excludesIdent(string $host, string $email): bool
+    {
+        if ($this->emails === []) {
+            return false;
+        }
+        $email = strtolower(Beacon::email($email));
+        if ($email === '') {
+            return false;
+        }
+        $host = strtolower(trim($host));
+
+        return isset($this->emails[''][$email]) || ($host !== '' && isset($this->emails[$host][$email]));
     }
 
     /**
@@ -328,6 +373,9 @@ final class Exclusions
     public function activeCount(): int
     {
         $n = count($this->whole);
+        foreach ($this->emails as $addresses) {
+            $n += count($addresses);
+        }
         foreach ($this->byHost as $rules) {
             $n += count($rules);
         }

@@ -1671,6 +1671,10 @@ final class Pipeline
                 if (is_array($out) && $out !== []) {
                     $hit = $out;
                 }
+                if (!empty($hit['_excluded'])) {
+                    $this->refused = true;
+                    return null;
+                }
             } catch (\Throwable $e) {
                 if (!$this->sessionizerWarned) {
                     $this->sessionizerWarned = true;
