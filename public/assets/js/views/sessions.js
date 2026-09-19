@@ -49,6 +49,21 @@ function renderRows(data) {
 }
 
 /**
+ * Print the size of the current result set in the card head, beside the CSV control.
+ *
+ * `numFound` of the same request that filled the table, so the figure always describes the
+ * rows under it: the duration, every applied filter and the search text, not one page.
+ */
+function renderCount(data) {
+    const el = byId('se-count');
+    if (!el) {
+        return;
+    }
+    const n = Number(data.numFound) || 0;
+    el.textContent = num(n) + (n === 1 ? ' visit' : ' visits');
+}
+
+/**
  * Load a page of results.
  *
  * `start` is read from the URL by the server, so the pager below the table is a set of real
@@ -59,6 +74,7 @@ function loadResults() {
     return loadCard('se-results', 'Searching visits', async () => {
         const data = await api('sessions', 'list');
         renderRows(data);
+        renderCount(data);
         renderLinkPager(byId('se-pager'), data.page);
     });
 }
