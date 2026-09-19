@@ -800,6 +800,19 @@ its position in one submission.
 hostname or for every host: a field and a PCRE body, applied by the tailer before enrichment and by
 the collector before a payload is staged. `*` on the path excludes a hostname outright.
 
+**The `email` field is an address, not a pattern** (`BEACON_ONLY_FIELDS`, 1.9.0): one exact
+signed-in email, compared without regard to case, and the only exclusion that removes what was
+already recorded. `collect.php` does not stage a beacon carrying it — only from a site that passed
+`lh_site()`, so origin and allowlist agree — and calls `State::excludeClient()`, which flags the
+open session on that `client_key` (`sessions_open.excluded = 1`) and holds the key in
+`excluded_pending` for two minutes, for the beacon that arrives before the tailer has opened the
+session. `Sessionizer::assign()` then returns the hit marked `_excluded` and the tailer refuses it
+before the batch; `purgeExcluded()` in `bin/loghound-score` deletes what is already indexed —
+`session_id_s:(…)` on the hits core, `id:(…)` on the sessions core — once when the session is
+flagged and once when it goes idle, which catches hits that were in the tailer's batch at the time.
+A flagged session is skipped by `listIdleSessions()` and `listDirtyOpenSessions()`, so it is never
+published.
+
 **Attack patterns** (`src/AttackPatterns.php`, config key `attack_patterns`) hold two things. `rules`
 are the operator's own patterns, `text` (a case-insensitive substring of the decoded path and query,
 the same surface `Score\Attacks` reads) or `regex` (a body wrapped as `~...~i`, refused on save if it
