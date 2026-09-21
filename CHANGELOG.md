@@ -7,6 +7,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.10.0] — 2026-09-22
+
+### Added
+
+- **The interface speaks seven languages.** English, Romanian, French, German, Spanish, Chinese
+  and Japanese, across the panel, the sign-in page, the installer and the messages the server
+  sends back. Settings, Display, Language picks it; the installer offers a language bar and
+  follows the browser's `Accept-Language` until one is chosen, and saves the choice for the
+  panel. English stays the source text, and any string a catalog lacks is shown in English.
+
+- **Your own wording for any string.** A file in `config/lang/<code>.json` overrides single
+  strings of a shipped catalog on one installation and survives upgrades. `tools/i18n.php`
+  regenerates the template and checks a catalog for missing strings and placeholder mistakes.
+  [docs/TRANSLATING.md](docs/TRANSLATING.md) explains how to add a language.
+
+- **Recent visitors counts its visits.** The card head shows how many visits the current result
+  set holds.
+
+### Changed
+
+- **CSV exports stay in English** whatever the interface language is, so a file exported from one
+  installation can be imported into any other.
+
+---
+
 ## [1.9.0] — 2026-09-20
 
 ### Added
