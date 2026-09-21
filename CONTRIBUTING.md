@@ -191,6 +191,9 @@ silently doubles the index and nothing uses it.
   is one of the most valuable things you can send.
 - **Documentation that is wrong or unclear.** Especially in `docs/INSTALL.md` — if
   something did not work on your distribution, that is a bug in the docs.
+- **A translation.** Fix a wording in `lang/<code>.json`, or add a language as a new file
+  built from `lang/template.json`. `php tools/i18n.php check <code>` must report no placeholder
+  problems. [docs/TRANSLATING.md](docs/TRANSLATING.md) has the file format.
 - **A platform the installer mishandles.** It detects rather than assumes, but it has not
   seen every box.
 

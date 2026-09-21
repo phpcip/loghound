@@ -9,6 +9,13 @@ beacon, and tells you two things that nothing else tells you honestly.
 > each with a short explanation, on the Loghound page at opensolr.com. Full documentation:
 > [opensolr.com/loghound-docs](https://opensolr.com/loghound-docs).
 
+**Speaks seven languages.** The panel, the installer and the sign-in page ship in English,
+Română, Français, Deutsch, Español, 中文 and 日本語: every screen, every chart, every setting and
+every message the server sends back. Pick one under Settings → Display, or from the language bar
+on the first setup screen. Each translation is a plain JSON file, so you can reword any sentence
+on your own installation or add a language Loghound does not ship, without touching the code,
+and your wording survives upgrades. [docs/TRANSLATING.md](docs/TRANSLATING.md) shows how.
+
 **New since 1.2:** [SEO Tools](docs/PANEL.md#seo-tools--9-pages-one-card-each) comparing any
 two periods like for like · [attack patterns](docs/ATTACKS.md#your-attack-patterns) you define per
 host, with 48 shipped defaults · non-browser User-Agents and refused attacks
@@ -343,6 +350,7 @@ beacon is independent of whatever other analytics you run.
 | [docs/SCHEMA.md](docs/SCHEMA.md) | Both Solr cores field by field, why each is indexed/docValued/stored, index-size arithmetic, and what to turn off first |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, controls by surface, hardening checklist, known limitations, how to report a vulnerability |
 | [docs/PRIVACY.md](docs/PRIVACY.md) | Exactly what is collected, the three IP modes, retention, GDPR posture, and what to tell your users |
+| [docs/TRANSLATING.md](docs/TRANSLATING.md) | The seven shipped languages, choosing one, rewording any sentence on your own installation, adding a language of your own, plurals, and keeping a translation complete after an upgrade |
 | [SPEC.md](SPEC.md) | The full technical specification, including the Solr schema |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | What will and will not be merged, the test runner, fixture rules |
 

@@ -8,6 +8,18 @@ translation.
 Nothing about English changes when a translation is added, removed or broken: a string the
 catalog does not have is shown in English, and a catalog that cannot be read is ignored.
 
+## Languages that ship
+
+| Code | Language |
+|---|---|
+| `en` | English (the source text, no file) |
+| `ro` | Română |
+| `fr` | Français |
+| `de` | Deutsch |
+| `es` | Español |
+| `zh` | 中文 (Simplified Chinese) |
+| `ja` | 日本語 |
+
 ## Choosing the language
 
 - **Panel:** Settings → Display → Language, or `'language'` under `'ui'` in
