@@ -33,6 +33,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Sources extends Controller
@@ -67,7 +68,7 @@ final class Sources extends Controller
 
     public function title(): string
     {
-        return 'Where they came from';
+        return I18n::t('Where they came from');
     }
 
 
@@ -114,7 +115,7 @@ final class Sources extends Controller
             'channels'  => $this->channels(),
             'referrers' => $this->referrers(),
             'referrer_urls' => $this->referrerUrls(),
-            default     => ['error' => 'Unknown action'],
+            default     => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -130,9 +131,9 @@ final class Sources extends Controller
     private function population(): array
     {
         return match (self::param('pop', ['humans', 'all', 'bots'], 'humans')) {
-            'all'   => [[], 'Every visit'],
-            'bots'  => [[Query::POP_BOTLIKE], 'Bots and crawlers only'],
-            default => [[Query::POP_HUMAN], 'Human visits only'],
+            'all'   => [[], I18n::t('Every visit')],
+            'bots'  => [[Query::POP_BOTLIKE], I18n::t('Bots and crawlers only')],
+            default => [[Query::POP_HUMAN], I18n::t('Human visits only')],
         };
     }
 
@@ -234,7 +235,7 @@ final class Sources extends Controller
                 $start,
                 $rows,
                 Paging::distinct($f, 'hosts'),
-                'referring sites',
+                I18n::t('referring sites'),
                 count($out)
             ),
         ]);
@@ -254,7 +255,7 @@ final class Sources extends Controller
     {
         $host = self::text('host', 253);
         if ($host === '') {
-            return ['error' => 'No referring site given'];
+            return ['error' => I18n::t('No referring site given')];
         }
 
         [$extra, $label] = $this->population();
@@ -286,7 +287,7 @@ final class Sources extends Controller
                 $start,
                 $rows,
                 Paging::distinct($f, 'urls'),
-                'referring pages',
+                I18n::t('referring pages'),
                 count($out)
             ),
         ]);
@@ -298,11 +299,11 @@ final class Sources extends Controller
     private function popToggle(): string
     {
         $active = self::param('pop', ['humans', 'all', 'bots'], 'humans');
-        $out = '<div class="toggle" role="group" aria-label="Population">';
-        foreach ([['humans', 'Humans only'], ['all', 'Everyone'], ['bots', 'Bots &amp; crawlers']] as [$v, $l]) {
+        $out = '<div class="toggle" role="group" aria-label="' . I18n::html('Population') . '">';
+        foreach ([['humans', I18n::t('Humans only')], ['all', I18n::t('Everyone')], ['bots', I18n::t('Bots & crawlers')]] as [$v, $l]) {
             $out .= '<button type="button" data-pop="' . Security::esc($v) . '"'
                 . ($v === $active ? ' class="on" aria-pressed="true"' : ' aria-pressed="false"')
-                . '>' . $l . '</button>';
+                . '>' . Security::esc($l) . '</button>';
         }
 
         return $out . '</div>';
@@ -316,40 +317,42 @@ final class Sources extends Controller
         self::cardOpen(
             'an-channels',
             Layout::cardNum(self::SECTIONS, 'an-channels'),
-            'What sent them',
-            'Every channel the parser recognises, including the ones with no traffic.',
+            I18n::t('What sent them'),
+            I18n::t('Every channel the parser recognises, including the ones with no traffic.'),
             $this->popToggle() . $this->exportTool('channels')
         );
-        self::skeleton('an-channels', 'rows', 0, 'Faceting referrer types');
-        echo '<div class="note"><p><strong>A referrer is a claim.</strong> Browsers strip it moving from '
+        self::skeleton('an-channels', 'rows', 0, I18n::t('Faceting referrer types'));
+        echo '<div class="note"><p><strong>' . I18n::html('A referrer is a claim.') . '</strong> '
+            . I18n::html('Browsers strip it moving from '
             . 'https to http, privacy settings remove it, and anything that wants to look like a search click '
-            . 'can say it was one. <strong>Direct is the residual</strong> — no referrer arrived — not a count '
-            . 'of people who typed your address in.</p></div>';
+            . 'can say it was one. {residual} — no referrer arrived — not a count '
+            . 'of people who typed your address in.', ['residual' => '<strong>' . I18n::html('Direct is the residual') . '</strong>'])
+            . '</p></div>';
         echo '<div class="table-wrap"><table id="an-channels-table" class="table-fixed"><colgroup>'
             . '<col style="width:22%"><col style="width:12%"><col style="width:18%">'
             . '<col style="width:48%"></colgroup><thead><tr>'
-            . '<th scope="col">Channel</th>'
-            . '<th scope="col" class="num">Visits</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
-            . '<th scope="col">What it means</th>'
+            . '<th scope="col">' . I18n::html('Channel') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Visits') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th>'
+            . '<th scope="col">' . I18n::html('What it means') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         self::cardClose('an-channels');
 
         self::cardOpen(
             'an-referrers',
             Layout::cardNum(self::SECTIONS, 'an-referrers'),
-            'Which site sent them',
-            'Visits that sent no referrer are counted in the card above, not here.',
+            I18n::t('Which site sent them'),
+            I18n::t('Visits that sent no referrer are counted in the card above, not here.'),
             $this->popToggle() . $this->exportTool('referrers')
         );
-        self::skeleton('an-referrers', 'rows', 0, 'Faceting referring sites');
+        self::skeleton('an-referrers', 'rows', 0, I18n::t('Faceting referring sites'));
         echo '<div class="table-wrap"><table id="an-referrers-table" class="table-fixed"'
             . Sorting::tableAttrs('an-referrers', self::referrersOrder()) . '><colgroup>'
             . '<col style="width:58%"><col style="width:16%"><col style="width:26%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('site') . '>Referring site</th>'
-            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
-            . '<th scope="col" class="bar-col">Share of referred visits</th>'
+            . '<th scope="col"' . Sorting::th('site') . '>' . I18n::html('Referring site') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>' . I18n::html('Visits') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share of referred visits') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-referrers-pager"></div>';
         self::cardClose('an-referrers');

@@ -35,6 +35,7 @@ namespace Loghound\Setup;
 
 use Loghound\Cache;
 use Loghound\Config;
+use Loghound\I18n;
 
 final class Requirements
 {
@@ -95,8 +96,8 @@ final class Requirements
         foreach ($this->extensions() as $row) {
             $rows[] = $row;
         }
-        $rows[] = $this->writable('config', $this->root . '/config', 'Configuration directory');
-        $rows[] = $this->writable('var', $this->root . '/var', 'Runtime directory');
+        $rows[] = $this->writable('config', $this->root . '/config', I18n::t('Configuration directory'));
+        $rows[] = $this->writable('var', $this->root . '/var', I18n::t('Runtime directory'));
 
         $basedir = $this->openBasedir();
         if ($basedir !== null) {
@@ -135,11 +136,11 @@ final class Requirements
         if (empty($status['configured'])) {
             return [
                 'id'     => 'cache',
-                'label'  => 'Query cache',
+                'label'  => I18n::t('Query cache'),
                 'state'  => 'pass',
-                'detail' => 'Off, which is the default. The panel fetches every answer from Solr as it '
+                'detail' => I18n::t('Off, which is the default. The panel fetches every answer from Solr as it '
                     . 'is asked for. Turning it on under Settings makes the panel faster and cuts the '
-                    . 'plan bandwidth it spends, because it is the panel\'s own reads that are metered.',
+                    . 'plan bandwidth it spends, because it is the panel\'s own reads that are metered.'),
                 'fix'    => [],
             ];
         }
@@ -147,26 +148,31 @@ final class Requirements
         if (!empty($status['working'])) {
             return [
                 'id'     => 'cache',
-                'label'  => 'Query cache',
+                'label'  => I18n::t('Query cache'),
                 'state'  => 'pass',
-                'detail' => 'On and answering at ' . (string) $status['server'] . ', holding each answer for '
-                    . (string) $status['ttl'] . ' seconds.',
+                'detail' => I18n::t('On and answering at {server}, holding each answer for {ttl} seconds.', [
+                    'server' => (string) $status['server'],
+                    'ttl'    => (string) $status['ttl'],
+                ]),
                 'fix'    => [],
             ];
         }
 
         return [
             'id'     => 'cache',
-            'label'  => 'Query cache',
+            'label'  => I18n::t('Query cache'),
             'state'  => 'warn',
-            'detail' => 'Switched on in the configuration, but ' . (string) $status['server'] . ' is not '
-                . 'answering (' . (string) $status['reason'] . '). Nothing is broken — every answer is '
+            'detail' => I18n::t('Switched on in the configuration, but {server} is not '
+                . 'answering ({reason}). Nothing is broken — every answer is '
                 . 'fetched from Solr instead — but the panel is slower than you asked for and spends '
-                . 'more of your plan bandwidth than it needs to.',
+                . 'more of your plan bandwidth than it needs to.', [
+                    'server' => (string) $status['server'],
+                    'reason' => (string) $status['reason'],
+                ]),
             'fix'    => [
-                '# Install and start a memcached on this machine:',
+                '# ' . I18n::t('Install and start a memcached on this machine:'),
                 'sudo apt-get install -y memcached && sudo systemctl enable --now memcached',
-                '# or switch the cache off under Settings if you did not mean to turn it on.',
+                '# ' . I18n::t('or switch the cache off under Settings if you did not mean to turn it on.'),
             ],
         ];
     }
@@ -263,13 +269,13 @@ final class Requirements
         $ok = version_compare(PHP_VERSION, self::MIN_PHP, '>=');
         return [
             'id'     => 'php_version',
-            'label'  => 'PHP ' . self::MIN_PHP . ' or newer',
+            'label'  => I18n::t('PHP {version} or newer', ['version' => self::MIN_PHP]),
             'state'  => $ok ? 'pass' : 'fail',
             'detail' => $ok
-                ? 'Running PHP ' . PHP_VERSION . '.'
-                : 'This server is running PHP ' . PHP_VERSION . ', which is too old.',
+                ? I18n::t('Running PHP {version}.', ['version' => PHP_VERSION])
+                : I18n::t('This server is running PHP {version}, which is too old.', ['version' => PHP_VERSION]),
             'fix'    => $ok ? [] : [
-                '# Install a newer PHP, then point this vhost and its FPM pool at it.',
+                '# ' . I18n::t('Install a newer PHP, then point this vhost and its FPM pool at it.'),
                 'apt install php' . self::minPhpSeries() . '-cli php' . self::minPhpSeries()
                     . '-fpm   # Debian/Ubuntu; any newer series works too',
             ],
@@ -289,9 +295,9 @@ final class Requirements
             $ok = extension_loaded($ext);
             $rows[] = [
                 'id'     => 'ext_' . $ext,
-                'label'  => 'PHP extension: ' . $ext,
+                'label'  => I18n::t('PHP extension: {ext}', ['ext' => $ext]),
                 'state'  => $ok ? 'pass' : 'fail',
-                'detail' => $ok ? 'Loaded.' : 'Not loaded.',
+                'detail' => $ok ? I18n::t('Loaded.') : I18n::t('Not loaded.'),
                 /* ONE DISTRO, AND THE RESTART OUTSIDE THE COMMENT. Both lines went into one
                    <pre> under one Copy button, so pasting the block ran `apt install` AND
                    `dnf install` — one of which is not on the machine — while the restart that
@@ -335,8 +341,8 @@ final class Requirements
         }
 
         return [
-            '# Install the "' . $ext . '" extension for PHP ' . $series . ' with this system\'s',
-            '# package manager, then restart PHP-FPM so it is loaded.',
+            '# ' . I18n::t('Install the "{ext}" extension for PHP {series} with this system\'s', ['ext' => $ext, 'series' => $series]),
+            '# ' . I18n::t('package manager, then restart PHP-FPM so it is loaded.'),
         ];
     }
 
@@ -386,9 +392,9 @@ final class Requirements
         if (!is_dir($dir)) {
             return [
                 'id'     => 'dir_' . $id,
-                'label'  => $label . ' exists',
+                'label'  => I18n::t('{label} exists', ['label' => $label]),
                 'state'  => 'fail',
-                'detail' => $dir . ' does not exist and could not be created.',
+                'detail' => I18n::t('{dir} does not exist and could not be created.', ['dir' => $dir]),
                 /* sudo ON EVERY LINE. chown is root-only without exception, so the block as
                    it stood could not succeed as the user the caption above it names. */
                 'fix'    => [
@@ -402,11 +408,11 @@ final class Requirements
         $ok = is_writable($dir);
         return [
             'id'     => 'dir_' . $id,
-            'label'  => $label . ' is writable',
+            'label'  => I18n::t('{label} is writable', ['label' => $label]),
             'state'  => $ok ? 'pass' : 'fail',
             'detail' => $ok
-                ? $dir . ' is writable by ' . $user . '.'
-                : $dir . ' is not writable by ' . $user . ', so setup cannot save anything.',
+                ? I18n::t('{dir} is writable by {user}.', ['dir' => $dir, 'user' => $user])
+                : I18n::t('{dir} is not writable by {user}, so setup cannot save anything.', ['dir' => $dir, 'user' => $user]),
             'fix'    => $ok ? [] : [
                 'sudo chown ' . $user . ' ' . $dir,
                 'sudo chmod ' . ($id === 'config' ? '0700' : '0750') . ' ' . $dir,
@@ -464,7 +470,7 @@ final class Requirements
                 'id'     => 'open_basedir',
                 'label'  => 'open_basedir',
                 'state'  => 'pass',
-                'detail' => 'Set to ' . $setting . ', and it covers the directories setup needs to read.',
+                'detail' => I18n::t('Set to {setting}, and it covers the directories setup needs to read.', ['setting' => $setting]),
                 'fix'    => [],
             ];
         }
@@ -473,10 +479,10 @@ final class Requirements
             'id'     => 'open_basedir',
             'label'  => 'open_basedir',
             'state'  => 'warn',
-            'detail' => 'PHP is restricted to ' . $setting . ', so this page cannot read '
-                . implode(', ', $blocked) . '. Log detection will find nothing until that changes. '
+            'detail' => I18n::t('PHP is restricted to {setting}, so this page cannot read '
+                . '{dirs}. Log detection will find nothing until that changes. '
                 . 'The ingest daemon is not affected — it runs from the command line, where the '
-                . 'restriction does not apply.',
+                . 'restriction does not apply.', ['setting' => $setting, 'dirs' => implode(', ', $blocked)]),
             /* ONE BLOCK, ONE SHELL. This mixed a PHP-FPM pool directive into a block under a
                Copy button, so pasting it into a terminal made line two a syntax error before
                anything useful ran. The pool edit is not a shell command and cannot be one, so
@@ -484,13 +490,12 @@ final class Requirements
                shell commands are the only ones that execute. The wizard is the honest way past
                this screen and stays, because the restriction genuinely does not apply there. */
             'fix'    => [
-                '# open_basedir is a PHP-FPM setting, not a shell command. Add this line to the',
-                '# pool file for this site (usually under /etc/php/' . self::phpSeries()
-                    . '/fpm/pool.d/), on its own:',
+                '# ' . I18n::t('open_basedir is a PHP-FPM setting, not a shell command. Add this line to the'),
+                '# ' . I18n::t('pool file for this site (usually under /etc/php/{series}/fpm/pool.d/), on its own:', ['series' => self::phpSeries()]),
                 '#',
                 '#   php_admin_value[open_basedir] = ' . $setting . ':' . implode(':', $blocked),
                 '#',
-                '# then run these two:',
+                '# ' . I18n::t('then run these two:'),
                 'sudo systemctl reload php' . self::phpSeries() . '-fpm',
                 $this->cliCommand(),
             ],
@@ -566,24 +571,26 @@ final class Requirements
         if ($readable !== []) {
             return [
                 'id'     => 'webserver_config',
-                'label'  => 'Webserver configuration is readable',
+                'label'  => I18n::t('Webserver configuration is readable'),
                 'state'  => 'pass',
-                'detail' => 'Reading ' . implode(', ', $readable) . ' — the log format and the '
-                    . 'virtual host of every access log can be read directly, with no guessing.',
+                'detail' => I18n::t('Reading {files} — the log format and the '
+                    . 'virtual host of every access log can be read directly, with no guessing.', ['files' => implode(', ', $readable)]),
                 'fix'    => [],
             ];
         }
 
         $user = self::phpUser();
         $detail = $present === []
-            ? 'No Apache or nginx configuration was found at the usual locations. Log formats '
-                . 'will be worked out by scoring sample lines instead, which is less certain.'
-            : 'Found ' . implode(', ', $present) . ' but cannot read it as ' . $user
-                . '. Log formats will be worked out by scoring sample lines instead.';
+            ? I18n::t('No Apache or nginx configuration was found at the usual locations. Log formats '
+                . 'will be worked out by scoring sample lines instead, which is less certain.')
+            : I18n::t('Found {files} but cannot read it as {user}. Log formats will be worked out by scoring sample lines instead.', [
+                'files' => implode(', ', $present),
+                'user'  => $user,
+            ]);
 
         return [
             'id'     => 'webserver_config',
-            'label'  => 'Webserver configuration is readable',
+            'label'  => I18n::t('Webserver configuration is readable'),
             'state'  => 'warn',
             'detail' => $detail,
             'fix'    => $present === [] ? [] : [
@@ -652,20 +659,19 @@ final class Requirements
             if ($blockedDirs !== []) {
                 return [[
                     'id'     => 'logs',
-                    'label'  => 'Access logs are readable',
+                    'label'  => I18n::t('Access logs are readable'),
                     'state'  => 'warn',
-                    'detail' => 'Cannot look in ' . implode(', ', array_keys($blockedDirs))
-                        . ' because of open_basedir, so no log file could be listed from here. '
-                        . 'You can still type a path on the next screen, or run the shell wizard.',
+                    'detail' => I18n::t('Cannot look in {dirs} because of open_basedir, so no log file could be listed from here. '
+                        . 'You can still type a path on the next screen, or run the shell wizard.', ['dirs' => implode(', ', array_keys($blockedDirs))]),
                     'fix'    => [],
                 ]];
             }
             return [[
                 'id'     => 'logs',
-                'label'  => 'Access logs are readable',
+                'label'  => I18n::t('Access logs are readable'),
                 'state'  => 'warn',
-                'detail' => 'No access log was found in the usual places. You can type the path '
-                    . 'to one on the next screen.',
+                'detail' => I18n::t('No access log was found in the usual places. You can type the path '
+                    . 'to one on the next screen.'),
                 'fix'    => [],
             ]];
         }
@@ -676,10 +682,11 @@ final class Requirements
             if (self::openBasedirBlocks($path)) {
                 $rows[] = [
                     'id'     => 'log_' . md5($path),
-                    'label'  => 'Log readable: ' . $path,
+                    'label'  => I18n::t('Log readable: {path}', ['path' => $path]),
                     'state'  => 'warn',
-                    'detail' => 'open_basedir stops this page from reading ' . $path
-                        . '. The ingest daemon runs from the command line and is not affected.',
+                    'detail' => I18n::t('open_basedir stops this page from reading {path}. The ingest daemon runs from the command line and is not affected.', [
+                        'path' => $path,
+                    ]),
                     'fix'    => [],
                 ];
                 continue;
@@ -688,19 +695,19 @@ final class Requirements
             $ok = @is_readable($path);
             $rows[] = [
                 'id'     => 'log_' . md5($path),
-                'label'  => 'Log readable: ' . $path,
+                'label'  => I18n::t('Log readable: {path}', ['path' => $path]),
                 'state'  => $ok ? 'pass' : 'fail',
                 'detail' => $ok
-                    ? 'Readable by ' . $user . '.'
-                    : $path . ' is not readable by ' . $user . '. Loghound would run and index '
-                        . 'nothing at all.' . ($groups !== []
-                            ? ' Current groups: ' . implode(', ', $groups) . '.'
+                    ? I18n::t('Readable by {user}.', ['user' => $user])
+                    : I18n::t('{path} is not readable by {user}. Loghound would run and index nothing at all.', ['path' => $path, 'user' => $user])
+                        . ($groups !== []
+                            ? ' ' . I18n::t('Current groups: {groups}.', ['groups' => implode(', ', $groups)])
                             : ''),
                 'fix'    => $ok ? [] : [
                     'setfacl -m u:' . $user . ':rx ' . $dir,
                     'setfacl -m u:' . $user . ':r ' . $path,
-                    '# or, if setfacl is not installed:',
-                    'usermod -aG adm ' . $user . '   # then restart PHP-FPM and the daemons',
+                    '# ' . I18n::t('or, if setfacl is not installed:'),
+                    'usermod -aG adm ' . $user . '   # ' . I18n::t('then restart PHP-FPM and the daemons'),
                 ],
             ];
         }
@@ -732,7 +739,7 @@ final class Requirements
         if ((array) $this->cfg->get('sources', []) === []) {
             $out[] = [
                 'step'       => Installer::STEP_SOURCES,
-                'text'       => 'No access log has been chosen yet, so there is nothing to analyse.',
+                'text'       => I18n::t('No access log has been chosen yet, so there is nothing to analyse.'),
                 'actionable' => true,
             ];
         }
@@ -740,28 +747,28 @@ final class Requirements
             || (string) $this->cfg->get('solr.sessions_core', '') === '') {
             $out[] = [
                 'step'       => Installer::STEP_STORAGE,
-                'text'       => 'No search index has been created yet, so there is nowhere to keep the results.',
+                'text'       => I18n::t('No search index has been created yet, so there is nowhere to keep the results.'),
                 'actionable' => true,
             ];
         } elseif ((string) $this->cfg->get('solr.base_url', '') === '') {
             $out[] = [
                 'step'       => Installer::STEP_STORAGE,
-                'text'       => 'The index exists but Loghound has no address to reach it on.',
+                'text'       => I18n::t('The index exists but Loghound has no address to reach it on.'),
                 'actionable' => true,
             ];
         }
         if (strlen((string) $this->cfg->get('beacon.secret', '')) < 32) {
             $out[] = [
                 'step'       => Installer::STEP_ADMIN,
-                'text'       => 'The signing key that stops visitors forging timing data has not been '
-                    . 'generated yet. Finishing setup generates it; there is nothing to do here.',
+                'text'       => I18n::t('The signing key that stops visitors forging timing data has not been '
+                    . 'generated yet. Finishing setup generates it; there is nothing to do here.'),
                 'actionable' => false,
             ];
         }
         if ((string) $this->cfg->get('auth.password_hash', '') === '') {
             $out[] = [
                 'step'       => Installer::STEP_ADMIN,
-                'text'       => 'There is no username and password for signing in to Loghound.',
+                'text'       => I18n::t('There is no username and password for signing in to Loghound.'),
                 'actionable' => true,
             ];
         }

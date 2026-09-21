@@ -29,6 +29,7 @@ namespace Loghound\Panel;
 
 use Loghound\Cache;
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Gateway
@@ -278,7 +279,7 @@ final class Gateway
             return true;
         }
         if ($this->solr === null) {
-            $this->error = 'Solr client is not available (src/Solr.php missing or configuration incomplete).';
+            $this->error = I18n::t('Solr client is not available (src/Solr.php missing or configuration incomplete).');
             return false;
         }
         try {
@@ -287,11 +288,11 @@ final class Gateway
                 ? (bool) $this->solr->ping($this->sessionsCore())
                 : (bool) $this->solr->ping();
             if (!$ok) {
-                $this->error = 'Solr did not respond to a ping on core "' . $this->sessionsCore() . '".';
+                $this->error = I18n::t('Solr did not respond to a ping on core "{core}".', ['core' => $this->sessionsCore()]);
             }
             return $ok;
         } catch (\Throwable $e) {
-            $this->error = 'Solr ping failed: ' . Jobs::redact($e->getMessage());
+            $this->error = I18n::t('Solr ping failed: {error}', ['error' => Jobs::redact($e->getMessage())]);
             return false;
         }
     }
@@ -315,7 +316,7 @@ final class Gateway
             return $this->select($tag, $core, $params + ['q' => $text === '' ? '*:*' : 'text', 'uq' => $text]);
         }
         if ($this->solr === null) {
-            $this->error ??= 'Solr client is not available.';
+            $this->error ??= I18n::t('Solr client is not available.');
             return ['docs' => [], 'numFound' => 0];
         }
 
@@ -362,7 +363,7 @@ final class Gateway
             return $this->facet($tag, $core, $q, $facet);
         }
         if ($this->solr === null) {
-            $this->error ??= 'Solr client is not available.';
+            $this->error ??= I18n::t('Solr client is not available.');
             return ['count' => 0];
         }
 
@@ -419,7 +420,7 @@ final class Gateway
         }
 
         if ($this->solr === null) {
-            $this->error ??= 'Solr client is not available.';
+            $this->error ??= I18n::t('Solr client is not available.');
             return ['count' => 0];
         }
 
@@ -473,11 +474,11 @@ final class Gateway
             return $out;
         }
         if ($this->solr === null) {
-            $this->error ??= 'Solr client is not available.';
+            $this->error ??= I18n::t('Solr client is not available.');
             return ['buckets' => []];
         }
         if (!method_exists($this->solr, 'facetContains')) {
-            $this->error = 'This Solr client is too old to search facet values.';
+            $this->error = I18n::t('This Solr client is too old to search facet values.');
             return ['buckets' => []];
         }
 
@@ -526,7 +527,7 @@ final class Gateway
         }
 
         if ($this->solr === null) {
-            $this->error ??= 'Solr client is not available.';
+            $this->error ??= I18n::t('Solr client is not available.');
             return ['docs' => [], 'numFound' => 0];
         }
 
@@ -593,23 +594,23 @@ final class Gateway
         $lower = strtolower($msg);
 
         if (str_contains($lower, 'timed out') || str_contains($lower, 'timeout')) {
-            return 'Solr did not answer within the panel query timeout while running "' . $tag . '". '
+            return I18n::t('Solr did not answer within the panel query timeout while running "{tag}". '
                 . 'Either the query is too heavy for this index (try a shorter time range) '
-                . 'or the node is overloaded.';
+                . 'or the node is overloaded.', ['tag' => $tag]);
         }
         if (str_contains($lower, 'could not resolve') || str_contains($lower, 'couldn\'t resolve')) {
-            return 'The Solr hostname could not be resolved while running "' . $tag . '". Check solr.base_url and DNS.';
+            return I18n::t('The Solr hostname could not be resolved while running "{tag}". Check solr.base_url and DNS.', ['tag' => $tag]);
         }
         if (str_contains($lower, 'connection refused') || str_contains($lower, 'failed to connect')) {
-            return 'The connection to Solr was refused while running "' . $tag . '". '
-                . 'Check that the node is up and that the port is reachable from this host.';
+            return I18n::t('The connection to Solr was refused while running "{tag}". '
+                . 'Check that the node is up and that the port is reachable from this host.', ['tag' => $tag]);
         }
         if (str_contains($lower, '401') || str_contains($lower, '403') || str_contains($lower, 'unauthor')) {
-            return 'Solr rejected the credentials while running "' . $tag . '". Check solr.http_user and solr.http_pass.';
+            return I18n::t('Solr rejected the credentials while running "{tag}". Check solr.http_user and solr.http_pass.', ['tag' => $tag]);
         }
         if (str_contains($lower, '404')) {
-            return 'Solr returned 404 while running "' . $tag . '" — the core name is probably wrong, '
-                . 'or the index has not been created yet.';
+            return I18n::t('Solr returned 404 while running "{tag}" — the core name is probably wrong, '
+                . 'or the index has not been created yet.', ['tag' => $tag]);
         }
         /* REDACTED, LIKE EVERY OTHER ERROR CHANNEL IN THIS PROJECT. This string reaches the
            browser: Controller::envelope() puts gw->error() in the `error` key of every API
@@ -617,7 +618,7 @@ final class Gateway
            echoes the offending filter back — or a raw curl_error(), and both carry internal
            hostnames, ports and core names. Panel\Jobs::redact() is what the POST path, the API
            path and the job store already use; this was the one place that skipped it. */
-        return 'Solr query "' . $tag . '" failed: ' . Jobs::redact($msg);
+        return I18n::t('Solr query "{tag}" failed: {error}', ['tag' => $tag, 'error' => Jobs::redact($msg)]);
     }
 
     /**

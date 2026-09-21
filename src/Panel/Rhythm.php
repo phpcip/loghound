@@ -39,6 +39,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Rhythm extends Controller
@@ -76,7 +77,7 @@ final class Rhythm extends Controller
 
     public function title(): string
     {
-        return 'When they come';
+        return I18n::t('When they come');
     }
 
 
@@ -123,7 +124,7 @@ final class Rhythm extends Controller
     {
         return match ($action) {
             'heat'  => $this->heat(),
-            default => ['error' => 'Unknown action'],
+            default => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -140,9 +141,9 @@ final class Rhythm extends Controller
     private function population(): array
     {
         return match (self::param('pop', ['all', 'humans', 'bots'], 'all')) {
-            'humans' => [[Query::POP_HUMAN], 'Human visits only'],
-            'bots'   => [[Query::POP_BOTLIKE], 'Bots and crawlers only'],
-            default  => [[], 'Every visit'],
+            'humans' => [[Query::POP_HUMAN], I18n::t('Human visits only')],
+            'bots'   => [[Query::POP_BOTLIKE], I18n::t('Bots and crawlers only')],
+            default  => [[], I18n::t('Every visit')],
         };
     }
 
@@ -197,9 +198,14 @@ final class Rhythm extends Controller
             $hours++;
         }
 
+        $names = [
+            I18n::t('Monday'), I18n::t('Tuesday'), I18n::t('Wednesday'), I18n::t('Thursday'),
+            I18n::t('Friday'), I18n::t('Saturday'), I18n::t('Sunday'),
+        ];
         $cells = [];
         $peak = 0.0;
-        foreach (self::DAYS as $day => $name) {
+        foreach (array_keys(self::DAYS) as $day) {
+            $name = $names[$day];
             for ($hour = 0; $hour < 24; $hour++) {
                 $seen = $observed[$day][$hour];
                 $avg = $seen > 0 ? $totals[$day][$hour] / $seen : null;
@@ -221,7 +227,7 @@ final class Rhythm extends Controller
             'population'       => self::param('pop', ['all', 'humans', 'bots'], 'all'),
             'population_label' => $label,
             'timezone'         => $tz->getName(),
-            'days'             => self::DAYS,
+            'days'             => $names,
             'hours_observed'   => $hours,
             'cells'            => $cells,
             'peak'             => $peak,
@@ -249,44 +255,45 @@ final class Rhythm extends Controller
      */
     public function body(): void
     {
-        $tools = '<div class="toggle" role="group" aria-label="Population">';
-        foreach ([['all', 'Everyone'], ['humans', 'Humans only'], ['bots', 'Bots &amp; crawlers']] as [$v, $l]) {
+        $tools = '<div class="toggle" role="group" aria-label="' . I18n::html('Population') . '">';
+        foreach ([['all', I18n::t('Everyone')], ['humans', I18n::t('Humans only')], ['bots', I18n::t('Bots & crawlers')]] as [$v, $l]) {
             $tools .= '<button type="button" data-pop="' . Security::esc($v) . '"'
                 . ($v === 'all' ? ' class="on" aria-pressed="true"' : ' aria-pressed="false"')
-                . '>' . $l . '</button>';
+                . '>' . Security::esc($l) . '</button>';
         }
         $tools .= '</div>' . $this->exportTool('heat');
 
         self::cardOpen(
             'an-heat',
             Layout::cardNum(self::SECTIONS, 'an-heat'),
-            'Hour of day by day of week',
-            'Shaded by the average visits in that hour, not the total.',
+            I18n::t('Hour of day by day of week'),
+            I18n::t('Shaded by the average visits in that hour, not the total.'),
             $tools
         );
-        self::skeleton('an-heat', 'chart', 300, 'Folding the range into hours of the week');
+        self::skeleton('an-heat', 'chart', 300, I18n::t('Folding the range into hours of the week'));
         echo '<div id="an-heat-grid"></div>';
-        echo '<div class="note"><p><strong>Average, not total.</strong> A ninety-day window holds thirteen '
+        echo '<div class="note"><p><strong>' . I18n::html('Average, not total.') . '</strong> '
+            . I18n::html('A ninety-day window holds thirteen '
             . 'Mondays and a nine-day window holds one, so a total would make whichever weekday came round '
             . 'more often look busier. An hour the window never covered is drawn as a gap: no observation is '
-            . 'not the same fact as no traffic.</p></div>';
+            . 'not the same fact as no traffic.') . '</p></div>';
         self::cardClose('an-heat');
 
         self::cardOpen(
             'an-hours',
             Layout::cardNum(self::SECTIONS, 'an-hours'),
-            'The busiest hours of the week',
-            'The same grid as a list.'
+            I18n::t('The busiest hours of the week'),
+            I18n::t('The same grid as a list.')
         );
-        self::skeleton('an-hours', 'rows', 0, 'Ranking the hours of the week');
+        self::skeleton('an-hours', 'rows', 0, I18n::t('Ranking the hours of the week'));
         echo '<div class="table-wrap"><table id="an-hours-table" class="table-fixed"><colgroup>'
             . '<col style="width:26%"><col style="width:16%"><col style="width:16%">'
             . '<col style="width:16%"><col style="width:26%"></colgroup><thead><tr>'
-            . '<th scope="col">Hour of the week</th>'
-            . '<th scope="col" class="num">Average visits</th>'
-            . '<th scope="col" class="num">Visits in all</th>'
-            . '<th scope="col" class="num">Times observed</th>'
-            . '<th scope="col" class="bar-col">Share of the peak</th>'
+            . '<th scope="col">' . I18n::html('Hour of the week') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Average visits') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Visits in all') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Times observed') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share of the peak') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-hours-pager"></div>';
         self::cardClose('an-hours');

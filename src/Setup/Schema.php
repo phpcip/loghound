@@ -69,6 +69,7 @@ declare(strict_types=1);
 namespace Loghound\Setup;
 
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Security;
 use Loghound\Opensolr;
 
@@ -223,7 +224,7 @@ final class Schema
         $path = self::confDir($root, $role) . '/' . self::SCHEMA_FILE;
         $xml = @file_get_contents($path);
         if (!is_string($xml) || $xml === '') {
-            throw new \RuntimeException('The schema is missing from this installation: ' . $path);
+            throw new \RuntimeException(I18n::t('The schema is missing from this installation: {path}', ['path' => $path]));
         }
         return $xml;
     }
@@ -241,8 +242,8 @@ final class Schema
         $names = Storage::schemaFieldNames(self::localSchema($root, $role));
         if ($names === []) {
             throw new \RuntimeException(
-                'The schema shipped for the ' . self::role($role) . ' index declares no fields, so it '
-                . 'is not a usable managed schema. Re-install the code before touching an index.'
+                I18n::t('The schema shipped for the {role} index declares no fields, so it '
+                . 'is not a usable managed schema. Re-install the code before touching an index.', ['role' => self::role($role)])
             );
         }
         return $names;
@@ -366,8 +367,8 @@ final class Schema
 
         if ($core === '') {
             $row['state'] = self::UNCONFIGURED;
-            $row['message'] = 'No ' . $role . ' index is configured, so there is nothing to compare. '
-                . 'Run setup before running this.';
+            $row['message'] = I18n::t('No {role} index is configured, so there is nothing to compare. '
+                . 'Run setup before running this.', ['role' => $role]);
             return $row;
         }
 
@@ -394,13 +395,13 @@ final class Schema
         $live = is_string($liveXml) ? Storage::schemaFieldNames($liveXml) : [];
 
         if ($liveXml === null || $live === []) {
-            $row['message'] = 'Opensolr would not hand back a readable schema for ' . $core . '. '
+            $row['message'] = I18n::t('Opensolr would not hand back a readable schema for {core}.', ['core' => $core]) . ' '
                 . ($why !== null && $why !== ''
                     ? rtrim($why, ' .') . '. '
-                    : 'What came back was not a managed schema. ')
-                . 'Loghound will not report an index it could not read as up to date, so this is '
+                    : I18n::t('What came back was not a managed schema.') . ' ')
+                . I18n::t('Loghound will not report an index it could not read as up to date, so this is '
                 . 'reported as unknown. Try again; if it keeps happening, check the account still '
-                . 'owns this index.';
+                . 'owns this index.');
             return $row;
         }
 
@@ -410,39 +411,45 @@ final class Schema
 
         if ($classic === false) {
             $row['state'] = self::MANAGED;
-            $row['message'] = $core . ' is still running Solr\'s MANAGED schema factory, so the '
+            $row['message'] = I18n::t('{core} is still running Solr\'s MANAGED schema factory, so the '
                 . 'schema.xml this release uploads is being ignored and every schema upload to it '
-                . 'reports success while changing nothing. '
+                . 'reports success while changing nothing.', ['core' => $core]) . ' '
                 . ($row['missing'] === []
-                    ? 'The schema in force happens to declare every field this release writes, so '
-                        . 'nothing is being discarded today — but the next schema change would be.'
-                    : 'The schema in force is missing ' . count($row['missing']) . ' of the '
-                        . count($expected) . ' fields this release writes ('
-                        . self::namedList($row['missing']) . '), and no push can add them until the '
-                        . 'factory is switched.')
-                . ' Running this with --apply uploads the whole configset in dependency order, '
+                    ? I18n::t('The schema in force happens to declare every field this release writes, so '
+                        . 'nothing is being discarded today — but the next schema change would be.')
+                    : I18n::t('The schema in force is missing {n} of the {total} fields this release writes ({fields}), '
+                        . 'and no push can add them until the factory is switched.', [
+                            'n'      => count($row['missing']),
+                            'total'  => count($expected),
+                            'fields' => self::namedList($row['missing']),
+                        ]))
+                . ' ' . I18n::t('Running this with --apply uploads the whole configset in dependency order, '
                 . 'which ends with the solrconfig.xml that switches the factory; from then on '
-                . 'schema.xml is authoritative.';
+                . 'schema.xml is authoritative.');
             return $row;
         }
 
         if ($row['missing'] === []) {
             $row['state'] = self::CURRENT;
-            $row['message'] = $core . ' declares every field this release writes'
-                . ($row['extra'] === []
-                    ? '.'
-                    : ', and ' . count($row['extra']) . ' more this release does not write, which is '
-                        . 'not a problem and is left alone.');
+            $row['message'] = $row['extra'] === []
+                ? I18n::t('{core} declares every field this release writes.', ['core' => $core])
+                : I18n::t('{core} declares every field this release writes, and {n} more this release does not write, which is '
+                    . 'not a problem and is left alone.', ['core' => $core, 'n' => count($row['extra'])]);
             return $row;
         }
 
         $row['state'] = self::BEHIND;
         $one = count($row['missing']) === 1;
-        $row['message'] = $core . ' is missing ' . count($row['missing']) . ' of the '
-            . count($expected) . ' fields this release writes (' . self::namedList($row['missing'])
-            . '). ' . ($one ? 'A document carrying it is' : 'Documents carrying them are')
-            . ' accepted and the value' . ($one ? ' is' : 's are') . ' discarded, because the only '
-            . 'dynamic field in this schema maps everything unknown to the ignored type.';
+        $row['message'] = I18n::t('{core} is missing {n} of the {total} fields this release writes ({fields}).', [
+                'core'   => $core,
+                'n'      => count($row['missing']),
+                'total'  => count($expected),
+                'fields' => self::namedList($row['missing']),
+            ]) . ' ' . ($one
+                ? I18n::t('A document carrying it is accepted and the value is discarded, because the only '
+                    . 'dynamic field in this schema maps everything unknown to the ignored type.')
+                : I18n::t('Documents carrying them are accepted and the values are discarded, because the only '
+                    . 'dynamic field in this schema maps everything unknown to the ignored type.'));
 
         return $row;
     }
@@ -782,9 +789,9 @@ final class Schema
             return [
                 'state'      => self::UNREADABLE,
                 'severity'   => 'bad',
-                'headline'   => 'The schemas are missing from this installation.',
-                'detail'     => $e->getMessage() . ' Until the code is complete, Loghound cannot tell '
-                    . 'you whether your indexes carry the fields it writes.',
+                'headline'   => I18n::t('The schemas are missing from this installation.'),
+                'detail'     => $e->getMessage() . ' ' . I18n::t('Until the code is complete, Loghound cannot tell '
+                    . 'you whether your indexes carry the fields it writes.'),
                 'checked_at' => null,
                 'command'    => $command,
                 'indexes'    => [],
@@ -801,11 +808,11 @@ final class Schema
             return [
                 'state'      => self::SUPERSEDED,
                 'severity'   => 'warn',
-                'headline'   => 'The last schema check was made against a different release.',
-                'detail'     => 'There is a saved result, but it was taken when Loghound expected a '
+                'headline'   => I18n::t('The last schema check was made against a different release.'),
+                'detail'     => I18n::t('There is a saved result, but it was taken when Loghound expected a '
                     . 'different set of fields, so it says nothing about the one running now. This is '
                     . 'the upgrade case: new fields are written to an index that may not declare them, '
-                    . 'and Solr discards them without an error. Check it again.',
+                    . 'and Solr discards them without an error. Check it again.'),
                 'checked_at' => (int) $cache['checked_at'],
                 'command'    => $command,
                 'indexes'    => [],
@@ -828,33 +835,33 @@ final class Schema
         $checked = (int) $cache['checked_at'];
 
         $headline = match ($state) {
-            self::CURRENT      => 'Both indexes declare every field this release writes.',
-            self::BEHIND       => 'Your indexes are missing fields this release writes.',
-            self::MANAGED      => 'An index is still on Solr\'s managed schema factory, so schema '
-                . 'uploads to it do nothing.',
-            self::UNCONFIGURED => 'There is no index to check yet.',
-            default            => 'One of your indexes could not be read.',
+            self::CURRENT      => I18n::t('Both indexes declare every field this release writes.'),
+            self::BEHIND       => I18n::t('Your indexes are missing fields this release writes.'),
+            self::MANAGED      => I18n::t('An index is still on Solr\'s managed schema factory, so schema '
+                . 'uploads to it do nothing.'),
+            self::UNCONFIGURED => I18n::t('There is no index to check yet.'),
+            default            => I18n::t('One of your indexes could not be read.'),
         };
 
         $detail = match ($state) {
-            self::CURRENT => 'Checked against the live schemas on your Opensolr account. Nothing to do '
-                . 'until the next release changes the schema, at which point this card says so.',
-            self::BEHIND => 'Solr accepts documents carrying a field its schema does not declare and '
+            self::CURRENT => I18n::t('Checked against the live schemas on your Opensolr account. Nothing to do '
+                . 'until the next release changes the schema, at which point this card says so.'),
+            self::BEHIND => I18n::t('Solr accepts documents carrying a field its schema does not declare and '
                 . 'throws the value away, with no error anywhere, so this does not show up as a failure '
                 . '— it shows up as a facet that is permanently empty. Push this release\'s configsets '
-                . 'to fix it; it is additive and it does not touch a document already in the index.',
+                . 'to fix it; it is additive and it does not touch a document already in the index.'),
             /* NOT THE UNREADABLE WORDING. Both schemas were read; what they say is that Solr owns
                the schema file on that index, which is a different problem with a different fix. */
-            self::MANAGED => 'The schemas were read — this is not a failure to reach your account. One '
+            self::MANAGED => I18n::t('The schemas were read — this is not a failure to reach your account. One '
                 . 'of your indexes declares ManagedIndexSchemaFactory in its solrconfig.xml, so Solr '
                 . 'owns the schema file there and the schema.xml Loghound uploads is ignored. Every '
                 . 'schema push to that index reports success and changes nothing, including the ones '
                 . 'already run. Pushing this release\'s configsets fixes it: the upload ends with the '
                 . 'solrconfig.xml that switches the index to the classic factory, and it does not touch '
-                . 'a document already in the index.',
-            self::UNCONFIGURED => 'Finish setup first — there is no index name in the configuration.',
-            default => 'A schema that cannot be read is never reported as matching. Run the check again; '
-                . 'if it keeps failing, confirm the account still owns both indexes.',
+                . 'a document already in the index.'),
+            self::UNCONFIGURED => I18n::t('Finish setup first — there is no index name in the configuration.'),
+            default => I18n::t('A schema that cannot be read is never reported as matching. Run the check again; '
+                . 'if it keeps failing, confirm the account still owns both indexes.'),
         };
 
         return [
@@ -896,10 +903,10 @@ final class Schema
             return [
                 'state'      => self::PUSHED,
                 'severity'   => 'good',
-                'headline'   => 'Both configsets were last set up by a release expecting these same fields.',
-                'detail'     => 'That is evidence, not a verification: it says what this installation '
+                'headline'   => I18n::t('Both configsets were last set up by a release expecting these same fields.'),
+                'detail'     => I18n::t('That is evidence, not a verification: it says what this installation '
                     . 'last uploaded or last confirmed, not what the indexes are running now. Run the '
-                    . 'check to compare against the live schemas — and run it after every upgrade.',
+                    . 'check to compare against the live schemas — and run it after every upgrade.'),
                 'checked_at' => null,
                 'command'    => $command,
                 'indexes'    => [],
@@ -910,12 +917,12 @@ final class Schema
             return [
                 'state'      => self::DRIFTED,
                 'severity'   => 'bad',
-                'headline'   => 'These indexes were configured by a release that expected different fields.',
-                'detail'     => 'The configsets on your indexes were last uploaded by a version of '
+                'headline'   => I18n::t('These indexes were configured by a release that expected different fields.'),
+                'detail'     => I18n::t('The configsets on your indexes were last uploaded by a version of '
                     . 'Loghound whose schema declared a different set of fields from the one running '
                     . 'here. Fields this release writes may be missing, and a missing field is '
                     . 'discarded silently by Solr rather than refused. Check it, and push the '
-                    . 'configsets if it says they are behind.',
+                    . 'configsets if it says they are behind.'),
                 'checked_at' => null,
                 'command'    => $command,
                 'indexes'    => [],
@@ -925,11 +932,11 @@ final class Schema
         return [
             'state'      => self::UNVERIFIED,
             'severity'   => 'warn',
-            'headline'   => 'The live schemas have never been checked from this installation.',
-            'detail'     => 'Loghound has not compared the fields this release writes against the '
+            'headline'   => I18n::t('The live schemas have never been checked from this installation.'),
+            'detail'     => I18n::t('Loghound has not compared the fields this release writes against the '
                 . 'schemas your two indexes are actually running. It is one read per index and it '
                 . 'changes nothing. Do it after every upgrade: a release that adds a field to an index '
-                . 'that does not declare it loses every one of those values, silently.',
+                . 'that does not declare it loses every one of those values, silently.'),
             'checked_at' => null,
             'command'    => $command,
             'indexes'    => [],
@@ -954,7 +961,7 @@ final class Schema
     {
         return [
             [
-                'label' => 'Reading the schemas your indexes are running',
+                'label' => I18n::t('Reading the schemas your indexes are running'),
                 'run'   => static function (array $ctx, Config $cfg, $gw) use ($root): array {
                     $report = self::inspect($cfg, $root);
                     $behind = 0;
@@ -964,25 +971,25 @@ final class Schema
 
                     return [
                         'note'    => $report['state'] === self::CURRENT
-                            ? 'both up to date'
-                            : $report['state'],
+                            ? I18n::t('both up to date')
+                            : I18n::t($report['state']),
                         'detail'  => self::summary($report),
                         'context' => ['report' => $report, 'missing_total' => $behind],
                     ];
                 },
             ],
             [
-                'label' => 'Saving the result',
+                'label' => I18n::t('Saving the result'),
                 'run'   => static function (array $ctx, Config $cfg, $gw) use ($root): array {
                     $report = is_array($ctx['report'] ?? null) ? $ctx['report'] : self::inspect($cfg, $root);
                     $path = self::writeCache($cfg, $report);
 
                     return [
-                        'note'   => $path === null ? 'not saved' : 'saved',
+                        'note'   => $path === null ? I18n::t('not saved') : I18n::t('saved'),
                         'detail' => $path === null
-                            ? 'The result could not be written to var/, so this card will ask you to '
-                                . 'check again next time. The verdict above still stands.'
-                            : 'Reload this page to see the verdict on the card above.',
+                            ? I18n::t('The result could not be written to var/, so this card will ask you to '
+                                . 'check again next time. The verdict above still stands.')
+                            : I18n::t('Reload this page to see the verdict on the card above.'),
                     ];
                 },
             ],

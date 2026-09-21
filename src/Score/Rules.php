@@ -50,6 +50,8 @@ declare(strict_types=1);
 
 namespace Loghound\Score;
 
+use Loghound\I18n;
+
 final class Rules
 {
     /**
@@ -969,10 +971,14 @@ final class Rules
      */
     public static function reason(string $code): array
     {
-        return self::REASONS[$code] ?? [
+        $known = self::REASONS[$code] ?? null;
+        if ($known !== null) {
+            return ['label' => I18n::t($known['label']), 'why' => I18n::t($known['why'])] + $known;
+        }
+        return [
             'label'    => $code,
             'severity' => 'med',
-            'why'      => 'This panel version has no description for the rule code "' . $code . '".',
+            'why'      => I18n::t('This panel version has no description for the rule code "{code}".', ['code' => $code]),
         ];
     }
 

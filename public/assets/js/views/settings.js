@@ -15,14 +15,15 @@
 'use strict';
 
 import { api, byId, dec, el, num, post, reattachJob, runJob, stamp } from '../core.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** Human titles for the job kinds this view can start. */
 const JOB_TITLES = {
-    solr_connection: 'Solr connection check',
-    opensolr_check: 'Opensolr credential check',
-    retention_preview: 'Retention preview',
-    source_rescan: 'Log source scan',
-    destructive_uninstall: 'Removing Loghound'
+    solr_connection: T('Solr connection check'),
+    opensolr_check: T('Opensolr credential check'),
+    retention_preview: T('Retention preview'),
+    source_rescan: T('Log source scan'),
+    destructive_uninstall: T('Removing Loghound')
 };
 
 /** The job kind that removes this installation. Named once, used three times below. */
@@ -53,7 +54,7 @@ function initJobButtons() {
         button.addEventListener('click', async () => {
             setJobButtonsBusy(kind, true);
             await runJob(kind, mount, {
-                title: JOB_TITLES[kind] || 'Operation',
+                title: JOB_TITLES[kind] || T('Operation'),
                 onDone: (job) => {
                     setJobButtonsBusy(kind, false);
                     reloadIfPageIsNowStale(kind, job);
@@ -100,7 +101,7 @@ function reattachRunningJobs() {
     for (const button of document.querySelectorAll('[data-job]')) {
         const kind = button.dataset.job;
         reattachJob(kind, button.dataset.mount, {
-            title: JOB_TITLES[kind] || 'Operation',
+            title: JOB_TITLES[kind] || T('Operation'),
             onDone: (job) => {
                 setJobButtonsBusy(kind, false);
                 reloadIfPageIsNowStale(kind, job);
@@ -202,20 +203,19 @@ async function loadBeaconStatus() {
             failBox.className = box ? 'beacon-status beacon-none' : 'finish-state finish-bad';
         }
         if (failLabel) {
-            failLabel.textContent = 'Beacon: status unknown';
+            failLabel.textContent = T('Beacon: status unknown');
         }
         if (failDetail) {
-            const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+            const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
             again.addEventListener('click', () => {
                 again.disabled = true;
                 if (failLabel) {
-                    failLabel.textContent = 'Beacon: asking\u2026';
+                    failLabel.textContent = T('Beacon: asking\u2026');
                 }
                 loadBeaconStatus();
             });
             failDetail.replaceChildren(
-                document.createTextNode('Could not ask the sessions core: '
-                    + (err && err.message ? err.message : err) + ' '),
+                document.createTextNode(T('Could not ask the sessions core: {error}', { error: err && err.message ? err.message : err }) + ' '),
                 again
             );
         }
@@ -241,8 +241,8 @@ async function loadBeaconStatus() {
         detail.replaceChildren(...(everSeen
             ? beaconDetail(status)
             : [document.createTextNode(
-                'No session in the last 30 days has carried beacon data. If you have just added the snippet, '
-                + 'load a page on your site and refresh this view.'
+                T('No session in the last 30 days has carried beacon data. If you have just added the snippet, '
+                + 'load a page on your site and refresh this view.')
             )]));
     }
 
@@ -274,8 +274,8 @@ function paintFinishBeacon(status, live, everSeen) {
     detail.replaceChildren(...(everSeen
         ? beaconDetail(status)
         : [document.createTextNode(
-            'No session in the last 30 days has carried beacon data, so the snippet below has either not been ' +
-            'added or is not loading. The beacon is optional, and Loghound keeps working without it.'
+            T('No session in the last 30 days has carried beacon data, so the snippet below has either not been ' +
+            'added or is not loading. The beacon is optional, and Loghound keeps working without it.')
         )]));
 
     const all = byId('finish-all');
@@ -295,11 +295,11 @@ function paintFinishBeacon(status, live, everSeen) {
  */
 function beaconLabel(live, everSeen) {
     if (live) {
-        return 'Beacon: receiving data';
+        return T('Beacon: receiving data');
     }
     return everSeen
-        ? 'Beacon: seen, but not in the last hour'
-        : 'Beacon: not seen in the last 30 days';
+        ? T('Beacon: seen, but not in the last hour')
+        : T('Beacon: not seen in the last 30 days');
 }
 
 /**
@@ -313,19 +313,20 @@ function beaconLabel(live, everSeen) {
  */
 function beaconDetail(status) {
     const parts = [
-        document.createTextNode(
-            num(status.hour) + ' sessions in the last hour · ' +
-            num(status.day) + ' in the last 24 hours'
-        )
+        document.createTextNode(T('{hour} sessions in the last hour · {day} in the last 24 hours', {
+            hour: num(status.hour),
+            day: num(status.day)
+        }))
     ];
     if (status.last) {
-        parts.push(document.createTextNode(' · last at '));
-        parts.push(stamp(status.last));
+        parts.push(document.createTextNode(' · '));
+        parts.push(...Tf('last at {when}', { when: stamp(status.last) }));
     }
     if (status.coverage !== null && status.coverage !== undefined) {
         parts.push(document.createTextNode(' · '));
-        parts.push(el('span', { class: 'mono', text: dec(status.coverage, 1) + '%' }));
-        parts.push(document.createTextNode(' of sessions that were served a page'));
+        parts.push(...Tf('{pct} of sessions that were served a page', {
+            pct: el('span', { class: 'mono', text: dec(status.coverage, 1) + '%' })
+        }));
     }
     return parts;
 }
@@ -431,8 +432,7 @@ function loadRegions() {
         if (note) {
             note.appendChild(el('span', {
                 class: 'faint',
-                text: ' The list of regions could not be read (' + String(err && err.message ? err.message : err)
-                    + '), so type one.'
+                text: ' ' + T('The list of regions could not be read ({error}), so type one.', { error: String(err && err.message ? err.message : err) })
             }));
         }
     });
@@ -493,7 +493,7 @@ function initCsvImports() {
             }
             if (file.size > IMPORT_MAX_BYTES) {
                 if (note) {
-                    note.textContent = 'That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.';
+                    note.textContent = T('That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.');
                 }
                 input.value = '';
                 return;
@@ -502,12 +502,12 @@ function initCsvImports() {
                 field.value = await file.text();
             } catch (err) {
                 if (note) {
-                    note.textContent = 'The file could not be read.';
+                    note.textContent = T('The file could not be read.');
                 }
                 return;
             }
             if (note) {
-                note.textContent = 'Importing…';
+                note.textContent = T('Importing…');
             }
             input.disabled = true;
             form.submit();

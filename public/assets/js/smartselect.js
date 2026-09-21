@@ -46,6 +46,7 @@
 'use strict';
 
 import { el } from './core.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /** Marks a select this module has already taken over, so a re-scan is idempotent. */
 const DONE = 'lhSmart';
@@ -79,7 +80,7 @@ function nameOf(select) {
         return select.dataset.smart;
     }
     const label = select.id ? document.querySelector('label[for="' + CSS.escape(select.id) + '"]') : null;
-    return label ? (label.textContent || '').trim() : 'Choose';
+    return label ? (label.textContent || '').trim() : T('Choose');
 }
 
 /**
@@ -114,10 +115,10 @@ function enhance(select) {
         class: 'ss-search',
         autocomplete: 'off',
         spellcheck: 'false',
-        'aria-label': 'Filter ' + nameOf(select)
+        'aria-label': T('Filter {name}', { name: nameOf(select) })
     });
     const list = el('ul', { class: 'ss-list', role: 'listbox', 'aria-label': nameOf(select) });
-    const none = el('p', { class: 'ss-none muted', text: 'Nothing matches.', hidden: true });
+    const none = el('p', { class: 'ss-none muted', text: T('Nothing matches.'), hidden: true });
     const pop = el('div', { class: 'ss-pop', hidden: true }, [search, list, none]);
 
     const root = el('div', { class: 'ss', dataset: { for: select.id || '' } }, [button, pop]);

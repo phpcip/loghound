@@ -22,6 +22,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 use Loghound\Setup\Steps;
 
@@ -68,7 +69,7 @@ final class Overview extends Controller
 
     public function title(): string
     {
-        return 'Overview';
+        return I18n::t('Overview');
     }
 
 
@@ -139,7 +140,7 @@ final class Overview extends Controller
             'series'   => $this->series(),
             'toppages' => $this->topPages(),
             'searches' => $this->searches(),
-            default    => ['error' => 'Unknown action'],
+            default    => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -432,10 +433,10 @@ final class Overview extends Controller
 
         $fqs = $this->hitFqs();
         $fqs[] = '-kind_s:(beacon OR favicon OR robots OR asset)';
-        $label = 'Every request';
+        $label = I18n::t('Every request');
         if ($scope === 'pages') {
             $fqs[] = Query::term('kind_s', 'html');
-            $label = 'Pageviews only';
+            $label = I18n::t('Pageviews only');
         }
 
         $f = $this->gw->facet('overview.toppages', $this->gw->hitsCore(), [
@@ -462,8 +463,8 @@ final class Overview extends Controller
         return $this->envelope([
             'population'       => $scope,
             'population_label' => $label,
-            'note'             => 'Sub-resources are not stored at all, and Loghound’s own collector, '
-                . 'favicons and robots.txt are excluded: nobody visited those.',
+            'note'             => I18n::t('Sub-resources are not stored at all, and Loghound’s own collector, '
+                . 'favicons and robots.txt are excluded: nobody visited those.'),
             'total'            => (int) ($f['count'] ?? 0),
             'ignored'          => $this->ignoredHitFilters(),
             'rows'             => $rows,
@@ -471,7 +472,7 @@ final class Overview extends Controller
                 Paging::start(),
                 Paging::rows(),
                 Paging::distinct($f, 'paths'),
-                'paths',
+                I18n::t('paths'),
                 count($rows)
             ),
         ]);
@@ -531,7 +532,7 @@ final class Overview extends Controller
                 Paging::start(),
                 Paging::rows(),
                 Paging::distinct($f, 'terms'),
-                'search terms',
+                I18n::t('search terms'),
                 count($rows)
             ),
         ]);
@@ -551,10 +552,10 @@ final class Overview extends Controller
         self::chart(
             'ov-series',
             '03',
-            'Sessions over time',
-            'All scored sessions, split into five mutually exclusive populations.',
+            I18n::t('Sessions over time'),
+            I18n::t('All scored sessions, split into five mutually exclusive populations.'),
             340,
-            'Bucketing sessions by hour'
+            I18n::t('Bucketing sessions by hour')
         );
         $this->pagesCard();
         $this->searchesCard();
@@ -574,20 +575,20 @@ final class Overview extends Controller
         self::cardOpen(
             'ov-searches',
             '05',
-            'What they searched for',
-            'Sessions that ran a search, by term.',
+            I18n::t('What they searched for'),
+            I18n::t('Sessions that ran a search, by term.'),
             $this->exportTool('searches')
         );
-        self::skeleton('ov-searches', 'rows', 0, 'Faceting search terms');
+        self::skeleton('ov-searches', 'rows', 0, I18n::t('Faceting search terms'));
 
         echo '<div class="table-wrap"><table id="ov-searches-table" class="table-fixed"'
             . Sorting::tableAttrs('ov-searches', self::searchesOrder()) . '><colgroup>'
             . '<col style="width:18%"><col style="width:42%"><col style="width:16%"><col style="width:24%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('term') . '>Parameter</th>'
-            . '<th scope="col">Search term</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
+            . '<th scope="col"' . Sorting::th('term') . '>' . I18n::html('Parameter') . '</th>'
+            . '<th scope="col">' . I18n::html('Search term') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         echo '<div id="ov-searches-pager"></div>';
@@ -614,27 +615,27 @@ final class Overview extends Controller
      */
     private function totalsCard(): void
     {
-        self::cardOpen('ov-stats', '01', 'Who was here', 'All scored sessions in the selected range.');
-        self::skeleton('ov-stats', 'stats', 0, 'Counting sessions by verdict');
+        self::cardOpen('ov-stats', '01', I18n::t('Who was here'), I18n::t('All scored sessions in the selected range.'));
+        self::skeleton('ov-stats', 'stats', 0, I18n::t('Counting sessions by verdict'));
 
         echo '<div class="stats">';
         foreach ([
-            ['human',    'Human sessions',    'Scored human or likely human',
-                'Nothing in the headers, the behaviour or the browser looked like automation.'],
-            ['evasive',  'Evasive bots',      'Automation that did not declare itself',
-                'Scored as automation and did not say so: headless browsers, scripted clients, spoofed '
-                . 'User-Agents, rotating proxy fleets.'],
-            ['declared', 'Declared crawlers', 'Identified themselves and verified',
-                'Said what they were in the User-Agent and the claim held up.'],
-            ['ai',       'AI crawlers',       'GPTBot, ClaudeBot, PerplexityBot',
-                'Declared crawlers collecting for model training or assistant answers.'],
-            ['unknown',  'Unknown',           'Scored, but the evidence was inconclusive',
-                'The evidence did not reach a verdict either way. A finding, not a failure to measure.'],
+            ['human',    I18n::t('Human sessions'),    I18n::t('Scored human or likely human'),
+                I18n::t('Nothing in the headers, the behaviour or the browser looked like automation.')],
+            ['evasive',  I18n::t('Evasive bots'),      I18n::t('Automation that did not declare itself'),
+                I18n::t('Scored as automation and did not say so: headless browsers, scripted clients, spoofed '
+                . 'User-Agents, rotating proxy fleets.')],
+            ['declared', I18n::t('Declared crawlers'), I18n::t('Identified themselves and verified'),
+                I18n::t('Said what they were in the User-Agent and the claim held up.')],
+            ['ai',       I18n::t('AI crawlers'),       'GPTBot, ClaudeBot, PerplexityBot',
+                I18n::t('Declared crawlers collecting for model training or assistant answers.')],
+            ['unknown',  I18n::t('Unknown'),           I18n::t('Scored, but the evidence was inconclusive'),
+                I18n::t('The evidence did not reach a verdict either way. A finding, not a failure to measure.')],
         ] as [$key, $label, $hint, $why]) {
             echo '<button type="button" class="stat stat-open" data-stat="' . Security::esc($key) . '"'
                 . ' data-lh-open="pop" data-pop="' . Security::esc($key) . '"'
                 . ' data-why="' . Security::esc($why) . '"'
-                . ' aria-label="' . Security::esc('Open the visits behind ' . $label) . '">';
+                . ' aria-label="' . Security::esc(I18n::t('Open the visits behind {label}', ['label' => $label])) . '">';
             echo '<span class="stat-label">' . Security::esc($label) . '</span>';
             echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
             echo '<span class="stat-hint">' . Security::esc($hint) . '</span>';
@@ -649,45 +650,48 @@ final class Overview extends Controller
     /** The four timing numbers, their explanations and the comparison bar. */
     private function timingCard(): void
     {
-        self::cardOpen('ov-timing', '02', 'How long they actually stayed');
-        self::skeleton('ov-timing', 'stats', 0, 'Measuring dwell time across four clocks');
+        self::cardOpen('ov-timing', '02', I18n::t('How long they actually stayed'));
+        self::skeleton('ov-timing', 'stats', 0, I18n::t('Measuring dwell time across four clocks'));
 
         echo '<div class="timing-grid">';
         foreach ([
             [
                 'log_span',
-                'Log span',
-                'Last request minus first request.',
-                'What GoAccess, AWStats and every log-only tool call &ldquo;time on site&rdquo;. It cannot see the '
+                I18n::t('Log span'),
+                I18n::t('Last request minus first request.'),
+                I18n::html('What GoAccess, AWStats and every log-only tool call “time on site”. It cannot see the '
                 . 'last page at all: once the visitor stops requesting things the log goes quiet, whether they left '
-                . 'or read for ten minutes.',
+                . 'or read for ten minutes.'),
             ],
             [
                 'wall',
-                'Wall clock',
-                'Page open, tab in any state.',
-                'What Clicky, GA and Plausible report. It keeps counting while the tab sits forgotten behind twelve '
-                . 'others, so it is reliably the largest of the four and reliably the least meaningful.',
+                I18n::t('Wall clock'),
+                I18n::t('Page open, tab in any state.'),
+                I18n::html('What Clicky, GA and Plausible report. It keeps counting while the tab sits forgotten behind twelve '
+                . 'others, so it is reliably the largest of the four and reliably the least meaningful.'),
             ],
             [
                 'visible',
-                'Visible',
-                'Tab visible and window focused.',
-                'Measured by pausing on <code>visibilitychange</code> and <code>blur</code>. The visitor could see '
-                . 'the page. Whether they were reading it is a different question.',
+                I18n::t('Visible'),
+                I18n::t('Tab visible and window focused.'),
+                I18n::html('Measured by pausing on {visibilitychange} and {blur}. The visitor could see '
+                . 'the page. Whether they were reading it is a different question.', [
+                    'visibilitychange' => '<code>visibilitychange</code>',
+                    'blur'             => '<code>blur</code>',
+                ]),
             ],
             [
                 'engaged',
-                'Engaged',
-                'Visible, within 30s of a real interaction.',
-                'Scroll, click, keypress, pointer movement. This is the honest number, and it is the one nobody '
-                . 'else reports because it needs a beacon that measures rather than trusts.',
+                I18n::t('Engaged'),
+                I18n::t('Visible, within 30s of a real interaction.'),
+                I18n::html('Scroll, click, keypress, pointer movement. This is the honest number, and it is the one nobody '
+                . 'else reports because it needs a beacon that measures rather than trusts.'),
             ],
         ] as [$key, $label, $definition, $why]) {
             echo '<div class="timing" data-timing="' . Security::esc($key) . '">';
             echo '<span class="timing-label">' . Security::esc($label) . '</span>';
             echo '<span class="timing-value mono" data-field="' . Security::esc($key) . '_p50">—</span>';
-            echo '<span class="timing-sub">median · mean <span data-field="'
+            echo '<span class="timing-sub">' . I18n::html('median · mean') . ' <span data-field="'
                 . Security::esc($key) . '_avg">—</span></span>';
             echo '<span class="timing-defn">' . Security::esc($definition) . '</span>';
             echo '<p class="timing-why">' . $why . '</p>';
@@ -698,28 +702,37 @@ final class Overview extends Controller
         echo '<div class="chart" id="ov-timing-chart" style="height:190px"></div>';
 
         echo '<div class="note" id="ov-timing-note">'
-            . '<p><strong>Why they differ.</strong> Each number measures something narrower than the one before it, '
+            . '<p><strong>' . I18n::html('Why they differ.') . '</strong> '
+            . I18n::html('Each number measures something narrower than the one before it, '
             . 'so on real traffic they descend: log span and wall clock are inflated by an open tab, visible time '
             . 'drops the background tab, and engaged time drops the visible-but-abandoned tab. A large wall clock '
-            . 'with near-zero engagement means nobody was reading.</p>'
-            . '<p><strong>Log span is not one of the three.</strong> It comes from the access log and is '
+            . 'with near-zero engagement means nobody was reading.') . '</p>'
+            . '<p><strong>' . I18n::html('Log span is not one of the three.') . '</strong> '
+            . I18n::html('It comes from the access log and is '
             . 'structurally blind to the final pageview: once the visitor stops requesting things the log goes '
             . 'quiet. The other three come from the beacon and exist only for sessions where it ran — sessions '
-            . 'without one are excluded, not counted as zero.</p>'
-            . '<p><strong>A span needs two requests.</strong> It is the last request minus the first, so a '
+            . 'without one are excluded, not counted as zero.') . '</p>'
+            . '<p><strong>' . I18n::html('A span needs two requests.') . '</strong> '
+            . I18n::html('It is the last request minus the first, so a '
             . 'session that made a single request has a span of zero by construction and no measurement has '
             . 'happened. Those are excluded and counted separately above rather than averaged in as zeroes — on '
-            . 'most sites they are the majority, and folding them in drags the median to nothing.</p>'
-            . '<p id="ov-timing-floor" hidden><strong>Some spans are shorter than this log can measure.</strong> '
-            . 'The stock Apache <code>%t</code> and nginx <code>$time_local</code> record whole seconds, so two '
+            . 'most sites they are the majority, and folding them in drags the median to nothing.') . '</p>'
+            . '<p id="ov-timing-floor" hidden><strong>' . I18n::html('Some spans are shorter than this log can measure.') . '</strong> '
+            . I18n::html('The stock Apache {apache} and nginx {nginx} record whole seconds, so two '
             . 'requests inside the same second are indistinguishable and the span reads as zero. Those sessions '
             . 'are counted above as “under the clock’s resolution” rather than reported as a measured zero. '
-            . 'Logging a fraction — <code>%{msec}t</code>, or HAProxy’s format — makes them measurable.</p>'
-            . '<p id="ov-timing-planes" hidden><strong>Some of this traffic has no access log behind it.</strong> '
-            . 'Sessions from a host measured by the beacon alone have no log span at all, so they contribute to '
+            . 'Logging a fraction — {msec}, or HAProxy’s format — makes them measurable.', [
+                'apache' => '<code>%t</code>',
+                'nginx'  => '<code>$time_local</code>',
+                'msec'   => '<code>%{msec}t</code>',
+            ]) . '</p>'
+            . '<p id="ov-timing-planes" hidden><strong>' . I18n::html('Some of this traffic has no access log behind it.') . '</strong> '
+            . I18n::html('Sessions from a host measured by the beacon alone have no log span at all, so they contribute to '
             . 'the three beacon clocks and to nothing else. The log-span figure therefore covers a smaller '
             . 'population than the ones beside it, and the contrast between them is not like-for-like on a '
-            . 'mixed install. Filter by <em>Planes</em> to compare one kind at a time.</p>'
+            . 'mixed install. Filter by {planes} to compare one kind at a time.', [
+                'planes' => '<em>' . I18n::html('Planes') . '</em>',
+            ]) . '</p>'
             . '</div>';
 
         self::cardClose('ov-timing');
@@ -737,26 +750,26 @@ final class Overview extends Controller
      */
     private function pagesCard(): void
     {
-        $tools = '<div class="toggle" role="group" aria-label="What to count">';
-        foreach ([['pages', 'Pages'], ['all', 'Every request']] as [$value, $label]) {
+        $tools = '<div class="toggle" role="group" aria-label="' . I18n::html('What to count') . '">';
+        foreach ([['pages', I18n::t('Pages')], ['all', I18n::t('Every request')]] as [$value, $label]) {
             $tools .= '<button type="button" data-pop="' . Security::esc($value) . '"'
                 . ($value === 'pages' ? ' class="on" aria-pressed="true"' : ' aria-pressed="false"')
-                . '>' . $label . '</button>';
+                . '>' . Security::esc($label) . '</button>';
         }
         $tools .= '</div>';
         $tools .= $this->exportTool('pages');
 
-        self::cardOpen('ov-pages', '04', 'Top pages', '', $tools);
-        self::skeleton('ov-pages', 'rows', 0, 'Counting requests by path');
+        self::cardOpen('ov-pages', '04', I18n::t('Top pages'), '', $tools);
+        self::skeleton('ov-pages', 'rows', 0, I18n::t('Counting requests by path'));
 
         echo '<div class="table-wrap"><table id="ov-pages-table" class="table-fixed"'
             . Sorting::tableAttrs('ov-pages', self::pagesOrder()) . '><colgroup>'
             . '<col style="width:46%"><col style="width:18%"><col style="width:18%"><col style="width:18%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('path') . '>Path</th>'
-            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
+            . '<th scope="col"' . Sorting::th('path') . '>' . I18n::html('Path') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="ov-pages-pager"></div>';
 
@@ -812,10 +825,12 @@ final class Overview extends Controller
 
         $idle = Security::clampInt($this->cfg->get('ingest.session_idle_sec'), 60, 86400, 1800);
 
-        return number_format($lines) . ' requests have been read from your logs, so ingestion is working, '
+        return I18n::t('{lines} requests have been read from your logs, so ingestion is working, '
             . 'and nothing has been scored yet. The scorer runs about once a minute; give it one. '
-            . 'A session settles once the visitor has been quiet for ' . self::humanMinutes($idle)
-            . ', and until then its numbers are still moving.';
+            . 'A session settles once the visitor has been quiet for {idle}, and until then its numbers are still moving.', [
+                'lines' => number_format($lines),
+                'idle'  => self::humanMinutes($idle),
+            ]);
     }
 
     /**
@@ -824,11 +839,11 @@ final class Overview extends Controller
     private static function humanMinutes(int $seconds): string
     {
         if ($seconds < 60) {
-            return $seconds . ' seconds';
+            return I18n::tn('{n} seconds', '{n} seconds', $seconds);
         }
         $minutes = (int) round($seconds / 60);
 
-        return $minutes . ' minute' . ($minutes === 1 ? '' : 's');
+        return I18n::tn('{n} minute', '{n} minutes', $minutes);
     }
 
 }

@@ -35,6 +35,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 use Loghound\Setup\Steps;
 
@@ -81,7 +82,7 @@ final class Hosts extends Controller
 
     public function title(): string
     {
-        return 'Websites';
+        return I18n::t('Websites');
     }
 
 
@@ -133,7 +134,7 @@ final class Hosts extends Controller
         return match ($action) {
             'list'    => $this->hostList(),
             'compare' => $this->compare(),
-            default   => ['error' => 'Unknown action'],
+            default   => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -307,10 +308,10 @@ final class Hosts extends Controller
         self::chart(
             'hosts-share',
             '02',
-            'Automation share by host',
-            'Scored sessions per virtual host, split into the five populations.',
+            I18n::t('Automation share by host'),
+            I18n::t('Scored sessions per virtual host, split into the five populations.'),
             360,
-            'Comparing hosts'
+            I18n::t('Comparing hosts')
         );
         $this->explainCard();
     }
@@ -321,11 +322,11 @@ final class Hosts extends Controller
         self::cardOpen(
             'hosts-table',
             '01',
-            'Traffic by virtual host',
-            'All scored sessions in the selected range, grouped by the host the request arrived on.',
+            I18n::t('Traffic by virtual host'),
+            I18n::t('All scored sessions in the selected range, grouped by the host the request arrived on.'),
             $this->exportTool('hosts')
         );
-        self::skeleton('hosts-table', 'rows', 0, 'Grouping sessions by virtual host');
+        self::skeleton('hosts-table', 'rows', 0, I18n::t('Grouping sessions by virtual host'));
 
         echo '<div class="table-wrap"><table id="hosts-table-table" class="table-fixed"'
             . Sorting::tableAttrs('hosts-table', self::hostsOrder()) . '><colgroup>'
@@ -340,15 +341,15 @@ final class Hosts extends Controller
             . '<col style="width:10%"><col style="width:10%"><col style="width:10%">'
             . '<col style="width:10%"><col style="width:10%"><col style="width:10%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('host') . '>Host</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
-            . '<th scope="col" class="num">Humans</th>'
-            . '<th scope="col" class="num">Unknown</th>'
-            . '<th scope="col" class="num">Evasive</th>'
-            . '<th scope="col" class="num">AI crawlers</th>'
-            . '<th scope="col" class="num">Declared</th>'
-            . '<th scope="col" class="num">Automation</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
+            . '<th scope="col"' . Sorting::th('host') . '>' . I18n::html('Host') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Humans') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Unknown') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Evasive') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('AI crawlers') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Declared') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Automation') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('hosts-table');
@@ -384,14 +385,14 @@ final class Hosts extends Controller
            silently forgets whether the operator folded it. */
         echo '<section class="card" id="hosts-none" data-card="hosts-none" hidden>';
         echo '<div class="card-head"><h2><span class="card-num">03</span>'
-            . '<span>No virtual host is being recorded</span></h2></div>';
+            . '<span>' . I18n::html('No virtual host is being recorded') . '</span></h2></div>';
         echo '<p class="pop" id="hosts-none-pop" hidden></p>';
         echo '<div class="explain">';
-        echo '<p>None of the sessions in this range records which virtual host served the request, which '
+        echo '<p>' . I18n::html('None of the sessions in this range records which virtual host served the request, which '
             . 'means the log format in use does not carry it. Everything else in '
-            . 'Loghound works exactly as before; this page is the one thing that cannot.</p>';
-        echo '<p>Apache logs it as <code>%v</code>, and it is the first field of the format Loghound '
-            . 'recommends:</p>';
+            . 'Loghound works exactly as before; this page is the one thing that cannot.') . '</p>';
+        echo '<p>' . I18n::html('Apache logs it as {v}, and it is the first field of the format Loghound '
+            . 'recommends:', ['v' => '<code>%v</code>']) . '</p>';
 
         /* THE CANONICAL STRING, NOT AN ABBREVIATION OF IT. This card used to print a shortened
            line — vhost, duration, referer, User-Agent — and publish it under the nickname
@@ -403,10 +404,12 @@ final class Hosts extends Controller
         echo '<pre class="snippet mono" id="hosts-logformat">'
             . Security::esc(Steps::recommendedLogFormat()) . "\n"
             . Security::esc(Steps::customLogLine(Steps::RECOMMENDED_NICKNAME)) . '</pre>';
-        echo '<p class="faint">nginx records the same thing as <code>$host</code>. '
+        echo '<p class="faint">' . I18n::html('nginx records the same thing as {host}.', ['host' => '<code>$host</code>']) . ' '
             . Security::esc(Steps::rescanAdvice(self::root()))
-            . ' The log sources card is under <a href="?v=settings">Settings</a>. Old documents keep no '
-            . 'host either way, so the comparison covers traffic from that point on.</p>';
+            . ' ' . I18n::html('The log sources card is under {settings}. Old documents keep no '
+            . 'host either way, so the comparison covers traffic from that point on.', [
+                'settings' => '<a href="?v=settings">' . I18n::html('Settings') . '</a>',
+            ]) . '</p>';
         echo '</div>';
         echo '</section>';
     }

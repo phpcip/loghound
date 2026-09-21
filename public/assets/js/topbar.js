@@ -31,11 +31,12 @@
 
 import { api, boot, byId, bytes, dec, el, num, when } from './core.js';
 import { closeDialog, dialogFail, openDialog } from './dialog.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /** The two filter planes, in the order the dialog lists them. */
 const PLANES = [
-    { ns: 'f', key: 'filters', title: 'Traffic filters' },
-    { ns: 'lf', key: 'log_filters', title: 'Search request filters' }
+    { ns: 'f', key: 'filters', title: T('Traffic filters') },
+    { ns: 'lf', key: 'log_filters', title: T('Search request filters') }
 ];
 
 /* -------------------------------------------------------------------------
@@ -154,7 +155,7 @@ export function hostsUnavailable(err) {
         class: 'job-meta',
         id: 'lh-hostpick-failed',
         title: String(err && err.message ? err.message : err),
-        text: 'list unavailable — these figures cover every host'
+        text: T('list unavailable — these figures cover every host')
     }));
 }
 
@@ -262,8 +263,8 @@ function urlForStage(staged) {
 function openFilters() {
     const staged = stage();
     const dialog = openDialog(
-        'Applied filters',
-        'Every number on this page counts only the traffic these leave.'
+        T('Applied filters'),
+        T('Every number on this page counts only the traffic these leave.')
     );
     const body = dialog.body;
 
@@ -285,7 +286,7 @@ function openFilters() {
                 const drop = el('button', {
                     type: 'button',
                     class: 'af-drop',
-                    'aria-label': 'Remove ' + dim.label + ': ' + entry.label
+                    'aria-label': T('Remove {filter}', { filter: dim.label + ': ' + entry.label })
                 }, [el('span', { 'aria-hidden': 'true', text: '×' })]);
                 drop.addEventListener('click', () => {
                     dim.values = dim.values.filter((v) => v.value !== entry.value);
@@ -307,15 +308,15 @@ function openFilters() {
         }
 
         if (!rows.length) {
-            rows.push(el('p', { class: 'muted', text: 'Nothing is filtered.' }));
+            rows.push(el('p', { class: 'muted', text: T('Nothing is filtered.') }));
         }
 
-        const apply = el('button', { type: 'button', class: 'primary', text: 'Apply' });
+        const apply = el('button', { type: 'button', class: 'primary', text: T('Apply') });
         apply.addEventListener('click', () => {
             window.location.href = urlForStage(staged);
         });
 
-        const close = el('button', { type: 'button', class: 'ghost', text: 'Close' });
+        const close = el('button', { type: 'button', class: 'ghost', text: T('Close') });
         close.addEventListener('click', closeDialog);
 
         rows.push(el('div', { class: 'af-actions' }, [apply, close]));
@@ -338,7 +339,7 @@ function mb(value) {
 /** A proportion bar. Loud only at a level the operator is meant to act on. */
 function meter(percent, level) {
     const width = Math.max(0, Math.min(100, Number(percent) || 0));
-    return el('span', { class: 'meter', role: 'img', 'aria-label': dec(width, 1) + '% used' }, [
+    return el('span', { class: 'meter', role: 'img', 'aria-label': T('{pct}% used', { pct: dec(width, 1) }) }, [
         el('span', {
             class: 'meter-fill' + (['warn', 'critical', 'blocked'].indexOf(String(level)) >= 0
                 ? ' meter-fill-loud'
@@ -353,7 +354,7 @@ function quotaRow(label, used, limit, percent, level, note) {
     return el('div', { class: 'res-row' }, [
         el('span', { class: 'res-label', text: label }),
         meter(percent, level),
-        el('span', { class: 'res-figure mono', text: used + ' of ' + limit }),
+        el('span', { class: 'res-figure mono', text: T('{used} of {limit}', { used: used, limit: limit }) }),
         note ? el('span', { class: 'res-note', text: note }) : null
     ]);
 }
@@ -379,24 +380,24 @@ function renderResources(body, data) {
         const used = Number(account.used || 0);
         const limit = Number(account.limit);
         parts.push(el('div', { class: 'res-block' }, [
-            el('h3', { text: 'Indexes' }),
+            el('h3', { text: T('Indexes') }),
             quotaRow(
-                'Against your plan',
+                T('Against your plan'),
                 num(used),
-                num(limit) + ' indexes',
+                T('{n} indexes', { n: num(limit) }),
                 limit > 0 ? (used / limit) * 100 : 0,
                 limit > 0 && used >= limit ? 'critical' : 'ok',
                 account.room === null || account.room === undefined
                     ? ''
-                    : num(account.room) + ' still available'
+                    : T('{n} still available', { n: num(account.room) })
             )
         ]));
     } else {
         parts.push(el('div', { class: 'res-block' }, [
-            el('h3', { text: 'Indexes' }),
+            el('h3', { text: T('Indexes') }),
             el('p', { class: 'muted', text: account.error
-                ? 'The allowance could not be read: ' + account.error
-                : 'No allowance was reported. This account holds ' + num(account.held || 0) + '.' })
+                ? T('The allowance could not be read: {error}', { error: account.error })
+                : T('No allowance was reported. This account holds {n}.', { n: num(account.held || 0) }) })
         ]));
     }
 
@@ -406,20 +407,20 @@ function renderResources(body, data) {
         const span = core.span || {};
         const block = [el('h3', {}, [
             el('span', { class: 'mono', text: String(core.core) }),
-            el('span', { class: 'res-role', text: String(core.role) })
+            el('span', { class: 'res-role', text: ({ hits: T('hits'), sessions: T('sessions') })[core.role] || String(core.role) })
         ])];
 
         block.push(quotaRow(
-            'Bandwidth this month',
+            T('Bandwidth this month'),
             mb(bw.used_mb),
             mb(bw.limit_mb),
             bw.percent,
             bw.level,
-            'resets ' + (data.resets_at ? when(data.resets_at, false) : 'on the 1st')
+            data.resets_at ? T('resets {when}', { when: when(data.resets_at, false) }) : T('resets on the 1st')
         ));
 
         block.push(quotaRow(
-            'Disk',
+            T('Disk'),
             mb(window_.size_mb),
             mb(window_.max_size_mb),
             window_.disk_ratio === null || window_.disk_ratio === undefined
@@ -428,14 +429,17 @@ function renderResources(body, data) {
             window_.disk_ratio !== null && window_.disk_ratio !== undefined && Number(window_.disk_ratio) >= 1
                 ? 'blocked'
                 : 'ok',
-            window_.estimated ? 'size is projected, not reported' : ''
+            window_.estimated ? T('size is projected, not reported') : ''
         ));
 
         block.push(el('p', { class: 'res-span' }, [
             span.days === null || span.days === undefined
-                ? 'Nothing is held in this index yet.'
-                : 'Holding ' + dec(span.days, 1) + ' days, from ' + when(span.oldest, false)
-                    + ' to ' + when(span.newest, false) + '.'
+                ? T('Nothing is held in this index yet.')
+                : T('Holding {days} days, from {from} to {to}.', {
+                    days: dec(span.days, 1),
+                    from: when(span.oldest, false),
+                    to: when(span.newest, false)
+                })
         ]));
 
         if (core.blocked && core.blocked.text) {
@@ -446,13 +450,13 @@ function renderResources(body, data) {
     }
 
     if (!(data.cores || []).length) {
-        parts.push(el('p', { class: 'muted', text: 'No Opensolr index is configured.' }));
+        parts.push(el('p', { class: 'muted', text: T('No Opensolr index is configured.') }));
     }
 
-    const close = el('button', { type: 'button', class: 'ghost', text: 'Close' });
+    const close = el('button', { type: 'button', class: 'ghost', text: T('Close') });
     close.addEventListener('click', closeDialog);
     parts.push(el('div', { class: 'af-actions' }, [
-        el('a', { class: 'primary', href: '?v=usage', text: 'Open Storage & bandwidth' }),
+        el('a', { class: 'primary', href: '?v=usage', text: T('Open Storage & bandwidth') }),
         close
     ]));
 
@@ -461,7 +465,7 @@ function renderResources(body, data) {
 
 /** Open the resources dialog and fetch what it shows. */
 function openResources() {
-    const dialog = openDialog('Opensolr resources', 'Usage against what the plan allows.');
+    const dialog = openDialog(T('Opensolr resources'), T('Usage against what the plan allows.'));
 
     api('usage', 'account').then((data) => {
         renderResources(dialog.body, data);

@@ -38,6 +38,7 @@ import settings from './views/settings.js';
 import indexes from './views/indexes.js';
 import usage from './views/usage.js';
 import hosts, { initHostPicker } from './views/hosts.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /**
  * Does the view on this page honour one of the page-toolbar controls?
@@ -193,10 +194,10 @@ function pageFailed(slug, err) {
     }
     const heading = banner.querySelector('strong');
     if (heading) {
-        heading.textContent = 'This page could not start.';
+        heading.textContent = T('This page could not start.');
     }
-    detail.textContent = 'Nothing on it loaded, because the ' + slug + ' view failed before it asked for any data: '
-        + String(err && err.message ? err.message : err) + ' Reloading the page is the only way to retry.';
+    detail.textContent = T('Nothing on it loaded, because the {view} view failed before it asked for any data: {error} Reloading the page is the only way to retry.',
+        { view: slug, error: String(err && err.message ? err.message : err) });
     banner.hidden = false;
 }
 

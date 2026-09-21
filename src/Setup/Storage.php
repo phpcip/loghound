@@ -59,6 +59,7 @@ declare(strict_types=1);
 namespace Loghound\Setup;
 
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Opensolr;
 use Loghound\Security;
 use Loghound\Solr;
@@ -123,48 +124,49 @@ final class Storage
         $upper = strtoupper($probe);
 
         if (preg_match('/CANNOT_ADD_MORE_THAN_(\d{1,6})_CORES/', $upper, $m) === 1) {
-            return 'Your Opensolr plan allows ' . (int) $m[1] . ' '
-                . ((int) $m[1] === 1 ? 'index' : 'indexes') . ', and they are all in use, so no '
+            return I18n::tn('Your Opensolr plan allows {n} index, and they are all in use, so no '
                 . 'more can be created. Reuse a pair of Loghound indexes this account already '
-                . 'has, delete an index you no longer need, or move to a larger plan.';
+                . 'has, delete an index you no longer need, or move to a larger plan.', 'Your Opensolr plan allows {n} indexes, and they are all in use, so no '
+                . 'more can be created. Reuse a pair of Loghound indexes this account already '
+                . 'has, delete an index you no longer need, or move to a larger plan.', (int) $m[1]);
         }
         if (str_contains($upper, 'AUTHENTICATION_FAILED')
             || str_contains($upper, 'INVALID_API_KEY')
             || str_contains($upper, 'INVALID_USER')) {
-            return 'Opensolr did not accept this email address and API key. Check both in your '
+            return I18n::t('Opensolr did not accept this email address and API key. Check both in your '
                 . 'Opensolr control panel under Account — the key is a single line of letters and '
-                . 'digits, and it is bound to the account the email belongs to.';
+                . 'digits, and it is bound to the account the email belongs to.');
         }
         if (str_contains($upper, 'INVALID_SIGNATURE')) {
-            return 'Opensolr rejected the signature on the request. That is an API key which no '
-                . 'longer matches the account; issue a new one under Account and enter it again.';
+            return I18n::t('Opensolr rejected the signature on the request. That is an API key which no '
+                . 'longer matches the account; issue a new one under Account and enter it again.');
         }
         if (str_contains($upper, 'CORE_NAME_TAKEN')) {
-            return 'That index name is already taken somewhere on the platform. Loghound picks '
-                . 'another and tries again by itself; if you are seeing this, it ran out of attempts.';
+            return I18n::t('That index name is already taken somewhere on the platform. Loghound picks '
+                . 'another and tries again by itself; if you are seeing this, it ran out of attempts.');
         }
         if (str_contains($upper, 'NOT_OWNER') || str_contains($upper, 'INVALID_CORE_NAME')) {
-            return 'This Opensolr account does not own that index, so the platform will not act on '
+            return I18n::t('This Opensolr account does not own that index, so the platform will not act on '
                 . 'it. Check the account email and API key, and that the index has not been deleted '
-                . 'in the Opensolr control panel.';
+                . 'in the Opensolr control panel.');
         }
         if (str_contains($upper, 'WRONG_API_HOST')) {
-            return 'That request went to the wrong Opensolr host. Leave opensolr.api_base at its '
-                . 'default unless Opensolr has told you otherwise.';
+            return I18n::t('That request went to the wrong Opensolr host. Leave opensolr.api_base at its '
+                . 'default unless Opensolr has told you otherwise.');
         }
         if (str_contains($upper, 'INVALID_SERVER_COUNTRY')
             || str_contains($upper, 'SERVER_COUNTRY_DOES_NOT_EXIST')) {
-            return 'Opensolr does not offer that region to this account. Choose one of the regions '
-                . 'in the list, which is the list the platform returned for these credentials.';
+            return I18n::t('Opensolr does not offer that region to this account. Choose one of the regions '
+                . 'in the list, which is the list the platform returned for these credentials.');
         }
         if (str_contains($probe, 'cannot reach the control plane')) {
-            return 'opensolr.com could not be reached from this server. Check that outbound HTTPS is '
-                . 'allowed here, then try again — nothing has been created or changed.';
+            return I18n::t('opensolr.com could not be reached from this server. Check that outbound HTTPS is '
+                . 'allowed here, then try again — nothing has been created or changed.');
         }
         if (str_contains($probe, 'unparseable body')) {
-            return 'Opensolr answered with something that is not a response Loghound understands. '
+            return I18n::t('Opensolr answered with something that is not a response Loghound understands. '
                 . 'Nothing has been created; try again, and if it persists say so in your Opensolr '
-                . 'control panel.';
+                . 'control panel.');
         }
 
         return $raw;
@@ -360,25 +362,25 @@ final class Storage
 
         $email = trim($email);
         if ($email === '') {
-            $errors[] = 'Enter the email address of your Opensolr account.';
+            $errors[] = I18n::t('Enter the email address of your Opensolr account.');
         } elseif (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
-            $errors[] = 'That does not look like an email address.';
+            $errors[] = I18n::t('That does not look like an email address.');
         }
 
         $apiKey = trim($apiKey);
         $stored = (string) $cfg->get('opensolr.api_key', '');
         if ($apiKey === '' && $stored === '') {
-            $errors[] = 'Enter your Opensolr API key. You will find it under Account in your '
-                . 'Opensolr control panel.';
+            $errors[] = I18n::t('Enter your Opensolr API key. You will find it under Account in your '
+                . 'Opensolr control panel.');
         } elseif ($apiKey !== '' && !preg_match('/^[A-Za-z0-9_\-]{8,128}$/D', $apiKey)) {
-            $errors[] = 'That API key does not look right — it should be a single line of '
-                . 'letters, digits, hyphens or underscores with no spaces.';
+            $errors[] = I18n::t('That API key does not look right — it should be a single line of '
+                . 'letters, digits, hyphens or underscores with no spaces.');
         }
 
         $region = trim($region);
         if ($region !== '' && !preg_match('/^[A-Z0-9_]{2,32}$/D', $region)) {
-            $errors[] = 'A region is a name like FINLAND9 — capital letters, digits and '
-                . 'underscores. Leave it blank to keep the one you have.';
+            $errors[] = I18n::t('A region is a name like FINLAND9 — capital letters, digits and '
+                . 'underscores. Leave it blank to keep the one you have.');
         }
 
         if ($errors !== []) {
@@ -431,8 +433,10 @@ final class Storage
      */
     public static function regionRefusal(string $wanted, array $regions): string
     {
-        return 'Opensolr does not offer the region "' . $wanted . '" to this account. '
-            . 'It offers: ' . implode(', ', $regions) . '.';
+        return I18n::t('Opensolr does not offer the region "{region}" to this account. It offers: {regions}.', [
+            'region'  => $wanted,
+            'regions' => implode(', ', $regions),
+        ]);
     }
 
     /**
@@ -466,8 +470,8 @@ final class Storage
         }
         if ($regions === []) {
             throw new \RuntimeException(
-                'Opensolr accepted the request but returned no regions for this account. '
-                . 'Check in your Opensolr control panel that the account is active.'
+                I18n::t('Opensolr accepted the request but returned no regions for this account. '
+                . 'Check in your Opensolr control panel that the account is active.')
             );
         }
         return $regions;
@@ -496,19 +500,19 @@ final class Storage
         return [
             [
                 'key'   => 'verify',
-                'label' => 'Checking your Opensolr credentials',
+                'label' => I18n::t('Checking your Opensolr credentials'),
                 'run'   => static fn(Job $j, Config $c): string => self::checkCredentials($j, $c, $region),
             ],
 
             [
                 'key'   => 'capacity',
-                'label' => 'Checking your plan has room for two indexes',
+                'label' => I18n::t('Checking your plan has room for two indexes'),
                 'run'   => static fn(Job $j, Config $c): string => self::checkCapacity($j, $c),
             ],
 
             [
                 'key'   => 'create_hits',
-                'label' => 'Creating the hits index',
+                'label' => I18n::t('Creating the hits index'),
                 'run'   => static function (Job $j, Config $c) use ($region): array|string {
                     return self::createOne($j, $c, $region, 'hits');
                 },
@@ -516,7 +520,7 @@ final class Storage
 
             [
                 'key'   => 'create_sessions',
-                'label' => 'Creating the sessions index',
+                'label' => I18n::t('Creating the sessions index'),
                 'run'   => static function (Job $j, Config $c) use ($region): array|string {
                     return self::createOne($j, $c, $region, 'sessions');
                 },
@@ -524,13 +528,13 @@ final class Storage
 
             [
                 'key'   => 'connect',
-                'label' => 'Fetching the connection details',
+                'label' => I18n::t('Fetching the connection details'),
                 'run'   => static fn(Job $j, Config $c): string => self::fetchConnection($j, $c),
             ],
 
             [
                 'key'   => 'schema_hits',
-                'label' => 'Uploading the hits schema',
+                'label' => I18n::t('Uploading the hits schema'),
                 'run'   => static function (Job $j, Config $c) use ($root): string {
                     return self::pushConfigset(
                         $j,
@@ -544,7 +548,7 @@ final class Storage
 
             [
                 'key'   => 'schema_sessions',
-                'label' => 'Uploading the sessions schema',
+                'label' => I18n::t('Uploading the sessions schema'),
                 'run'   => static function (Job $j, Config $c) use ($root): string {
                     return self::pushConfigset(
                         $j,
@@ -558,7 +562,7 @@ final class Storage
 
             [
                 'key'   => 'verify_hits',
-                'label' => 'Verifying the hits index answers',
+                'label' => I18n::t('Verifying the hits index answers'),
                 'run'   => static function (Job $j, Config $c): string {
                     return self::verifyCore($j, $c, (string) $c->get('solr.hits_core'));
                 },
@@ -566,7 +570,7 @@ final class Storage
 
             [
                 'key'   => 'verify_sessions',
-                'label' => 'Verifying the sessions index answers',
+                'label' => I18n::t('Verifying the sessions index answers'),
                 'run'   => static function (Job $j, Config $c): string {
                     return self::verifyCore($j, $c, (string) $c->get('solr.sessions_core'));
                 },
@@ -603,13 +607,13 @@ final class Storage
         return [
             [
                 'key'   => 'verify',
-                'label' => 'Checking your Opensolr credentials',
+                'label' => I18n::t('Checking your Opensolr credentials'),
                 'run'   => static fn(Job $j, Config $c): string => self::checkCredentials($j, $c, ''),
             ],
 
             [
                 'key'   => 'adopt',
-                'label' => 'Confirming the indexes are still on your account',
+                'label' => I18n::t('Confirming the indexes are still on your account'),
                 'run'   => static function (Job $j, Config $c) use ($installId): string {
                     return self::adoptPair($j, $c, $installId);
                 },
@@ -617,13 +621,13 @@ final class Storage
 
             [
                 'key'   => 'connect',
-                'label' => 'Fetching the connection details',
+                'label' => I18n::t('Fetching the connection details'),
                 'run'   => static fn(Job $j, Config $c): string => self::fetchConnection($j, $c),
             ],
 
             [
                 'key'   => 'schema_hits',
-                'label' => 'Checking the hits index has the shape this version writes',
+                'label' => I18n::t('Checking the hits index has the shape this version writes'),
                 'run'   => static function (Job $j, Config $c) use ($root, $upgrade): string {
                     return self::reconcileSchema($j, $c, 'hits', $root, $upgrade);
                 },
@@ -631,7 +635,7 @@ final class Storage
 
             [
                 'key'   => 'schema_sessions',
-                'label' => 'Checking the sessions index has the shape this version writes',
+                'label' => I18n::t('Checking the sessions index has the shape this version writes'),
                 'run'   => static function (Job $j, Config $c) use ($root, $upgrade): string {
                     return self::reconcileSchema($j, $c, 'sessions', $root, $upgrade);
                 },
@@ -639,7 +643,7 @@ final class Storage
 
             [
                 'key'   => 'verify_hits',
-                'label' => 'Verifying the hits index answers',
+                'label' => I18n::t('Verifying the hits index answers'),
                 'run'   => static function (Job $j, Config $c): string {
                     return self::verifyCore($j, $c, (string) $c->get('solr.hits_core'));
                 },
@@ -647,7 +651,7 @@ final class Storage
 
             [
                 'key'   => 'verify_sessions',
-                'label' => 'Verifying the sessions index answers',
+                'label' => I18n::t('Verifying the sessions index answers'),
                 'run'   => static function (Job $j, Config $c): string {
                     return self::verifyCore($j, $c, (string) $c->get('solr.sessions_core'));
                 },
@@ -682,7 +686,7 @@ final class Storage
      */
     private static function adoptPair(Job $job, Config $cfg, string $installId): string
     {
-        $job->note('Asking Opensolr which Loghound indexes this account holds …');
+        $job->note(I18n::t('Asking Opensolr which Loghound indexes this account holds …'));
 
         $account = self::account($cfg);
         if (!$account['ok']) {
@@ -692,9 +696,9 @@ final class Storage
         $pair = Pairs::find($account['pairs'], $installId);
         if ($pair === null) {
             throw new \RuntimeException(
-                'That pair of indexes is no longer on this Opensolr account. It may have been '
+                I18n::t('That pair of indexes is no longer on this Opensolr account. It may have been '
                 . 'deleted, or these credentials may belong to a different account. Go back a step '
-                . 'and choose from the list again.'
+                . 'and choose from the list again.')
             );
         }
 
@@ -705,7 +709,7 @@ final class Storage
         $cfg->set('solr.sessions_core', $pair['sessions']);
         self::persist($cfg);
 
-        return 'Using ' . $pair['hits'] . ' and ' . $pair['sessions'] . '.';
+        return I18n::t('Using {hits} and {sessions}.', ['hits' => $pair['hits'], 'sessions' => $pair['sessions']]);
     }
 
     /**
@@ -741,13 +745,13 @@ final class Storage
     {
         $core = (string) $cfg->get($role === 'hits' ? 'solr.hits_core' : 'solr.sessions_core', '');
         if ($core === '') {
-            throw new \RuntimeException('The index name is missing — the previous step did not finish.');
+            throw new \RuntimeException(I18n::t('The index name is missing — the previous step did not finish.'));
         }
 
         $localPath = rtrim($root, '/') . '/solr/' . $role . '/conf/' . Schema::SCHEMA_FILE;
         $localXml  = @file_get_contents($localPath);
         if (!is_string($localXml) || $localXml === '') {
-            throw new \RuntimeException('The schema is missing from this checkout: ' . $localPath);
+            throw new \RuntimeException(I18n::t('The schema is missing from this checkout: {path}', ['path' => $localPath]));
         }
 
         /* THE SCHEMA THAT IS ACTUALLY IN FORCE, WHICHEVER FACTORY THE INDEX IS ON. An index
@@ -759,7 +763,7 @@ final class Storage
 
            The push that follows uploads the whole configset in dependency order and ends with
            the solrconfig that switches the factory, so adopting a managed index also upgrades it. */
-        $job->note('Reading the schema ' . $core . ' is running …');
+        $job->note(I18n::t('Reading the schema {core} is running …', ['core' => $core]));
         $client = self::client($cfg);
         $liveXml = $client->fetchConfigFile($core, 'schema', 'xml');
         if ($liveXml === null) {
@@ -768,10 +772,10 @@ final class Storage
 
         if ($liveXml === null || self::schemaFieldNames($liveXml) === []) {
             throw new \RuntimeException(
-                'Opensolr would not hand back a readable schema for ' . $core . ', so Loghound '
+                I18n::t('Opensolr would not hand back a readable schema for {core}, so Loghound '
                 . 'cannot tell whether it has the shape this version writes — and it will not write '
                 . 'into an index it has not checked. Try again; if it keeps happening, create a new '
-                . 'pair of indexes instead of reusing this one.'
+                . 'pair of indexes instead of reusing this one.', ['core' => $core])
             );
         }
 
@@ -779,27 +783,30 @@ final class Storage
 
         if ($missing === []) {
             Schema::recordRelease($cfg, $role, rtrim($root, '/'));
-            return $core . ' already has every field this version writes.';
+            return I18n::t('{core} already has every field this version writes.', ['core' => $core]);
         }
 
         $named = implode(', ', array_slice($missing, 0, 8))
-            . (count($missing) > 8 ? ' and ' . (count($missing) - 8) . ' more' : '');
+            . (count($missing) > 8 ? ' ' . I18n::t('and {n} more', ['n' => count($missing) - 8]) : '');
 
         if (!$upgrade) {
             throw new \RuntimeException(
-                $core . ' was created by an older version of Loghound: it is missing '
-                . count($missing) . ' of the fields this version writes (' . $named . '). Nothing '
+                I18n::t('{core} was created by an older version of Loghound: it is missing '
+                . '{n} of the fields this version writes ({named}). Nothing '
                 . 'has been changed. Go back a step and tick "update the schema on these indexes" '
                 . 'to add the missing fields — that is additive and it does not touch a single '
-                . 'document already in there — or choose a different pair, or create a new one.'
+                . 'document already in there — or choose a different pair, or create a new one.', [
+                    'core'  => $core,
+                    'n'     => count($missing),
+                    'named' => $named,
+                ])
             );
         }
 
-        $job->note('Adding the missing fields to ' . $core . ' …');
+        $job->note(I18n::t('Adding the missing fields to {core} …', ['core' => $core]));
         $pushed = self::pushConfigset($job, $cfg, $core, rtrim($root, '/') . '/solr/' . $role . '/conf', $role);
 
-        return 'Added ' . count($missing) . ' missing field'
-            . (count($missing) === 1 ? '' : 's') . ' to ' . $core . '. ' . $pushed;
+        return I18n::tn('Added {n} missing field to {core}.', 'Added {n} missing fields to {core}.', count($missing), ['core' => $core]) . ' ' . $pushed;
     }
 
     /**
@@ -891,7 +898,7 @@ final class Storage
      */
     private static function checkCredentials(Job $job, Config $cfg, string $region): string
     {
-        $job->note('Contacting opensolr.com …');
+        $job->note(I18n::t('Contacting opensolr.com …'));
         $regions = self::listRegions($cfg);
         $job->setResult('regions', $regions);
 
@@ -903,10 +910,10 @@ final class Storage
             $cfg->set('opensolr.region', $region);
             self::persist($cfg);
 
-            return 'Credentials accepted; region ' . $region . ' is available.';
+            return I18n::t('Credentials accepted; region {region} is available.', ['region' => $region]);
         }
 
-        return 'Credentials accepted.';
+        return I18n::t('Credentials accepted.');
     }
 
     /**
@@ -934,7 +941,7 @@ final class Storage
      */
     private static function checkCapacity(Job $job, Config $cfg): string
     {
-        $job->note('Asking Opensolr what this account already holds …');
+        $job->note(I18n::t('Asking Opensolr what this account already holds …'));
 
         $account = self::account($cfg);
         if (!$account['ok']) {
@@ -952,9 +959,9 @@ final class Storage
         if ($account['halves'] !== []) {
             foreach ($account['halves'] as $half) {
                 $job->note(
-                    'Note: ' . $half['name'] . ' is on this account without its matching '
-                    . $half['missing'] . ', which is what a setup run that stopped half way leaves '
-                    . 'behind. It still counts against the plan.'
+                    I18n::t('Note: {name} is on this account without its matching '
+                    . '{missing}, which is what a setup run that stopped half way leaves '
+                    . 'behind. It still counts against the plan.', ['name' => $half['name'], 'missing' => $half['missing']])
                 );
             }
         }
@@ -972,12 +979,14 @@ final class Storage
     public static function waysForwardSentence(bool $haveReusable): string
     {
         $text = $haveReusable
-            ? 'This account already holds a pair of Loghound indexes, and reusing it creates '
-                . 'nothing — go back a step and choose it. '
+            ? I18n::t('This account already holds a pair of Loghound indexes, and reusing it creates '
+                . 'nothing — go back a step and choose it.') . ' '
             : '';
 
-        return $text . 'Otherwise delete an index you no longer need at ' . self::URL_INDEXES
-            . ', or move to a plan that allows more at ' . self::URL_PLANS . '.';
+        return $text . I18n::t('Otherwise delete an index you no longer need at {indexes}, or move to a plan that allows more at {plans}.', [
+            'indexes' => self::URL_INDEXES,
+            'plans'   => self::URL_PLANS,
+        ]);
     }
 
     /**
@@ -1006,7 +1015,7 @@ final class Storage
     private static function fetchConnection(Job $job, Config $cfg): string
     {
         $hits = (string) $cfg->get('solr.hits_core', '');
-        $job->note('Asking where ' . $hits . ' lives …');
+        $job->note(I18n::t('Asking where {core} lives …', ['core' => $hits]));
 
         $conn = self::client($cfg)->connectionDetails($hits);
 
@@ -1025,9 +1034,9 @@ final class Storage
            endpoint now get: https, a public host, no embedded credentials. */
         if (Security::safeOutboundUrl((string) $conn['base_url']) === null) {
             throw new \RuntimeException(
-                'Opensolr gave a connection URL for ' . $hits . ' that this installation will not '
+                I18n::t('Opensolr gave a connection URL for {core} that this installation will not '
                 . 'use: it has to be an https URL on a public host with no credentials in it. '
-                . 'Nothing has been saved.'
+                . 'Nothing has been saved.', ['core' => $hits])
             );
         }
 
@@ -1039,7 +1048,7 @@ final class Storage
 
         $host = (string) parse_url($conn['base_url'], PHP_URL_HOST);
 
-        return 'Your indexes are on ' . ($host !== '' ? $host : 'the Opensolr platform') . '.';
+        return I18n::t('Your indexes are on {host}.', ['host' => $host !== '' ? $host : I18n::t('the Opensolr platform')]);
     }
 
     /**
@@ -1074,13 +1083,13 @@ final class Storage
         $cfg->set($key, $name);
         self::persist($cfg);
 
-        $job->note('Creating index ' . $name . ' …');
+        $job->note(I18n::t('Creating index {name} …', ['name' => $name]));
         $res = self::client($cfg)->createIndex($name, $region);
 
         if (!empty($res['status'])) {
             $job->setResult($role, $name);
             $job->setResult('install_id', $installId);
-            return 'Created ' . $name . '.';
+            return I18n::t('Created {name}.', ['name' => $name]);
         }
 
         if (!Opensolr::isNameTaken($res)) {
@@ -1094,18 +1103,18 @@ final class Storage
         if (($job->result()[$role] ?? null) === $name || self::accountOwns($cfg, $name)) {
             $job->setResult($role, $name);
             $job->setResult('install_id', $installId);
-            return 'Index ' . $name . ' already exists from an earlier attempt — reusing it.';
+            return I18n::t('Index {name} already exists from an earlier attempt — reusing it.', ['name' => $name]);
         }
 
         $attempt = $job->nextAttempt();
         if ($attempt >= self::MAX_NAME_ATTEMPTS) {
             throw new \RuntimeException(
-                'Could not find a free index name after ' . $attempt . ' attempts. '
-                . 'That is unusual — try again, and if it persists say so in your Opensolr control panel.'
+                I18n::t('Could not find a free index name after {n} attempts. '
+                . 'That is unusual — try again, and if it persists say so in your Opensolr control panel.', ['n' => $attempt])
             );
         }
 
-        $job->note('The name ' . $name . ' is already taken on the platform; choosing another.');
+        $job->note(I18n::t('The name {name} is already taken on the platform; choosing another.', ['name' => $name]));
 
         self::abandonAttempt($job, $cfg, $role);
 
@@ -1114,7 +1123,7 @@ final class Storage
         $cfg->set('solr.sessions_core', '');
         self::persist($cfg);
 
-        return ['goto' => 'create_hits', 'detail' => 'Name taken; retrying with a new id.'];
+        return ['goto' => 'create_hits', 'detail' => I18n::t('Name taken; retrying with a new id.')];
     }
 
     /**
@@ -1135,9 +1144,9 @@ final class Storage
     {
         $account = self::account($cfg);
 
-        $text = 'Opensolr refused the second index because the plan is full. Loghound checked before '
+        $text = I18n::t('Opensolr refused the second index because the plan is full. Loghound checked before '
             . 'it started and there was room then, so something else on this account took the last '
-            . 'slot in between. Nothing has been left behind. ';
+            . 'slot in between. Nothing has been left behind.') . ' ';
 
         if ($account['ok']) {
             $text .= $account['capacity']['sentence'] . ' ';
@@ -1178,14 +1187,14 @@ final class Storage
             return;
         }
 
-        $job->note('Removing ' . $hits . ', which this attempt created and will not be using …');
+        $job->note(I18n::t('Removing {name}, which this attempt created and will not be using …', ['name' => $hits]));
         try {
             self::client($cfg)->deleteIndex($hits);
-            $job->note('Removed ' . $hits . '. Nothing has been left behind on your account.');
+            $job->note(I18n::t('Removed {name}. Nothing has been left behind on your account.', ['name' => $hits]));
         } catch (\Throwable $e) {
             $job->note(
-                'Could not remove ' . $hits . '. It is still on your Opensolr account and still '
-                . 'counts against your plan — delete it at ' . self::URL_INDEXES . '.'
+                I18n::t('Could not remove {name}. It is still on your Opensolr account and still '
+                . 'counts against your plan — delete it at {url}.', ['name' => $hits, 'url' => self::URL_INDEXES])
             );
         }
     }
@@ -1222,9 +1231,9 @@ final class Storage
             $held = self::client($cfg)->listIndexes();
         } catch (\Throwable $e) {
             throw new \RuntimeException(
-                'The name ' . $name . ' is already taken, and Opensolr could not be asked whether '
+                I18n::t('The name {name} is already taken, and Opensolr could not be asked whether '
                 . 'this account is the one holding it. Nothing has been changed or removed. '
-                . 'Check outbound HTTPS from this server and press Try again.'
+                . 'Check outbound HTTPS from this server and press Try again.', ['name' => $name])
             );
         }
 
@@ -1256,13 +1265,13 @@ final class Storage
         string $role = ''
     ): string {
         if ($core === '') {
-            throw new \RuntimeException('The index name is missing — the previous step did not finish.');
+            throw new \RuntimeException(I18n::t('The index name is missing — the previous step did not finish.'));
         }
         if (!is_dir($confDir)) {
-            throw new \RuntimeException('The configset directory is missing from this checkout: ' . $confDir);
+            throw new \RuntimeException(I18n::t('The configset directory is missing from this checkout: {path}', ['path' => $confDir]));
         }
 
-        $job->note('Uploading the schema to ' . $core . ' …');
+        $job->note(I18n::t('Uploading the schema to {core} …', ['core' => $core]));
         $results = self::client($cfg)->pushConfigSet($core, $confDir);
 
         $failed = [];
@@ -1274,9 +1283,8 @@ final class Storage
         }
         if ($failed !== []) {
             throw new \RuntimeException(
-                'The index was created but its configuration was rejected: ' . implode(', ', $failed)
-                . '. The index is in your Opensolr control panel; you can upload the files from '
-                . 'solr/ by hand there, or press Try again.'
+                I18n::t('The index was created but its configuration was rejected: {files}. The index is in your Opensolr control panel; you can upload the files from '
+                . 'solr/ by hand there, or press Try again.', ['files' => implode(', ', $failed)])
             );
         }
 
@@ -1284,13 +1292,13 @@ final class Storage
             Schema::recordRelease($cfg, $role, dirname($confDir, 3));
         }
 
-        return 'Schema and solrconfig uploaded, index reloaded.';
+        return I18n::t('Schema and solrconfig uploaded, index reloaded.');
     }
 
     /** Prove Loghound itself can reach and authenticate to a core. */
     private static function verifyCore(Job $job, Config $cfg, string $core): string
     {
-        $job->note('Querying ' . $core . ' …');
+        $job->note(I18n::t('Querying {core} …', ['core' => $core]));
         $probe = self::probeCore($cfg, $core);
         if (!$probe['ok']) {
             throw new \RuntimeException($probe['message']);
@@ -1313,14 +1321,14 @@ final class Storage
         return [
             [
                 'key'   => 'hits',
-                'label' => 'Querying the hits core',
+                'label' => I18n::t('Querying the hits core'),
                 'run'   => static function (Job $j, Config $c): string {
                     return self::verifyCore($j, $c, (string) $c->get('solr.hits_core'));
                 },
             ],
             [
                 'key'   => 'sessions',
-                'label' => 'Querying the sessions core',
+                'label' => I18n::t('Querying the sessions core'),
                 'run'   => static function (Job $j, Config $c): string {
                     return self::verifyCore($j, $c, (string) $c->get('solr.sessions_core'));
                 },
@@ -1355,14 +1363,14 @@ final class Storage
         if ($base === '') {
             return [
                 'ok' => false,
-                'message' => 'No Solr address has been configured yet.',
+                'message' => I18n::t('No Solr address has been configured yet.'),
                 'fix' => [],
             ];
         }
         if ($core === '' || !Security::isSafeCoreName($core)) {
             return [
                 'ok' => false,
-                'message' => 'The index name is missing or invalid.',
+                'message' => I18n::t('The index name is missing or invalid.'),
                 'fix' => [],
             ];
         }
@@ -1383,8 +1391,11 @@ final class Storage
         $found = (int) ($res['response']['numFound'] ?? 0);
         return [
             'ok' => true,
-            'message' => $core . ' answered on ' . $where . ' and holds '
-                . number_format($found) . ' document' . ($found === 1 ? '' : 's') . '.',
+            'message' => I18n::tn('{core} answered on {where} and holds {n} document.', '{core} answered on {where} and holds {n} documents.', $found, [
+                'core'  => $core,
+                'where' => $where,
+                'n'     => number_format($found),
+            ]),
             'fix' => [],
         ];
     }
@@ -1411,7 +1422,7 @@ final class Storage
     {
         $host = (string) parse_url($base, PHP_URL_HOST);
         if ($host === '') {
-            return 'the configured address';
+            return I18n::t('the configured address');
         }
         $port = parse_url($base, PHP_URL_PORT);
         if ($port === null || $port === false) {
@@ -1436,30 +1447,30 @@ final class Storage
         $lower = strtolower($raw);
 
         if (str_contains($lower, 'connection refused')) {
-            return 'Connection refused to ' . $where . ' — nothing is listening there. Check the '
-                . 'address, and that Solr is running.';
+            return I18n::t('Connection refused to {where} — nothing is listening there. Check the '
+                . 'address, and that Solr is running.', ['where' => $where]);
         }
         if (str_contains($lower, 'could not resolve') || str_contains($lower, 'name or service not known')) {
-            return 'The name in the address could not be resolved from this server (' . $where . ').';
+            return I18n::t('The name in the address could not be resolved from this server ({where}).', ['where' => $where]);
         }
         if (str_contains($lower, 'timed out') || str_contains($lower, 'timeout')) {
-            return 'No answer from ' . $where . ' before the timeout. Usually a firewall between '
-                . 'this server and Solr.';
+            return I18n::t('No answer from {where} before the timeout. Usually a firewall between '
+                . 'this server and Solr.', ['where' => $where]);
         }
         if (str_contains($lower, 'certificate') || str_contains($lower, 'ssl')) {
-            return 'The TLS certificate of ' . $where . ' was rejected. Loghound will not send '
-                . 'credentials over an unverified connection.';
+            return I18n::t('The TLS certificate of {where} was rejected. Loghound will not send '
+                . 'credentials over an unverified connection.', ['where' => $where]);
         }
         if (str_contains($lower, '401') || str_contains($lower, 'unauthorized')) {
-            return $where . ' answered, but refused the username and password.';
+            return I18n::t('{where} answered, but refused the username and password.', ['where' => $where]);
         }
         if (str_contains($lower, '403') || str_contains($lower, 'forbidden')) {
-            return $where . ' answered, but this account is not allowed to read ' . $core . '.';
+            return I18n::t('{where} answered, but this account is not allowed to read {core}.', ['where' => $where, 'core' => $core]);
         }
         if (str_contains($lower, '404') || str_contains($lower, 'not found')) {
-            return $where . ' answered, but there is no core called ' . $core . ' on it.';
+            return I18n::t('{where} answered, but there is no core called {core} on it.', ['where' => $where, 'core' => $core]);
         }
-        return $where . ' did not answer as expected: ' . $raw;
+        return I18n::t('{where} did not answer as expected: {error}', ['where' => $where, 'error' => $raw]);
     }
 
     /**
@@ -1477,7 +1488,7 @@ final class Storage
             return $explained;
         }
 
-        return 'Opensolr refused the request: ' . $explained;
+        return I18n::t('Opensolr refused the request: {error}', ['error' => $explained]);
     }
 
     /**

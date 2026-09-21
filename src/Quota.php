@@ -290,14 +290,14 @@ final class Quota
     public function usage(string $core, bool $force = false): array
     {
         if (!Security::isSafeCoreName($core)) {
-            return self::unknown($core, 'refused', 'That is not a valid Opensolr index name.');
+            return self::unknown($core, 'refused', I18n::t('That is not a valid Opensolr index name.'));
         }
         if ($this->api === null) {
             return self::unknown(
                 $core,
                 'not_configured',
-                'No Opensolr API key is configured, so Loghound cannot read the account\'s plan. '
-                . 'Until one is set there is no limit to work against and nothing is trimmed by size.'
+                I18n::t('No Opensolr API key is configured, so Loghound cannot read the account\'s plan. '
+                . 'Until one is set there is no limit to work against and nothing is trimmed by size.')
             );
         }
 
@@ -357,8 +357,8 @@ final class Quota
         } catch (\Throwable $e) {
             return $this->put($core, [
                 'state'     => 'unreachable',
-                'message'   => 'Opensolr could not be reached for the plan usage of this index. '
-                    . 'Any figures shown are the last ones it reported.',
+                'message'   => I18n::t('Opensolr could not be reached for the plan usage of this index. '
+                    . 'Any figures shown are the last ones it reported.'),
                 'failed_at' => $now,
             ], true);
         }
@@ -449,7 +449,7 @@ final class Quota
             return self::unknown(
                 $core,
                 $state === 'ok' ? 'unknown' : $state,
-                (string) ($entry['message'] ?? 'No plan usage has been read for this index yet.')
+                (string) ($entry['message'] ?? I18n::t('No plan usage has been read for this index yet.'))
             );
         }
 
@@ -573,7 +573,7 @@ final class Quota
             'resets_in'   => self::secondsToReset(),
             'age_sec'     => $usage['age_sec'],
             'upgrade_url' => $this->upgradeUrl(),
-            'consequence' => self::CONSEQUENCE,
+            'consequence' => I18n::t(self::CONSEQUENCE),
             'headline'    => self::bandwidthHeadline($level),
         ];
     }
@@ -606,15 +606,15 @@ final class Quota
     {
         switch ($level) {
             case 'blocked':
-                return 'Bandwidth quota exceeded — this index is blocked.';
+                return I18n::t('Bandwidth quota exceeded — this index is blocked.');
             case 'critical':
-                return 'Bandwidth is nearly used up for this month.';
+                return I18n::t('Bandwidth is nearly used up for this month.');
             case 'warn':
-                return 'Bandwidth is past the level worth watching.';
+                return I18n::t('Bandwidth is past the level worth watching.');
             case 'unknown':
-                return 'Bandwidth usage is not known yet.';
+                return I18n::t('Bandwidth usage is not known yet.');
             default:
-                return 'Bandwidth is within the plan.';
+                return I18n::t('Bandwidth is within the plan.');
         }
     }
 
@@ -714,16 +714,19 @@ final class Quota
         $parts = [];
 
         if ($observed !== null) {
-            $parts[] = 'You have ' . self::days($observed) . ' of traffic in this index right now.';
+            $parts[] = I18n::t('You have {span} of traffic in this index right now.', ['span' => self::days($observed)]);
         }
 
         if ($limitedBy === 'size' && $plan !== null && $max !== null) {
-            $parts[] = 'At the current rate your ' . self::mb($max) . ' plan holds roughly '
-                . self::days($plan) . ', and Loghound keeps the window at about that by deleting '
-                . 'the oldest data before it writes new data.';
+            $parts[] = I18n::t('At the current rate your {size} plan holds roughly {span}, and Loghound keeps the window at about that by deleting '
+                . 'the oldest data before it writes new data.', ['size' => self::mb($max), 'span' => self::days($plan)]);
         } elseif ($limitedBy === 'time' && $time !== null) {
-            $parts[] = 'Your age limit keeps ' . self::days($time) . ', which is what limits the window'
-                . ($plan !== null ? ' — the plan itself would hold roughly ' . self::days($plan) . '.' : '.');
+            $parts[] = $plan !== null
+                ? I18n::t('Your age limit keeps {span}, which is what limits the window — the plan itself would hold roughly {plan}.', [
+                    'span' => self::days($time),
+                    'plan' => self::days($plan),
+                ])
+                : I18n::t('Your age limit keeps {span}, which is what limits the window.', ['span' => self::days($time)]);
         } elseif ($limitedBy === 'none') {
             /* "NOTHING IS BEING DELETED" IS ONLY TRUE IF THE SIZE RULE IS ALSO OFF. `limitedBy`
                falls to 'none' whenever the window cannot be PROJECTED — and it cannot be
@@ -733,23 +736,23 @@ final class Quota
                told the rate is not known yet. Not knowing how far back the data goes is not the
                same fact as nothing being deleted, and the two branches say so separately. */
             $parts[] = $this->enabled()
-                ? 'How far back the data goes cannot be stated yet: no age limit is set, and the plan '
+                ? I18n::t('How far back the data goes cannot be stated yet: no age limit is set, and the plan '
                   . 'disk quota for this index has not been read. Data is still deleted when the index '
-                  . 'runs out of that disk, oldest first.'
-                : 'Nothing limits how far back the data goes: there is no age limit, and deleting for '
+                  . 'runs out of that disk, oldest first.')
+                : I18n::t('Nothing limits how far back the data goes: there is no age limit, and deleting for '
                   . 'size is switched off. An index that reaches its Opensolr disk quota is blocked by '
-                  . 'the platform, reads included.';
+                  . 'the platform, reads included.');
         }
 
         if ($rate !== null) {
-            $parts[] = 'Current ingest is about ' . self::mb($rate) . ' per day.';
+            $parts[] = I18n::t('Current ingest is about {size} per day.', ['size' => self::mb($rate)]);
         } else {
-            $parts[] = 'The ingest rate is not known yet — it needs at least two usage readings '
-                . 'ten minutes apart — so the window cannot be projected.';
+            $parts[] = I18n::t('The ingest rate is not known yet — it needs at least two usage readings '
+                . 'ten minutes apart — so the window cannot be projected.');
         }
 
         if ($plan !== null || $rate !== null) {
-            $parts[] = 'These are estimates from observed growth, not exact figures.';
+            $parts[] = I18n::t('These are estimates from observed growth, not exact figures.');
         }
 
         return implode(' ', $parts);
@@ -783,10 +786,11 @@ final class Quota
             'percent' => round($ratio * 100, 1),
             'reason'  => (string) ($trim['message'] ?? 'unknown reason'),
             'at'      => (int) ($trim['at'] ?? 0),
-            'text'    => 'Loghound could not free space in this index. It is at '
-                . round($ratio * 100, 1) . '% of the plan limit and the rolling trim failed: '
-                . (string) ($trim['message'] ?? 'unknown reason')
-                . ' If it reaches the limit, Opensolr blocks the index completely — reads as well as writes.',
+            'text'    => I18n::t('Loghound could not free space in this index. It is at {percent}% of the plan limit and the rolling trim failed: {reason} '
+                . 'If it reaches the limit, Opensolr blocks the index completely — reads as well as writes.', [
+                    'percent' => round($ratio * 100, 1),
+                    'reason'  => (string) ($trim['message'] ?? I18n::t('unknown reason')),
+                ]),
         ];
     }
 
@@ -1227,7 +1231,7 @@ final class Quota
             return ['state' => 'ok', 'message' => ''];
         } catch (\Throwable $e) {
             if (self::blackout($e)) {
-                return ['state' => 'blocked', 'message' => self::BLOCKED_MESSAGE];
+                return ['state' => 'blocked', 'message' => I18n::t(self::BLOCKED_MESSAGE)];
             }
             return ['state' => 'unreachable', 'message' => 'Solr did not answer: ' . $e->getMessage()];
         }
@@ -1444,12 +1448,13 @@ final class Quota
     {
         if ($days < 1.0) {
             $hours = max(1, (int) round($days * 24));
-            return $hours . ' hour' . ($hours === 1 ? '' : 's');
+            return I18n::tn('{n} hour', '{n} hours', $hours);
         }
         if ($days < 10.0) {
-            return rtrim(rtrim(number_format($days, 1), '0'), '.') . ' days';
+            $shown = rtrim(rtrim(number_format($days, 1), '0'), '.');
+            return I18n::tn('{n} day', '{n} days', (float) $shown, ['n' => $shown]);
         }
-        return number_format($days, 0) . ' days';
+        return I18n::tn('{n} day', '{n} days', round($days), ['n' => number_format($days, 0)]);
     }
 
     /** Megabytes rendered at the scale a human reads them. */

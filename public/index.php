@@ -97,6 +97,7 @@ require __DIR__ . '/../src/autoload.php';
 use Loghound\Auth\Persistence;
 use Loghound\Config;
 use Loghound\Geo\Countries;
+use Loghound\I18n;
 use Loghound\Panel\Controller;
 use Loghound\Panel\Gateway;
 use Loghound\Panel\JobHost;
@@ -116,6 +117,11 @@ header('Cache-Control: no-store, private');
 
 $configPath = __DIR__ . '/../config/loghound.php';
 $cfg = Config::load($configPath);
+
+if (isset($_GET['i18n'])) {
+    I18n::serve(dirname(__DIR__), $_GET['i18n'], $_GET['h'] ?? null);
+}
+I18n::boot(dirname(__DIR__), (string) $cfg->get('ui.language', I18n::SOURCE));
 Query::setTimezone((string) $cfg->get('ui.timezone', 'UTC'));
 
 /* The trusted-proxy list is read once and handed to the two places that need it before any
@@ -144,8 +150,8 @@ if (Installer::isNeeded($cfg)) {
 
     if ($panelApi || $panelPost) {
         json_out([
-            'error' => 'This Loghound installation has been removed, so there is nothing left to '
-                . 'ask. Setup is where this address goes now.',
+            'error' => I18n::t('This Loghound installation has been removed, so there is nothing left to '
+                . 'ask. Setup is where this address goes now.'),
             'setup' => './',
         ], 409);
     }
@@ -243,7 +249,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             error_log('loghound/panel: POST failed: ' . Jobs::redact($e->getMessage()));
             http_response_code(500);
             header('Content-Type: text/plain; charset=utf-8');
-            exit("The action could not be completed. See the server error log for details.\n");
+            exit(I18n::t('The action could not be completed. See the server error log for details.') . "\n");
         }
         header('Location: ' . $target, true, 303);
         exit;
@@ -251,7 +257,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     http_response_code(405);
     header('Allow: GET, HEAD');
     header('Content-Type: text/plain; charset=utf-8');
-    exit("This view does not accept POST.\n");
+    exit(I18n::t('This view does not accept POST.') . "\n");
 }
 
 /* The CSV export path: `?v=<view>&export=<dataset>`.
@@ -277,7 +283,7 @@ if (is_string($export) && $export !== '') {
         http_response_code(404);
         header('Content-Type: text/plain; charset=utf-8');
         header('Cache-Control: no-store, private');
-        exit("This view has no such export.\n");
+        exit(I18n::t('This view has no such export.') . "\n");
     }
 
     try {
@@ -287,7 +293,7 @@ if (is_string($export) && $export !== '') {
         if (!headers_sent()) {
             http_response_code(500);
             header('Content-Type: text/plain; charset=utf-8');
-            exit("The export could not be produced. See the server error log.\n");
+            exit(I18n::t('The export could not be produced. See the server error log.') . "\n");
         }
     }
     exit;
@@ -296,14 +302,14 @@ if (is_string($export) && $export !== '') {
 $action = $_GET['api'] ?? null;
 if (is_string($action) && $action !== '') {
     if (!preg_match('/^[a-z_]{1,32}$/D', $action)) {
-        json_out(['error' => 'Unknown action'], 400);
+        json_out(['error' => I18n::t('Unknown action')], 400);
     }
 
     try {
         $payload = $view->api($action);
     } catch (Throwable $e) {
         error_log('[loghound-panel] ' . Jobs::redact($e->getMessage()));
-        json_out(['error' => 'The panel could not complete that request. See the server error log.'], 500);
+        json_out(['error' => I18n::t('The panel could not complete that request. See the server error log.')], 500);
     }
 
     /* WHEN THESE NUMBERS WERE COMPUTED, on every payload without exception. Attached here

@@ -27,6 +27,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Networks extends Controller
@@ -65,7 +66,7 @@ final class Networks extends Controller
 
     public function title(): string
     {
-        return 'Networks';
+        return I18n::t('Networks');
     }
 
 
@@ -186,7 +187,7 @@ final class Networks extends Controller
             'types'    => $this->types(),
             'netnames' => $this->netnames(),
             'geo'      => $this->geo(),
-            default    => ['error' => 'Unknown action'],
+            default    => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -401,18 +402,18 @@ final class Networks extends Controller
         self::chart(
             'net-types',
             '03',
-            'Sessions by network type',
-            'All sessions in range, grouped by the kind of network they came from.',
+            I18n::t('Sessions by network type'),
+            I18n::t('All sessions in range, grouped by the kind of network they came from.'),
             300,
-            'Faceting network types'
+            I18n::t('Faceting network types')
         );
         self::chart(
             'net-map',
             '04',
-            'Where they answered from',
-            'All sessions in range, plotted at country centroids — country resolution only, not city.',
+            I18n::t('Where they answered from'),
+            I18n::t('All sessions in range, plotted at country centroids — country resolution only, not city.'),
             300,
-            'Geolocating sessions'
+            I18n::t('Geolocating sessions')
         );
         echo '</div>';
 
@@ -424,8 +425,8 @@ final class Networks extends Controller
     /** Headline network counters. */
     private function totalsCard(): void
     {
-        self::cardOpen('net-stats', '01', 'Network totals', 'All sessions in the selected range.');
-        self::skeleton('net-stats', 'stats', 0, 'Counting distinct addresses and networks');
+        self::cardOpen('net-stats', '01', I18n::t('Network totals'), I18n::t('All sessions in the selected range.'));
+        self::skeleton('net-stats', 'stats', 0, I18n::t('Counting distinct addresses and networks'));
 
         /* EVERY ONE OF THESE OPENS, and they do not all open the same kind of thing. Two are
            populations of VISITS — every session in scope, and the ones answering from hosting
@@ -434,22 +435,22 @@ final class Networks extends Controller
            visits would not answer it, so those open the value list for their dimension. */
         echo '<div class="stats">';
         foreach ([
-            ['sessions',  'Sessions',         'In the selected range',
-                ['pop', 'pop', 'all'], 'Every visit in the selected range and filters.'],
-            ['uniq_ips',  'Distinct IPs',     'Approximate above ~100 (Solr unique())',
+            ['sessions',  I18n::t('Sessions'),         I18n::t('In the selected range'),
+                ['pop', 'pop', 'all'], I18n::t('Every visit in the selected range and filters.')],
+            ['uniq_ips',  I18n::t('Distinct IPs'),     I18n::t('Approximate above ~100 (Solr unique())'),
                 ['dimlist', 'dim', 'ip_s'], ''],
-            ['uniq_asns', 'Distinct ASNs',    'Autonomous systems seen',
+            ['uniq_asns', I18n::t('Distinct ASNs'),    I18n::t('Autonomous systems seen'),
                 ['dimlist', 'dim', 'asn_i'], ''],
-            ['hosting',   'From datacentres', 'Sessions on hosting or VPN networks',
+            ['hosting',   I18n::t('From datacentres'), I18n::t('Sessions on hosting or VPN networks'),
                 ['pop', 'pop', 'datacentre'],
-                'Visits answering from hosting or VPN address space, which is where automation lives.'],
+                I18n::t('Visits answering from hosting or VPN address space, which is where automation lives.')],
         ] as [$key, $label, $hint, $open, $why]) {
             [$kind, $attr, $value] = $open;
             echo '<button type="button" class="stat stat-open"'
                 . ' data-lh-open="' . Security::esc($kind) . '"'
                 . ' data-' . Security::esc($attr) . '="' . Security::esc($value) . '"'
                 . ($why === '' ? '' : ' data-why="' . Security::esc($why) . '"')
-                . ' aria-label="' . Security::esc('Open ' . $label) . '">';
+                . ' aria-label="' . Security::esc(I18n::t('Open {label}', ['label' => $label])) . '">';
             echo '<span class="stat-label">' . Security::esc($label) . '</span>';
             echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
             echo '<span class="stat-hint">' . Security::esc($hint) . '</span>';
@@ -467,12 +468,12 @@ final class Networks extends Controller
         self::cardOpen(
             'net-asns',
             '02',
-            'Autonomous systems',
-            'All sessions in range. Box area is sessions, colour is network type — a large hosting box and a large '
-            . 'consumer-ISP box are opposite findings.',
+            I18n::t('Autonomous systems'),
+            I18n::t('All sessions in range. Box area is sessions, colour is network type — a large hosting box and a large '
+            . 'consumer-ISP box are opposite findings.'),
             $this->exportTool('asns')
         );
-        self::skeleton('net-asns', 'chart', 420, 'Faceting autonomous systems');
+        self::skeleton('net-asns', 'chart', 420, I18n::t('Faceting autonomous systems'));
 
         echo '<div id="net-asns-legend" class="controls"></div>';
         echo '<div class="chart" id="net-treemap" style="height:420px"></div>';
@@ -481,11 +482,11 @@ final class Networks extends Controller
             . '<col style="width:34%"><col style="width:12%"><col style="width:11%">'
             . '<col style="width:12%"><col style="width:31%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('network') . '>Network</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
-            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>IPs</th>'
-            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
-            . '<th scope="col">Mix</th>'
+            . '<th scope="col"' . Sorting::th('network') . '>' . I18n::html('Network') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>' . I18n::html('IPs') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>' . I18n::html('Requests') . '</th>'
+            . '<th scope="col">' . I18n::html('Mix') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('net-asns');
@@ -497,23 +498,23 @@ final class Networks extends Controller
         self::cardOpen(
             'net-netnames',
             '05',
-            'Netblocks',
-            'All sessions in range, grouped by RIR netname. The netname is the level that exposes a leased range: '
-            . 'the ASN says "Amazon", the netname says which customer.',
+            I18n::t('Netblocks'),
+            I18n::t('All sessions in range, grouped by RIR netname. The netname is the level that exposes a leased range: '
+            . 'the ASN says "Amazon", the netname says which customer.'),
             $this->exportTool('netnames')
         );
-        self::skeleton('net-netnames', 'rows', 0, 'Faceting netblocks');
+        self::skeleton('net-netnames', 'rows', 0, I18n::t('Faceting netblocks'));
 
         echo '<div class="table-wrap"><table id="net-netnames-table" class="table-fixed"'
             . Sorting::tableAttrs('net-netnames', self::netnamesOrder()) . '><colgroup>'
             . '<col style="width:34%"><col style="width:12%"><col style="width:11%">'
             . '<col style="width:12%"><col style="width:31%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('netblock') . '>Netblock</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
-            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>IPs</th>'
-            . '<th scope="col" class="num"' . Sorting::th('prints', 'desc') . '>Prints</th>'
-            . '<th scope="col">Mix</th>'
+            . '<th scope="col"' . Sorting::th('netblock') . '>' . I18n::html('Netblock') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>' . I18n::html('IPs') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('prints', 'desc') . '>' . I18n::html('Prints') . '</th>'
+            . '<th scope="col">' . I18n::html('Mix') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('net-netnames');
@@ -525,24 +526,24 @@ final class Networks extends Controller
         self::cardOpen(
             'net-countries',
             '06',
-            'Countries',
-            'All sessions in range, grouped by the country the IP geolocates to. Geolocating a datacentre address '
-            . 'tells you where the machine is, not where its operator is.',
+            I18n::t('Countries'),
+            I18n::t('All sessions in range, grouped by the country the IP geolocates to. Geolocating a datacentre address '
+            . 'tells you where the machine is, not where its operator is.'),
             $this->exportTool('countries')
         );
-        self::skeleton('net-countries', 'rows', 0, 'Faceting countries');
+        self::skeleton('net-countries', 'rows', 0, I18n::t('Faceting countries'));
 
         echo '<div class="table-wrap"><table id="net-countries-table" class="table-fixed"'
             . Sorting::tableAttrs('net-countries', self::countriesOrder()) . '><colgroup>'
             . '<col style="width:24%"><col style="width:12%"><col style="width:10%">'
             . '<col style="width:11%"><col style="width:11%"><col style="width:32%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('country') . '>Country</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
-            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>IPs</th>'
-            . '<th scope="col" class="num">Human</th>'
-            . '<th scope="col" class="num">Evasive</th>'
-            . '<th scope="col">Top cities</th>'
+            . '<th scope="col"' . Sorting::th('country') . '>' . I18n::html('Country') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>' . I18n::html('IPs') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Human') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Evasive') . '</th>'
+            . '<th scope="col">' . I18n::html('Top cities') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('net-countries');

@@ -55,6 +55,7 @@ declare(strict_types=1);
 namespace Loghound\Setup;
 
 use Loghound\Config;
+use Loghound\I18n;
 
 final class Teardown
 {
@@ -212,7 +213,7 @@ final class Teardown
     /** The label of one step, by id. */
     public static function label(string $id): string
     {
-        return self::STEPS[$id] ?? $id;
+        return isset(self::STEPS[$id]) ? I18n::t(self::STEPS[$id]) : $id;
     }
 
     /** Is this a step the panel can carry out on its own? */
@@ -236,30 +237,30 @@ final class Teardown
     public static function shellOnlyReasons(): array
     {
         return [
-            'services'  => 'Left running and still enabled at boot, because ingestion is meant to '
+            'services'  => I18n::t('Left running and still enabled at boot, because ingestion is meant to '
                 . 'resume once setup is finished — and because stopping or removing '
                 . 'loghound-tail.service and both timers is a systemd operation that needs root. '
                 . 'Until you stop it the reader keeps the configuration it started with, and keeps '
-                . 'trying to write to indexes that are being deleted: noisy, not harmful.',
-            'webserver' => 'Left in place. The vhost is what serves this panel and the installer you '
+                . 'trying to write to indexes that are being deleted: noisy, not harmful.'),
+            'webserver' => I18n::t('Left in place. The vhost is what serves this panel and the installer you '
                 . 'are about to land on, so removing it here would take the machine away mid-run. '
                 . 'install/uninstall.sh removes it when you want Loghound gone entirely — as root, '
                 . 'and only when the file carries the GENERATED banner install.sh puts in the ones '
-                . 'it wrote.',
-            'fpm'       => 'Left in place. The dedicated PHP-FPM pool is the process this request is '
+                . 'it wrote.'),
+            'fpm'       => I18n::t('Left in place. The dedicated PHP-FPM pool is the process this request is '
                 . 'running in, its socket belongs to the pool manager, and retiring one means '
-                . 'reloading php-fpm as root. install/uninstall.sh does it.',
-            'links'     => 'Left in place. The command links in /usr/local/bin, and any cron or '
+                . 'reloading php-fpm as root. install/uninstall.sh does it.'),
+            'links'     => I18n::t('Left in place. The command links in /usr/local/bin, and any cron or '
                 . 'logrotate fragment in /etc, belong to the machine installation rather than to '
                 . 'this installation\'s data, and setup uses them. Both need root; '
-                . 'install/uninstall.sh removes them.',
-            'tree'      => 'Left in place. The install tree is the application itself, so setup needs '
+                . 'install/uninstall.sh removes them.'),
+            'tree'      => I18n::t('Left in place. The install tree is the application itself, so setup needs '
                 . 'it. It is usually owned by root, and removing it is the one step that takes the '
-                . 'uninstaller away with it — which is install/uninstall.sh\'s job, not this one\'s.',
-            'user'      => 'Left in place. The service user owns this tree and runs the reader. '
+                . 'uninstaller away with it — which is install/uninstall.sh\'s job, not this one\'s.'),
+            'user'      => I18n::t('Left in place. The service user owns this tree and runs the reader. '
                 . 'Removing it and its adm membership is userdel and gpasswd, which need root, and '
                 . 'it has to happen after everything it owns is gone; install/uninstall.sh does both '
-                . 'in that order.',
+                . 'in that order.'),
         ];
     }
 
@@ -288,112 +289,112 @@ final class Teardown
     {
         return [
             [
-                'what'    => 'Your two Loghound indexes, and every document in them',
-                'happens' => 'Permanently deleted from your Opensolr account. Every hit and every '
+                'what'    => I18n::t('Your two Loghound indexes, and every document in them'),
+                'happens' => I18n::t('Permanently deleted from your Opensolr account. Every hit and every '
                     . 'session Loghound has ever recorded goes with them. There is no undo, and '
                     . 'Opensolr index names are unique across the whole platform and are never '
                     . 'released, so neither name can ever be created again — by you or by anyone. '
-                    . 'Setup provisions a new pair under a new installation id.',
+                    . 'Setup provisions a new pair under a new installation id.'),
             ],
             [
-                'what'    => 'Keeping the data',
-                'happens' => 'The only way is a backup taken in Opensolr BEFORE you press this. '
+                'what'    => I18n::t('Keeping the data'),
+                'happens' => I18n::t('The only way is a backup taken in Opensolr BEFORE you press this. '
                     . 'Opensolr backups are a separately billed feature, so if you have not bought '
                     . 'one and taken it, there is no copy of this data anywhere and there will not '
-                    . 'be one afterwards.',
+                    . 'be one afterwards.'),
             ],
             [
-                'what'    => 'Nothing else on your Opensolr account',
-                'happens' => 'Untouched. Only the two names this installation created are deleted, '
+                'what'    => I18n::t('Nothing else on your Opensolr account'),
+                'happens' => I18n::t('Untouched. Only the two names this installation created are deleted, '
                     . 'only after they are derived from solr.install_id and match what is stored, '
                     . 'and only after the platform\'s own listing confirms your account holds them. '
                     . 'Nothing local is removed until the listing has been read again and says both '
-                    . 'names are gone.',
+                    . 'names are gone.'),
             ],
             [
-                'what'    => 'Your Opensolr account details',
-                'happens' => 'Deleted. The email, the API key and the region go with the '
+                'what'    => I18n::t('Your Opensolr account details'),
+                'happens' => I18n::t('Deleted. The email, the API key and the region go with the '
                     . 'configuration, and nothing about your plan\'s index allowance is remembered '
                     . 'anywhere — it is read back from the platform whenever it is needed. Setup '
                     . 'asks for the account from scratch. It is not kept so that setup can offer you '
                     . 'the indexes that account already holds: the two this installation held are '
-                    . 'the two that were just deleted.',
+                    . 'the two that were just deleted.'),
             ],
             [
-                'what'    => 'The configuration',
-                'happens' => 'Deleted. config/loghound.php goes, with the Opensolr API key, the '
+                'what'    => I18n::t('The configuration'),
+                'happens' => I18n::t('Deleted. config/loghound.php goes, with the Opensolr API key, the '
                     . 'beacon signing key, the address salt, any Solr password and your panel '
                     . 'password hash in it. Overwriting a file is not a guarantee on a '
                     . 'copy-on-write, journalling or snapshotted filesystem, or on any SSD, so '
-                    . 'treat the API key as exposed and rotate it at opensolr.com.',
+                    . 'treat the API key as exposed and rotate it at opensolr.com.'),
             ],
             [
-                'what'    => 'The sign-in',
-                'happens' => 'Removed with it. The username, the password, two-factor and its '
+                'what'    => I18n::t('The sign-in'),
+                'happens' => I18n::t('Removed with it. The username, the password, two-factor and its '
                     . 'recovery codes all go, and every browser that was staying signed in is signed '
                     . 'out — including this one. You set a new username and password at the end of '
-                    . 'setup.',
+                    . 'setup.'),
             ],
             [
-                'what'    => 'The chosen log files',
-                'happens' => 'Forgotten, along with the index names, their connection details and '
+                'what'    => I18n::t('The chosen log files'),
+                'happens' => I18n::t('Forgotten, along with the index names, their connection details and '
                     . 'this installation\'s id. Setup scans for the files again and asks you to '
                     . 'confirm the format, the same as on a first install. The files themselves are '
-                    . 'not touched; see below.',
+                    . 'not touched; see below.'),
             ],
             [
-                'what'    => 'The beacon signing key and the address salt',
-                'happens' => 'Deleted too, and setup generates new ones. Two things follow, and both '
+                'what'    => I18n::t('The beacon signing key and the address salt'),
+                'happens' => I18n::t('Deleted too, and setup generates new ones. Two things follow, and both '
                     . 'are one-off: every beacon token already in a visitor\'s browser stops '
                     . 'validating, and until each browser is issued a fresh one the scorer reads the '
                     . 'invalid token as evidence of a bot; and a hashed address cannot be matched '
                     . 'across the change, which costs nothing here because the documents holding the '
-                    . 'old ones have just been deleted.',
+                    . 'old ones have just been deleted.'),
             ],
             [
-                'what'    => 'Everything under var/',
-                'happens' => 'Deleted. The state database, the reader\'s position in every log file, '
+                'what'    => I18n::t('Everything under var/'),
+                'happens' => I18n::t('Deleted. The state database, the reader\'s position in every log file, '
                     . 'open sessions, the quota cache, the setup token, signed-in panel sessions, '
                     . 'remembered browsers, recovery code hashes, the rate-limit ledgers and the '
                     . 'saved schema check. Each log is read from its END when ingestion starts '
-                    . 'again, so nothing already on disk is replayed into the new indexes.',
+                    . 'again, so nothing already on disk is replayed into the new indexes.'),
             ],
             [
-                'what'    => 'Your access log files',
-                'happens' => 'Untouched, as always. Loghound has never written to one, never '
+                'what'    => I18n::t('Your access log files'),
+                'happens' => I18n::t('Untouched, as always. Loghound has never written to one, never '
                     . 'truncated one and never rotated one, and starting over does not change that. '
-                    . 'They are exactly as they were, which is how setup finds them again.',
+                    . 'They are exactly as they were, which is how setup finds them again.'),
             ],
             [
-                'what'    => 'The LogFormat line you added to your own web server',
-                'happens' => 'Left alone. It lives in a file Loghound does not own, so this will not '
+                'what'    => I18n::t('The LogFormat line you added to your own web server'),
+                'happens' => I18n::t('Left alone. It lives in a file Loghound does not own, so this will not '
                     . 'reach into it. It is harmless — it only changes what your web server writes '
                     . 'to its own logs — it is yours to remove or keep, and leaving it there is what '
-                    . 'makes the next setup a shorter job.',
+                    . 'makes the next setup a shorter job.'),
             ],
             [
-                'what'    => 'The beacon tag on your website',
-                'happens' => 'Left where it is; only you can change your own templates. Nothing is '
+                'what'    => I18n::t('The beacon tag on your website'),
+                'happens' => I18n::t('Left where it is; only you can change your own templates. Nothing is '
                     . 'collected from it between now and the end of setup, and afterwards it starts '
                     . 'working again on its own — against the new signing key above, so the first '
-                    . 'visit from each browser mints a fresh token.',
+                    . 'visit from each browser mints a fresh token.'),
             ],
             [
-                'what'    => 'The service and the timers',
-                'happens' => 'Left running and still enabled at boot, because ingestion is meant to '
+                'what'    => I18n::t('The service and the timers'),
+                'happens' => I18n::t('Left running and still enabled at boot, because ingestion is meant to '
                     . 'resume once setup is done — and because stopping them is a systemd operation '
                     . 'that needs root. The reader keeps the configuration it started with, and a '
                     . 'reload onto a half-finished one is refused and logged, so until you stop it '
                     . 'it carries on trying to write to indexes that are being deleted. Nothing is '
-                    . 'corrupted by that; it fills your log with errors. The command is below.',
+                    . 'corrupted by that; it fills your log with errors. The command is below.'),
             ],
             [
-                'what'    => 'The vhost, the FPM pool, the command links, the service user and this '
-                    . 'install tree',
-                'happens' => 'All left in place. This starts the installation over; it does not take '
+                'what'    => I18n::t('The vhost, the FPM pool, the command links, the service user and this '
+                    . 'install tree'),
+                'happens' => I18n::t('All left in place. This starts the installation over; it does not take '
                     . 'Loghound off the machine, and setup needs every one of them to run at all. '
                     . 'install/uninstall.sh is what removes them, it needs root, and it proves it '
-                    . 'wrote a file before it deletes one.',
+                    . 'wrote a file before it deletes one.'),
             ],
         ];
     }
@@ -415,25 +416,25 @@ final class Teardown
             if (self::isPanelStep($id)) {
                 continue;
             }
-            $out[] = $label . ' — ' . (self::shellOnlyReasons()[$id] ?? 'left in place; needs root.');
+            $out[] = I18n::t($label) . ' — ' . (self::shellOnlyReasons()[$id] ?? I18n::t('left in place; needs root.'));
         }
 
-        $out[] = 'Your access log files — never written to, never truncated, never rotated, and '
-            . 'exactly as they were. Setup reads them again from the end.';
-        $out[] = 'The LogFormat line in your own web server configuration — still there, never '
+        $out[] = I18n::t('Your access log files — never written to, never truncated, never rotated, and '
+            . 'exactly as they were. Setup reads them again from the end.');
+        $out[] = I18n::t('The LogFormat line in your own web server configuration — still there, never '
             . 'touched, and yours to remove or keep. Setup expects to find it, so leaving it is '
-            . 'the shorter road.';
-        $out[] = 'The beacon <script> tag in your site templates — only you can change those. '
+            . 'the shorter road.');
+        $out[] = I18n::t('The beacon <script> tag in your site templates — only you can change those. '
             . 'Nothing is collected from it until setup is finished, and then it works again '
-            . 'against a signing key that is new, so every visitor mints a fresh token.';
-        $out[] = 'Your Opensolr API key — the file that held it is gone, but an overwritten file '
+            . 'against a signing key that is new, so every visitor mints a fresh token.');
+        $out[] = I18n::t('Your Opensolr API key — the file that held it is gone, but an overwritten file '
             . 'is not a destroyed one on a copy-on-write or snapshotted filesystem, or on an SSD. '
             . 'Rotate it at opensolr.com if this box is shared, is being decommissioned, sold or '
-            . 'handed to somebody else. Backups and snapshots of this disk were never touched.';
-        $out[] = 'Anything you added by hand — a supervisor unit, a firewall rule, a reverse proxy '
+            . 'handed to somebody else. Backups and snapshots of this disk were never touched.');
+        $out[] = I18n::t('Anything you added by hand — a supervisor unit, a firewall rule, a reverse proxy '
             . 'entry, a monitoring check, a backup job, an entry in your own logrotate '
-            . 'configuration. Run ' . self::shellCommand($root) . ' to take Loghound off this '
-            . 'machine altogether, rather than setting it up again.';
+            . 'configuration. Run {command} to take Loghound off this '
+            . 'machine altogether, rather than setting it up again.', ['command' => self::shellCommand($root)]);
 
         return $out;
     }

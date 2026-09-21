@@ -23,24 +23,25 @@ import {
 import { lines, stackedBars, tokens } from '../charts.js';
 import { drillRow } from '../identity.js';
 import { pathCell } from '../url.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** Plain-English meaning for the status codes that actually turn up in web logs. */
 const STATUS_MEANING = {
-    200: 'OK', 201: 'Created', 204: 'No content',
-    301: 'Moved permanently', 302: 'Found', 304: 'Not modified (cache hit)',
-    400: 'Bad request', 401: 'Unauthorised', 403: 'Forbidden', 404: 'Not found',
-    405: 'Method not allowed', 408: 'Request timeout', 413: 'Payload too large',
-    429: 'Too many requests',
-    500: 'Internal server error', 502: 'Bad gateway', 503: 'Service unavailable',
-    504: 'Gateway timeout'
+    200: T('OK'), 201: T('Created'), 204: T('No content'),
+    301: T('Moved permanently'), 302: T('Found'), 304: T('Not modified (cache hit)'),
+    400: T('Bad request'), 401: T('Unauthorised'), 403: T('Forbidden'), 404: T('Not found'),
+    405: T('Method not allowed'), 408: T('Request timeout'), 413: T('Payload too large'),
+    429: T('Too many requests'),
+    500: T('Internal server error'), 502: T('Bad gateway'), 503: T('Service unavailable'),
+    504: T('Gateway timeout')
 };
 
 /** How the two controls describe themselves in a caption. */
 const KIND_LABEL = {
-    html: 'HTML page requests',
-    api: 'API requests',
-    asset: 'static asset requests',
-    all: 'all requests'
+    html: T('HTML page requests'),
+    api: T('API requests'),
+    asset: T('static asset requests'),
+    all: T('all requests')
 };
 
 /**
@@ -86,11 +87,12 @@ function renderHeadline(data) {
        means — "requests at least this slow" — depends on the figure that just arrived, so the
        microsecond value and the words for it are stamped on here. A percentile that came back
        empty leaves its tile inert rather than opening a dialog for a threshold of zero. */
-    for (const [key, label] of [['p50', 'p50 latency'], ['p95', 'p95 latency'], ['p99', 'p99 latency']]) {
+    for (const [key, label] of [['p50', T('p50 latency')], ['p95', T('p95 latency')], ['p99', T('p99 latency')]]) {
         /* Matched on the CLASS, not on data-lh-open: this loop removes that attribute when a
            percentile comes back empty, so keying on it would make the tile unfindable — and
            permanently inert — the moment the figures returned. */
-        const node = scope ? scope.querySelector('.stat-open[aria-label*="' + label + '"]') : null;
+        const value = scope ? scope.querySelector('.stat-open [data-field="' + key + '"]') : null;
+        const node = value ? value.closest('.stat-open') : null;
         if (!node) {
             continue;
         }
@@ -105,14 +107,15 @@ function renderHeadline(data) {
     }
 
     setPop('pf-headline',
-        num(data.requests) + ' ' + (KIND_LABEL[data.kind] || 'requests') +
-        (data.who === 'human' ? ', from sessions scored human' : '') + ' in this range. ' +
-        num(data.timed) + ' of them (' + dec(data.timed_pct, 1) + '%) carry a logged duration; the percentiles ' +
-        'cover only those. Requests without a duration are excluded, not counted as zero.' +
+        (data.who === 'human'
+            ? T('{n} {kind}, from sessions scored human in this range.', { n: num(data.requests), kind: KIND_LABEL[data.kind] || T('requests') })
+            : T('{n} {kind} in this range.', { n: num(data.requests), kind: KIND_LABEL[data.kind] || T('requests') })) + ' ' +
+        T('{n} of them ({pct}%) carry a logged duration; the percentiles ' +
+        'cover only those. Requests without a duration are excluded, not counted as zero.', { n: num(data.timed), pct: dec(data.timed_pct, 1) }) +
         (data.who === 'human' && !data.who_supported
-            ? ' NOTE: requests in this index carry no verdict, so the "Humans only" choice could not be applied ' +
+            ? ' ' + T('NOTE: requests in this index carry no verdict, so the "Humans only" choice could not be applied ' +
               'to these figures — they cover every request in range, not only human ones. Switch back to ' +
-              '"All clients" to stop the choice implying otherwise.'
+              '"All clients" to stop the choice implying otherwise.')
             : '') +
         ignoredFilterNote(data));
 
@@ -122,7 +125,7 @@ function renderHeadline(data) {
        reading "0 HTML page requests in this range", which is the one card in the panel that
        said nothing about why it was blank. */
     if (data.requests === 0) {
-        noDataYet('pf-headline-empty', 'requests');
+        noDataYet('pf-headline-empty', T('requests'));
         return false;
     }
     if (data.timed === 0) {
@@ -146,10 +149,9 @@ function ignoredFilterNote(data) {
     if (ignored.length === 0) {
         return '';
     }
-    return ' NOTE: ' + ignored.join(', ') +
-        (ignored.length === 1 ? ' is a session-level filter' : ' are session-level filters') +
-        ' and could not be applied to these numbers, which cover every request in range that ' +
-        'the other filters match.';
+    return ' ' + Tn('NOTE: {filters} is a session-level filter and could not be applied to these numbers, which cover every request in range that the other filters match.',
+        'NOTE: {filters} are session-level filters and could not be applied to these numbers, which cover every request in range that the other filters match.',
+        ignored.length, { filters: ignored.join(', ') });
 }
 
 /**
@@ -185,28 +187,26 @@ function durationFix() {
 function showMissingDuration(requests) {
     const fix = durationFix();
 
-    showEmpty('pf-headline-empty', 'No request durations are being logged', [
-        'Not one of the ' + num(requests) + ' matched requests records how long it took, so there is ' +
+    showEmpty('pf-headline-empty', T('No request durations are being logged'), [
+        T('Not one of the {n} matched requests records how long it took, so there is ' +
             'nothing to compute a percentile from. Your log format does not include the request duration — ' +
-            'the stock Apache "combined" format does not.',
-        'Add %D to your Apache LogFormat, or $request_time to an nginx log_format. Give the format its ' +
+            'the stock Apache "combined" format does not.', { n: num(requests) }),
+        T('Add %D to your Apache LogFormat, or $request_time to an nginx log_format. Give the format its ' +
             'own name: Debian and Ubuntu already define "combined" in apache2.conf, and redefining that ' +
             'name inside a virtual host does not reliably win — the config is accepted, the reload ' +
-            'succeeds, and the lines keep coming out in the old shape.',
+            'succeeds, and the lines keep coming out in the old shape.'),
         fix.line ? snippet(fix.line) : null,
-        fix.custom ? 'Then point the log at it, which is the half people forget — a format that nothing ' +
-            'references changes nothing:' : null,
+        fix.custom ? T('Then point the log at it, which is the half people forget — a format that nothing ' +
+            'references changes nothing:') : null,
         fix.custom ? snippet(fix.custom) : null,
         fix.rescan ? el('p', {}, [
             fix.rescan + ' ',
-            el('a', { href: '?v=settings', text: 'Open Settings' }),
+            el('a', { href: '?v=settings', text: T('Open Settings') }),
             '.'
         ]) : null,
-        el('p', {}, [
-            'The full recommended format, which also enables several detection rules, is in ',
-            el('code', { text: 'docs/INSTALL.md' }),
-            '. Everything else in this view works without it.'
-        ])
+        el('p', {}, Tf('The full recommended format, which also enables several detection rules, is in {file}. Everything else in this view works without it.', {
+            file: el('code', { text: 'docs/INSTALL.md' })
+        }))
     ]);
 }
 
@@ -215,7 +215,7 @@ function showMissingDuration(requests) {
  */
 function renderLatency(data) {
     if (!data.timed || !data.times.length) {
-        noDataYet('pf-time-empty', 'timed requests');
+        noDataYet('pf-time-empty', T('timed requests'));
         return;
     }
     hideEmpty('pf-time-empty');
@@ -233,7 +233,7 @@ function renderLatency(data) {
 function renderPaths(data) {
     if (!data.paths.length) {
         tbody(byId('pf-paths-table'), []);
-        noDataYet('pf-paths-empty', 'requests');
+        noDataYet('pf-paths-empty', T('requests'));
         return;
     }
     hideEmpty('pf-paths-empty');
@@ -279,7 +279,7 @@ function renderPaths(data) {
 function renderStatus(data) {
     if (!data.statuses.length) {
         tbody(byId('pf-status-table'), []);
-        noDataYet('pf-status-empty', 'requests');
+        noDataYet('pf-status-empty', T('requests'));
         return;
     }
     hideEmpty('pf-status-empty');
@@ -323,16 +323,16 @@ function renderStatus(data) {
 function refresh() {
     const state = controls();
 
-    loadCard('pf-headline', 'Computing latency percentiles', async () => {
+    loadCard('pf-headline', T('Computing latency percentiles'), async () => {
         renderHeadline(await api('performance', 'headline', state));
     });
-    loadCard('pf-time', 'Computing latency over time', async () => {
+    loadCard('pf-time', T('Computing latency over time'), async () => {
         renderLatency(await api('performance', 'latency', state));
     });
-    loadCard('pf-paths', 'Computing per-path percentiles', async () => {
+    loadCard('pf-paths', T('Computing per-path percentiles'), async () => {
         renderPaths(await api('performance', 'paths', state));
     });
-    loadCard('pf-status', 'Faceting response codes', async () => {
+    loadCard('pf-status', T('Faceting response codes'), async () => {
         renderStatus(await api('performance', 'status', state));
     });
 }

@@ -17,6 +17,7 @@
 
 import { byId, el, loadCard, noDataYet, num, pct, registerCardReset } from './core.js';
 import { renderPager } from './pager.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /**
  * Wire a card whose table pages server-side, and load its first page.
@@ -93,8 +94,9 @@ export function shareBar(value, total, unit) {
     return el('span', {
         class: 'bar',
         title: total > 0
-            ? pct(value, total) + ' of ' + num(total) + (unit ? ' ' + unit : '')
-            : 'Nothing to take a share of'
+            ? (unit ? T('{pct} of {total} {unit}', { pct: pct(value, total), total: num(total), unit: unit })
+                : T('{pct} of {total}', { pct: pct(value, total), total: num(total) }))
+            : T('Nothing to take a share of')
     }, [el('span', { style: 'width:' + width + '%' })]);
 }
 
@@ -118,7 +120,7 @@ export function magnitudeBar(value, peak, against, detail) {
 
     return el('span', {
         class: 'bar',
-        title: (detail ? detail + '. ' : '') + 'Drawn against ' + against + ', not as a share of a total.'
+        title: (detail ? detail + '. ' : '') + T('Drawn against {reference}, not as a share of a total.', { reference: against })
     }, [el('span', { style: 'width:' + width + '%' })]);
 }
 
@@ -139,13 +141,13 @@ export function changeCell(now, prev) {
     const delta = now - prev;
 
     if (prev === 0 && now > 0) {
-        return el('span', { class: 'chip chip-accent', text: 'new' });
+        return el('span', { class: 'chip chip-accent', text: T('new') });
     }
     if (now === 0 && prev > 0) {
-        return el('span', { class: 'chip', text: 'gone' });
+        return el('span', { class: 'chip', text: T('gone') });
     }
     if (delta === 0) {
-        return el('span', { class: 'muted', text: 'no change' });
+        return el('span', { class: 'muted', text: T('no change') });
     }
 
     return el('span', {

@@ -84,6 +84,8 @@ declare(strict_types=1);
 
 namespace Loghound\Score;
 
+use Loghound\I18n;
+
 final class Attacks
 {
     /**
@@ -778,14 +780,23 @@ final class Attacks
      */
     public static function describe(string $code): array
     {
-        return self::RULES[$code] ?? [
+        $rule = self::RULES[$code] ?? null;
+        if ($rule !== null) {
+            foreach (['label', 'what', 'misses', 'over'] as $key) {
+                if (isset($rule[$key]) && is_string($rule[$key])) {
+                    $rule[$key] = I18n::t($rule[$key]);
+                }
+            }
+            return $rule;
+        }
+        return [
             'label'    => $code,
             'family'   => 'other',
             'severity' => 'med',
-            'what'     => 'This panel version has no description for that rule code. It was written by a '
-                . 'different version of the detector.',
-            'misses'   => 'Unknown.',
-            'over'     => 'Unknown.',
+            'what'     => I18n::t('This panel version has no description for that rule code. It was written by a '
+                . 'different version of the detector.'),
+            'misses'   => I18n::t('Unknown.'),
+            'over'     => I18n::t('Unknown.'),
         ];
     }
 
@@ -819,13 +830,13 @@ final class Attacks
     public static function families(): array
     {
         return [
-            'disclosure'    => 'File disclosure',
-            'injection'     => 'Injection',
-            'exploit'       => 'Known exploits',
-            'credential'    => 'Credential attacks',
-            'recon'         => 'Reconnaissance',
-            'impersonation' => 'Impersonation',
-            'custom'        => 'Your attack patterns',
+            'disclosure'    => I18n::t('File disclosure'),
+            'injection'     => I18n::t('Injection'),
+            'exploit'       => I18n::t('Known exploits'),
+            'credential'    => I18n::t('Credential attacks'),
+            'recon'         => I18n::t('Reconnaissance'),
+            'impersonation' => I18n::t('Impersonation'),
+            'custom'        => I18n::t('Your attack patterns'),
         ];
     }
 

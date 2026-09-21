@@ -47,6 +47,7 @@ namespace Loghound\Setup;
 
 use Loghound\Auth\Persistence;
 use Loghound\Config;
+use Loghound\I18n;
 
 final class Reset
 {
@@ -166,64 +167,64 @@ final class Reset
     {
         return [
             [
-                'what'    => 'Your Opensolr indexes, and everything in them',
-                'happens' => 'Untouched. Not a document is deleted, and the two indexes stay on your '
+                'what'    => I18n::t('Your Opensolr indexes, and everything in them'),
+                'happens' => I18n::t('Untouched. Not a document is deleted, and the two indexes stay on your '
                     . 'account exactly as they are. Setup will offer them back to you as a pair you '
                     . 'can rejoin, so this can land on the same history it started with. To delete '
                     . 'them as well, use Settings → Start over in the panel: it proves your account '
                     . 'owns each index, deletes it, and reads the account listing again to prove it '
                     . 'is gone. install/uninstall.sh does the same and takes Loghound off the '
-                    . 'machine with it.',
+                    . 'machine with it.'),
             ],
             [
-                'what'    => 'Your access log files',
-                'happens' => 'Untouched. Loghound never writes to them, and a reinstall does not '
-                    . 'change that.',
+                'what'    => I18n::t('Your access log files'),
+                'happens' => I18n::t('Untouched. Loghound never writes to them, and a reinstall does not '
+                    . 'change that.'),
             ],
             [
-                'what'    => 'The sign-in',
-                'happens' => 'Removed. The username, the password and two-factor all go, and every '
+                'what'    => I18n::t('The sign-in'),
+                'happens' => I18n::t('Removed. The username, the password and two-factor all go, and every '
                     . 'browser that was staying signed in is signed out — including this one. You '
-                    . 'will set a new username and password at the end of setup.',
+                    . 'will set a new username and password at the end of setup.'),
             ],
             [
-                'what'    => 'The chosen log files',
-                'happens' => 'Forgotten. Setup scans for them again and asks you to confirm the '
-                    . 'format, the same as on a first install.',
+                'what'    => I18n::t('The chosen log files'),
+                'happens' => I18n::t('Forgotten. Setup scans for them again and asks you to confirm the '
+                    . 'format, the same as on a first install.'),
             ],
             [
-                'what'    => 'The index names and their connection details',
-                'happens' => 'Forgotten by this machine. Nothing is deleted at Opensolr; the panel '
-                    . 'simply stops pointing at them until setup names a pair again.',
+                'what'    => I18n::t('The index names and their connection details'),
+                'happens' => I18n::t('Forgotten by this machine. Nothing is deleted at Opensolr; the panel '
+                    . 'simply stops pointing at them until setup names a pair again.'),
             ],
             [
-                'what'    => 'The sessions database (var/state.db)',
-                'happens' => 'Deleted. That is the tailer\'s read position in every log file, the '
+                'what'    => I18n::t('The sessions database (var/state.db)'),
+                'happens' => I18n::t('Deleted. That is the tailer\'s read position in every log file, the '
                     . 'sessions still open, the beacon rows not yet merged, and the enrichment '
                     . 'caches. After the reinstall each log is read from its END again, so the gap '
                     . 'is not backfilled, and sessions in flight are lost. Everything already '
-                    . 'indexed is unaffected.',
+                    . 'indexed is unaffected.'),
             ],
             [
-                'what'    => 'The Opensolr account details',
-                'happens' => 'Kept. The email, the API key and the region stay, so setup can show '
+                'what'    => I18n::t('The Opensolr account details'),
+                'happens' => I18n::t('Kept. The email, the API key and the region stay, so setup can show '
                     . 'you the indexes that account already holds instead of asking for the key '
-                    . 'again. Change the account in the Solr card above if that is what you want.',
+                    . 'again. Change the account in the Solr card above if that is what you want.'),
             ],
             [
-                'what'    => 'The beacon signing key and the address salt',
-                'happens' => 'Kept, deliberately. A new signing key would make every token already '
+                'what'    => I18n::t('The beacon signing key and the address salt'),
+                'happens' => I18n::t('Kept, deliberately. A new signing key would make every token already '
                     . 'in a visitor\'s browser invalid, and the scorer reads an invalid token as '
                     . 'evidence of a bot — so rotating it would turn honest traffic into false '
                     . 'verdicts. A new address salt would stop hashed visitors matching themselves '
-                    . 'across the reinstall.',
+                    . 'across the reinstall.'),
             ],
             [
-                'what'    => 'The service and the timers',
-                'happens' => 'Left running and still enabled at boot. The reader keeps the '
+                'what'    => I18n::t('The service and the timers'),
+                'happens' => I18n::t('Left running and still enabled at boot. The reader keeps the '
                     . 'configuration it started with — a reload onto a half-finished one is refused '
                     . 'and logged — so it carries on writing to the indexes it already had, and '
-                    . 'nothing is corrupted. Stop them first if you want a clean break.',
+                    . 'nothing is corrupted. Stop them first if you want a clean break.'),
             ],
         ];
     }

@@ -53,6 +53,7 @@ import { closeDialog, dialogFail, isCurrent, openDialog } from './dialog.js';
 import { dimValue } from './identity.js';
 import { bindPath, claimPath, isPathField, pathLabel, urlMark } from './url.js';
 import { exportLink } from './export.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /** The query-string prefix for Loghound's own dimensions. The Opensolr log plane uses 'lf'. */
 const NS = 'f';
@@ -304,7 +305,7 @@ export function operatorControl(group) {
     return el('div', {
         class: 'facet-op',
         role: 'group',
-        'aria-label': 'How the selected ' + String(group.label || field).toLowerCase() + ' values combine',
+        'aria-label': T('How the selected {dimension} values combine', { dimension: String(group.label || field).toLowerCase() }),
         dataset: { field: field, op: current }
     }, buttons);
 }
@@ -319,12 +320,12 @@ export function operatorControl(group) {
 function defaultOperators(group, current) {
     const label = String(group.label || group.field).toLowerCase();
     const out = [
-        { op: OP_ANY, label: 'Any of', hint: 'Match traffic carrying ANY selected ' + label + ' value.' }
+        { op: OP_ANY, label: T('Any of'), hint: T('Match traffic carrying ANY selected {dimension} value.', { dimension: label }) }
     ];
     if (group.arity === 'multi' || current === OP_ALL) {
-        out.push({ op: OP_ALL, label: 'All of', hint: 'Match only traffic carrying EVERY selected ' + label + ' value.' });
+        out.push({ op: OP_ALL, label: T('All of'), hint: T('Match only traffic carrying EVERY selected {dimension} value.', { dimension: label }) });
     }
-    out.push({ op: OP_NONE, label: 'None of', hint: 'Exclude every selected ' + label + ' value; keep the rest.' });
+    out.push({ op: OP_NONE, label: T('None of'), hint: T('Exclude every selected {dimension} value; keep the rest.', { dimension: label }) });
     return out;
 }
 
@@ -399,12 +400,12 @@ export function filterInput(group, shown) {
     const label = String(group.label || group.field);
 
     return el('div', { class: 'facet-search' }, [
-        el('label', { class: 'sr-only', for: id, text: 'Filter ' + label + ' values' }),
+        el('label', { class: 'sr-only', for: id, text: T('Filter {dimension} values', { dimension: label }) }),
         el('input', {
             type: 'search',
             id: id,
             class: 'facet-q',
-            placeholder: 'Filter ' + label.toLowerCase() + '…',
+            placeholder: T('Filter {dimension}…', { dimension: label.toLowerCase() }),
             autocomplete: 'off',
             spellcheck: 'false',
             dataset: { field: group.field, ns: group.ns || NS }
@@ -429,7 +430,7 @@ export function showAllButton(group) {
         type: 'button',
         class: 'facet-more',
         dataset: { field: group.field, label: String(group.label || group.field), ns: group.ns || NS },
-        text: total ? 'Show all ' + num(total) + ' values' : 'Show all values'
+        text: total ? T('Show all {n} values', { n: num(total) }) : T('Show all values')
     });
 }
 
@@ -684,18 +685,16 @@ function sidebarNote(matches, typed, complete) {
  * @param {boolean} truncated Were there more matches than were returned?
  */
 function searchSentence(found, typed, complete, truncated) {
-    const covered = complete
-        ? 'Every value of this dimension was searched'
-        : 'Only the values listed here were searched';
-    const caveat = complete
-        ? (truncated && found ? ', and there were more matches than the ' + num(found) + ' shown.' : '.')
-        : ' — open the full list to search every value.';
+    const scope = complete
+        ? (truncated && found
+            ? T('Every value of this dimension was searched, and there were more matches than the {n} shown.', { n: num(found) })
+            : T('Every value of this dimension was searched.'))
+        : T('Only the values listed here were searched — open the full list to search every value.');
 
     if (found === 0) {
-        return 'No value contains “' + typed + '”. ' + covered + caveat;
+        return T('No value contains “{text}”.', { text: typed }) + ' ' + scope;
     }
-    return num(found) + (found === 1 ? ' value contains' : ' values contain') + ' “' + typed + '”. '
-        + covered + caveat;
+    return Tn('{n} value contains “{text}”.', '{n} values contain “{text}”.', found, { n: num(found), text: typed }) + ' ' + scope;
 }
 
 /**
@@ -723,10 +722,10 @@ function rebuild(list, group, needle, ns) {
     const dimension = String(group.label || group.field).toLowerCase();
     let message = '';
     if (!matches.length) {
-        message = 'No ' + dimension + ' value matches \u201c' + needle + '\u201d.';
+        message = T('No {dimension} value matches “{text}”.', { dimension: dimension, text: needle });
     } else if (found.length > matches.length) {
-        message = 'Showing the first ' + matches.length + ' of ' + found.length + ' matching values. '
-            + 'Narrow the text, or open the full list to see them all.';
+        message = T('Showing the first {n} of {total} matching values. '
+            + 'Narrow the text, or open the full list to see them all.', { n: matches.length, total: found.length });
     }
     note(list.closest('.facet'), message);
 }
@@ -842,7 +841,7 @@ export function openValueBrowser(field, label, ns) {
     openField = field;
     staged = new Set(valuesOf(field, ns));
 
-    const { body, generation } = openDialog(label || field, 'Every value of this dimension, with the traffic behind it.');
+    const { body, generation } = openDialog(label || field, T('Every value of this dimension, with the traffic behind it.'));
 
     fetchAll(field).then((group) => {
         if (!isCurrent(generation) || openField !== field) {
@@ -871,11 +870,11 @@ function renderBrowser(body, group, generation) {
         type: 'search',
         class: 'fb-search',
         id: 'fb-search',
-        placeholder: 'Search…',
+        placeholder: T('Search…'),
         autocomplete: 'off',
         spellcheck: 'false'
     });
-    const letters = el('nav', { class: 'fb-letters', 'aria-label': 'Jump to a letter' });
+    const letters = el('nav', { class: 'fb-letters', 'aria-label': T('Jump to a letter') });
     const values = el('div', { class: 'fb-body' });
     const footer = el('div', { class: 'fb-foot' });
     const notes = el('div', { class: 'fb-notes' });
@@ -883,15 +882,15 @@ function renderBrowser(body, group, generation) {
     const csv = exportLink(
         'sessions',
         'values',
-        'Download every value of ' + String(group.label) + ' as CSV: the value listing with its '
+        T('Download every value of {dimension} as CSV: the value listing with its '
             + 'session counts, carrying the time range, virtual host and filters in force. It covers '
-            + 'the listing, not the search box.',
+            + 'the listing, not the search box.', { dimension: String(group.label) }),
         { field: String(group.field || '') }
     );
 
     fill(body, [
         el('div', { class: 'fb-head' }, [
-            el('label', { class: 'sr-only', for: 'fb-search', text: 'Search ' + String(group.label) + ' values' }),
+            el('label', { class: 'sr-only', for: 'fb-search', text: T('Search {dimension} values', { dimension: String(group.label) }) }),
             search,
             csv
         ]),
@@ -957,7 +956,7 @@ function renderBrowser(body, group, generation) {
         }).catch((err) => {
             search.classList.remove('is-loading');
             if (isCurrent(generation)) {
-                fill(notes, [el('p', { class: 'fb-note', text: 'That search could not be run: ' + err.message })]);
+                fill(notes, [el('p', { class: 'fb-note', text: T('That search could not be run: {error}', { error: err.message }) })]);
             }
         });
     };
@@ -1008,8 +1007,8 @@ function populationNote(showing, listing) {
         }
         return el('p', {
             class: 'fb-note',
-            text: 'Listing the ' + num(listed) + ' most common of ' + num(distinct)
-                + ' values in this range. The search box is not limited to these — it searches every value.'
+            text: T('Listing the {n} most common of {total} values in this range. The search box is not limited to these — it searches every value.',
+                { n: num(listed), total: num(distinct) })
         });
     }
 
@@ -1213,16 +1212,16 @@ function drawFooter(footer, group) {
         el('span', {
             class: 'fb-selected',
             text: count === 0
-                ? 'Nothing selected'
-                : num(count) + (count === 1 ? ' value selected' : ' values selected')
+                ? T('Nothing selected')
+                : Tn('{n} value selected', '{n} values selected', count, { n: num(count) })
         }),
         opControl,
         el('a', {
             class: 'fb-apply' + (count ? ' primary' : ' ghost'),
             href: urlFor(selection, ns),
-            text: count ? 'Apply' : 'Clear this filter'
+            text: count ? T('Apply') : T('Clear this filter')
         }),
-        el('button', { type: 'button', class: 'ghost small fb-cancel', text: 'Cancel' })
+        el('button', { type: 'button', class: 'ghost small fb-cancel', text: T('Cancel') })
     ]);
 }
 
@@ -1307,9 +1306,13 @@ export function renderPivot(id, data) {
         const cells = row.cells.map((cell) => el('a', {
             class: 'pivot-cell',
             href: crossUrl(data.outer, row.value, data.inner, cell.value),
-            title: 'Show ' + data.outer_label + ' ' + row.label + ' and '
-                + data.inner_label + ' ' + cell.label
-                + ' — ' + share(cell.count, row.count) + ' of this row'
+            title: T('Show {outer} {row} and {inner} {cell} — {share} of this row', {
+                outer: data.outer_label,
+                row: row.label,
+                inner: data.inner_label,
+                cell: cell.label,
+                share: share(cell.count, row.count)
+            })
         }, [
             el('span', { class: 'pivot-cell-label', text: cell.label }),
             el('span', { class: 'pivot-cell-n', text: num(cell.count) }),
@@ -1319,15 +1322,15 @@ export function renderPivot(id, data) {
         if (shortfall > 0) {
             cells.push(el('span', {
                 class: 'pivot-cell is-rest',
-                title: 'Outside the ' + num(row.cells.length) + ' values shown for this row',
-                text: num(shortfall) + ' in other values · ' + share(shortfall, row.count)
+                title: T('Outside the {n} values shown for this row', { n: num(row.cells.length) }),
+                text: T('{n} in other values', { n: num(shortfall) }) + ' · ' + share(shortfall, row.count)
             }));
         }
 
         return el('tr', {}, [
             el('td', { class: 'clip' }, [dimValue(data.outer, row.value, {
                 text: data.outer === 'country_s' ? null : row.label,
-                title: 'Filter every view to ' + data.outer_label + ': ' + row.label
+                title: T('Filter every view to {filter}', { filter: data.outer_label + ': ' + row.label })
             })]),
             el('td', { class: 'num mono', text: num(row.count) }),
             el('td', {}, [el('div', { class: 'pivot-cells' }, cells)])

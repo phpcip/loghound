@@ -67,6 +67,7 @@ use Loghound\Assets;
 use Loghound\Auth\Persistence;
 use Loghound\Auth\TwoFactor;
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Login
@@ -170,7 +171,7 @@ final class Login
             http_response_code(405);
             header('Allow: POST');
             header('Content-Type: text/plain; charset=utf-8');
-            exit("Sign out is a POST.\n");
+            exit(I18n::t('Sign out is a POST.') . "\n");
         }
 
         Security::requireCsrf();
@@ -387,39 +388,39 @@ final class Login
         return [
             'bad' => [
                 'kind' => 'bad',
-                'text' => 'That username and password did not match. Try again.',
+                'text' => I18n::t('That username and password did not match. Try again.'),
             ],
             'badcode' => [
                 'kind' => 'bad',
-                'text' => 'That code was not right. Enter the current code from your authenticator app, '
-                    . 'or one of your recovery codes.',
+                'text' => I18n::t('That code was not right. Enter the current code from your authenticator app, '
+                    . 'or one of your recovery codes.'),
             ],
             'idle' => [
                 'kind' => 'warn',
-                'text' => 'You were signed out because nothing happened for a while. Sign in to carry on.',
+                'text' => I18n::t('You were signed out because nothing happened for a while. Sign in to carry on.'),
             ],
             'absolute' => [
                 'kind' => 'warn',
-                'text' => 'Your session reached its maximum age and was ended. Sign in again.',
+                'text' => I18n::t('Your session reached its maximum age and was ended. Sign in again.'),
             ],
             'stale' => [
                 'kind' => 'warn',
-                'text' => 'That sign-in took too long to finish. Enter your username and password again.',
+                'text' => I18n::t('That sign-in took too long to finish. Enter your username and password again.'),
             ],
             'out' => [
                 'kind' => 'good',
-                'text' => 'Signed out. The session was destroyed on the server, not just in this browser, '
-                    . 'and every "stay signed in" token was revoked.',
+                'text' => I18n::t('Signed out. The session was destroyed on the server, not just in this browser, '
+                    . 'and every "stay signed in" token was revoked.'),
             ],
             'locked' => [
                 'kind' => 'bad',
-                'text' => 'Too many failed sign-in attempts from your address.',
+                'text' => I18n::t('Too many failed sign-in attempts from your address.'),
             ],
             'store' => [
                 'kind' => 'bad',
-                'text' => 'Loghound cannot record failed sign-in attempts, because it cannot write to its '
+                'text' => I18n::t('Loghound cannot record failed sign-in attempts, because it cannot write to its '
                     . 'var directory. It refuses to sign anyone in rather than skip the check — give that '
-                    . 'directory to the user this panel runs as.',
+                    . 'directory to the user this panel runs as.'),
             ],
         ];
     }
@@ -439,10 +440,10 @@ final class Login
     {
         $siteName = (string) $this->cfg->get('site_name', 'Loghound');
 
-        $this->head('Sign in — ' . $siteName, 'Sign in to ' . $siteName);
+        $this->head(I18n::t('Sign in — {site}', ['site' => $siteName]), I18n::t('Sign in to {site}', ['site' => $siteName]));
 
-        echo '<p class="setup-lead">This panel shows every visitor, page and address on your site, '
-            . 'so it is never served without a password.</p>' . "\n";
+        echo '<p class="setup-lead">' . I18n::html('This panel shows every visitor, page and address on your site, '
+            . 'so it is never served without a password.') . '</p>' . "\n";
 
         $this->theftWarning();
         $this->message($why, $retry);
@@ -450,11 +451,11 @@ final class Login
         echo '<form method="post" action="?login=1" class="card setup-form login-form">';
         echo '<input type="hidden" name="csrf" value="' . Security::esc(Security::csrfToken()) . '">';
 
-        echo '<label for="user">Username</label>';
+        echo '<label for="user">' . I18n::html('Username') . '</label>';
         echo '<input type="text" id="user" name="user" size="28" autocomplete="username" '
             . 'autocapitalize="none" spellcheck="false" required autofocus>';
 
-        echo '<label for="password">Password</label>';
+        echo '<label for="password">' . I18n::html('Password') . '</label>';
         echo '<input type="password" id="password" name="password" size="28" '
             . 'autocomplete="current-password" required>';
 
@@ -466,25 +467,25 @@ final class Login
            a paragraph merely sitting after a checkbox is not announced with it. */
         $days = (int) floor(Persistence::lifetime((array) $this->cfg->get('auth', [])) / 86400);
         $howLong = $days >= 3650
-            ? 'It does not expire on a clock: the only way back out is the Sign out button.'
-            : 'It lasts ' . $days . ' day' . ($days === 1 ? '' : 's') . ' on this installation, '
-              . 'and the Sign out button ends it sooner.';
+            ? I18n::t('It does not expire on a clock: the only way back out is the Sign out button.')
+            : I18n::tn('It lasts {n} day on this installation, and the Sign out button ends it sooner.',
+                'It lasts {n} days on this installation, and the Sign out button ends it sooner.', $days);
 
         echo '<label class="check"><input type="checkbox" id="remember" name="'
             . Security::esc(Persistence::FIELD) . '" value="1" aria-describedby="remember-note">'
-            . '<span>Stay signed in on this browser</span></label>';
-        echo '<p class="setup-widen" id="remember-note">Keeps you signed in after you close the browser '
-            . 'or restart the machine. ' . Security::esc($howLong) . ' Whoever has this browser profile '
-            . 'is signed in to this panel, so leave it unticked on a shared or portable machine.</p>';
+            . '<span>' . I18n::html('Stay signed in on this browser') . '</span></label>';
+        echo '<p class="setup-widen" id="remember-note">' . I18n::html('Keeps you signed in after you close the browser '
+            . 'or restart the machine.') . ' ' . Security::esc($howLong) . ' ' . I18n::html('Whoever has this browser profile '
+            . 'is signed in to this panel, so leave it unticked on a shared or portable machine.') . '</p>';
 
-        echo '<button type="submit" class="primary">Sign in</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Sign in') . '</button>';
         echo '</form>' . "\n";
 
-        echo '<p class="muted login-note">Forgotten it? There is no reset by email — Loghound has no '
-            . 'mail path and would not use one for this. Run <code>'
-            . 'bin/loghound-setup'
-            . '</code> on the server and answer yes when it offers to set a new username and password. '
-            . 'Being able to run that is already proof enough of who you are.</p>' . "\n";
+        echo '<p class="muted login-note">' . I18n::html('Forgotten it? There is no reset by email — Loghound has no '
+            . 'mail path and would not use one for this. Run {command} on the server and answer yes when it offers '
+            . 'to set a new username and password. '
+            . 'Being able to run that is already proof enough of who you are.', ['command' => '<code>bin/loghound-setup</code>'])
+            . '</p>' . "\n";
 
         $this->foot();
     }
@@ -506,27 +507,28 @@ final class Login
     {
         $siteName = (string) $this->cfg->get('site_name', 'Loghound');
 
-        $this->head('Two-factor code — ' . $siteName, 'Two-factor code');
+        $this->head(I18n::t('Two-factor code — {site}', ['site' => $siteName]), I18n::t('Two-factor code'));
 
-        echo '<p class="setup-lead">Your password was accepted. Enter the current code from your '
-            . 'authenticator app to finish signing in.</p>' . "\n";
+        echo '<p class="setup-lead">' . I18n::html('Your password was accepted. Enter the current code from your '
+            . 'authenticator app to finish signing in.') . '</p>' . "\n";
 
         $this->message($why, $retry);
 
         echo '<form method="post" action="?login=1" class="card setup-form login-form">';
         echo '<input type="hidden" name="csrf" value="' . Security::esc(Security::csrfToken()) . '">';
 
-        echo '<label for="code">Six-digit code</label>';
+        echo '<label for="code">' . I18n::html('Six-digit code') . '</label>';
         echo '<input type="text" id="code" name="code" size="14" inputmode="numeric" '
             . 'autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required autofocus>';
 
-        echo '<button type="submit" class="primary">Finish signing in</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Finish signing in') . '</button>';
         echo '</form>' . "\n";
 
-        echo '<p class="muted login-note">Lost the phone? Type one of the recovery codes you saved when '
+        echo '<p class="muted login-note">' . I18n::html('Lost the phone? Type one of the recovery codes you saved when '
             . 'you turned two-factor on into the same field. Each one works once. If those are gone too, '
-            . 'run <code>' . 'bin/loghound-setup'
-            . '</code> on the server to set a new password, which also turns two-factor off.</p>' . "\n";
+            . 'run {command} on the server to set a new password, which also turns two-factor off.', [
+                'command' => '<code>bin/loghound-setup</code>',
+            ]) . '</p>' . "\n";
 
         $this->foot();
     }
@@ -555,13 +557,11 @@ final class Login
            unambiguous to anyone who can already reach a shell on the machine, which is the only
            person the sentence is for. */
         echo '<div class="banner banner-bad" role="alert">'
-            . Security::esc(
-                'A "stay signed in" token for this panel was presented twice. That can only happen if a '
+            . I18n::html('A "stay signed in" token for this panel was presented twice. That can only happen if a '
                 . 'copy of it was taken, so every one of those tokens has been destroyed and every browser '
-                . 'has to sign in again. Sign in now, then change your password with '
-            )
-            . '<code>' . 'bin/loghound-setup' . '</code>'
-            . Security::esc(' if you cannot account for it.')
+                . 'has to sign in again. Sign in now, then change your password with {command} if you cannot account for it.', [
+                'command' => '<code>bin/loghound-setup</code>',
+            ])
             . "</div>\n";
     }
 
@@ -586,9 +586,12 @@ final class Login
                ?login=1 after a lockout, with no credentials, and it used to print the full
                filesystem path of the attempt ledger — deployment root and layout handed to an
                anonymous prober. Security::requireAuth() logs the exact file for the operator. */
-            $text .= ' Try again in ' . max(1, (int) ceil($retry / 60)) . ' minute(s). '
-                . 'To clear it now, delete var/' . Security::LOGIN_LEDGER . ' inside your Loghound '
-                . 'installation; the server error log names its full path.';
+            $text .= ' ' . I18n::t('Try again in {n} minute(s). '
+                . 'To clear it now, delete var/{ledger} inside your Loghound '
+                . 'installation; the server error log names its full path.', [
+                    'n'      => max(1, (int) ceil($retry / 60)),
+                    'ledger' => Security::LOGIN_LEDGER,
+                ]);
         }
 
         $class = 'banner-' . ($messages[$why]['kind'] === 'good' ? 'good'
@@ -622,7 +625,7 @@ final class Login
         header('Content-Type: text/html; charset=utf-8');
 
         echo "<!doctype html>\n";
-        echo '<html lang="en" data-theme="auto">' . "\n<head>\n";
+        echo '<html ' . I18n::htmlAttrs() . ' data-theme="auto">' . "\n<head>\n";
         echo '<meta charset="utf-8">' . "\n";
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\n";
         echo '<meta name="robots" content="noindex, nofollow">' . "\n";

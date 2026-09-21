@@ -369,20 +369,18 @@ final class Security
             if (is_string($api) && $api !== '') {
                 header('Content-Type: application/json; charset=utf-8');
                 exit((string) json_encode([
-                    'error' => 'Your session was re-established, so this page is out of date. '
-                        . 'Reload it and try again.',
+                    'error' => I18n::t('Your session was re-established, so this page is out of date. '
+                        . 'Reload it and try again.'),
                 ]));
             }
             header('Content-Type: text/plain; charset=utf-8');
-            exit(
-                "You are signed in, but this page was loaded under a session the server has since\n" .
-                "cleaned up, so the form it carried is out of date. Reload the page and do it again.\n"
-            );
+            exit(I18n::t("You are signed in, but this page was loaded under a session the server has since\n" .
+                "cleaned up, so the form it carried is out of date. Reload the page and do it again.") . "\n");
         }
 
         http_response_code(403);
         header('Content-Type: text/plain; charset=utf-8');
-        exit("CSRF token mismatch\n");
+        exit(I18n::t('CSRF token mismatch') . "\n");
     }
 
     /**
@@ -481,10 +479,10 @@ final class Security
     public static function validateUserRegex(string $pattern, float $budgetSeconds = 0.10): ?string
     {
         if (strlen($pattern) > 4096) {
-            return 'Pattern is too long (max 4096 bytes).';
+            return I18n::t('Pattern is too long (max 4096 bytes).');
         }
         if (!preg_match('/^([\/#~%|])(.*)\1([imsxuUAD]*)$/sD', $pattern)) {
-            return 'Pattern must be a delimited regex, e.g. /^(?<ip>\S+) .../';
+            return I18n::t('Pattern must be a delimited regex, e.g. /^(?<ip>\S+) .../');
         }
 
         $oldLimit = ini_get('pcre.backtrack_limit');
@@ -501,15 +499,14 @@ final class Security
         if ($result === false) {
             $err = preg_last_error();
             if ($err === PREG_BACKTRACK_LIMIT_ERROR) {
-                return 'Pattern backtracks excessively and would stall ingestion.';
+                return I18n::t('Pattern backtracks excessively and would stall ingestion.');
             }
-            return 'Pattern failed to compile: ' . preg_last_error_msg();
+            return I18n::t('Pattern failed to compile: {error}', ['error' => preg_last_error_msg()]);
         }
         if ($elapsed > $budgetSeconds) {
-            return sprintf(
-                'Pattern is too slow (%.0f ms on a 900-byte line); it would not keep up with ingestion.',
-                $elapsed * 1000
-            );
+            return I18n::t('Pattern is too slow ({ms} ms on a 900-byte line); it would not keep up with ingestion.', [
+                'ms' => sprintf('%.0f', $elapsed * 1000),
+            ]);
         }
         return null;
     }
@@ -527,19 +524,19 @@ final class Security
     {
         return [
             'basic' => [
-                'label' => 'The browser\'s own password prompt',
-                'text'  => 'Your browser asks for the username and password before it shows anything. '
+                'label' => I18n::t('The browser\'s own password prompt'),
+                'text'  => I18n::t('Your browser asks for the username and password before it shows anything. '
                     . 'Every tool that speaks HTTP can sign in the same way, so curl and scripts work '
-                    . 'with nothing more than --user.',
-                'cost'  => 'The prompt is the browser\'s and cannot be styled, and there is no way to '
-                    . 'sign out short of closing the browser.',
+                    . 'with nothing more than --user.'),
+                'cost'  => I18n::t('The prompt is the browser\'s and cannot be styled, and there is no way to '
+                    . 'sign out short of closing the browser.'),
             ],
             'session' => [
-                'label' => 'A sign-in page',
-                'text'  => 'Loghound shows its own sign-in form, keeps you signed in for as long as you '
-                    . 'are using it, and gives you a Sign out button that ends the session on the server.',
-                'cost'  => 'It only works in a browser: curl and scripts cannot sign in to it, so a '
-                    . 'monitoring check against the panel has to be moved to Basic or dropped.',
+                'label' => I18n::t('A sign-in page'),
+                'text'  => I18n::t('Loghound shows its own sign-in form, keeps you signed in for as long as you '
+                    . 'are using it, and gives you a Sign out button that ends the session on the server.'),
+                'cost'  => I18n::t('It only works in a browser: curl and scripts cannot sign in to it, so a '
+                    . 'monitoring check against the panel has to be moved to Basic or dropped.'),
             ],
         ];
     }
@@ -1017,8 +1014,8 @@ final class Security
             http_response_code(503);
             header('Content-Type: text/plain; charset=utf-8');
             exit(
-                "Loghound has not finished being set up, so it has no way to sign you in.\n" .
-                "Open this site in a browser to finish setup, or run this on the server:\n" .
+                I18n::t("Loghound has not finished being set up, so it has no way to sign you in.\n" .
+                "Open this site in a browser to finish setup, or run this on the server:") . "\n" .
                 '  ' . dirname(__DIR__) . "/bin/loghound-setup\n"
             );
         }
@@ -1035,10 +1032,10 @@ final class Security
                into an exploit. The operator, who can read the error log, still gets the path. */
             error_log('Loghound: sign-in lockout in force; clear it by deleting ' . self::ledgerPath($varDir));
             exit(
-                "Too many failed sign-in attempts from your address.\n" .
-                'Try again in ' . $minutes . " minute(s).\n" .
-                'To clear it now, delete var/' . self::LOGIN_LEDGER . " inside your Loghound\n" .
-                "installation; the server error log names its full path.\n"
+                I18n::t("Too many failed sign-in attempts from your address.\n" .
+                "Try again in {n} minute(s).\n" .
+                "To clear it now, delete var/{ledger} inside your Loghound\n" .
+                "installation; the server error log names its full path.", ['n' => $minutes, 'ledger' => self::LOGIN_LEDGER]) . "\n"
             );
         }
 
@@ -1050,9 +1047,9 @@ final class Security
                 . dirname(self::ledgerPath($varDir)) . '; refusing every sign-in until it is writable.'
             );
             exit(
-                "Loghound cannot record failed sign-in attempts, because it cannot write to its\n" .
+                I18n::t("Loghound cannot record failed sign-in attempts, because it cannot write to its\n" .
                 "var/ directory. It refuses to sign anyone in rather than skip the check. Give that\n" .
-                "directory to the user this panel runs as; the server error log names it.\n"
+                "directory to the user this panel runs as; the server error log names it.") . "\n"
             );
         }
 
@@ -1060,7 +1057,7 @@ final class Security
             header('WWW-Authenticate: Basic realm="Loghound"');
             http_response_code(401);
             header('Content-Type: text/plain; charset=utf-8');
-            exit("Authentication required\n");
+            exit(I18n::t('Authentication required') . "\n");
         }
 
         if ($state === 'login' || $state === 'idle' || $state === 'absolute') {
@@ -1068,7 +1065,7 @@ final class Security
             if (is_string($api) && $api !== '') {
                 http_response_code(401);
                 header('Content-Type: application/json; charset=utf-8');
-                exit((string) json_encode(['error' => 'Your session has ended. Reload the page to sign in again.']));
+                exit((string) json_encode(['error' => I18n::t('Your session has ended. Reload the page to sign in again.')]));
             }
             $why = $state === 'login' ? '' : '&why=' . rawurlencode($state);
             header('Location: ?login=1' . $why, true, 302);
@@ -1077,7 +1074,7 @@ final class Security
 
         http_response_code(500);
         header('Content-Type: text/plain; charset=utf-8');
-        exit("Unknown auth mode\n");
+        exit(I18n::t('Unknown auth mode') . "\n");
     }
 
     /**

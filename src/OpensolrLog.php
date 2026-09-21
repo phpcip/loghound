@@ -179,11 +179,11 @@ final class OpensolrLog
         if (!$this->isConfigured()) {
             return self::fail(
                 'not_configured',
-                'No Opensolr account is configured, so there is nothing to read the request log from.'
+                I18n::t('No Opensolr account is configured, so there is nothing to read the request log from.')
             );
         }
         if (!Security::isSafeCoreName($core)) {
-            return self::fail('refused', 'That is not a valid Opensolr index name.');
+            return self::fail('refused', I18n::t('That is not a valid Opensolr index name.'));
         }
 
         $params = $this->buildParams($opt);
@@ -307,19 +307,20 @@ final class OpensolrLog
         if ($status === 0) {
             return self::fail(
                 'unreachable',
-                'The Opensolr API did not answer: ' . $this->redact((string) ($res['error'] ?? 'no response'))
-                . ' Check outbound HTTPS from this host.'
+                I18n::t('The Opensolr API did not answer: {error} Check outbound HTTPS from this host.', [
+                    'error' => $this->redact((string) ($res['error'] ?? 'no response')),
+                ])
             );
         }
         if ($status >= 500) {
-            return self::fail('unreachable', 'The Opensolr API answered HTTP ' . $status . '.');
+            return self::fail('unreachable', I18n::t('The Opensolr API answered HTTP {status}.', ['status' => $status]));
         }
 
         $decoded = json_decode($body, true);
         if (!is_array($decoded)) {
             return self::fail(
                 'unreachable',
-                'The Opensolr API answered HTTP ' . $status . ' with something that was not JSON.'
+                I18n::t('The Opensolr API answered HTTP {status} with something that was not JSON.', ['status' => $status])
             );
         }
 
@@ -328,7 +329,7 @@ final class OpensolrLog
             return $refusal;
         }
         if (!isset($decoded['response']) || !is_array($decoded['response'])) {
-            return self::fail('unreachable', 'The Opensolr API answered without a result set.');
+            return self::fail('unreachable', I18n::t('The Opensolr API answered without a result set.'));
         }
 
         return self::shapeOk($decoded);
@@ -355,21 +356,21 @@ final class OpensolrLog
         if (stripos($msg, 'NOT_CORE_OWNER') !== false || stripos($msg, 'NOT_OWNER') !== false) {
             return self::fail(
                 'not_owner',
-                'This Opensolr account does not own that index, so the platform will not show its '
-                . 'request log. Pick another index, or check the credentials in config/loghound.php.'
+                I18n::t('This Opensolr account does not own that index, so the platform will not show its '
+                . 'request log. Pick another index, or check the credentials in config/loghound.php.')
             );
         }
         if (stripos($msg, 'INVALID_CORE_NAME') !== false) {
-            return self::fail('not_owner', 'The platform does not recognise that index name.');
+            return self::fail('not_owner', I18n::t('The platform does not recognise that index name.'));
         }
         if (stripos($msg, 'INVALID_USER_ID') !== false || stripos($msg, 'API_KEY') !== false) {
             return self::fail(
                 'refused',
-                'Opensolr rejected the account credentials. Check opensolr.email and opensolr.api_key.'
+                I18n::t('Opensolr rejected the account credentials. Check opensolr.email and opensolr.api_key.')
             );
         }
         if (stripos($msg, 'ERROR') !== false) {
-            return self::fail('refused', 'Opensolr refused the request.');
+            return self::fail('refused', I18n::t('Opensolr refused the request.'));
         }
         return null;
     }

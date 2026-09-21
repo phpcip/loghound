@@ -42,6 +42,7 @@ import { boot, el, num } from './core.js';
 import { toggleUrl } from './facetfilter.js';
 import { countryName } from './geo.js';
 import { icon } from './icons.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /**
  * Field → label, from the server's own filter allowlist.
@@ -321,10 +322,10 @@ export function dimValue(field, value, opts) {
         href: toggleUrl(field, raw),
         'aria-current': on ? 'true' : null,
         title: on
-            ? 'Filtered to this now — these figures are already narrowed by it. Selecting it again removes the filter.'
+            ? T('Filtered to this now — these figures are already narrowed by it. Selecting it again removes the filter.')
             : ((spoken && spoken.why)
                 || options.title
-                || ('Filter every view to ' + dimLabel(field) + ': ' + text))
+                || T('Filter every view to {filter}', { filter: dimLabel(field) + ': ' + text }))
     });
     if (mark) {
         node.appendChild(mark);
@@ -414,8 +415,8 @@ export function countryNode(code, opts) {
         text: name,
         markOnly: (opts || {}).flagOnly === true,
         title: (opts || {}).flagOnly === true
-            ? name + ' (' + cc + ') — select to filter every view to it'
-            : 'Filter every view to ' + name + ' (' + cc + ')'
+            ? T('{country} — select to filter every view to it', { country: name + ' (' + cc + ')' })
+            : T('Filter every view to {filter}', { filter: name + ' (' + cc + ')' })
     });
     return el('span', { class: 'geo' }, [label]);
 }
@@ -438,7 +439,7 @@ export function clientNode(doc) {
             doc.ai_crawler ? el('span', { class: 'chip chip-accent', text: 'AI' }) : null
         ]));
         parts.push(el('div', { class: 'muted' }, [
-            doc.ua_bot_cat ? dimValue('ua_bot_cat_s', doc.ua_bot_cat) : el('span', { text: 'declared crawler' })
+            doc.ua_bot_cat ? dimValue('ua_bot_cat_s', doc.ua_bot_cat) : el('span', { text: T('declared crawler') })
         ]));
         return el('div', { class: 'client' }, parts);
     }
@@ -447,7 +448,7 @@ export function clientNode(doc) {
     parts.push(el('div', {}, [
         doc.browser
             ? dimValue('browser_s', doc.browser, { text: browser || doc.browser })
-            : el('span', { class: 'muted', text: 'unknown client' })
+            : el('span', { class: 'muted', text: T('unknown client') })
     ]));
 
     const lower = [];
@@ -525,8 +526,8 @@ export function drillRow(kind, data) {
         class: 'row-link',
         tabindex: '0',
         dataset: dataset,
-        title: 'Open the full record',
-        'aria-label': 'Open the full record'
+        title: T('Open the full record'),
+        'aria-label': T('Open the full record')
     };
 }
 
@@ -556,7 +557,7 @@ export function drillRow(kind, data) {
  * @param {string} [label] What the control says it will open.
  */
 export function openButton(kind, data, label) {
-    const name = label || 'Open the full record';
+    const name = label || T('Open the full record');
     const attrs = {
         type: 'button',
         class: 'rowopen',

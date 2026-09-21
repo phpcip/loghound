@@ -69,6 +69,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Score\Attacks as Rules;
 use Loghound\Security;
 
@@ -136,7 +137,7 @@ final class Attacks extends Controller implements Sections
 
     public function title(): string
     {
-        return 'Attacks';
+        return I18n::t('Attacks');
     }
 
 
@@ -320,7 +321,7 @@ final class Attacks extends Controller implements Sections
             'who'           => $this->who(),
             'impersonation' => $this->impersonation(),
             'when'          => $this->when(),
-            default         => ['error' => 'Unknown action'],
+            default         => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -485,9 +486,9 @@ final class Attacks extends Controller implements Sections
             'pivot'    => [
                 'outer'       => 'hit_flags_ss',
                 'inner'       => 'status_class_s',
-                'outer_label' => 'Attack pattern',
-                'inner_label' => 'Status class',
-                'question'    => 'What the server actually answered each kind of probe with.',
+                'outer_label' => I18n::t('Attack pattern'),
+                'inner_label' => I18n::t('Status class'),
+                'question'    => I18n::t('What the server actually answered each kind of probe with.'),
                 'rows'        => $pivot,
             ],
         ]);
@@ -544,7 +545,7 @@ final class Attacks extends Controller implements Sections
             }
             $matched = array_values(array_map('strval', (array) ($doc['hit_patterns_ss'] ?? [])));
             if ($matched !== []) {
-                $labels[] = 'matched ' . implode(', ', $matched);
+                $labels[] = I18n::t('matched {patterns}', ['patterns' => implode(', ', $matched)]);
             }
 
             $out[] = [
@@ -573,7 +574,7 @@ final class Attacks extends Controller implements Sections
                 $start,
                 $rows,
                 (int) $res['numFound'],
-                'requests',
+                I18n::t('requests'),
                 count($out),
                 Paging::sizesUpTo(self::MAX_REQUESTS)
             ),
@@ -834,33 +835,35 @@ final class Attacks extends Controller implements Sections
         self::cardOpen(
             'atk-answered',
             $this->cardNumber('atk-answered'),
-            'What the server answered',
-            'Requests in range that matched a detection pattern, counted by what the server replied '
-            . 'with. The four classes are counted separately and are never added together.'
+            I18n::t('What the server answered'),
+            I18n::t('Requests in range that matched a detection pattern, counted by what the server replied '
+            . 'with. The four classes are counted separately and are never added together.')
         );
-        self::skeleton('atk-answered', 'stats', 0, 'Correlating matched requests with response codes');
+        self::skeleton('atk-answered', 'stats', 0, I18n::t('Correlating matched requests with response codes'));
 
         echo '<div class="split-card">';
 
         echo '<div class="split-half split-evasive">';
-        echo '<h2>Answered</h2>';
-        echo '<p class="split-note">The server returned a body or a redirect. <strong>That does not '
-            . 'prove a disclosure</strong> — a site whose error page carries a 200 status looks exactly '
-            . 'like this in a log. It is where to start looking, not what to conclude.</p>';
+        echo '<h2>' . I18n::html('Answered') . '</h2>';
+        echo '<p class="split-note">' . I18n::html('The server returned a body or a redirect. {claim} — a site whose error page '
+            . 'carries a 200 status looks exactly '
+            . 'like this in a log. It is where to start looking, not what to conclude.', [
+                'claim' => '<strong>' . I18n::html('That does not prove a disclosure') . '</strong>',
+            ]) . '</p>';
         echo '<div class="split-stats">';
         echo '<div><span class="stat-value mono" data-field="status_ok">—</span>'
-            . '<span class="stat-label">Answered 2xx</span></div>';
+            . '<span class="stat-label">' . I18n::html('Answered 2xx') . '</span></div>';
         echo '<div><span class="stat-value mono" data-field="status_redirect">—</span>'
-            . '<span class="stat-label">Redirected 3xx</span></div>';
+            . '<span class="stat-label">' . I18n::html('Redirected 3xx') . '</span></div>';
         echo '<div><span class="stat-value mono" data-field="status_broke">—</span>'
-            . '<span class="stat-label">Server error 5xx</span></div>';
+            . '<span class="stat-label">' . I18n::html('Server error 5xx') . '</span></div>';
         echo '</div></div>';
 
         echo '<div class="split-half split-declared">';
-        echo '<h2>Refused</h2>';
-        echo '<p class="split-note">The server declined: not found, forbidden, unauthorised. This is '
+        echo '<h2>' . I18n::html('Refused') . '</h2>';
+        echo '<p class="split-note">' . I18n::html('The server declined: not found, forbidden, unauthorised. This is '
             . 'the webserver doing its job, and on any address on the public internet it is almost '
-            . 'all of the traffic on this page.</p>';
+            . 'all of the traffic on this page.') . '</p>';
         /* TWO WHOLE-CARD TOTALS WERE PARKED UNDER "Refused" TO BALANCE THE LAYOUT, and a tile
            takes its population from the heading above it. "Matched in all" and "Distinct
            addresses" count every matched request and every address on the card — not the
@@ -870,19 +873,19 @@ final class Attacks extends Controller implements Sections
            saying what it counts. The Refused half keeps the one figure that is about refusals. */
         echo '<div class="split-stats">';
         echo '<div><span class="stat-value mono" data-field="status_refused">—</span>'
-            . '<span class="stat-label">Refused 4xx</span></div>';
+            . '<span class="stat-label">' . I18n::html('Refused 4xx') . '</span></div>';
         echo '</div></div>';
 
         echo '</div>';
 
         echo '<div class="stats">';
         foreach ([
-            ['matched',     'Matched, all classes', 'Every request in range that matched a pattern, whatever the server answered'],
-            ['uniq_ips',    'Distinct addresses',   'Addresses behind those matched requests, across all four status classes'],
-            ['evaluated',   'Requests evaluated',  'Requests the detector has actually looked at'],
-            ['unevaluated', 'Never evaluated',     'Indexed before detection existed. NOT the same as clean'],
-            ['uniq_patterns', 'Distinct patterns', 'How many of the named patterns appeared at all'],
-            ['last',        'Most recent match',   'The last request in range that matched anything'],
+            ['matched',     I18n::t('Matched, all classes'), I18n::t('Every request in range that matched a pattern, whatever the server answered')],
+            ['uniq_ips',    I18n::t('Distinct addresses'),   I18n::t('Addresses behind those matched requests, across all four status classes')],
+            ['evaluated',   I18n::t('Requests evaluated'),  I18n::t('Requests the detector has actually looked at')],
+            ['unevaluated', I18n::t('Never evaluated'),     I18n::t('Indexed before detection existed. NOT the same as clean')],
+            ['uniq_patterns', I18n::t('Distinct patterns'), I18n::t('How many of the named patterns appeared at all')],
+            ['last',        I18n::t('Most recent match'),   I18n::t('The last request in range that matched anything')],
         ] as [$key, $label, $hint]) {
             echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
             echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
@@ -901,13 +904,13 @@ final class Attacks extends Controller implements Sections
         self::cardOpen(
             'atk-patterns',
             $this->cardNumber('atk-patterns'),
-            'What is being tried',
-            'Grouped by PATTERN, not by request string — every probe is unique, so a list of exact '
+            I18n::t('What is being tried'),
+            I18n::t('Grouped by PATTERN, not by request string — every probe is unique, so a list of exact '
             . 'strings would be a list of one-hit wonders. Ordered by how many attempts the server '
-            . 'answered, so the rows that matter are at the top whatever their volume.',
+            . 'answered, so the rows that matter are at the top whatever their volume.'),
             $this->exportTool('patterns')
         );
-        self::skeleton('atk-patterns', 'chart', 360, 'Faceting detection patterns against status codes');
+        self::skeleton('atk-patterns', 'chart', 360, I18n::t('Faceting detection patterns against status codes'));
 
         echo '<div class="chart" id="atk-patterns-chart" style="height:360px"></div>';
         echo '<div class="table-wrap"><table id="atk-patterns-table" class="table-fixed"><colgroup>'
@@ -915,13 +918,13 @@ final class Attacks extends Controller implements Sections
             . '<col style="width:11%"><col style="width:11%"><col style="width:12%">'
             . '<col style="width:12%"><col style="width:14%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Pattern</th>'
-            . '<th scope="col" class="num">Answered</th>'
-            . '<th scope="col" class="num">Redirected</th>'
-            . '<th scope="col" class="num">Refused</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">Addresses</th>'
-            . '<th scope="col">Last seen</th>'
+            . '<th scope="col">' . I18n::html('Pattern') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Answered') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Redirected') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Refused') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Addresses') . '</th>'
+            . '<th scope="col">' . I18n::html('Last seen') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('atk-patterns');
@@ -933,13 +936,13 @@ final class Attacks extends Controller implements Sections
         self::cardOpen(
             'atk-requests',
             $this->cardNumber('atk-requests'),
-            'The requests the server answered',
-            'Individual requests that matched a pattern AND were answered with a 2xx or a 3xx — the '
+            I18n::t('The requests the server answered'),
+            I18n::t('Individual requests that matched a pattern AND were answered with a 2xx or a 3xx — the '
             . 'small set worth a person\'s time. Every path and query string here was chosen by '
-            . 'whoever sent it; do not paste one into a shell.',
+            . 'whoever sent it; do not paste one into a shell.'),
             $this->exportTool('requests')
         );
-        self::skeleton('atk-requests', 'rows', 0, 'Reading the answered requests');
+        self::skeleton('atk-requests', 'rows', 0, I18n::t('Reading the answered requests'));
 
         /* THE OPENER COLUMN, which this table did not have. Its rows open the session that
            made the request — identity.js documents that as the drill-through that makes a URL
@@ -961,11 +964,11 @@ final class Attacks extends Controller implements Sections
             . '<col style="width:23%"><col style="width:15%"><col style="width:6%">'
             . '<col style="width:35%"><col style="width:21%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('date', 'desc') . '>Date</th>'
+            . '<th scope="col"' . Sorting::th('date', 'desc') . '>' . I18n::html('Date') . '</th>'
             . '<th scope="col"' . Sorting::th('ip') . '>IP</th>'
-            . '<th scope="col"' . Sorting::th('country') . '>Country</th>'
-            . '<th scope="col"' . Sorting::th('page') . '>Page</th>'
-            . '<th scope="col" class="visit-verdict"' . Sorting::th('verdict') . '>Verdict</th>'
+            . '<th scope="col"' . Sorting::th('country') . '>' . I18n::html('Country') . '</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>' . I18n::html('Page') . '</th>'
+            . '<th scope="col" class="visit-verdict"' . Sorting::th('verdict') . '>' . I18n::html('Verdict') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="atk-requests-pager"></div>';
 
@@ -994,36 +997,36 @@ final class Attacks extends Controller implements Sections
         self::cardOpen(
             'atk-who',
             $this->cardNumber('atk-who'),
-            'Who is doing it',
-            'Addresses whose requests matched a pattern, ordered by how many of them the server '
+            I18n::t('Who is doing it'),
+            I18n::t('Addresses whose requests matched a pattern, ordered by how many of them the server '
             . 'answered. An address is not a person: one host can carry many clients, and one '
             . 'campaign can rent many hosts — the network column and the Fingerprints view are '
-            . 'where that question is actually answered.',
+            . 'where that question is actually answered.'),
             $this->exportTool('actors')
         );
-        self::skeleton('atk-who', 'rows', 0, 'Faceting addresses and networks');
+        self::skeleton('atk-who', 'rows', 0, I18n::t('Faceting addresses and networks'));
 
         echo '<div class="table-wrap"><table id="atk-who-table" class="table-fixed"><colgroup>'
             . '<col style="width:18%"><col style="width:24%"><col style="width:11%">'
             . '<col style="width:11%"><col style="width:11%"><col style="width:11%">'
             . '<col style="width:14%"></colgroup><thead><tr>'
-            . '<th scope="col">Address</th>'
-            . '<th scope="col">Network</th>'
-            . '<th scope="col" class="num">Answered</th>'
-            . '<th scope="col" class="num">Refused</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">Patterns</th>'
-            . '<th scope="col">Last seen</th>'
+            . '<th scope="col">' . I18n::html('Address') . '</th>'
+            . '<th scope="col">' . I18n::html('Network') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Answered') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Refused') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Patterns') . '</th>'
+            . '<th scope="col">' . I18n::html('Last seen') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         echo '<div class="table-wrap"><table id="atk-networks-table" class="table-fixed"><colgroup>'
             . '<col style="width:42%"><col style="width:15%"><col style="width:15%">'
             . '<col style="width:14%"><col style="width:14%"></colgroup><thead><tr>'
-            . '<th scope="col">Network</th>'
-            . '<th scope="col" class="num">Answered</th>'
-            . '<th scope="col" class="num">Refused</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">Addresses</th>'
+            . '<th scope="col">' . I18n::html('Network') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Answered') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Refused') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Addresses') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('atk-who');
@@ -1035,19 +1038,19 @@ final class Attacks extends Controller implements Sections
         self::cardOpen(
             'atk-impersonation',
             $this->cardNumber('atk-impersonation'),
-            'Crawlers that are not what they say',
-            'Sessions whose User-Agent declared a named crawler. Verified means forward-confirmed '
+            I18n::t('Crawlers that are not what they say'),
+            I18n::t('Sessions whose User-Agent declared a named crawler. Verified means forward-confirmed '
             . 'reverse DNS backed the claim up. A name with sessions and none verified is an '
-            . 'impersonator, not a crawler.'
+            . 'impersonator, not a crawler.')
         );
-        self::skeleton('atk-impersonation', 'rows', 0, 'Checking declared crawler claims');
+        self::skeleton('atk-impersonation', 'rows', 0, I18n::t('Checking declared crawler claims'));
 
         echo '<div class="stats">';
         foreach ([
-            ['declared',    'Declared a crawler', 'Sessions whose User-Agent named a bot'],
-            ['verified',    'Claim verified',     'Forward-confirmed reverse DNS backed the name up'],
-            ['rdns_failed', 'rDNS check failed',  'A crawler whose operator publishes rDNS, and it did not match'],
-            ['tenant',      'On a rented cloud VM', 'A named search or AI crawler answering from general-purpose cloud tenant space'],
+            ['declared',    I18n::t('Declared a crawler'), I18n::t('Sessions whose User-Agent named a bot')],
+            ['verified',    I18n::t('Claim verified'),     I18n::t('Forward-confirmed reverse DNS backed the name up')],
+            ['rdns_failed', I18n::t('rDNS check failed'),  I18n::t('A crawler whose operator publishes rDNS, and it did not match')],
+            ['tenant',      I18n::t('On a rented cloud VM'), I18n::t('A named search or AI crawler answering from general-purpose cloud tenant space')],
         ] as [$key, $label, $hint]) {
             echo '<div class="stat"><span class="stat-label">' . Security::esc($label) . '</span>';
             echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
@@ -1059,13 +1062,13 @@ final class Attacks extends Controller implements Sections
             . '<col style="width:22%"><col style="width:15%"><col style="width:11%">'
             . '<col style="width:11%"><col style="width:12%"><col style="width:12%">'
             . '<col style="width:17%"></colgroup><thead><tr>'
-            . '<th scope="col">Crawler</th>'
-            . '<th scope="col">Category</th>'
-            . '<th scope="col" class="num">Sessions</th>'
-            . '<th scope="col" class="num">Verified</th>'
-            . '<th scope="col" class="num">rDNS failed</th>'
-            . '<th scope="col" class="num">Cloud tenant</th>'
-            . '<th scope="col">Last seen</th>'
+            . '<th scope="col">' . I18n::html('Crawler') . '</th>'
+            . '<th scope="col">' . I18n::html('Category') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Verified') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('rDNS failed') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Cloud tenant') . '</th>'
+            . '<th scope="col">' . I18n::html('Last seen') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('atk-impersonation');
@@ -1077,12 +1080,12 @@ final class Attacks extends Controller implements Sections
         self::cardOpen(
             'atk-when',
             $this->cardNumber('atk-when'),
-            'When',
-            'Matched requests over the selected range, with the answered subset drawn beneath them. '
+            I18n::t('When'),
+            I18n::t('Matched requests over the selected range, with the answered subset drawn beneath them. '
             . 'One line rising alone is ordinary background probing; both rising together is a burst '
-            . 'worth opening.'
+            . 'worth opening.')
         );
-        self::skeleton('atk-when', 'chart', 300, 'Bucketing matched requests over time');
+        self::skeleton('atk-when', 'chart', 300, I18n::t('Bucketing matched requests over time'));
         echo '<div class="chart" id="atk-when-chart" style="height:300px"></div>';
         self::cardClose('atk-when');
     }
@@ -1104,18 +1107,18 @@ final class Attacks extends Controller implements Sections
         self::cardOpen(
             'atk-pivot',
             $this->cardNumber('atk-pivot'),
-            'Pattern by status class',
+            I18n::t('Pattern by status class'),
             $question,
             $this->exportTool('pivot')
         );
-        self::skeleton('atk-pivot', 'rows', 0, 'Cross-tabulating patterns by status class');
+        self::skeleton('atk-pivot', 'rows', 0, I18n::t('Cross-tabulating patterns by status class'));
 
         echo '<div class="table-wrap"><table id="atk-pivot-table" class="table-fixed pivot">'
             . '<colgroup><col style="width:32%"><col style="width:12%"><col style="width:56%"></colgroup>'
             . '<thead><tr>'
-            . '<th scope="col">Attack pattern</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col">Status class</th>'
+            . '<th scope="col">' . I18n::html('Attack pattern') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Requests') . '</th>'
+            . '<th scope="col">' . I18n::html('Status class') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('atk-pivot');
@@ -1132,40 +1135,45 @@ final class Attacks extends Controller implements Sections
      */
     private function explainCard(): void
     {
-        self::cardOpen('atk-explain', $this->cardNumber('atk-explain'), 'What this page does not claim');
+        self::cardOpen('atk-explain', $this->cardNumber('atk-explain'), I18n::t('What this page does not claim'));
 
         echo '<div class="explain">';
-        echo '<p><strong>Loghound is not a firewall and blocked none of this.</strong> It reads the '
+        echo '<p><strong>' . I18n::html('Loghound is not a firewall and blocked none of this.') . '</strong> '
+            . I18n::html('It reads the '
             . 'access log after the fact. Every request on this page was served — or refused — by the '
             . 'webserver long before Loghound saw the line. Nothing here was stopped, prevented or '
-            . 'protected against, and no number on this page should be read as though it had been.</p>';
-        echo '<p><strong>A 2xx does not prove a disclosure.</strong> It proves the server returned a '
+            . 'protected against, and no number on this page should be read as though it had been.') . '</p>';
+        echo '<p><strong>' . I18n::html('A 2xx does not prove a disclosure.') . '</strong> '
+            . I18n::html('It proves the server returned a '
             . 'body. A site that serves its error page with a 200 status — a single-page-app shell, a '
             . 'CMS catch-all route, a misconfigured ErrorDocument — is indistinguishable in a log from '
             . 'one that handed over its environment. The only way to know is to fetch the URL and look '
             . 'at what comes back. That is why this page leads with the answered requests and their '
-            . 'exact paths rather than with a verdict.</p>';
-        echo '<p><strong>A 404 is not nothing, it is just not an incident.</strong> Every address on '
+            . 'exact paths rather than with a verdict.') . '</p>';
+        echo '<p><strong>' . I18n::html('A 404 is not nothing, it is just not an incident.') . '</strong> '
+            . I18n::html('Every address on '
             . 'the public internet collects thousands of these a day from untargeted scanners. They are '
             . 'worth knowing about in aggregate — a hundred distinct paths from one address in ten '
             . 'seconds is a scanner, whatever the status codes say — and they are worth almost nothing '
-            . 'individually. The ordering on this page reflects that.</p>';
-        echo '<p><strong>Detection runs at ingest, so it can only speak for what it was there for.</strong> '
-            . 'A request indexed before this feature existed carries no verdict at all, and the coverage '
+            . 'individually. The ordering on this page reflects that.') . '</p>';
+        echo '<p><strong>' . I18n::html('Detection runs at ingest, so it can only speak for what it was there for.') . '</strong> '
+            . I18n::html('A request indexed before this feature existed carries no verdict at all, and the coverage '
             . 'line on the first card says how many of those are in the selected range. "No attacks" over '
-            . 'a period the detector was not running is not a finding.</p>';
-        echo '<p><strong>The request line is all there is.</strong> An access log records the method, '
+            . 'a period the detector was not running is not a finding.') . '</p>';
+        echo '<p><strong>' . I18n::html('The request line is all there is.') . '</strong> '
+            . I18n::html('An access log records the method, '
             . 'the path and the query string. It does not record the request body, so injection through '
             . 'a POST — which is where most real injection goes — is invisible here, and it does not '
             . 'record headers, so a payload in a User-Agent or a Referer is invisible too unless the '
             . 'log format captures them. Nothing on this page should be read as a survey of what was '
-            . 'attempted, only of what was attempted where a log can see it.</p>';
+            . 'attempted, only of what was attempted where a log can see it.') . '</p>';
         echo '</div>';
 
         $families = Rules::families();
 
         echo '<div class="rulebook">';
-        foreach (Rules::RULES as $code => $rule) {
+        foreach (array_keys(Rules::RULES) as $code) {
+            $rule = Rules::describe($code);
             echo '<article class="rulecard">';
             echo '<div class="rulecard-head">';
             echo '<span class="rulecard-name">' . Security::esc($rule['label']) . '</span>';
@@ -1175,9 +1183,9 @@ final class Attacks extends Controller implements Sections
             echo '<code class="rulecard-code mono muted">' . Security::esc($code) . '</code>';
             echo '<div class="rulecard-meta">';
             foreach ([
-                ['Matches', $rule['what']],
-                ['Misses', $rule['misses']],
-                ['Over-reports', $rule['over']],
+                [I18n::t('Matches'), $rule['what']],
+                [I18n::t('Misses'), $rule['misses']],
+                [I18n::t('Over-reports'), $rule['over']],
             ] as [$heading, $text]) {
                 echo '<div class="rulecard-facet">';
                 echo '<h4>' . Security::esc($heading) . '</h4>';

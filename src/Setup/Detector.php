@@ -34,6 +34,7 @@ declare(strict_types=1);
 namespace Loghound\Setup;
 
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\LogDetect;
 use Loghound\LogFormat;
 use Loghound\Parser;
@@ -111,21 +112,21 @@ final class Detector
     {
         $steps = [[
             'key'   => 'discover',
-            'label' => 'Looking for access logs',
+            'label' => I18n::t('Looking for access logs'),
             'run'   => static function (Job $j, Config $c): string {
                 $found = self::candidates($c, $j);
                 $j->setResult('candidates', $found);
                 if ($found === []) {
-                    return 'No access log found automatically — you can type a path instead.';
+                    return I18n::t('No access log found automatically — you can type a path instead.');
                 }
-                return count($found) . ' candidate file' . (count($found) === 1 ? '' : 's') . ' to examine.';
+                return I18n::tn('{n} candidate file to examine.', '{n} candidate files to examine.', count($found));
             },
         ]];
 
         foreach ((array) ($job->result()['candidates'] ?? []) as $path => $meta) {
             $steps[] = [
                 'key'   => 'file:' . md5((string) $path),
-                'label' => 'Reading ' . basename((string) $path),
+                'label' => I18n::t('Reading {file}', ['file' => basename((string) $path)]),
                 'run'   => static function (Job $j, Config $c) use ($path, $meta): string {
                     $source = self::examine($c, (string) $path, (array) $meta);
                     $sources = (array) ($j->result()['sources'] ?? []);
@@ -133,31 +134,30 @@ final class Detector
                     $j->setResult('sources', $sources);
 
                     if (!empty($source['outside_roots'])) {
-                        return 'Outside the directories Loghound may read — listed, not opened.';
+                        return I18n::t('Outside the directories Loghound may read — listed, not opened.');
                     }
                     if ($source['lines_tested'] === 0) {
-                        return 'Empty or unreadable — skipped.';
+                        return I18n::t('Empty or unreadable — skipped.');
                     }
-                    return sprintf(
-                        '%s, %s%% of %d sampled lines parse cleanly.',
-                        $source['format_name'],
-                        rtrim(rtrim(number_format($source['confidence'], 1), '0'), '.'),
-                        $source['lines_tested']
-                    );
+                    return I18n::t('{format}, {share}% of {n} sampled lines parse cleanly.', [
+                        'format' => I18n::t((string) $source['format_name']),
+                        'share'  => rtrim(rtrim(number_format($source['confidence'], 1), '0'), '.'),
+                        'n'      => (int) $source['lines_tested'],
+                    ]);
                 },
             ];
         }
 
         $steps[] = [
             'key'   => 'report',
-            'label' => 'Saving the detection report',
+            'label' => I18n::t('Saving the detection report'),
             'run'   => static function (Job $j, Config $c): string {
                 $report = self::report(array_values((array) ($j->result()['sources'] ?? [])), $c);
                 $path = self::writeReport($c, $report);
                 $j->setResult('report_path', $path === null ? '' : $path);
                 return $path === null
-                    ? 'Report kept in memory (var/ is not writable).'
-                    : 'Saved to ' . $path . '.';
+                    ? I18n::t('Report kept in memory (var/ is not writable).')
+                    : I18n::t('Saved to {path}.', ['path' => $path]);
             },
         ];
 
@@ -209,7 +209,7 @@ final class Detector
         } catch (\Throwable $e) {
             $fromConfig = [];
             if ($job !== null) {
-                $job->note('Could not read the webserver configuration: ' . $e->getMessage());
+                $job->note(I18n::t('Could not read the webserver configuration: {error}', ['error' => $e->getMessage()]));
             }
         }
 
@@ -222,7 +222,7 @@ final class Detector
             }
 
             $out[(string) $path] = [
-                'origin'        => 'webserver config (' . basename((string) ($meta['config'] ?? '?')) . ')',
+                'origin'        => I18n::t('webserver config ({file})', ['file' => basename((string) ($meta['config'] ?? '?'))]),
                 'server'        => (string) ($meta['server'] ?? 'apache'),
                 'vhost'         => $meta['vhost'] ?? null,
                 'format_string' => (string) ($meta['format'] ?? ''),
@@ -236,7 +236,7 @@ final class Detector
                     continue;
                 }
                 $out[$file] = [
-                    'origin'        => 'found in the usual location',
+                    'origin'        => I18n::t('found in the usual location'),
                     'server'        => str_contains($file, 'nginx') ? 'nginx' : 'apache',
                     'vhost'         => null,
                     'format_string' => '',
@@ -363,7 +363,7 @@ final class Detector
             $source['confidence']  = $confidence;
             $source['lines_parsed'] = $parsed;
             if ($source['format_name'] === '') {
-                $source['format_name'] = 'from your webserver configuration';
+                $source['format_name'] = I18n::mark('from your webserver configuration');
             }
         }
 
@@ -378,8 +378,8 @@ final class Detector
                     $source['confidence']    = (float) $best['confidence'];
                     $source['lines_parsed']  = (int) $best['parsed'];
                     $source['source'] = $source['source'] === ''
-                        ? 'matched the built-in format library'
-                        : $source['source'] . ' — overridden by the format library, which matches this file better';
+                        ? I18n::t('matched the built-in format library')
+                        : $source['source'] . ' — ' . I18n::t('overridden by the format library, which matches this file better');
                 }
                 foreach (array_slice($ranked, 1) as $alt) {
                     $source['alternatives'][] = [
@@ -391,9 +391,9 @@ final class Detector
                 $proposal = LogDetect::proposeRegex($lines);
                 if ($proposal !== null) {
                     $fmt = LogDetect::formatFromRegex($proposal, 'proposed');
-                    $source['format_name']   = 'a pattern generated from your log';
+                    $source['format_name']   = I18n::mark('a pattern generated from your log');
                     $source['format_string'] = $proposal;
-                    $source['source'] = 'nothing in the format library matched, so this was generated from the file';
+                    $source['source'] = I18n::t('nothing in the format library matched, so this was generated from the file');
                     if ($fmt !== null) {
                         [$c, $p] = self::grade($fmt, $lines);
                         $source['confidence'] = $c;
@@ -464,7 +464,7 @@ final class Detector
             } elseif ($field === null && str_starts_with($canonical, 'var.')) {
                 $flat = str_replace('-', '_', substr($canonical, strlen('var.')));
                 $field = $flat === 'ssl_protocol' ? 'tls_proto_s'
-                    : ($flat === 'ssl_cipher' ? 'tls_cipher_s' : '(not indexed)');
+                    : ($flat === 'ssl_cipher' ? 'tls_cipher_s' : I18n::mark('(not indexed)'));
                 $canonicalLabel = $canonical;
             } else {
                 $canonicalLabel = $canonical;
@@ -472,7 +472,7 @@ final class Detector
 
             $out[] = [
                 'token'   => $canonicalLabel,
-                'field'   => (string) ($field ?? '(not indexed)'),
+                'field'   => (string) ($field ?? I18n::mark('(not indexed)')),
                 'example' => self::clip((string) ($first[$canonical] ?? '')),
             ];
         }
@@ -498,7 +498,7 @@ final class Detector
             'sec-fetch-user'     => 'sec_fetch_user_s',
             'x-forwarded-for'    => 'xff_s',
         ];
-        return $map[strtolower($header)] ?? '(not indexed)';
+        return $map[strtolower($header)] ?? I18n::mark('(not indexed)');
     }
 
     /**
@@ -678,7 +678,7 @@ final class Detector
 
         $path = trim($path);
         if ($path === '') {
-            return $fail('Enter the full path of an access log file.');
+            return $fail(I18n::t('Enter the full path of an access log file.'));
         }
         /* THE ALLOWLIST IS CONSULTED BEFORE THE FILESYSTEM IS. The other order answered "there
            is no file at /etc/shadow" differently from "there is no file at /etc/nonexistent",
@@ -688,17 +688,21 @@ final class Detector
         $roots = (array) $cfg->get('allowed_log_roots', []);
         if (Security::safePath($path, $roots) === null) {
             return $fail(
-                $path . ' is outside the directories Loghound is allowed to read ('
-                . implode(', ', $roots) . '). That list is a safety control and it is never '
+                I18n::t('{path} is outside the directories Loghound is allowed to read ({roots}). That list is a safety control and it is never '
                 . 'widened from a web form. Either put the file somewhere already on the list, '
-                . 'or run ' . self::setupCommand($cfg) . ' in a shell — it offers this same path '
-                . 'and asks whether ' . dirname($path) . ' may be read — or add that directory to '
-                . 'allowed_log_roots in config/loghound.php yourself.'
+                . 'or run {command} in a shell — it offers this same path '
+                . 'and asks whether {dir} may be read — or add that directory to '
+                . 'allowed_log_roots in config/loghound.php yourself.', [
+                    'path'    => $path,
+                    'roots'   => implode(', ', $roots),
+                    'command' => self::setupCommand($cfg),
+                    'dir'     => dirname($path),
+                ])
             );
         }
 
         if (!@is_file($path)) {
-            return $fail('There is no file at ' . $path . ' that this server can see.');
+            return $fail(I18n::t('There is no file at {path} that this server can see.', ['path' => $path]));
         }
 
         if ($format === 'custom') {
@@ -708,10 +712,10 @@ final class Detector
             }
             $fmt = LogDetect::formatFromRegex($regex, 'custom');
             if ($fmt === null) {
-                return $fail('That pattern compiled but captured no named groups, so nothing would be extracted.');
+                return $fail(I18n::t('That pattern compiled but captured no named groups, so nothing would be extracted.'));
             }
             $meta = [
-                'origin'        => 'entered by hand, with a custom pattern',
+                'origin'        => I18n::t('entered by hand, with a custom pattern'),
                 'server'        => 'custom',
                 'vhost'         => null,
                 'format_string' => $regex,
@@ -719,10 +723,10 @@ final class Detector
             ];
         } else {
             if (LogDetect::formatByName($format) === null) {
-                return $fail('Unknown log format: ' . $format);
+                return $fail(I18n::t('Unknown log format: {format}', ['format' => $format]));
             }
             $meta = [
-                'origin'        => 'entered by hand',
+                'origin'        => I18n::t('entered by hand'),
                 'server'        => str_starts_with($format, 'nginx') ? 'nginx' : 'apache',
                 'vhost'         => null,
                 'format_string' => '',
@@ -748,7 +752,7 @@ final class Detector
         foreach (array_keys(LogDetect::library()) as $name) {
             $out[(string) $name] = str_replace('_', ' ', (string) $name);
         }
-        $out['custom'] = 'custom pattern (regular expression)';
+        $out['custom'] = I18n::t('custom pattern (regular expression)');
         return $out;
     }
 }

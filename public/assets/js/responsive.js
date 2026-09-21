@@ -40,6 +40,7 @@
 import { endCopyFields, initCopyFields } from './copy.js';
 import { icon } from './icons.js';
 import { orderTable } from './sorttable.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 const NARROW = 900;
 const RAIL_KEY = 'lh.rail';
@@ -284,7 +285,7 @@ function setUpNav() {
         'aria-controls': list.id
     });
     navBtn.appendChild(el('span', { class: 'lh-navbtn-mark', 'aria-hidden': 'true' }));
-    navBtn.appendChild(el('span', {}, 'Views'));
+    navBtn.appendChild(el('span', {}, T('Views')));
 
     const brand = side.querySelector('.brand');
     if (brand && brand.parentNode === side) {
@@ -428,14 +429,14 @@ function sortBar(table) {
     }
 
     const bar = el('div', { class: 'lh-sortbar' });
-    const field = el('select', { class: 'lh-sortfield', 'aria-label': 'Sort by' });
-    const dir = el('select', { class: 'lh-sortdir', 'aria-label': 'Sort direction' });
+    const field = el('select', { class: 'lh-sortfield', 'aria-label': T('Sort by') });
+    const dir = el('select', { class: 'lh-sortdir', 'aria-label': T('Sort direction') });
 
     for (const th of cells) {
         field.appendChild(el('option', { value: String(th.cellIndex) }, (th.textContent || '').trim()));
     }
-    dir.appendChild(el('option', { value: 'asc' }, 'Ascending'));
-    dir.appendChild(el('option', { value: 'desc' }, 'Descending'));
+    dir.appendChild(el('option', { value: 'asc' }, T('Ascending')));
+    dir.appendChild(el('option', { value: 'desc' }, T('Descending')));
 
     /* WHAT IT IS SORTED BY NOW, not what it would be sorted by if pressed. sortBy() records both
        on the table, so the controls can open already showing the truth. */
@@ -525,9 +526,9 @@ function labelFacetButton(button, open) {
         return;
     }
     if (n > 0) {
-        state.textContent = n === 1 ? '1 active' : n + ' active';
+        state.textContent = Tn('{n} active', '{n} active', n);
     } else {
-        state.textContent = open ? 'hide' : 'show';
+        state.textContent = open ? T('hide') : T('show');
     }
 }
 
@@ -550,7 +551,7 @@ function setUpFacets() {
     }
 
     const button = el('button', { type: 'button', class: 'lh-facetbtn', 'aria-expanded': 'false' });
-    button.appendChild(el('span', {}, 'Filters'));
+    button.appendChild(el('span', {}, T('Filters')));
     button.appendChild(el('span', { class: 'lh-facetbtn-state' }));
     head.insertAdjacentElement('afterend', button);
 
@@ -634,7 +635,7 @@ function setUpRail() {
 
     const toggle = side.querySelector('.theme-toggle');
     if (toggle && !toggle.querySelector('.lh-themelabel')) {
-        const label = el('span', { class: 'lh-themelabel' }, toggle.textContent || 'Theme');
+        const label = el('span', { class: 'lh-themelabel' }, toggle.textContent || T('Theme'));
         toggle.textContent = '';
         const mark = icon('theme', 'theme');
         if (mark) {
@@ -658,7 +659,7 @@ function setUpRail() {
         'aria-pressed': 'false'
     });
     button.appendChild(el('span', { class: 'lh-railbtn-mark', 'aria-hidden': 'true' }));
-    button.appendChild(el('span', { class: 'lh-railbtn-label' }, 'Collapse'));
+    button.appendChild(el('span', { class: 'lh-railbtn-label' }, T('Collapse')));
 
     const brand = side.querySelector('.brand');
     if (brand && brand.parentNode === side) {
@@ -1042,7 +1043,7 @@ function parkTitle(node, collapsed) {
  */
 function mirrorThemeTitle(toggle, label) {
     const sync = () => {
-        const text = (label.textContent || 'Theme').trim();
+        const text = (label.textContent || T('Theme')).trim();
         toggle.setAttribute('title', text);
         toggle.setAttribute('aria-label', text);
         parkTitle(toggle, document.documentElement.classList.contains('lh-rail-collapsed'));
@@ -1090,10 +1091,10 @@ function applyRail(collapsed) {
     document.documentElement.classList.toggle('lh-rail-collapsed', collapsed);
     if (button) {
         button.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
-        button.setAttribute('title', collapsed ? 'Show the view names' : 'Collapse to icons');
+        button.setAttribute('title', collapsed ? T('Show the view names') : T('Collapse to icons'));
         const label = button.querySelector('.lh-railbtn-label');
         if (label) {
-            label.textContent = collapsed ? 'Expand' : 'Collapse';
+            label.textContent = collapsed ? T('Expand') : T('Collapse');
         }
     }
     /* AFTER the button's own title has been written, so the state that is parked is the state

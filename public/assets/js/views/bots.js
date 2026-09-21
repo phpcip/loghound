@@ -20,6 +20,7 @@ import { clearTableChart, splitChart } from '../tablecharts.js';
 import { openSubject } from '../dialog.js';
 import { dimRow, dimValue, valueText } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /**
  * The chart colour a verdict keeps everywhere in the panel.
@@ -59,8 +60,8 @@ function renderSplit(data) {
     setField('bf-split', 'evasive_sessions', num(data.evasive.sessions));
     setField('bf-split', 'evasive_ips', num(data.evasive.uniq_ips));
     setField('bf-split', 'evasive_hits', num(data.evasive.hits));
-    setPop('bf-split', num(data.total) + ' scored sessions in range, of which ' + num(data.human.sessions) +
-        ' were human. The two halves below are never added together.');
+    setPop('bf-split', T('{n} scored sessions in range, of which {human} were human. The two halves below are never added together.',
+        { n: num(data.total), human: num(data.human.sessions) }));
 }
 
 /**
@@ -68,19 +69,19 @@ function renderSplit(data) {
  */
 function renderReasons(data) {
     if (!data.reasons.length) {
-        noDataYet('bf-reasons-empty', 'scored bot sessions');
+        noDataYet('bf-reasons-empty', T('scored bot sessions'));
         return;
     }
     hideEmpty('bf-reasons-empty');
-    setPop('bf-reasons', num(data.botlike) + ' sessions judged Bot or Likely bot. A session fires several ' +
-        'rules, so the bars sum to more than the session count.');
+    setPop('bf-reasons', T('{n} sessions judged Bot or Likely bot. A session fires several ' +
+        'rules, so the bars sum to more than the session count.', { n: num(data.botlike) }));
 
     const t = tokens();
     barsHStacked('bf-reasons-chart', data.reasons.map((row) => ({
         label: row.label,
         parts: [
-            { name: 'Evasive', value: row.evasive, color: t.pop.evasive },
-            { name: 'Declared crawlers', value: row.declared, color: t.pop.declared }
+            { name: T('Evasive'), value: row.evasive, color: t.pop.evasive },
+            { name: T('Declared crawlers'), value: row.declared, color: t.pop.declared }
         ]
     })), { labelWidth: 230 });
 
@@ -114,7 +115,7 @@ function renderReasons(data) {
  */
 function renderVerdicts(data) {
     if (!data.verdicts.length) {
-        noDataYet('bf-verdicts-empty', 'scored sessions');
+        noDataYet('bf-verdicts-empty', T('scored sessions'));
         return;
     }
     hideEmpty('bf-verdicts-empty');
@@ -124,7 +125,7 @@ function renderVerdicts(data) {
         label: valueText('bot_verdict_s', row.verdict),
         value: row.count,
         color: verdictColour(t, row.verdict)
-    })), 'sessions', num(data.total));
+    })), T('sessions'), num(data.total));
 }
 
 /**
@@ -132,7 +133,7 @@ function renderVerdicts(data) {
  */
 function renderHistogram(data) {
     if (!data.histogram.some((bucket) => bucket.count > 0)) {
-        noDataYet('bf-histogram-empty', 'scored sessions');
+        noDataYet('bf-histogram-empty', T('scored sessions'));
         return;
     }
     hideEmpty('bf-histogram-empty');
@@ -162,7 +163,7 @@ function renderClasses(data) {
     if (!data.classes.length) {
         tbody(byId('bf-classes-table'), []);
         clearTableChart('bf-classes');
-        noDataYet('bf-classes-empty', 'bot classes');
+        noDataYet('bf-classes-empty', T('bot classes'));
         return;
     }
     hideEmpty('bf-classes-empty');
@@ -174,7 +175,7 @@ function renderClasses(data) {
             {
                 node: el('span', {
                     class: 'chip ' + (row.declared ? 'chip-good' : 'chip-bad'),
-                    text: row.declared ? 'declared' : 'evasive'
+                    text: row.declared ? T('declared') : T('evasive')
                 }),
                 sort: row.declared ? 'declared' : 'evasive'
             },
@@ -193,10 +194,10 @@ function renderClasses(data) {
     splitChart('bf-classes', data.classes.map((row) => ({
         label: valueText('bot_class_s', row.class),
         parts: [
-            { name: 'Declared', value: row.declared ? row.count : 0, color: t.pop.ai },
-            { name: 'Evasive', value: row.declared ? 0 : row.count, color: t.pop.evasive }
+            { name: T('Declared'), value: row.declared ? row.count : 0, color: t.pop.ai },
+            { name: T('Evasive'), value: row.declared ? 0 : row.count, color: t.pop.evasive }
         ]
-    })), { label: 'Sessions per bot class, declared and evasive' });
+    })), { label: T('Sessions per bot class, declared and evasive') });
 }
 
 /**
@@ -229,8 +230,8 @@ function crawlerRow(row) {
                     class: 'chip ' + (row.verified >= row.sessions ? 'chip-good' : 'chip-bad'),
                     text: num(row.verified) + '/' + num(row.sessions),
                     title: row.verified >= row.sessions
-                        ? 'Every session passed forward-confirmed reverse DNS.'
-                        : 'Some or all sessions failed forward-confirmed reverse DNS — that is an impersonator.'
+                        ? T('Every session passed forward-confirmed reverse DNS.')
+                        : T('Some or all sessions failed forward-confirmed reverse DNS — that is an impersonator.')
                 }),
                 sort: row.sessions ? row.verified / row.sessions : 0
             },
@@ -251,10 +252,10 @@ function unspecifiedNote(columns) {
         el('td', {
             colspan: String(columns),
             class: 'muted wrap',
-            text: 'Below: sessions that declared themselves a crawler and named nothing recognisable — a ' +
+            text: T('Below: sessions that declared themselves a crawler and named nothing recognisable — a ' +
                 'User-Agent carrying bot, crawler or spider, or nothing bot-like but a contact URL. They ' +
                 'are counted in every figure above, and each marker keeps its own row because two ' +
-                'different markers are not evidence of one crawler.'
+                'different markers are not evidence of one crawler.')
         })
     ]);
 }
@@ -298,10 +299,10 @@ function renderCrawlers(data) {
     splitChart('bf-crawlers', named.map((row) => ({
         label: row.name,
         parts: [
-            { name: 'Verified', value: Math.min(row.verified, row.sessions), color: t.pop.ai },
-            { name: 'Not verified', value: Math.max(0, row.sessions - row.verified), color: t.pop.evasive }
+            { name: T('Verified'), value: Math.min(row.verified, row.sessions), color: t.pop.ai },
+            { name: T('Not verified'), value: Math.max(0, row.sessions - row.verified), color: t.pop.evasive }
         ]
-    })), { label: 'Sessions per declared crawler, verified and not verified' });
+    })), { label: T('Sessions per declared crawler, verified and not verified') });
 
     if (!unspecified.length) {
         return;
@@ -329,10 +330,10 @@ function showNoCrawlers() {
     node.hidden = false;
     node.classList.add('show');
     node.replaceChildren(
-        el('h3', { text: 'No self-declaring crawlers in this range' }),
+        el('h3', { text: T('No self-declaring crawlers in this range') }),
         el('p', {
-            text: 'Nothing arrived with a User-Agent that identifies itself as a bot. On a public site that is ' +
-                'unusual over anything longer than an hour — widen the time range before concluding anything.'
+            text: T('Nothing arrived with a User-Agent that identifies itself as a bot. On a public site that is ' +
+                'unusual over anything longer than an hour — widen the time range before concluding anything.')
         })
     );
     const content = byId('bf-crawlers-content');
@@ -349,30 +350,30 @@ export default function init() {
        so the pivot costs no extra round trip — but it is its own card, so it keeps its own
        progress line and its own failure state. Both await the same promise. */
     const split = api('bots', 'split');
-    loadCard('bf-split', 'Separating declared crawlers from evasive automation', async () => {
+    loadCard('bf-split', T('Separating declared crawlers from evasive automation'), async () => {
         renderSplit(await split);
     });
     if (byId('bf-pivot-table')) {
-        loadCard('bf-pivot', 'Cross-tabulating the filtered population', async () => {
+        loadCard('bf-pivot', T('Cross-tabulating the filtered population'), async () => {
             const data = await split;
             if (!renderPivot('bf-pivot', data.pivot)) {
-                noPivotYet('bf-pivot-empty', 'both a bot class and a network type');
+                noPivotYet('bf-pivot-empty', T('both a bot class and a network type'));
             }
         });
     }
-    loadCard('bf-reasons', 'Faceting signal codes', async () => {
+    loadCard('bf-reasons', T('Faceting signal codes'), async () => {
         renderReasons(await api('bots', 'reasons'));
     });
-    loadCard('bf-verdicts', 'Faceting verdicts', async () => {
+    loadCard('bf-verdicts', T('Faceting verdicts'), async () => {
         renderVerdicts(await api('bots', 'verdicts'));
     });
-    loadCard('bf-histogram', 'Bucketing bot scores', async () => {
+    loadCard('bf-histogram', T('Bucketing bot scores'), async () => {
         renderHistogram(await api('bots', 'histogram'));
     });
-    loadCard('bf-classes', 'Faceting bot classes', async () => {
+    loadCard('bf-classes', T('Faceting bot classes'), async () => {
         renderClasses(await api('bots', 'classes'));
     });
-    loadCard('bf-crawlers', 'Faceting crawler names', async () => {
+    loadCard('bf-crawlers', T('Faceting crawler names'), async () => {
         renderCrawlers(await api('bots', 'crawlers'));
     });
 }

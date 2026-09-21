@@ -15,6 +15,7 @@ import { dimRow, dimValue } from '../identity.js';
 import { renderPager } from '../pager.js';
 import { hrefLink } from '../url.js';
 import { clearTableChart, rankChart } from '../tablecharts.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** The population currently selected by the toggles. */
 let population = 'humans';
@@ -31,14 +32,13 @@ const loaders = {};
  * card's note.
  */
 function renderChannels(data) {
-    setPop('an-channels', data.population_label + ' · ' + num(data.referred) + ' of ' + num(data.total)
-        + ' visits (' + pct(data.referred, data.total, 0) + ') sent a referrer. The rest are Direct, which '
-        + 'means none arrived — not that somebody typed your address in.');
+    setPop('an-channels', data.population_label + ' · ' + T('{n} of {total} visits ({pct}) sent a referrer. The rest are Direct, which '
+        + 'means none arrived — not that somebody typed your address in.', { n: num(data.referred), total: num(data.total), pct: pct(data.referred, data.total, 0) }));
 
     if (!data.rows.length) {
         tbody(byId('an-channels-table'), []);
         clearTableChart('an-channels');
-        noDataYet('an-channels-empty', 'referrer types');
+        noDataYet('an-channels-empty', T('referrer types'));
         return;
     }
     hideEmpty('an-channels-empty');
@@ -53,19 +53,19 @@ function renderChannels(data) {
                 sort: row.sessions,
                 class: row.sessions ? null : 'muted'
             },
-            { node: shareBar(row.sessions, data.total, 'visits'), sort: row.sessions },
+            { node: shareBar(row.sessions, data.total, T('visits')), sort: row.sessions },
             { text: row.why || '—', class: 'muted wrap', sort: row.label }
         ]
     })));
 
     rankChart('an-channels', data.rows.map((row) => ({ label: row.label, value: row.sessions })),
-        { label: 'Visits per referrer type' });
+        { label: T('Visits per referrer type') });
 }
 
 /** Fill the referring-sites table. */
 function renderReferrers(data) {
-    setPop('an-referrers', data.population_label + ' · shares are of the ' + num(data.referred) + ' visits '
-        + 'that sent a referrer, not of all ' + num(data.total) + '.');
+    setPop('an-referrers', data.population_label + ' · ' + T('shares are of the {n} visits '
+        + 'that sent a referrer, not of all {total}.', { n: num(data.referred), total: num(data.total) }));
 
     if (!data.rows.length) {
         tbody(byId('an-referrers-table'), []);
@@ -79,12 +79,12 @@ function renderReferrers(data) {
         cells: [
             { node: hostCell(row.host), clip: true, title: row.host, sort: row.host },
             { text: num(row.sessions), num: true, sort: row.sessions },
-            { node: shareBar(row.sessions, data.referred, 'referred visits'), sort: row.sessions }
+            { node: shareBar(row.sessions, data.referred, T('referred visits')), sort: row.sessions }
         ]
     })));
 
     rankChart('an-referrers', data.rows.map((row) => ({ label: row.host, value: row.sessions })),
-        { label: 'Referred visits per referring site' });
+        { label: T('Referred visits per referring site') });
 
     return true;
 }
@@ -101,7 +101,7 @@ function hostCell(host) {
         type: 'button',
         class: 'expander',
         'aria-expanded': 'false',
-        'aria-label': 'Show the full referrer URLs from ' + host,
+        'aria-label': T('Show the full referrer URLs from {host}', { host: host }),
         text: '+'
     });
     button.addEventListener('click', (event) => {
@@ -136,7 +136,7 @@ function toggleUrls(button, host) {
 
 /** Fetch one page of a site's referrer URLs into the open row, with a retry in place on failure. */
 async function loadUrls(inner, host, start, rows) {
-    inner.replaceChildren(el('p', { class: 'muted', text: 'Loading referrer URLs…' }));
+    inner.replaceChildren(el('p', { class: 'muted', text: T('Loading referrer URLs…') }));
     try {
         const data = await api('sources', 'referrer_urls', {
             host: host,
@@ -146,10 +146,10 @@ async function loadUrls(inner, host, start, rows) {
         });
         renderUrls(inner, host, data);
     } catch (err) {
-        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
         again.addEventListener('click', () => loadUrls(inner, host, start, rows));
         inner.replaceChildren(
-            el('p', { class: 'muted', text: 'Could not load referrer URLs: ' + String(err && err.message ? err.message : err) }),
+            el('p', { class: 'muted', text: T('Could not load referrer URLs: {error}', { error: String(err && err.message ? err.message : err) }) }),
             el('div', { class: 'card-error-actions' }, [again])
         );
     }
@@ -161,15 +161,15 @@ async function loadUrls(inner, host, start, rows) {
  */
 function renderUrls(inner, host, data) {
     if (!data.rows.length) {
-        inner.replaceChildren(el('p', { class: 'muted', text: 'No full referrer URL is stored for ' + host + ' in this range.' }));
+        inner.replaceChildren(el('p', { class: 'muted', text: T('No full referrer URL is stored for {host} in this range.', { host: host }) }));
         return;
     }
 
     const table = el('table', { class: 'table-fixed' }, [
         el('colgroup', {}, [el('col', { style: 'width:84%' }), el('col', { style: 'width:16%' })]),
         el('thead', {}, [el('tr', {}, [
-            el('th', { scope: 'col', text: 'Referring page' }),
-            el('th', { scope: 'col', class: 'num', text: 'Visits' })
+            el('th', { scope: 'col', text: T('Referring page') }),
+            el('th', { scope: 'col', class: 'num', text: T('Visits') })
         ])]),
         el('tbody', {}, data.rows.map((row) => el('tr', {}, [
             el('td', { class: 'wrap' }, [
@@ -187,7 +187,7 @@ function renderUrls(inner, host, data) {
 
 /** Load the channel card, which has no pages. */
 function loadChannels() {
-    return loadCard('an-channels', 'Faceting referrer types', async () => {
+    return loadCard('an-channels', T('Faceting referrer types'), async () => {
         renderChannels(await api('sources', 'channels', { pop: population }));
     });
 }
@@ -222,8 +222,8 @@ export default function init() {
     loadChannels();
     loaders['an-referrers'] = pagedCard({
         id: 'an-referrers',
-        label: 'Faceting referring sites',
-        empty: 'referring sites',
+        label: T('Faceting referring sites'),
+        empty: T('referring sites'),
         fetch: (start, rows) => api('sources', 'referrers', { start: start, rows: rows, pop: population }),
         render: renderReferrers
     });

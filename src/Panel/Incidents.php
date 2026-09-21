@@ -63,6 +63,7 @@ namespace Loghound\Panel;
 
 use Loghound\Config;
 use Loghound\Diagnostics;
+use Loghound\I18n;
 use Loghound\Security;
 use Loghound\Setup\Schema;
 use Loghound\Setup\Steps;
@@ -196,11 +197,11 @@ final class Incidents
 
         if ($state === 'refused') {
             return [self::incident(
-                'Reading your access logs',
-                'The reader refused the configuration it was asked to reload',
+                I18n::mark('Reading your access logs'),
+                I18n::mark('The reader refused the configuration it was asked to reload'),
                 implode(' ', array_filter((array) ($status['errors'] ?? []), 'is_string'))
-                    ?: 'The reader rejected the configuration and kept the previous one.',
-                ['Status file' => $file],
+                    ?: I18n::t('The reader rejected the configuration and kept the previous one.'),
+                [I18n::t('Status file') => $file],
                 $cfg,
                 $root
             )];
@@ -208,19 +209,20 @@ final class Incidents
 
         if ($sources !== [] && ($state === 'absent' || $state === 'unreadable' || $state === 'stale')) {
             $why = match ($state) {
-                'absent'     => 'The reader has never written a status document, so it has not run on '
-                    . 'this machine since the sources were configured.',
-                'unreadable' => 'The reader\'s status document cannot be read or is not the shape this '
-                    . 'release writes.',
-                default      => 'The reader last wrote its status document '
-                    . (int) ($status['age_sec'] ?? 0) . ' seconds ago, so it has stopped.',
+                'absent'     => I18n::t('The reader has never written a status document, so it has not run on '
+                    . 'this machine since the sources were configured.'),
+                'unreadable' => I18n::t('The reader\'s status document cannot be read or is not the shape this '
+                    . 'release writes.'),
+                default      => I18n::t('The reader last wrote its status document {n} seconds ago, so it has stopped.', [
+                    'n' => (int) ($status['age_sec'] ?? 0),
+                ]),
             };
 
             $out[] = self::incident(
-                'Reading your access logs',
-                'Ingestion is not running',
-                $why . ' Nothing new is reaching either index while this is true.',
-                ['Status file' => $file, 'Sources configured' => (string) count($sources)],
+                I18n::mark('Reading your access logs'),
+                I18n::mark('Ingestion is not running'),
+                $why . ' ' . I18n::t('Nothing new is reaching either index while this is true.'),
+                [I18n::t('Status file') => $file, I18n::t('Sources configured') => (string) count($sources)],
                 $cfg,
                 $root
             );
@@ -231,12 +233,12 @@ final class Incidents
         if ($doc !== null) {
             foreach (self::unreadableSources($cfg, $doc) as $path) {
                 $out[] = self::incident(
-                    'Reading your access logs',
-                    'A log source cannot be read',
-                    'The reader is running but is not reading this file. It is either gone, or it is '
+                    I18n::mark('Reading your access logs'),
+                    I18n::mark('A log source cannot be read'),
+                    I18n::t('The reader is running but is not reading this file. It is either gone, or it is '
                         . 'not readable by the user the reader runs as. Nothing from it is being '
-                        . 'ingested.',
-                    ['File' => $path],
+                        . 'ingested.'),
+                    [I18n::t('File') => $path],
                     $cfg,
                     $root
                 );
@@ -250,14 +252,18 @@ final class Incidents
 
             if ($lines > 0 && $docs === 0 && $errors >= $lines) {
                 $out[] = self::incident(
-                    'Reading your access logs',
-                    'Every line read is failing to parse',
-                    'The reader has read ' . $lines . ' line' . ($lines === 1 ? '' : 's') . ' and '
+                    I18n::mark('Reading your access logs'),
+                    I18n::mark('Every line read is failing to parse'),
+                    I18n::tn('The reader has read {n} line and '
                         . 'indexed none of them: the configured log format does not match what is '
                         . 'actually in the file. A single unparsed line is normal and is not reported '
                         . 'here; a whole source failing is the panel silently staying empty. Confirm '
-                        . 'the format again on the log sources card.',
-                    ['Lines read' => (string) $lines, 'Parse errors' => (string) $errors],
+                        . 'the format again on the log sources card.', 'The reader has read {n} lines and '
+                        . 'indexed none of them: the configured log format does not match what is '
+                        . 'actually in the file. A single unparsed line is normal and is not reported '
+                        . 'here; a whole source failing is the panel silently staying empty. Confirm '
+                        . 'the format again on the log sources card.', $lines),
+                    [I18n::t('Lines read') => (string) $lines, I18n::t('Parse errors') => (string) $errors],
                     $cfg,
                     $root
                 );
@@ -265,11 +271,11 @@ final class Incidents
 
             if ($solr > 0) {
                 $out[] = self::incident(
-                    'Writing documents to Solr',
-                    'Solr is refusing writes',
-                    'The reader has had ' . $solr . ' batch' . ($solr === 1 ? '' : 'es')
-                        . ' rejected by Solr. Documents that were in them are not in the index.',
-                    ['Solr errors' => (string) $solr],
+                    I18n::mark('Writing documents to Solr'),
+                    I18n::mark('Solr is refusing writes'),
+                    I18n::tn('The reader has had {n} batch rejected by Solr. Documents that were in them are not in the index.',
+                        'The reader has had {n} batches rejected by Solr. Documents that were in them are not in the index.', $solr),
+                    [I18n::t('Solr errors') => (string) $solr],
                     $cfg,
                     $root
                 );
@@ -294,8 +300,8 @@ final class Incidents
             $notice = Schema::notice($cfg, $root);
         } catch (\Throwable $e) {
             return [self::incident(
-                'Checking your index schemas',
-                'The schema check could not run',
+                I18n::mark('Checking your index schemas'),
+                I18n::mark('The schema check could not run'),
                 $e->getMessage(),
                 [],
                 $cfg,
@@ -308,10 +314,10 @@ final class Incidents
         }
 
         return [self::incident(
-            'Checking your index schemas',
-            (string) ($notice['headline'] ?? 'A schema could not be read'),
+            I18n::mark('Checking your index schemas'),
+            (string) ($notice['headline'] ?? I18n::mark('A schema could not be read')),
             (string) ($notice['detail'] ?? ''),
-            ['State' => (string) ($notice['state'] ?? '')],
+            [I18n::t('State') => (string) ($notice['state'] ?? '')],
             $cfg,
             $root
         )];
@@ -335,13 +341,13 @@ final class Incidents
         }
 
         return [self::incident(
-            'Keeping this installation\'s own state',
-            'Loghound cannot write to its var directory',
-            'Signing in cannot work while this is true: the panel refuses to check a password it '
+            I18n::mark('Keeping this installation\'s own state'),
+            I18n::mark('Loghound cannot write to its var directory'),
+            I18n::t('Signing in cannot work while this is true: the panel refuses to check a password it '
                 . 'cannot record the attempt for, rather than check one without counting it. The '
                 . 'long operations on this page cannot start either. Give the directory to the user '
-                . 'this panel runs as.',
-            ['Directory' => $varDir === '' ? 'not configured' : $varDir],
+                . 'this panel runs as.'),
+            [I18n::t('Directory') => $varDir === '' ? I18n::t('not configured') : $varDir],
             $cfg,
             null
         )];

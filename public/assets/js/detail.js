@@ -53,6 +53,7 @@ import { countryName } from './geo.js';
 import { bindPath, claimPath, hrefLink, outLink, pathCell, pathCopy, urlMark } from './url.js';
 import { renderPager } from './pager.js';
 import { fillVisits, visitCaption, visitTable } from './visits.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /** Population keys in the order every other chart in the panel stacks them. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -93,7 +94,7 @@ function kv(pairs) {
  */
 function cameFrom(s) {
     if (!s.referer) {
-        return 'no referrer sent';
+        return T('no referrer sent');
     }
 
     /* THE WHOLE URL AS TEXT, AND THE LINK AS THE MARK BESIDE IT — the same ↗ every path in the
@@ -123,7 +124,7 @@ function filterNote(active) {
     }
     return el('p', {
         class: 'faint',
-        text: 'Scoped to ' + parts.join(', ') + ', and to the selected range.'
+        text: T('Scoped to {filters}, and to the selected range.', { filters: parts.join(', ') })
     });
 }
 
@@ -156,7 +157,7 @@ function visitBlock(rows, page, fetchPage) {
 
     const show = (state) => {
         renderPager(mount, state, async (start, rows) => {
-            const busy = el('p', { class: 'muted', text: 'Loading page…' });
+            const busy = el('p', { class: 'muted', text: T('Loading page…') });
             mount.replaceChildren(busy);
             try {
                 const next = await fetchPage(start, rows);
@@ -164,11 +165,12 @@ function visitBlock(rows, page, fetchPage) {
                 markSortable(wrap);
                 show(next.page);
             } catch (err) {
-                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
                 again.addEventListener('click', () => show(state));
                 mount.replaceChildren(
-                    el('p', { class: 'muted', text: 'That page could not be loaded: ' +
-                        String(err && err.message ? err.message : err) }),
+                    el('p', { class: 'muted', text: T('That page could not be loaded: {error}', {
+                        error: String(err && err.message ? err.message : err)
+                    }) }),
                     el('div', { class: 'card-error-actions' }, [again])
                 );
             }
@@ -201,7 +203,7 @@ function howLong(s) {
 
     if (oneRequest && !s.beacon) {
         return [
-            say('One request, at ' + when(s.ts_start) + ', and no beacon: nothing measured a duration.')
+            say(T('One request, at {when}, and no beacon: nothing measured a duration.', { when: when(s.ts_start) }))
         ];
     }
 
@@ -216,21 +218,26 @@ function howLong(s) {
                 el('span', { class: 'timing-defn', text: defn })
             ]));
         };
-        add('log_span', 'Requesting things for', dur(s.log_span_ms), 'First request to last. Blind to the final page.');
-        add('wall', 'Page open for', dur(s.wall_ms), 'Tab in any state.');
-        add('visible', 'Looking at it for', dur(s.visible_ms), 'Visible and focused.');
-        add('engaged', 'Actually engaged for', dur(s.engaged_ms), 'Within 30s of an interaction.');
+        add('log_span', T('Requesting things for'), dur(s.log_span_ms), T('First request to last. Blind to the final page.'));
+        add('wall', T('Page open for'), dur(s.wall_ms), T('Tab in any state.'));
+        add('visible', T('Looking at it for'), dur(s.visible_ms), T('Visible and focused.'));
+        add('engaged', T('Actually engaged for'), dur(s.engaged_ms), T('Within 30s of an interaction.'));
         parts.push(grid);
-        parts.push(say(num(s.interactions) + ' interactions, '
-            + (s.max_scroll === null ? 'no scroll depth recorded' : s.max_scroll + '% deepest scroll')
-            + ', ' + num(s.pageviews) + ' pageviews.'));
+        parts.push(say(T('{interactions} interactions, {scroll}, {pageviews} pageviews.', {
+            interactions: num(s.interactions),
+            scroll: s.max_scroll === null ? T('no scroll depth recorded') : T('{n}% deepest scroll', { n: s.max_scroll }),
+            pageviews: num(s.pageviews)
+        })));
         return parts;
     }
 
-    parts.push(say('They were requesting things for ' + dur(s.log_span_ms) + ', from '
-        + when(s.ts_start) + ' to ' + when(s.ts_end) + '.'));
-    parts.push(say('That is the log span, which cannot see the last page. No beacon ran, so how long they '
-        + 'stayed is unknown rather than zero.'));
+    parts.push(say(T('They were requesting things for {span}, from {from} to {to}.', {
+        span: dur(s.log_span_ms),
+        from: when(s.ts_start),
+        to: when(s.ts_end)
+    })));
+    parts.push(say(T('That is the log span, which cannot see the last page. No beacon ran, so how long they '
+        + 'stayed is unknown rather than zero.')));
 
     return parts;
 }
@@ -282,11 +289,11 @@ function firedRules(s, catalogue) {
             dimValue('bot_reasons_ss', code),
             meta
                 ? el('span', { text: ' — ' + meta.why })
-                : el('span', { class: 'muted', text: ' — no description for this rule code in this panel version' })
+                : el('span', { class: 'muted', text: T(' — no description for this rule code in this panel version') })
         ]));
     }
     if (!(s.reasons || []).length) {
-        list.appendChild(el('li', { class: 'muted', text: 'No signal fired.' }));
+        list.appendChild(el('li', { class: 'muted', text: T('No signal fired.') }));
     }
     return list;
 }
@@ -340,12 +347,12 @@ function trailBlock(id, data, host) {
                 el('span', {
                     class: 't-dur muted mono',
                     text: hit.dur_us === null ? '' : durUs(hit.dur_us),
-                    title: hit.dur_us === null ? '' : 'Time the server took to answer'
+                    title: hit.dur_us === null ? '' : T('Time the server took to answer')
                 }),
                 el('span', {
                     class: 't-gap muted mono',
                     text: gap,
-                    title: gap === '' ? '' : 'They asked for nothing else for this long'
+                    title: gap === '' ? '' : T('They asked for nothing else for this long')
                 })
             ]));
         }
@@ -353,7 +360,7 @@ function trailBlock(id, data, host) {
 
     const show = (state) => {
         renderPager(mount, state, async (start, rows) => {
-            mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page…' }));
+            mount.replaceChildren(el('p', { class: 'muted', text: T('Loading page…') }));
             try {
                 const next = await api('sessions', 'trail', {
                     id: id,
@@ -363,11 +370,12 @@ function trailBlock(id, data, host) {
                 paint(next.timeline);
                 show(next.page);
             } catch (err) {
-                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
                 again.addEventListener('click', () => show(state));
                 mount.replaceChildren(
-                    el('p', { class: 'muted', text: 'That page could not be loaded: ' +
-                        String(err && err.message ? err.message : err) }),
+                    el('p', { class: 'muted', text: T('That page could not be loaded: {error}', {
+                        error: String(err && err.message ? err.message : err)
+                    }) }),
                     el('div', { class: 'card-error-actions' }, [again])
                 );
             }
@@ -377,8 +385,8 @@ function trailBlock(id, data, host) {
     if (!data.timeline.length) {
         return el('p', {
             class: 'muted',
-            text: 'No individual requests came back: they have aged out of the request log, which is kept '
-                + 'for less time than the summary of a visit.'
+            text: T('No individual requests came back: they have aged out of the request log, which is kept '
+                + 'for less time than the summary of a visit.')
         });
     }
 
@@ -409,14 +417,14 @@ function identStrip(s) {
 
     const parts = [];
     if (s.ident) {
-        parts.push(el('span', { class: 'ident-label', text: 'The site knows them as' }));
+        parts.push(el('span', { class: 'ident-label', text: T('The site knows them as') }));
         parts.push(el('span', { class: 'ident-value mono' }, [identMark(s.device), s.ident]));
     }
     parts.push(el('span', {
         class: 'chip ' + (s.signed_in === true ? 'chip-good' : ''),
-        text: s.signed_in === true ? 'signed in' : (s.signed_in === false ? 'not signed in' : 'sign-in state not reported')
+        text: s.signed_in === true ? T('signed in') : (s.signed_in === false ? T('not signed in') : T('sign-in state not reported'))
     }));
-    parts.push(el('span', { class: 'faint', text: 'Declared by the site, not derived.' }));
+    parts.push(el('span', { class: 'faint', text: T('Declared by the site, not derived.') }));
 
     return el('div', { class: 'ident-strip' }, parts);
 }
@@ -448,9 +456,9 @@ function rdnsSentence(s) {
         return null;
     }
     return s.rdns_ok
-        ? 'Reverse DNS says ' + s.rdns + ', forward-confirmed.'
-        : 'Reverse DNS claims ' + s.rdns + ', which does not resolve back to this address. The claim is '
-            + 'worth nothing.';
+        ? T('Reverse DNS says {rdns}, forward-confirmed.', { rdns: s.rdns })
+        : T('Reverse DNS claims {rdns}, which does not resolve back to this address. The claim is '
+            + 'worth nothing.', { rdns: s.rdns });
 }
 
 /**
@@ -466,13 +474,13 @@ function signatureSentence(s) {
     }
     const n = Number(s.fp_ips_24h);
     if (n <= 1) {
-        return 'This exact set of request headers came from this address alone in the surrounding day.';
+        return T('This exact set of request headers came from this address alone in the surrounding day.');
     }
     if (n < 5) {
-        return 'The same headers came from ' + num(n) + ' addresses in the surrounding day.';
+        return T('The same headers came from {n} addresses in the surrounding day.', { n: num(n) });
     }
-    return 'The same headers came from ' + num(n) + ' unrelated addresses in the surrounding day — the shape '
-        + 'a proxy fleet makes.';
+    return T('The same headers came from {n} unrelated addresses in the surrounding day — the shape '
+        + 'a proxy fleet makes.', { n: num(n) });
 }
 
 /**
@@ -491,7 +499,7 @@ function rawAgent(s) {
         return null;
     }
     return el('details', { class: 'raw-ua' }, [
-        el('summary', { text: 'The raw User-Agent string' }),
+        el('summary', { text: T('The raw User-Agent string') }),
         el('p', { class: 'mono wrap', text: s.ua })
     ]);
 }
@@ -507,39 +515,44 @@ function rawAgent(s) {
  */
 function whatTheyDid(s) {
     const facts = kv([
-        ['Requests', s.hits === null ? null : num(s.hits), true],
-        ['Pages / other files', s.pages === null && s.assets === null
+        [T('Requests'), s.hits === null ? null : num(s.hits), true],
+        [T('Pages / other files'), s.pages === null && s.assets === null
             ? null
             : num(s.pages) + ' / ' + num(s.assets), true],
-        ['Distinct pages', s.uniq_paths === null ? null : num(s.uniq_paths), true],
-        ['Data sent', s.bytes === null ? null : bytes(s.bytes), true]
+        [T('Distinct pages'), s.uniq_paths === null ? null : num(s.uniq_paths), true],
+        [T('Data sent'), s.bytes === null ? null : bytes(s.bytes), true]
     ]);
 
     const notes = [];
 
     const bad = (s.status['4xx'] || 0) + (s.status['5xx'] || 0);
     if (bad > 0) {
-        notes.push(num(s.status['2xx'] || 0) + ' answered, ' + num(s.status['3xx'] || 0) + ' redirected, '
-            + num(s.status['4xx'] || 0) + ' refused, ' + num(s.status['5xx'] || 0) + ' broke the server.');
+        notes.push(T('{ok} answered, {redirected} redirected, {refused} refused, {broke} broke the server.', {
+            ok: num(s.status['2xx'] || 0),
+            redirected: num(s.status['3xx'] || 0),
+            refused: num(s.status['4xx'] || 0),
+            broke: num(s.status['5xx'] || 0)
+        }));
     }
 
     if (s.asset_ratio !== null && s.hits !== null && s.hits > 3) {
         if (s.asset_ratio < 0.2) {
-            notes.push('Almost nothing they fetched was an image, a stylesheet or a script. A browser loads '
-                + 'the trimmings; something that only wants the text does not.');
+            notes.push(T('Almost nothing they fetched was an image, a stylesheet or a script. A browser loads '
+                + 'the trimmings; something that only wants the text does not.'));
         }
     }
 
     if (s.gap_p50_ms !== null && s.hits !== null && s.hits > 3) {
         const steady = s.gap_stddev_ms !== null && s.gap_p50_ms > 0
             && s.gap_stddev_ms < s.gap_p50_ms * 0.15;
-        notes.push('A request about every ' + dur(s.gap_p50_ms)
-            + (s.gap_stddev_ms === null ? '.' : ', varying by ' + dur(s.gap_stddev_ms) + '.')
-            + (steady ? ' That even a rhythm is a timer, not a hand on a mouse.' : ''));
+        notes.push((s.gap_stddev_ms === null
+            ? T('A request about every {gap}.', { gap: dur(s.gap_p50_ms) })
+            : T('A request about every {gap}, varying by {spread}.', { gap: dur(s.gap_p50_ms), spread: dur(s.gap_stddev_ms) }))
+            + (steady ? ' ' + T('That even a rhythm is a timer, not a hand on a mouse.') : ''));
     }
 
     if (s.got_304 === false && s.hits !== null && s.hits > 3) {
-        notes.push('Never asked whether anything had changed since last time, which a browser cache does.');
+        notes.push(T('Never asked whether anything had changed since last time, which a browser cache does.'));
     }
 
     return [facts].concat(notes.map((n) => say(n)));
@@ -565,9 +578,9 @@ function whatTheyDid(s) {
 function timeOnSite(s) {
     const clocks = [
         [s.engaged_ms, ''],
-        [s.visible_ms, 'visible'],
-        [s.wall_ms, 'tab open'],
-        [s.log_span_ms, 'from the log']
+        [s.visible_ms, T('visible')],
+        [s.wall_ms, T('tab open')],
+        [s.log_span_ms, T('from the log')]
     ];
 
     for (const [ms, source] of clocks) {
@@ -600,60 +613,60 @@ function renderSession(body, data) {
     const stayed = timeOnSite(s);
 
     const who = [
-        ['Address', s.ip ? dimValue('ip_s', s.ip, { mono: true }) : null],
-        ['Where', placeNode(s)],
-        ['Time on site', stayed === null ? 'N/A' : el('span', {}, [
+        [T('Address'), s.ip ? dimValue('ip_s', s.ip, { mono: true }) : null],
+        [T('Where'), placeNode(s)],
+        [T('Time on site'), stayed === null ? T('N/A') : el('span', {}, [
             el('span', { text: dur(stayed.ms) }),
             stayed.source ? el('span', { class: 'sub', text: ' · ' + stayed.source }) : null
         ])],
-        ['Timezone of the address', s.tz, true],
+        [T('Timezone of the address'), s.tz, true],
 
         /* REPEATED HERE ON PURPOSE, not moved. Where somebody came from is part of who they
            are — a visit off a search engine and a visit off an admin page are different
            visitors before any fold is opened — so it is answered at the top as well as in its
            own section. cameFrom() builds a new node per call for the reason its docblock
            gives. */
-        ['Came from', cameFrom(s)]
+        [T('Came from'), cameFrom(s)]
     ];
 
     const used = [
-        ['Browser', s.browser ? dimValue('browser_s', s.browser, {
+        [T('Browser'), s.browser ? dimValue('browser_s', s.browser, {
             text: [s.browser, s.browser_ver].filter(Boolean).join(' ')
         }) : null],
-        ['Operating system', s.os ? dimValue('os_s', s.os) : null],
-        ['Kind of device', s.device ? dimValue('device_s', s.device) : null],
-        ['Says it is a crawler', s.ua_bot
+        [T('Operating system'), s.os ? dimValue('os_s', s.os) : null],
+        [T('Kind of device'), s.device ? dimValue('device_s', s.device) : null],
+        [T('Says it is a crawler'), s.ua_bot
             ? el('span', {}, [
-                el('span', { text: (s.ua_bot_name || 'yes') }),
+                el('span', { text: (s.ua_bot_name || T('yes')) }),
                 s.ua_bot_cat ? el('span', { text: ' — ' }) : null,
                 s.ua_bot_cat ? dimValue('ua_bot_cat_s', s.ua_bot_cat) : null,
-                s.ai_crawler ? el('span', { class: 'chip chip-accent', text: 'collects for AI' }) : null
+                s.ai_crawler ? el('span', { class: 'chip chip-accent', text: T('collects for AI') }) : null
             ])
             : null]
     ];
 
     const execution = [];
     if (s.beacon) {
-        execution.push(['Scripts ran on the page', s.js ? 'yes' : 'no']);
-        execution.push(['Headless signals', s.headless ? 'yes' : 'none']);
-        execution.push(['The browser it claimed to be', s.ua_claim_ok === null
+        execution.push([T('Scripts ran on the page'), s.js ? T('yes') : T('no')]);
+        execution.push([T('Headless signals'), s.headless ? T('yes') : T('none')]);
+        execution.push([T('The browser it claimed to be'), s.ua_claim_ok === null
             ? null
-            : (s.ua_claim_ok ? 'matches the engine' : 'contradicts the engine')]);
-        execution.push(['Its clock against its address', s.tz_match === null
+            : (s.ua_claim_ok ? T('matches the engine') : T('contradicts the engine'))]);
+        execution.push([T('Its clock against its address'), s.tz_match === null
             ? null
-            : (s.tz_match ? 'agree' : 'disagree')]);
-        execution.push(['Graphics hardware reported', s.webgl]);
+            : (s.tz_match ? T('agree') : T('disagree'))]);
+        execution.push([T('Graphics hardware reported'), s.webgl]);
         if ((s.automation || []).length) {
-            execution.push(['Automation markers', s.automation.join(', ')]);
+            execution.push([T('Automation markers'), s.automation.join(', ')]);
         }
     }
 
     const arrival = [
-        ['First page they asked for', s.entry ? pathCell(s.entry, { fallback: s.host }) : null],
-        ['Last page the log saw', s.exit ? pathCell(s.exit, { fallback: s.host }) : null],
-        ['Came from', cameFrom(s)],
-        ['Which counts as', s.referer_type ? dimValue('referer_type_s', s.referer_type) : null],
-        ['Site they were on', s.host
+        [T('First page they asked for'), s.entry ? pathCell(s.entry, { fallback: s.host }) : null],
+        [T('Last page the log saw'), s.exit ? pathCell(s.exit, { fallback: s.host }) : null],
+        [T('Came from'), cameFrom(s)],
+        [T('Which counts as'), s.referer_type ? dimValue('referer_type_s', s.referer_type) : null],
+        [T('Site they were on'), s.host
             ? el('span', { class: 'urlwrap' }, [
                 el('span', { class: 'urlpath' }, [dimValue('host_s', s.host, { mono: true })]),
                 outLink(s.host, '/')
@@ -668,8 +681,8 @@ function renderSession(body, data) {
         identStrip(s),
 
         el('div', { class: 'grid-2' }, [
-            foldSection('who', 'Who was here', [kv(who), say(rdns)]),
-            foldSection('used', 'What they used', [kv(used), say(signature), rawAgent(s)])
+            foldSection('who', T('Who was here'), [kv(who), say(rdns)]),
+            foldSection('used', T('What they used'), [kv(used), say(signature), rawAgent(s)])
         ]),
 
         /* THE CIRCUIT COMES BEFORE EVERYTHING ELSE. This sat at the very bottom, under the
@@ -677,29 +690,29 @@ function renderSession(body, data) {
            beside how they arrived, and that was still one fold too low. WHERE THEY WENT is the
            thing a reader opens a visit to see, so it is the first fold under the identity — the
            clocks and the referrer are context for it, not a preamble to it. */
-        foldSection('trail', 'Pages Visited', [
+        foldSection('trail', T('Pages Visited'), [
             trailBlock(data.session.id, data, s.host)
         ]),
 
-        foldSection('howlong', 'How long they were here', howLong(s)),
+        foldSection('howlong', T('How long they were here'), howLong(s)),
 
-        foldSection('arrival', 'How they arrived', [kv(arrival)]),
+        foldSection('arrival', T('How they arrived'), [kv(arrival)]),
 
         /* WHAT THEY DID COMES BEFORE THE VERDICT. The behaviour is the evidence and the verdict
            is the conclusion drawn from it, so a reader who wants to check the conclusion has to
            scroll back up past it to find what it was based on. Evidence first, then the finding
            that rests on it. */
-        foldSection('did', 'What they did', whatTheyDid(s)),
+        foldSection('did', T('What they did'), whatTheyDid(s)),
 
-        foldSection('verdict', 'What we concluded, and why', [
+        foldSection('verdict', T('What we concluded, and why'), [
             kv([
-                ['Verdict', verdictChip(s.verdict)],
-                ['Bot score', s.score === null ? null : dec(s.score, 0) + ' / 100', true],
-                ['Kind of client', s.class ? dimValue('bot_class_s', s.class) : null]
+                [T('Verdict'), verdictChip(s.verdict)],
+                [T('Bot score'), s.score === null ? null : dec(s.score, 0) + ' / 100', true],
+                [T('Kind of client'), s.class ? dimValue('bot_class_s', s.class) : null]
             ]),
-            foldSection('verdict-rules', 'What led to that', [firedRules(s, data.reasons)]),
+            foldSection('verdict-rules', T('What led to that'), [firedRules(s, data.reasons)]),
             execution.length
-                ? foldSection('verdict-execution', 'What the browser could actually do', [kv(execution)])
+                ? foldSection('verdict-execution', T('What the browser could actually do'), [kv(execution)])
                 : null
         ])
     ]);
@@ -723,7 +736,7 @@ function renderSession(body, data) {
  * "Loading" with nothing on screen and nothing in the console to say why.
  */
 export async function openSession(id) {
-    let handle = openDialog('This visit', 'Loading the visit and every request in it…');
+    let handle = openDialog(T('This visit'), T('Loading the visit and every request in it…'));
     try {
         const data = await api('sessions', 'detail', { id: id });
         if (!isCurrent(handle.generation)) {
@@ -733,7 +746,7 @@ export async function openSession(id) {
         const where = [s.city, countryName(s.country) || s.country].filter(Boolean).join(', ');
 
         handle = openDialog(
-            s.ident || s.ip || 'This visit',
+            s.ident || s.ip || T('This visit'),
             [when(s.ts_start), where, s.as_org, valueText('bot_verdict_s', s.verdict)]
                 .filter(Boolean).join(' · ')
         );
@@ -781,18 +794,17 @@ function requestProfile(req) {
         el('span', { class: 'faint', text: num(row.count) + ' · ' + pct(row.count, req.hits) })
     ]));
 
-    return foldSection('request-profile', 'What the server actually returned', [
+    return foldSection('request-profile', T('What the server actually returned'), [
         kv([
-            ['Times it was requested', num(req.hits), true],
-            ['Data sent', bytes(req.bytes), true],
-            ['Usually answered in', req.dur_p50 === null ? null : durUs(req.dur_p50), true],
-            ['Slowest one request in twenty', req.dur_p95 === null ? null : durUs(req.dur_p95), true]
+            [T('Times it was requested'), num(req.hits), true],
+            [T('Data sent'), bytes(req.bytes), true],
+            [T('Usually answered in'), req.dur_p50 === null ? null : durUs(req.dur_p50), true],
+            [T('Slowest one request in twenty'), req.dur_p95 === null ? null : durUs(req.dur_p95), true]
         ]),
-        el('div', { class: 'fgroup' }, [el('h4', { text: 'What it answered with' }), el('ul', {}, statuses)]),
+        el('div', { class: 'fgroup' }, [el('h4', { text: T('What it answered with') }), el('ul', {}, statuses)]),
         (req.ignored || []).length
-            ? el('p', { class: 'faint', text: 'Counted per request. ' + (req.ignored || []).join(', ')
-                + ' do not exist on a request, so those filters are not applied and these figures cover a '
-                + 'wider population than the visit counts.' })
+            ? el('p', { class: 'faint', text: T('Counted per request. {filters} do not exist on a request, so those filters are not applied and these figures cover a '
+                + 'wider population than the visit counts.', { filters: (req.ignored || []).join(', ') }) })
             : null
     ]);
 }
@@ -812,25 +824,28 @@ function requestProfile(req) {
 function dimHeading(data) {
     const field = String(data.field || '');
     const label = String(data.label || dimLabel(field));
-    const sessions = num(data.sessions) + ' visit' + (data.sessions === 1 ? '' : 's');
-    const range = data.range_label || 'the selected range';
+    const sessions = Tn('{n} visit', '{n} visits', data.sessions, { n: num(data.sessions) });
+    const range = data.range_label || T('the selected range');
 
     if (field === 'fp_hash_s') {
         return {
-            title: 'One client signature',
-            sub: sessions + ' in ' + range + ' shared this exact set of request headers, across '
-                + num(data.uniq_ips) + ' address' + (data.uniq_ips === 1 ? '' : 'es')
-                + ' and ' + num(data.uniq_asns) + ' network' + (data.uniq_asns === 1 ? '' : 's') + '.'
+            title: T('One client signature'),
+            sub: T('{visits} in {range} shared this exact set of request headers, across {addresses} and {networks}.', {
+                visits: sessions,
+                range: range,
+                addresses: Tn('{n} address', '{n} addresses', data.uniq_ips, { n: num(data.uniq_ips) }),
+                networks: Tn('{n} network', '{n} networks', data.uniq_asns, { n: num(data.uniq_asns) })
+            })
         };
     }
 
     if (field === 'ip_s' || field === 'session_id_s') {
-        return { title: String(data.value), sub: sessions + ' in ' + range };
+        return { title: String(data.value), sub: T('{visits} in {range}', { visits: sessions, range: range }) };
     }
 
     return {
         title: label + ': ' + valueText(field, data.value),
-        sub: sessions + ' in ' + range
+        sub: T('{visits} in {range}', { visits: sessions, range: range })
     };
 }
 
@@ -853,22 +868,25 @@ function atAGlance(data) {
     const buckets = hosts && Array.isArray(hosts.buckets) ? hosts.buckets : [];
 
     if (buckets.length === 1) {
-        rows.push(['Virtual host', dimValue('host_s', buckets[0].value, { mono: true })]);
+        rows.push([T('Virtual host'), dimValue('host_s', buckets[0].value, { mono: true })]);
     } else if (buckets.length > 1) {
-        rows.push(['Virtual hosts', num(buckets.length) + ' — ' + buckets[0].value
-            + ' is the busiest, with ' + pct(buckets[0].count, total || 1)]);
+        rows.push([T('Virtual hosts'), T('{n} — {host} is the busiest, with {share}', {
+            n: num(buckets.length),
+            host: buckets[0].value,
+            share: pct(buckets[0].count, total || 1)
+        })]);
     }
 
     if (data.searched !== undefined && data.searched !== null) {
-        rows.push(['Searched the site', data.searched > 0
-            ? num(data.searched) + ' of ' + num(total) + ' · ' + pct(data.searched, total || 1)
-            : 'None of them searched']);
+        rows.push([T('Searched the site'), data.searched > 0
+            ? T('{n} of {total} · {share}', { n: num(data.searched), total: num(total), share: pct(data.searched, total || 1) })
+            : T('None of them searched')]);
     }
 
     if (data.attacked !== undefined && data.attacked !== null) {
-        rows.push(['Matched an attack pattern', data.attacked > 0
-            ? num(data.attacked) + ' of ' + num(total) + ' · ' + pct(data.attacked, total || 1)
-            : 'None of them']);
+        rows.push([T('Matched an attack pattern'), data.attacked > 0
+            ? T('{n} of {total} · {share}', { n: num(data.attacked), total: num(total), share: pct(data.attacked, total || 1) })
+            : T('None of them')]);
     }
 
     return rows.length ? kv(rows) : null;
@@ -907,10 +925,10 @@ function pagesTable(rows) {
         el('colgroup', {}, ['52%', '14%', '14%', '20%'].map((w) => el('col', { style: 'width:' + w }))),
         el('thead', {}, [
             el('tr', {}, [
-                el('th', { scope: 'col', text: 'Page' }),
-                el('th', { scope: 'col', class: 'num', text: 'Visits' }),
-                el('th', { scope: 'col', class: 'num', text: 'Requests' }),
-                el('th', { scope: 'col', text: 'Last seen' })
+                el('th', { scope: 'col', text: T('Page') }),
+                el('th', { scope: 'col', class: 'num', text: T('Visits') }),
+                el('th', { scope: 'col', class: 'num', text: T('Requests') }),
+                el('th', { scope: 'col', text: T('Last seen') })
             ])
         ]),
         body
@@ -941,12 +959,12 @@ function fillPages(table, rows) {
 function pagesCaption(page) {
     const total = page && page.total !== null && page.total !== undefined ? Number(page.total) : null;
     if (total === null) {
-        return 'Every page in scope.';
+        return T('Every page in scope.');
     }
     if (total === 0) {
-        return 'No page in scope.';
+        return T('No page in scope.');
     }
-    return num(total) + (total === 1 ? ' distinct page.' : ' distinct pages, all of them reachable.');
+    return Tn('{n} distinct page.', '{n} distinct pages, all of them reachable.', total, { n: num(total) });
 }
 
 /**
@@ -961,7 +979,7 @@ function pagesCaption(page) {
  * @param {string} value The dimension value, as rendered.
  */
 function pagesBlock(field, value) {
-    const caption = el('p', { class: 'faint', text: 'Counting the pages…' });
+    const caption = el('p', { class: 'faint', text: T('Counting the pages…') });
     const wrap = pagesTable([]);
     const table = wrap.querySelector('table');
     const mount = el('div', { class: 'pager-mount' });
@@ -969,7 +987,7 @@ function pagesBlock(field, value) {
     const show = (page) => {
         caption.textContent = pagesCaption(page);
         renderPager(mount, page, async (start, rows) => {
-            mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page…' }));
+            mount.replaceChildren(el('p', { class: 'muted', text: T('Loading page…') }));
             try {
                 const next = await api('sessions', 'dimpages', {
                     field: field,
@@ -981,11 +999,12 @@ function pagesBlock(field, value) {
                 markSortable(wrap);
                 show(next.page);
             } catch (err) {
-                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
                 again.addEventListener('click', () => show(page));
                 mount.replaceChildren(
-                    el('p', { class: 'muted', text: 'That page could not be loaded: '
-                        + String(err && err.message ? err.message : err) }),
+                    el('p', { class: 'muted', text: T('That page could not be loaded: {error}', {
+                        error: String(err && err.message ? err.message : err)
+                    }) }),
                     el('div', { class: 'card-error-actions' }, [again])
                 );
             }
@@ -1001,8 +1020,7 @@ function pagesBlock(field, value) {
         markSortable(wrap);
         show(data && data.page);
     }).catch((err) => {
-        caption.textContent = 'The pages could not be loaded: '
-            + String(err && err.message ? err.message : err);
+        caption.textContent = T('The pages could not be loaded: {error}', { error: String(err && err.message ? err.message : err) });
     });
 
     return el('div', { class: 'visit-block' }, [caption, wrap, mount]);
@@ -1024,10 +1042,15 @@ function looseNote(data) {
     const names = (loose.dropped || []).join(', ');
     return el('p', {
         class: 'muted',
-        text: num(data.sessions || 0) + ' under the active filters · ' + num(loose.sessions) + ' without '
-            + (names || 'the session-only filters') + '. ' + num(hidden) + (hidden === 1 ? ' visit is' : ' visits are')
-            + ' hidden by ' + ((loose.dropped || []).length === 1 ? 'that filter' : 'those filters')
-            + ', which the table this was opened from may not apply.'
+        text: T('{n} under the active filters · {loose} without {names}.', {
+            n: num(data.sessions || 0),
+            loose: num(loose.sessions),
+            names: names || T('the session-only filters')
+        }) + ' ' + ((loose.dropped || []).length === 1
+            ? Tn('{n} visit is hidden by that filter, which the table this was opened from may not apply.',
+                '{n} visits are hidden by that filter, which the table this was opened from may not apply.', hidden, { n: num(hidden) })
+            : Tn('{n} visit is hidden by those filters, which the table this was opened from may not apply.',
+                '{n} visits are hidden by those filters, which the table this was opened from may not apply.', hidden, { n: num(hidden) }))
     });
 }
 
@@ -1036,10 +1059,10 @@ function renderDimension(body, data) {
 
     fill(body, [
         el('div', { class: 'stats' }, [
-            statTile('Visits', num(total), 'In range, under the active filters'),
-            statTile('Addresses', num(data.uniq_ips), 'Approximate above ~100'),
-            statTile('Client signatures', num(data.uniq_fps), 'Few across many addresses is one client'),
-            statTile('Requests', num(data.hits), 'Log lines in these visits')
+            statTile(T('Visits'), num(total), T('In range, under the active filters')),
+            statTile(T('Addresses'), num(data.uniq_ips), T('Approximate above ~100')),
+            statTile(T('Client signatures'), num(data.uniq_fps), T('Few across many addresses is one client')),
+            statTile(T('Requests'), num(data.hits), T('Log lines in these visits'))
         ]),
 
         filterNote(data.active),
@@ -1055,7 +1078,7 @@ function renderDimension(body, data) {
            while sitting fourth, below the traffic mix, the clocks and the request profile — so
            the rows a reader opened the dialog to look at were still a screen down. Moved to the
            top of the folds, where the comment has always said it belonged. */
-        foldSection('dim-visits', 'The visits', [
+        foldSection('dim-visits', T('The visits'), [
             visitBlock(data.visitors, data.page, (start, rows) => api('sessions', 'visitors', {
                 field: data.field,
                 value: data.value,
@@ -1069,11 +1092,11 @@ function renderDimension(body, data) {
            a named visitor's whole reading history is reachable. Fetched when the dialog opens
            rather than when the fold is pressed: one bounded request, and the section can state
            its own total in the caption instead of promising one. */
-        foldSection('dim-pages', 'The pages they visited', [
+        foldSection('dim-pages', T('The pages they visited'), [
             pagesBlock(data.field, data.value)
         ]),
 
-        foldSection('dim-kind', 'What kind of traffic this is', [
+        foldSection('dim-kind', T('What kind of traffic this is'), [
             mixBar(data.mix, total),
             kv(ORDER.map((key) => [
                 data.labels[key] || key,
@@ -1082,36 +1105,36 @@ function renderDimension(body, data) {
             ]))
         ]),
 
-        foldSection('dim-when', 'When, and for how long', [
+        foldSection('dim-when', T('When, and for how long'), [
             kv([
-            ['First seen', stamp(data.first), true],
-            ['Last seen', stamp(data.last), true],
-            ['Typical time spent requesting', data.log_span_p50 === null ? null : dur(data.log_span_p50), true],
-            ['Visits a beacon reported on', num(data.beacon.sessions), true],
-            ['Typical time actually engaged', data.beacon.sessions
+            [T('First seen'), stamp(data.first), true],
+            [T('Last seen'), stamp(data.last), true],
+            [T('Typical time spent requesting'), data.log_span_p50 === null ? null : dur(data.log_span_p50), true],
+            [T('Visits a beacon reported on'), num(data.beacon.sessions), true],
+            [T('Typical time actually engaged'), data.beacon.sessions
                 ? (data.beacon.engaged_p50 === null ? null : dur(data.beacon.engaged_p50))
                 : null, true],
-            ['Typical time the page was open', data.beacon.sessions
+            [T('Typical time the page was open'), data.beacon.sessions
                 ? (data.beacon.wall_p50 === null ? null : dur(data.beacon.wall_p50))
                 : null, true],
-                ['Average bot score', data.score === null ? null : dec(data.score, 0) + ' out of 100', true],
-                ['Data sent', bytes(data.bytes), true]
+                [T('Average bot score'), data.score === null ? null : T('{n} out of 100', { n: dec(data.score, 0) }), true],
+                [T('Data sent'), bytes(data.bytes), true]
             ]),
             data.beacon.sessions === 0
-                ? say('No beacon on any of these visits, so the measured clocks are unknown rather than zero.')
+                ? say(T('No beacon on any of these visits, so the measured clocks are unknown rather than zero.'))
                 : null
         ]),
 
         requestProfile(data.requests),
 
-        foldSection('dim-breakdown', 'How it breaks down', [
+        foldSection('dim-breakdown', T('How it breaks down'), [
             el('div', { class: 'fpanel' }, data.breakdowns.map((group) => breakdown(group, total)))
         ]),
 
         data.filterable
             ? el('p', {}, [
                 dimValue(data.field, data.value, {
-                    text: 'Filter everything to this ' + String(data.label).toLowerCase()
+                    text: T('Filter everything to this {dimension}', { dimension: String(data.label).toLowerCase() })
                 })
             ])
             : null
@@ -1134,7 +1157,7 @@ function statTile(label, value, hint) {
  * @param {string} value The value, exactly as it was rendered.
  */
 export async function openDimension(field, value) {
-    let handle = openDialog(dimLabel(field), 'Counting the visits behind this…');
+    let handle = openDialog(dimLabel(field), T('Counting the visits behind this…'));
     try {
         const data = await api('sessions', 'dimension', { field: field, value: value });
         if (!isCurrent(handle.generation)) {
@@ -1162,7 +1185,7 @@ export async function openDimension(field, value) {
  * @param {string} field Solr field name; the server checks it against its own allowlist.
  */
 export async function openDimList(field) {
-    let handle = openDialog(dimLabel(field), 'Counting every value…');
+    let handle = openDialog(dimLabel(field), T('Counting every value…'));
 
     try {
         const data = await api('sessions', 'values', { field: field });
@@ -1170,16 +1193,16 @@ export async function openDimList(field) {
             return;
         }
         if (data.error || !data.group) {
-            fill(handle.body, [say(data.error || 'That dimension has no values in range.')]);
+            fill(handle.body, [say(data.error || T('That dimension has no values in range.'))]);
             return;
         }
 
         const buckets = Array.isArray(data.group.buckets) ? data.group.buckets : [];
         const shown = data.group.numBuckets === undefined || data.group.numBuckets === null
-            ? num(buckets.length) + ' value' + (buckets.length === 1 ? '' : 's')
-            : num(buckets.length) + ' of ' + num(data.group.numBuckets);
+            ? Tn('{n} value', '{n} values', buckets.length, { n: num(buckets.length) })
+            : T('{n} of {total}', { n: num(buckets.length), total: num(data.group.numBuckets) });
 
-        handle = openDialog(dimLabel(field), shown + ', across ' + num(data.matched) + ' visits');
+        handle = openDialog(dimLabel(field), T('{shown}, across {n} visits', { shown: shown, n: num(data.matched) }));
         fill(handle.body, [
             filterNote(data.active),
             el('div', { class: 'fpanel' }, [breakdown(data.group, data.matched || 0)])
@@ -1205,7 +1228,7 @@ export async function openDimList(field) {
  * @param {number} to   Upper bound, exclusive except at the top of the range.
  */
 export async function openBand(band, from, to) {
-    let handle = openDialog(dimLabel(band), 'Listing the visits in this band…');
+    let handle = openDialog(dimLabel(band), T('Listing the visits in this band…'));
 
     const fetchPage = (start, rows) => api('sessions', 'visitors', {
         band: band,
@@ -1228,7 +1251,7 @@ export async function openBand(band, from, to) {
         const total = data.page && data.page.total !== null ? data.page.total : 0;
         handle = openDialog(
             String(data.subject || dimLabel(band)),
-            num(total) + ' visit' + (total === 1 ? '' : 's') + ' in this band'
+            Tn('{n} visit in this band', '{n} visits in this band', total, { n: num(total) })
         );
         fill(handle.body, [
             filterNote(data.active),
@@ -1261,26 +1284,26 @@ function requestRow(r) {
         'data-sort': r.ts || ''
     }, [stamp(r.ts)]));
 
-    tr.appendChild(el('td', { class: 'mono clip', title: r.ip || 'Address not recorded' }, [
-        r.ip ? dimValue('ip_s', r.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })
+    tr.appendChild(el('td', { class: 'mono clip', title: r.ip || T('Address not recorded') }, [
+        r.ip ? dimValue('ip_s', r.ip, { mono: true }) : el('span', { class: 'muted', text: T('not recorded') })
     ]));
 
     tr.appendChild(el('td', { class: 'clip' }, [
         r.country
             ? dimValue('country_s', r.country, { markOnly: true })
-            : el('span', { class: 'muted', text: 'unknown' })
+            : el('span', { class: 'muted', text: T('unknown') })
     ]));
 
     tr.appendChild(el('td', { class: 'clip urlcell', title: (r.method || '') + ' ' + (r.path || '') }, [
         el('span', { class: 'mono muted', text: (r.method || '') + ' ' }),
         r.path
             ? pathCell(r.path, { host: r.host, query: r.query })
-            : el('span', { class: 'muted', text: 'no path logged' })
+            : el('span', { class: 'muted', text: T('no path logged') })
     ]));
 
     tr.appendChild(el('td', { class: 'num mono' }, [
         r.status === null || r.status === undefined
-            ? el('span', { class: 'muted', text: 'none' })
+            ? el('span', { class: 'muted', text: T('none') })
             : dimValue('status_i', r.status, { mono: true })
     ]));
 
@@ -1298,8 +1321,8 @@ function requestTable(rows) {
             el('col', { style: 'width:10%' })
         ]),
         el('thead', {}, [
-            el('tr', {}, ['Date', 'IP', 'Country', 'Request', 'Status']
-                .map((t) => el('th', { scope: 'col', text: t })))
+            el('tr', {}, [T('Date'), T('IP'), T('Country'), T('Request'), T('Status')]
+                .map((heading) => el('th', { scope: 'col', text: heading })))
         ]),
         el('tbody', {}, rows.map(requestRow))
     ]);
@@ -1323,7 +1346,7 @@ function requestTable(rows) {
  */
 export async function openHitDimension(field, value, view) {
     const target = view || 'performance';
-    let handle = openDialog(dimLabel(field), 'Counting the requests behind this…');
+    let handle = openDialog(dimLabel(field), T('Counting the requests behind this…'));
 
     const fetchPage = (start, rows) => api(target, 'hitdim', {
         field: field,
@@ -1345,8 +1368,10 @@ export async function openHitDimension(field, value, view) {
 
         handle = openDialog(
             String(data.label) + ': ' + valueText(field, data.value),
-            num(data.requests) + ' request' + (data.requests === 1 ? '' : 's')
-                + ' in ' + (data.range_label || 'the selected range')
+            Tn('{n} request in {range}', '{n} requests in {range}', data.requests, {
+                n: num(data.requests),
+                range: data.range_label || T('the selected range')
+            })
         );
         renderHitDimension(handle.body, data, fetchPage);
         markSortable(handle.body);
@@ -1372,7 +1397,7 @@ export async function openHitDimension(field, value, view) {
  */
 export async function openHitBand(band, from, view, label) {
     const target = view || 'performance';
-    let handle = openDialog(label || dimLabel(band), 'Counting the requests above this…');
+    let handle = openDialog(label || dimLabel(band), T('Counting the requests above this…'));
 
     const fetchPage = (start, rows) => api(target, 'hitdim', {
         band: band,
@@ -1392,9 +1417,11 @@ export async function openHitBand(band, from, view, label) {
         }
 
         handle = openDialog(
-            (label || String(data.label)) + ' and slower',
-            num(data.requests) + ' request' + (data.requests === 1 ? '' : 's')
-                + ' in ' + (data.range_label || 'the selected range')
+            T('{label} and slower', { label: label || String(data.label) }),
+            Tn('{n} request in {range}', '{n} requests in {range}', data.requests, {
+                n: num(data.requests),
+                range: data.range_label || T('the selected range')
+            })
         );
         renderHitDimension(handle.body, data, fetchPage);
         markSortable(handle.body);
@@ -1419,7 +1446,7 @@ function renderHitDimension(body, data, fetchPage) {
 
     const show = (state) => {
         renderPager(mount, state, async (start, rows) => {
-            mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page…' }));
+            mount.replaceChildren(el('p', { class: 'muted', text: T('Loading page…') }));
             try {
                 const next = await fetchPage(start, rows);
                 const table = wrap.querySelector('tbody');
@@ -1427,10 +1454,10 @@ function renderHitDimension(body, data, fetchPage) {
                 markSortable(wrap);
                 show(next.page);
             } catch (err) {
-                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
                 again.addEventListener('click', () => show(state));
                 mount.replaceChildren(
-                    el('p', { class: 'muted', text: 'That page could not be loaded.' }),
+                    el('p', { class: 'muted', text: T('That page could not be loaded.') }),
                     el('div', { class: 'card-error-actions' }, [again])
                 );
             }
@@ -1439,28 +1466,29 @@ function renderHitDimension(body, data, fetchPage) {
 
     fill(body, [
         el('div', { class: 'stats' }, [
-            statTile('Requests', num(total), 'In range, under the active filters'),
-            statTile('Addresses', num(data.uniq_ips), 'Distinct clients behind them'),
-            statTile('Pages', num(data.uniq_paths), 'Distinct paths asked for'),
-            statTile('Visits', num(data.uniq_sessions), 'Sessions these requests belong to')
+            statTile(T('Requests'), num(total), T('In range, under the active filters')),
+            statTile(T('Addresses'), num(data.uniq_ips), T('Distinct clients behind them')),
+            statTile(T('Pages'), num(data.uniq_paths), T('Distinct paths asked for')),
+            statTile(T('Visits'), num(data.uniq_sessions), T('Sessions these requests belong to'))
         ]),
 
         (data.ignored || []).length
-            ? say('Not narrowed by ' + data.ignored.join(', ')
-                + ': those are conclusions about a whole visit, and this counts requests.')
+            ? say(T('Not narrowed by {filters}: those are conclusions about a whole visit, and this counts requests.', {
+                filters: data.ignored.join(', ')
+            }))
             : null,
 
-        foldSection('req-when', 'When, and how much', [
+        foldSection('req-when', T('When, and how much'), [
             kv([
-                ['First seen', stamp(data.first), true],
-                ['Last seen', stamp(data.last), true],
-                ['Data sent', bytes(data.bytes), true]
+                [T('First seen'), stamp(data.first), true],
+                [T('Last seen'), stamp(data.last), true],
+                [T('Data sent'), bytes(data.bytes), true]
             ])
         ]),
 
-        foldSection('req-list', 'The requests', [wrap, mount]),
+        foldSection('req-list', T('The requests'), [wrap, mount]),
 
-        foldSection('req-breakdown', 'How it breaks down', [
+        foldSection('req-breakdown', T('How it breaks down'), [
             el('div', { class: 'fpanel' }, (data.breakdowns || []).map((group) => breakdown(group, total)))
         ])
     ]);
@@ -1485,7 +1513,7 @@ function renderHitDimension(body, data, fetchPage) {
  */
 export async function openPopulation(key, why) {
     const name = populationLabel(key);
-    let handle = openDialog(name, 'Listing the visits behind this figure…');
+    let handle = openDialog(name, T('Listing the visits behind this figure…'));
     try {
         const data = await api('sessions', 'visitors', { pop: key, start: 0, rows: 20 });
         if (!isCurrent(handle.generation)) {
@@ -1494,7 +1522,9 @@ export async function openPopulation(key, why) {
         const total = data.page && data.page.total !== null ? data.page.total : null;
         handle = openDialog(
             name,
-            (total === null ? '' : num(total) + ' visits in ') + (data.range_label || 'the selected range')
+            total === null
+                ? (data.range_label || T('the selected range'))
+                : T('{n} visits in {range}', { n: num(total), range: data.range_label || T('the selected range') })
         );
 
         fill(handle.body, [

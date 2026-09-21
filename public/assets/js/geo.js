@@ -21,6 +21,7 @@
 'use strict';
 
 import { boot } from './core.js';
+import { regionName } from './i18n.js';
 
 /**
  * ISO 3166-1 alpha-2 → [latitude, longitude, English name].
@@ -195,9 +196,9 @@ export function countryName(value) {
     if (/^[A-Z]{2}$/.test(cc)) {
         const named = (boot.countries || {})[cc];
         if (named) {
-            return named;
+            return regionName(cc, named);
         }
     }
     const hit = locate(value);
-    return hit ? hit.name : String(value || '—');
+    return hit ? regionName(hit.code, hit.name) : String(value || '—');
 }

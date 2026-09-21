@@ -23,6 +23,7 @@
 'use strict';
 
 import { el, num } from './core.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /**
  * Work out the page geometry from a server `page` block.
@@ -48,7 +49,7 @@ function geometry(page) {
         page: Math.floor(start / rows) + 1,
         from: shown === 0 ? 0 : start + 1,
         to: start + shown,
-        unit: String(p.unit || 'rows')
+        unit: String(p.unit || T('rows'))
     };
 }
 
@@ -60,13 +61,14 @@ function geometry(page) {
  */
 function summary(g) {
     if (g.from === 0) {
-        return 'No ' + g.unit;
+        return T('No {unit}', { unit: g.unit });
     }
     if (g.total !== null && g.total <= g.rows) {
-        return 'All ' + num(g.total) + ' ' + g.unit;
+        return T('All {n} {unit}', { n: num(g.total), unit: g.unit });
     }
-    const of = g.total === null ? '' : ' of ' + num(g.total);
-    return num(g.from) + '–' + num(g.to) + of + ' ' + g.unit;
+    return g.total === null
+        ? T('{from}–{to} {unit}', { from: num(g.from), to: num(g.to), unit: g.unit })
+        : T('{from}–{to} of {total} {unit}', { from: num(g.from), to: num(g.to), total: num(g.total), unit: g.unit });
 }
 
 /**
@@ -103,19 +105,19 @@ function build(page, make, tail) {
     const last = lastStart(g);
 
     if (g.start > 0) {
-        steps.appendChild(make(0, '« First', { label: 'First page' }));
-        steps.appendChild(make(Math.max(0, g.start - g.rows), '← Previous', { label: 'Previous page' }));
+        steps.appendChild(make(0, '« ' + T('First'), { label: T('First page') }));
+        steps.appendChild(make(Math.max(0, g.start - g.rows), '← ' + T('Previous'), { label: T('Previous page') }));
     }
 
     steps.appendChild(el('span', {
         class: 'pager-pos',
-        text: g.pages === null ? 'Page ' + num(g.page) : 'Page ' + num(g.page) + ' of ' + num(g.pages)
+        text: g.pages === null ? T('Page {n}', { n: num(g.page) }) : T('Page {n} of {total}', { n: num(g.page), total: num(g.pages) })
     }));
 
     if (hasNext(g)) {
-        steps.appendChild(make(g.start + g.rows, 'Next →', { label: 'Next page' }));
+        steps.appendChild(make(g.start + g.rows, T('Next') + ' →', { label: T('Next page') }));
         if (last !== null && last > g.start + g.rows) {
-            steps.appendChild(make(last, 'Last »', { label: 'Last page' }));
+            steps.appendChild(make(last, T('Last') + ' »', { label: T('Last page') }));
         }
     }
 
@@ -126,7 +128,7 @@ function build(page, make, tail) {
         }
     }
 
-    return el('nav', { class: 'pager', 'aria-label': 'Pagination for this table' }, parts);
+    return el('nav', { class: 'pager', 'aria-label': T('Pagination for this table') }, parts);
 }
 
 /**
@@ -157,15 +159,15 @@ function jumpBox(page, go) {
         step: '1',
         value: String(g.page),
         inputmode: 'numeric',
-        'aria-label': 'Go to page number, 1 to ' + g.pages
+        'aria-label': T('Go to page number, 1 to {n}', { n: g.pages })
     });
 
     const form = el('form', { class: 'pager-jump' }, [
         el('label', { class: 'pager-jump-label' }, [
-            el('span', { text: 'Go to page' }),
+            el('span', { text: T('Go to page') }),
             input
         ]),
-        el('button', { type: 'submit', class: 'ghost small', text: 'Go' })
+        el('button', { type: 'submit', class: 'ghost small', text: T('Go') })
     ]);
 
     form.addEventListener('submit', (event) => {
@@ -206,7 +208,7 @@ function sizeBox(page, onSize) {
         return null;
     }
 
-    const select = el('select', { class: 'pager-size-input', 'aria-label': 'Rows per page' });
+    const select = el('select', { class: 'pager-size-input', 'aria-label': T('Rows per page') });
     const offered = sizes.slice();
     if (!offered.includes(g.rows)) {
         offered.push(g.rows);
@@ -227,7 +229,7 @@ function sizeBox(page, onSize) {
     });
 
     return el('label', { class: 'pager-size' }, [
-        el('span', { text: 'Per page' }),
+        el('span', { text: T('Per page') }),
         select
     ]);
 }

@@ -21,6 +21,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Score\Attacks;
 use Loghound\Security;
 use Loghound\Solr;
@@ -256,14 +257,14 @@ final class Query
     public static function populationLabels(): array
     {
         return [
-            'human'    => 'Humans',
-            'unknown'  => 'Unknown',
-            'declared' => 'Declared crawlers',
-            'ai'       => 'AI crawlers',
-            'evasive'  => 'Evasive bots',
-            'all'        => 'All sessions',
-            'beacon'     => 'Sessions with beacon data',
-            'datacentre' => 'Visits from hosting or VPN networks',
+            'human'    => I18n::t('Humans'),
+            'unknown'  => I18n::t('Unknown'),
+            'declared' => I18n::t('Declared crawlers'),
+            'ai'       => I18n::t('AI crawlers'),
+            'evasive'  => I18n::t('Evasive bots'),
+            'all'        => I18n::t('All sessions'),
+            'beacon'     => I18n::t('Sessions with beacon data'),
+            'datacentre' => I18n::t('Visits from hosting or VPN networks'),
         ];
     }
 
@@ -289,14 +290,14 @@ final class Query
     public static function ranges(): array
     {
         return self::calendarDays() + [
-            '1h'  => ['label' => 'Last hour',    'short' => '1H',  'start' => 'NOW-1HOUR/MINUTE',  'secs' => 3600,    'gap' => '+2MINUTE', 'fmt' => 'time'],
-            '3h'  => ['label' => 'Last 3 hours', 'short' => '3H',  'start' => 'NOW-3HOUR/MINUTE',  'secs' => 10800,   'gap' => '+5MINUTE', 'fmt' => 'time'],
-            '6h'  => ['label' => 'Last 6 hours', 'short' => '6H',  'start' => 'NOW-6HOUR/MINUTE',  'secs' => 21600,   'gap' => '+15MINUTE','fmt' => 'time'],
-            '24h' => ['label' => 'Last 24 hours','short' => '24H', 'start' => 'NOW-24HOUR/HOUR',   'secs' => 86400,   'gap' => '+1HOUR',   'fmt' => 'hour'],
-            '7d'  => ['label' => 'Last 7 days',  'short' => '7D',  'start' => 'NOW-7DAY/HOUR',     'secs' => 604800,  'gap' => '+3HOUR',   'fmt' => 'hour'],
-            '30d' => ['label' => 'Last 30 days', 'short' => '30D', 'start' => 'NOW-30DAY/DAY',     'secs' => 2592000, 'gap' => '+1DAY',    'fmt' => 'day'],
-            '90d' => ['label' => 'Last 90 days', 'short' => '90D', 'start' => 'NOW-90DAY/DAY',     'secs' => 7776000, 'gap' => '+1DAY',    'fmt' => 'day'],
-            'all' => ['label' => 'All time',     'short' => 'All time', 'start' => 'NOW-1YEAR/DAY', 'secs' => 31536000, 'gap' => '+7DAY',  'fmt' => 'day', 'unbounded' => true],
+            '1h'  => ['label' => I18n::t('Last hour'),    'short' => I18n::t('1H'),  'start' => 'NOW-1HOUR/MINUTE',  'secs' => 3600,    'gap' => '+2MINUTE', 'fmt' => 'time'],
+            '3h'  => ['label' => I18n::t('Last 3 hours'), 'short' => I18n::t('3H'),  'start' => 'NOW-3HOUR/MINUTE',  'secs' => 10800,   'gap' => '+5MINUTE', 'fmt' => 'time'],
+            '6h'  => ['label' => I18n::t('Last 6 hours'), 'short' => I18n::t('6H'),  'start' => 'NOW-6HOUR/MINUTE',  'secs' => 21600,   'gap' => '+15MINUTE','fmt' => 'time'],
+            '24h' => ['label' => I18n::t('Last 24 hours'),'short' => I18n::t('24H'), 'start' => 'NOW-24HOUR/HOUR',   'secs' => 86400,   'gap' => '+1HOUR',   'fmt' => 'hour'],
+            '7d'  => ['label' => I18n::t('Last 7 days'),  'short' => I18n::t('7D'),  'start' => 'NOW-7DAY/HOUR',     'secs' => 604800,  'gap' => '+3HOUR',   'fmt' => 'hour'],
+            '30d' => ['label' => I18n::t('Last 30 days'), 'short' => I18n::t('30D'), 'start' => 'NOW-30DAY/DAY',     'secs' => 2592000, 'gap' => '+1DAY',    'fmt' => 'day'],
+            '90d' => ['label' => I18n::t('Last 90 days'), 'short' => I18n::t('90D'), 'start' => 'NOW-90DAY/DAY',     'secs' => 7776000, 'gap' => '+1DAY',    'fmt' => 'day'],
+            'all' => ['label' => I18n::t('All time'),     'short' => I18n::t('All time'), 'start' => 'NOW-1YEAR/DAY', 'secs' => 31536000, 'gap' => '+7DAY',  'fmt' => 'day', 'unbounded' => true],
         ];
     }
 
@@ -333,9 +334,9 @@ final class Query
 
         $out = [];
         $defs = [
-            'today'     => ['Today', 0],
-            'yesterday' => ['Yesterday', 1],
-            '2daysago'  => ['2 days ago', 2],
+            'today'     => [I18n::t('Today'), 0],
+            'yesterday' => [I18n::t('Yesterday'), 1],
+            '2daysago'  => [I18n::t('2 days ago'), 2],
         ];
         foreach ($defs as $key => [$label, $back]) {
             $start = $back === 0 ? $midnight : $midnight->modify('-' . $back . ' day');
@@ -348,7 +349,7 @@ final class Query
                 'secs'     => $next->getTimestamp() - $start->getTimestamp(),
                 'gap'      => '+1HOUR',
                 'fmt'      => 'hour',
-                'baseline' => 'the day before',
+                'baseline' => I18n::t('the day before'),
             ];
         }
         return $out;
@@ -591,45 +592,46 @@ final class Query
      */
     public static function filterFields(): array
     {
-        return [
-            'host_s'        => 'Website',
-            'bot_verdict_s' => 'Verdict',
-            'bot_class_s'   => 'Bot class',
-            'as_type_s'     => 'Network type',
-            'country_s'     => 'Country',
-            'browser_s'     => 'Browser',
-            'os_s'          => 'OS',
-            'device_s'      => 'Device',
-            'ua_bot_cat_s'  => 'Declared bot category',
-            'referer_type_s' => 'Referrer type',
+        static $memo = [];
+        return $memo[I18n::language()] ??= [
+            'host_s'        => I18n::t('Website'),
+            'bot_verdict_s' => I18n::t('Verdict'),
+            'bot_class_s'   => I18n::t('Bot class'),
+            'as_type_s'     => I18n::t('Network type'),
+            'country_s'     => I18n::t('Country'),
+            'browser_s'     => I18n::t('Browser'),
+            'os_s'          => I18n::t('OS'),
+            'device_s'      => I18n::t('Device'),
+            'ua_bot_cat_s'  => I18n::t('Declared bot category'),
+            'referer_type_s' => I18n::t('Referrer type'),
 
             /* THE SITE THAT SENT THEM, which was on both cores and on neither allowlist. The
                referrer TYPE answers "was this organic or paid"; the HOST answers "which of the
                forty sites linking to us is actually sending people", which is the question the
                analytics section is for and which could not be asked at all. Present on both
                schemas, so it needs no exclusion on either plane. */
-            'referer_host_s' => 'Referring site',
-            'bot_reasons_ss' => 'Signal fired',
+            'referer_host_s' => I18n::t('Referring site'),
+            'bot_reasons_ss' => I18n::t('Signal fired'),
 
             /* WHAT THEY TYPED INTO YOUR OWN SEARCH BOX. The field was indexed on both cores and
                already named in multiValuedFilterFields(), but it was never listed here — so it
                could be stored and never asked about: no dimension, no label, and no group in
                any breakdown. A visit that searched for something is the most legible thing a
                visit can do, and it was the one thing the dialogs could not say. */
-            'search_terms_ss' => 'Search terms',
-            'as_org_s'      => 'AS organisation',
-            'netname_s'     => 'Netname',
-            'fp_hash_s'     => 'Fingerprint',
-            'ip_s'          => 'IP',
-            'session_id_s'  => 'Session',
-            'sec_ch_ua_s'      => 'Client hints (Sec-CH-UA)',
-            'sec_ch_platform_s' => 'Client platform',
-            'tls_proto_s'      => 'TLS version',
-            'ua_bot_name_s'    => 'Declared crawler',
-            'city_s'           => 'City',
-            'region_s'         => 'Region',
-            'asn_i'            => 'ASN',
-            'paths_ss'         => 'Path',
+            'search_terms_ss' => I18n::t('Search terms'),
+            'as_org_s'      => I18n::t('AS organisation'),
+            'netname_s'     => I18n::t('Netname'),
+            'fp_hash_s'     => I18n::t('Fingerprint'),
+            'ip_s'          => I18n::t('IP'),
+            'session_id_s'  => I18n::t('Session'),
+            'sec_ch_ua_s'      => I18n::t('Client hints (Sec-CH-UA)'),
+            'sec_ch_platform_s' => I18n::t('Client platform'),
+            'tls_proto_s'      => I18n::t('TLS version'),
+            'ua_bot_name_s'    => I18n::t('Declared crawler'),
+            'city_s'           => I18n::t('City'),
+            'region_s'         => I18n::t('Region'),
+            'asn_i'            => I18n::t('ASN'),
+            'paths_ss'         => I18n::t('Path'),
 
             /* WHERE A VISIT STARTED AND WHERE IT ENDED, which are different questions from "which
                paths did it touch" and were not askable at all. `paths_ss` is the union over a
@@ -637,9 +639,9 @@ final class Query
                analytics section needs "visits that ARRIVED on /pricing", which is what a landing
                page is. Both are SESSION-ONLY: a hit has a `path_s` and no notion of being the
                first or last of anything, so both are excluded from the hits plane below. */
-            'entry_path_s'     => 'Landing page',
-            'exit_path_s'      => 'Exit page',
-            'signed_in_b'      => 'Signed in',
+            'entry_path_s'     => I18n::t('Landing page'),
+            'exit_path_s'      => I18n::t('Exit page'),
+            'signed_in_b'      => I18n::t('Signed in'),
 
             /* THE NAME THE MEASURED SITE ATTACHED, and a real dimension rather than a field that
                merely rides along on the document. It was in sessionFl() — returned with every
@@ -647,9 +649,9 @@ final class Query
                faceted, filtered or opened. "Who was here" is the first question anybody asks of
                a signed-in visit, and it had no answer. Sessions-only by construction: a request
                carries no identity, the session it belongs to does. */
-            'ident_s'          => 'Signed-in visitor',
-            'planes_s'         => 'Planes',
-            'search_terms_ss'  => 'Search term',
+            'ident_s'          => I18n::t('Signed-in visitor'),
+            'planes_s'         => I18n::t('Planes'),
+            'search_terms_ss'  => I18n::t('Search term'),
 
             /* THE STATUS DIMENSIONS, AND WHY THERE ARE TWO OF THEM. `status_class_s` is what an
                operator asks — was it answered, redirected, refused, or did it break — and it is
@@ -662,8 +664,8 @@ final class Query
                session that recorded one 2xx and one 4xx tells you nothing about which of its
                requests was which, and a session-plane filter on a field the sessions core does
                not define would match nothing while looking like it worked. */
-            'status_class_s'   => 'Status class',
-            'status_i'         => 'Status code',
+            'status_class_s'   => I18n::t('Status class'),
+            'status_i'         => I18n::t('Status code'),
 
             /* THE SAME QUESTION, ASKED OF A VISIT. `status_codes_is` is the set of codes one
                session received, so "only the visits that were answered 200" — which an operator
@@ -672,12 +674,12 @@ final class Query
                hitFilterFields) for the mirror of the reason those two are hits-only, and it
                carries the same label as `status_i` on purpose: each plane offers exactly one of
                the two, so the operator sees one "Status code" filter wherever they are. */
-            'status_codes_is'  => 'Status code',
+            'status_codes_is'  => I18n::t('Status code'),
 
             /* Present on BOTH cores at different grains: on a hit it is what that request
                matched, on a session it is the union across its requests. Same vocabulary, so one
                name (Score\Attacks). */
-            'hit_flags_ss'     => 'Attack pattern',
+            'hit_flags_ss'     => I18n::t('Attack pattern'),
         ];
     }
 
@@ -876,11 +878,11 @@ final class Query
     {
         return [
             'overview' => ['country_s', 'bot_verdict_s',
-                'Which countries send humans and which send automation.'],
+                I18n::t('Which countries send humans and which send automation.')],
             'bots' => ['bot_class_s', 'as_type_s',
-                'Where each kind of bot comes from.'],
+                I18n::t('Where each kind of bot comes from.')],
             'networks' => ['as_type_s', 'bot_verdict_s',
-                'Whether a network type is carrying people or automation.'],
+                I18n::t('Whether a network type is carrying people or automation.')],
 
             /* THE ONE CROSS-TAB THIS PRODUCT EXISTS TO PRINT. Every other tool in this category
                lists the scary-looking requests and stops. What an operator needs is that list
@@ -889,7 +891,7 @@ final class Query
                incident. Both cells are openable, so "show me the ones that got a 200" is one
                click from the grid. */
             'attacks' => ['hit_flags_ss', 'status_class_s',
-                'What the server answered each kind of probe with.'],
+                I18n::t('What the server answered each kind of probe with.')],
         ];
     }
 

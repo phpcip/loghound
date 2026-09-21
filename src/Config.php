@@ -342,6 +342,7 @@ final class Config
             'ui' => [
                 'timezone'    => 'UTC',
                 'date_format' => 'm/d/Y H:i:s',
+                'language'    => 'en',
             ],
         ];
     }
@@ -873,10 +874,10 @@ final class Config
                     : ', which is the only storage backend there is.');
         } else {
             if ($this->get('opensolr.email') === '') {
-                $errors[] = 'opensolr.email is required — the indexes are provisioned on your Opensolr account.';
+                $errors[] = I18n::mark('opensolr.email is required — the indexes are provisioned on your Opensolr account.');
             }
             if ($this->get('opensolr.api_key') === '') {
-                $errors[] = 'opensolr.api_key is required — the indexes are provisioned on your Opensolr account.';
+                $errors[] = I18n::mark('opensolr.api_key is required — the indexes are provisioned on your Opensolr account.');
             }
         }
 
@@ -894,19 +895,19 @@ final class Config
 
         if ($this->get('solr.hits_core') !== '' &&
             $this->get('solr.hits_core') === $this->get('solr.sessions_core')) {
-            $errors[] = 'solr.hits_core and solr.sessions_core must be different indexes.';
+            $errors[] = I18n::mark('solr.hits_core and solr.sessions_core must be different indexes.');
         }
 
         if ($this->get('beacon.enabled') && strlen((string) $this->get('beacon.secret')) < 32) {
-            $errors[] = 'beacon.secret must be at least 32 characters; run install.sh to generate one.';
+            $errors[] = I18n::mark('beacon.secret must be at least 32 characters; run install.sh to generate one.');
         }
 
         $ipMode = $this->get('privacy.ip_mode');
         if (!in_array($ipMode, ['full', 'truncate', 'hash'], true)) {
-            $errors[] = "privacy.ip_mode must be 'full', 'truncate' or 'hash'.";
+            $errors[] = I18n::mark("privacy.ip_mode must be 'full', 'truncate' or 'hash'.");
         }
         if ($ipMode === 'hash' && strlen((string) $this->get('privacy.ip_salt')) < 16) {
-            $errors[] = 'privacy.ip_salt must be at least 16 characters when ip_mode is hash.';
+            $errors[] = I18n::mark('privacy.ip_salt must be at least 16 characters when ip_mode is hash.');
         }
 
         $errors = array_merge($errors, $this->validateAuth());
@@ -1020,7 +1021,7 @@ final class Config
         }
 
         if ((int) $this->get('auth.absolute_timeout', 0) < (int) $this->get('auth.idle_timeout', 0)) {
-            $errors[] = 'auth.absolute_timeout must not be shorter than auth.idle_timeout.';
+            $errors[] = I18n::mark('auth.absolute_timeout must not be shorter than auth.idle_timeout.');
         }
 
         $lifetime = $this->get('auth.persistent_lifetime');
@@ -1049,25 +1050,25 @@ final class Config
         $totp = $this->get('auth.totp');
 
         if (!is_array($totp)) {
-            return ['auth.totp must be a map of enabled, secret and recovery.'];
+            return [I18n::mark('auth.totp must be a map of enabled, secret and recovery.')];
         }
 
         if (!is_bool($totp['enabled'] ?? null)) {
-            $errors[] = 'auth.totp.enabled must be true or false.';
+            $errors[] = I18n::mark('auth.totp.enabled must be true or false.');
         }
         if (!is_string($totp['secret'] ?? null)) {
-            $errors[] = 'auth.totp.secret must be a Base32 string, or empty.';
+            $errors[] = I18n::mark('auth.totp.secret must be a Base32 string, or empty.');
         }
         if (!is_array($totp['recovery'] ?? null)) {
-            $errors[] = 'auth.totp.recovery must be a list of hashes.';
+            $errors[] = I18n::mark('auth.totp.recovery must be a list of hashes.');
         }
 
         if ($errors === []
             && ($totp['enabled'] ?? false) === true
             && !Totp::isValidSecret((string) $totp['secret'])
         ) {
-            $errors[] = 'auth.totp.enabled is true but auth.totp.secret is not a usable Base32 secret, '
-                . 'so no code could ever be accepted. Turn two-factor off in Settings, or set a secret.';
+            $errors[] = I18n::mark('auth.totp.enabled is true but auth.totp.secret is not a usable Base32 secret, '
+                . 'so no code could ever be accepted. Turn two-factor off in Settings, or set a secret.');
         }
 
         return $errors;

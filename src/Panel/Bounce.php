@@ -77,6 +77,8 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
+
 final class Bounce
 {
     /**
@@ -131,9 +133,9 @@ final class Bounce
      */
     public static function definition(): string
     {
-        return 'Completed human visits that loaded a page. A bounce is one page with under '
-            . (self::ENGAGED_MS / 1000) . ' seconds of engaged time; one page with more is counted '
-            . 'separately as a visit that stayed.';
+        return I18n::t('Completed human visits that loaded a page. A bounce is one page with under '
+            . '{n} seconds of engaged time; one page with more is counted '
+            . 'separately as a visit that stayed.', ['n' => self::ENGAGED_MS / 1000]);
     }
 
     /**

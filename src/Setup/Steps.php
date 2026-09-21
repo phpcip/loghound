@@ -20,6 +20,7 @@ namespace Loghound\Setup;
 use Loghound\Auth\Persistence;
 use Loghound\Beacon\Doc;
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Steps
@@ -126,7 +127,7 @@ final class Steps
         foreach ($widen as $dir) {
             $real = realpath((string) $dir);
             if ($real === false || !is_dir($real)) {
-                $widening[] = 'Cannot allow ' . $dir . ': there is no such directory.';
+                $widening[] = I18n::t('Cannot allow {dir}: there is no such directory.', ['dir' => $dir]);
                 continue;
             }
             /* THE / GUARD ITS SIBLING HAS HAD ALL ALONG. allowLogRoot() refuses it in so many
@@ -137,8 +138,7 @@ final class Steps
                Security::safePath() accepts every path on the machine and "add a log source"
                becomes an arbitrary-file read whose contents are rendered as sample lines. */
             if ($real === '/') {
-                $widening[] = 'Refusing to allow / — that would let any file on this server be '
-                    . 'read as a log.';
+                $widening[] = I18n::t('Refusing to allow / — that would let any file on this server be read as a log.');
                 continue;
             }
             if (!in_array($real, $roots, true)) {
@@ -157,7 +157,7 @@ final class Steps
             if (Security::safePath(dirname($path), $roots) === null) {
                 $refused[] = [
                     'path'    => $path,
-                    'message' => $path . ' is outside the directories Loghound may read.',
+                    'message' => I18n::t('{path} is outside the directories Loghound may read.', ['path' => $path]),
                 ];
                 continue;
             }
@@ -166,7 +166,7 @@ final class Steps
             if ($format === '' || $format === 'unknown' || $format === 'unrecognised') {
                 $refused[] = [
                     'path'    => $path,
-                    'message' => 'No usable format was worked out for ' . $path . '.',
+                    'message' => I18n::t('No usable format was worked out for {path}.', ['path' => $path]),
                 ];
                 continue;
             }
@@ -216,10 +216,10 @@ final class Steps
     {
         $real = realpath($dir);
         if ($real === false || !is_dir($real)) {
-            return 'Cannot allow ' . $dir . ': there is no such directory.';
+            return I18n::t('Cannot allow {dir}: there is no such directory.', ['dir' => $dir]);
         }
         if ($real === '/') {
-            return 'Refusing to allow / — that would let any file on this server be read as a log.';
+            return I18n::t('Refusing to allow / — that would let any file on this server be read as a log.');
         }
 
         $roots = (array) $cfg->get('allowed_log_roots', []);
@@ -258,7 +258,7 @@ final class Steps
     public static function applyPrivacy(Config $cfg, string $ipMode, $retentionDays): array
     {
         if (!in_array($ipMode, self::ipModes(), true)) {
-            return ['Choose one of the three ways to store visitor addresses.'];
+            return [I18n::t('Choose one of the three ways to store visitor addresses.')];
         }
 
         $cfg->set('privacy.ip_mode', $ipMode);
@@ -303,11 +303,11 @@ final class Steps
     public static function applyAuthMode(Config $cfg, string $mode): array
     {
         if (!array_key_exists($mode, self::authModes())) {
-            return ['Choose one of the two ways to sign in.'];
+            return [I18n::t('Choose one of the two ways to sign in.')];
         }
         if ((string) $cfg->get('auth.password_hash', '') === ''
             || (string) $cfg->get('auth.user', '') === '') {
-            return ['Set a username and password before choosing how to sign in.'];
+            return [I18n::t('Set a username and password before choosing how to sign in.')];
         }
 
         $cfg->set('auth.mode', $mode);
@@ -350,22 +350,22 @@ final class Steps
         $errors = [];
 
         if (!array_key_exists($mode, self::authModes())) {
-            $errors[] = 'Choose one of the two ways to sign in.';
+            $errors[] = I18n::t('Choose one of the two ways to sign in.');
         }
 
         $user = trim($user);
         if ($user === '') {
-            $errors[] = 'Choose a username.';
+            $errors[] = I18n::t('Choose a username.');
         } elseif (!preg_match('/^[A-Za-z0-9._@-]{1,64}$/D', $user)) {
-            $errors[] = 'The username may contain letters, digits, and . _ - @ only.';
+            $errors[] = I18n::t('The username may contain letters, digits, and . _ - @ only.');
         }
 
         if (strlen($password) < self::MIN_PASSWORD) {
-            $errors[] = 'Use a password of at least ' . self::MIN_PASSWORD . ' characters. This page '
-                . 'shows every visitor, page and address on your site.';
+            $errors[] = I18n::t('Use a password of at least {n} characters. This page '
+                . 'shows every visitor, page and address on your site.', ['n' => self::MIN_PASSWORD]);
         }
         if ($confirm !== '' && $password !== $confirm) {
-            $errors[] = 'The two passwords are not the same.';
+            $errors[] = I18n::t('The two passwords are not the same.');
         }
 
         if ($errors !== []) {
@@ -399,11 +399,11 @@ final class Steps
             return [];
         }
         if (Security::urlHasUserinfo($url)) {
-            return ['The address of this panel must not contain a username or password. '
-                . 'Enter it as https://host/path only.'];
+            return [I18n::t('The address of this panel must not contain a username or password. '
+                . 'Enter it as https://host/path only.')];
         }
         if (Security::safeUrl($url) === '#') {
-            return ['The address of this panel must be a plain http:// or https:// URL.'];
+            return [I18n::t('The address of this panel must be a plain http:// or https:// URL.')];
         }
         $cfg->set('base_url', $url);
         return [];
@@ -564,11 +564,11 @@ final class Steps
     {
         $bin = rtrim($root, '/') . '/bin/';
 
-        return 'Then tell Loghound the shape changed: rescan the source under Settings, or re-run '
-            . $bin . 'loghound-setup. It stores the format per source, so until you do, every '
+        return I18n::t('Then tell Loghound the shape changed: rescan the source under Settings, or re-run '
+            . '{setup}. It stores the format per source, so until you do, every '
             . 'newly written line is a parse error and nothing new reaches the panel. Check '
-            . $bin . 'loghound-tail --status --human afterwards — parse errors should be back to '
-            . 'zero within a minute.';
+            . '{status} afterwards — parse errors should be back to '
+            . 'zero within a minute.', ['setup' => $bin . 'loghound-setup', 'status' => $bin . 'loghound-tail --status --human']);
     }
 
     /**
@@ -663,13 +663,13 @@ final class Steps
         return [
             [
                 'key'     => 'ingest',
-                'title'   => 'Start reading the logs, now and after every reboot',
+                'title'   => I18n::t('Start reading the logs, now and after every reboot'),
                 'lines'   => $ingestProblem === '' ? self::ingestCommands($root) : [],
                 'problem' => $ingestProblem,
             ],
             [
                 'key'     => 'status',
-                'title'   => 'Check it is keeping up',
+                'title'   => I18n::t('Check it is keeping up'),
                 'lines'   => [
                     rtrim($root, '/') . '/bin/loghound-tail --status --human',
                 ],
@@ -677,19 +677,19 @@ final class Steps
             ],
             [
                 'key'     => 'beacon',
-                'title'   => 'Add the beacon to your site',
+                'title'   => I18n::t('Add the beacon to your site'),
                 'lines'   => $snippet === '' ? [] : [$snippet],
                 'problem' => $problem,
             ],
             [
                 'key'     => 'beacon-identity',
-                'title'   => 'Optional: tell Loghound who the visitor is',
+                'title'   => I18n::t('Optional: tell Loghound who the visitor is'),
                 'lines'   => $base === '' ? [] : [self::beaconIdentitySnippet($cfg, $base)],
                 'problem' => $problem,
             ],
             [
                 'key'     => 'beacon-csp',
-                'title'   => 'If the measured site sends a Content-Security-Policy',
+                'title'   => I18n::t('If the measured site sends a Content-Security-Policy'),
                 'lines'   => $origin === '' ? [] : [Doc::cspDirectives($origin)],
                 'problem' => $problem,
             ],
@@ -737,13 +737,13 @@ final class Steps
         return [
             [
                 'key'     => 'units',
-                'title'   => 'What is running, and whether it comes back after a reboot',
+                'title'   => I18n::t('What is running, and whether it comes back after a reboot'),
                 'lines'   => ['systemctl --no-pager status ' . $units],
                 'problem' => '',
             ],
             [
                 'key'     => 'journal',
-                'title'   => 'Watch what the reader is doing, live',
+                'title'   => I18n::t('Watch what the reader is doing, live'),
                 'lines'   => ['sudo journalctl -u loghound-tail.service -f'],
                 'problem' => '',
             ],
@@ -757,7 +757,7 @@ final class Steps
                that FINDS the log is given instead, which works on every deployment. */
             [
                 'key'     => 'ownlog',
-                'title'   => 'Its own errors, if a page misbehaves',
+                'title'   => I18n::t('Its own errors, if a page misbehaves'),
                 'lines'   => is_file($root . '/var/php-error.log')
                     ? ['sudo tail -n 100 ' . $root . '/var/php-error.log']
                     : [
@@ -769,13 +769,13 @@ final class Steps
             ],
             [
                 'key'     => 'stop',
-                'title'   => 'Stop it, and keep it stopped across reboots',
+                'title'   => I18n::t('Stop it, and keep it stopped across reboots'),
                 'lines'   => ['sudo systemctl disable --now ' . $units],
                 'problem' => '',
             ],
             [
                 'key'     => 'uninstall',
-                'title'   => 'Remove Loghound from this machine',
+                'title'   => I18n::t('Remove Loghound from this machine'),
                 'lines'   => ['sudo ' . $root . '/install/uninstall.sh'],
                 'problem' => '',
             ],
@@ -810,10 +810,10 @@ final class Steps
            "the button above", which is not on Settings, and "it is in Settings afterwards" to
            a reader who is already in Settings. Neither screen can be named here, so neither
            is. */
-        return 'The configuration is not complete yet, so there is nothing to start: the ingest '
+        return I18n::t('The configuration is not complete yet, so there is nothing to start: the ingest '
             . 'daemon reads it, checks it before it runs, and stops on an incomplete one. Finish '
             . 'the outstanding setup steps — each one says what it still needs — and this command '
-            . 'appears here, ready to paste, as soon as it would work.';
+            . 'appears here, ready to paste, as soon as it would work.');
     }
 
     /** Where a systemd unit lives, and the one this installation is named after. */
@@ -984,28 +984,28 @@ final class Steps
         $base = self::effectiveBaseUrl($cfg, $mayUseRequestHost);
 
         $setIt = $mayUseRequestHost
-            ? 'Fill in the "Public URL" field on this screen — it is just above this card — and '
-                . 'press the button; the snippet is then on the Settings page.'
-            : 'Set base_url in config/loghound.php to the URL your visitors would reach this '
-                . 'installation at, then come back.';
+            ? I18n::t('Fill in the "Public URL" field on this screen — it is just above this card — and '
+                . 'press the button; the snippet is then on the Settings page.')
+            : I18n::t('Set base_url in config/loghound.php to the URL your visitors would reach this '
+                . 'installation at, then come back.');
 
         $correctIt = $mayUseRequestHost
-            ? 'Correct the "Public URL" field on this screen, just above this card, and press the '
-                . 'button.'
-            : 'Correct base_url in config/loghound.php.';
+            ? I18n::t('Correct the "Public URL" field on this screen, just above this card, and press the '
+                . 'button.')
+            : I18n::t('Correct base_url in config/loghound.php.');
 
         if ($base === '') {
-            return ['', 'The public address of this panel is not set, so there is no snippet to copy. '
+            return ['', I18n::t('The public address of this panel is not set, so there is no snippet to copy.') . ' '
                 . $setIt];
         }
         if (Security::urlHasUserinfo($base)) {
-            return ['', 'The configured address of this panel contains a username or password, which would '
-                . 'be published in the HTML of every page you measure. It must be https://host/path only. '
+            return ['', I18n::t('The configured address of this panel contains a username or password, which would '
+                . 'be published in the HTML of every page you measure. It must be https://host/path only.') . ' '
                 . $correctIt];
         }
         if (Security::safeUrl($base) === '#') {
-            return ['', 'The configured address of this panel is not a plain http:// or https:// URL, so no '
-                . 'snippet can be built from it. ' . $correctIt];
+            return ['', I18n::t('The configured address of this panel is not a plain http:// or https:// URL, so no '
+                . 'snippet can be built from it.') . ' ' . $correctIt];
         }
 
         return [Doc::snippet($base, Doc::configuredAttrs($cfg)), ''];

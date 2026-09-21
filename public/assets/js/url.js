@@ -47,13 +47,14 @@
 
 import { el } from './core.js';
 import { copyValue } from './copy.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /** The scheme every link is built with, and the sentence that admits it is an assumption. */
 export const SCHEME = 'https://';
 
 /** Said in the title of every external link, so the assumption is never presented as a fact. */
-export const SCHEME_NOTE = 'Nothing in an access log records whether the request was http or '
-    + 'https, so this link assumes https.';
+export const SCHEME_NOTE = T('Nothing in an access log records whether the request was http or '
+    + 'https, so this link assumes https.');
 
 /** The filter parameter prefix, and the field the host filter lives on. */
 const FILTER_NS = 'f';
@@ -602,8 +603,8 @@ export function outLink(host, path, query) {
         href: url,
         target: '_blank',
         rel: 'noopener noreferrer',
-        title: 'Open ' + url + ' in a new tab. ' + SCHEME_NOTE,
-        'aria-label': 'Open ' + url + ' in a new tab'
+        title: T('Open {url} in a new tab.', { url: url }) + ' ' + SCHEME_NOTE,
+        'aria-label': T('Open {url} in a new tab', { url: url })
     }, [el('span', { class: 'urlout-mark', 'aria-hidden': 'true', text: '↗' })]);
 }
 
@@ -628,8 +629,8 @@ export function hrefLink(href) {
         href: url,
         target: '_blank',
         rel: 'noopener noreferrer',
-        title: 'Open ' + url + ' in a new tab',
-        'aria-label': 'Open ' + url + ' in a new tab'
+        title: T('Open {url} in a new tab', { url: url }),
+        'aria-label': T('Open {url} in a new tab', { url: url })
     }, [el('span', { class: 'urlout-mark', 'aria-hidden': 'true', text: '↗' })]);
 }
 
@@ -646,19 +647,19 @@ export function ambiguityMark(count) {
     const many = typeof count === 'number' && count > 1;
     const none = count === 0;
 
-    const text = many ? count + ' hosts' : (none ? 'no host logged' : 'several hosts');
+    const text = many ? T('{n} hosts', { n: count }) : (none ? T('no host logged') : T('several hosts'));
 
     let why;
     if (none) {
-        why = 'No virtual host was recorded for this path, so there is no URL to link to. An access '
-            + 'log that does not record %v cannot say which of this machine\'s sites a request went to.';
+        why = T('No virtual host was recorded for this path, so there is no URL to link to. An access '
+            + 'log that does not record %v cannot say which of this machine\'s sites a request went to.');
     } else if (many) {
-        why = 'This path was requested on ' + count + ' virtual hosts, so no single URL can be linked. '
-            + 'Filter to one host and the link appears.';
+        why = T('This path was requested on {n} virtual hosts, so no single URL can be linked. '
+            + 'Filter to one host and the link appears.', { n: count });
     } else {
-        why = 'This installation serves more than one virtual host and this list does not say which of '
+        why = T('This installation serves more than one virtual host and this list does not say which of '
             + 'them the path belongs to, so no single URL can be linked. Filter to one host and the '
-            + 'link appears.';
+            + 'link appears.');
     }
 
     return el('span', { class: 'urlamb', text: text, title: why });
@@ -723,7 +724,7 @@ function upgrade(job) {
  * @returns {HTMLElement}
  */
 export function pathCopy(path) {
-    return copyValue(path, { cls: 'mono path-copy', end: true, url: true, label: 'Page' });
+    return copyValue(path, { cls: 'mono path-copy', end: true, url: true, label: T('Page') });
 }
 
 /**
@@ -750,7 +751,7 @@ export function pathCell(path, opts) {
        once. `data-full` carries the untruncated path, `data-lh-tip` opts the element into the
        tooltip the rest of the panel uses; the native `title` is deliberately not used, because it
        is slow to appear and cannot be styled or read on a touch device. */
-    const cell = el('span', { class: classes, text: shown === '' ? 'no path' : shown });
+    const cell = el('span', { class: classes, text: shown === '' ? T('no path') : shown });
     if (raw !== '') {
         cell.setAttribute('data-lh-tip', '1');
         /* The path alone, as on screen. The query string still travels in the link beside it. */

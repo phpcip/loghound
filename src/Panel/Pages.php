@@ -36,6 +36,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Pages extends Controller
@@ -84,7 +85,7 @@ final class Pages extends Controller
 
     public function title(): string
     {
-        return 'Pages';
+        return I18n::t('Pages');
     }
 
 
@@ -155,7 +156,7 @@ final class Pages extends Controller
             'entry'    => $this->entry(),
             'exit'     => $this->exitPages(),
             'trending' => $this->trending(),
-            default    => ['error' => 'Unknown action'],
+            default    => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -173,9 +174,9 @@ final class Pages extends Controller
         $choice = self::param('scope', ['all', 'multi', 'single'], $default);
 
         return match ($choice) {
-            'multi'  => [[Query::POP_MULTI_REQUEST], 'Visits that made more than one request'],
-            'single' => [['hits_i:[* TO 1]'], 'Visits that made exactly one request'],
-            default  => [[], 'Every visit in range'],
+            'multi'  => [[Query::POP_MULTI_REQUEST], I18n::t('Visits that made more than one request')],
+            'single' => [['hits_i:[* TO 1]'], I18n::t('Visits that made exactly one request')],
+            default  => [[], I18n::t('Every visit in range')],
         };
     }
 
@@ -223,7 +224,7 @@ final class Pages extends Controller
             'scope_label' => $label,
             'total'       => (int) ($f['count'] ?? 0),
             'rows'        => $out,
-            'page'        => Paging::block($start, $rows, Paging::distinct($f, 'paths'), 'entry pages', count($out)),
+            'page'        => Paging::block($start, $rows, Paging::distinct($f, 'paths'), I18n::t('entry pages'), count($out)),
         ]);
     }
 
@@ -275,7 +276,7 @@ final class Pages extends Controller
             'total'       => (int) ($f['count'] ?? 0),
             'beacon'      => self::qcount($f, 'beacon'),
             'rows'        => $out,
-            'page'        => Paging::block($start, $rows, Paging::distinct($f, 'paths'), 'exit pages', count($out)),
+            'page'        => Paging::block($start, $rows, Paging::distinct($f, 'paths'), I18n::t('exit pages'), count($out)),
         ]);
     }
 
@@ -343,7 +344,7 @@ final class Pages extends Controller
             'baseline'     => (string) ($this->range['baseline'] ?? 'the ' . mb_strtolower((string) $this->range['label']) . ' immediately before this one'),
             'range_secs'   => (int) $this->range['secs'],
             'rows'         => array_values($page),
-            'page'         => Paging::block($start, $rows, count($candidates), 'paths', count($page)),
+            'page'         => Paging::block($start, $rows, count($candidates), I18n::t('paths'), count($page)),
         ]);
     }
 
@@ -364,7 +365,7 @@ final class Pages extends Controller
      */
     private static function scopeToggle(array $choices, string $active): string
     {
-        $out = '<div class="toggle" role="group" aria-label="Which visits to count">';
+        $out = '<div class="toggle" role="group" aria-label="' . I18n::html('Which visits to count') . '">';
         foreach ($choices as [$value, $label]) {
             $on = $value === $active;
             $out .= '<button type="button" data-scope="' . Security::esc($value) . '"'
@@ -379,28 +380,28 @@ final class Pages extends Controller
     private function entryCard(): void
     {
         $tools = self::scopeToggle([
-            ['all', 'All visits'],
-            ['multi', 'Went further'],
-            ['single', 'One request only'],
+            ['all', I18n::t('All visits')],
+            ['multi', I18n::t('Went further')],
+            ['single', I18n::t('One request only')],
         ], 'all') . $this->exportTool('entry');
 
         self::cardOpen(
             'an-entry',
             Layout::cardNum(self::SECTIONS, 'an-entry'),
-            'Where people arrive',
-            'The first request of each visit.',
+            I18n::t('Where people arrive'),
+            I18n::t('The first request of each visit.'),
             $tools
         );
-        self::skeleton('an-entry', 'rows', 0, 'Faceting entry pages');
+        self::skeleton('an-entry', 'rows', 0, I18n::t('Faceting entry pages'));
 
         echo '<div class="table-wrap"><table id="an-entry-table" class="table-fixed"'
             . Sorting::tableAttrs('an-entry', self::pathOrder('an-entry')) . '><colgroup>'
             . '<col style="width:52%"><col style="width:14%"><col style="width:16%">'
             . '<col style="width:18%"></colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('page') . '>Page</th>'
-            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
-            . '<th scope="col" class="num">Left straight away</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>' . I18n::html('Page') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>' . I18n::html('Visits') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Left straight away') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-entry-pager"></div>';
 
@@ -422,32 +423,33 @@ final class Pages extends Controller
     private function exitCard(): void
     {
         $tools = self::scopeToggle([
-            ['multi', 'Went further'],
-            ['all', 'All visits'],
-            ['single', 'One request only'],
+            ['multi', I18n::t('Went further')],
+            ['all', I18n::t('All visits')],
+            ['single', I18n::t('One request only')],
         ], 'multi') . $this->exportTool('exit');
 
         self::cardOpen(
             'an-exit',
             Layout::cardNum(self::SECTIONS, 'an-exit'),
-            'Where the log last saw them',
-            'The last request of each finished visit.',
+            I18n::t('Where the log last saw them'),
+            I18n::t('The last request of each finished visit.'),
             $tools
         );
-        self::skeleton('an-exit', 'rows', 0, 'Faceting exit pages');
+        self::skeleton('an-exit', 'rows', 0, I18n::t('Faceting exit pages'));
 
-        echo '<div class="note"><p><strong>This one is a guess.</strong> The exit page is the last request '
+        echo '<div class="note"><p><strong>' . I18n::html('This one is a guess.') . '</strong> '
+            . I18n::html('The exit page is the last request '
             . 'the LOG saw, which is not the last page the visitor looked at: a page read and then abandoned '
             . 'produces no further log line, and a page served from the browser cache produces none at all. '
-            . 'Read a row as "this is where the trail goes cold".</p></div>';
+            . 'Read a row as "this is where the trail goes cold".') . '</p></div>';
 
         echo '<div class="table-wrap"><table id="an-exit-table" class="table-fixed"'
             . Sorting::tableAttrs('an-exit', self::pathOrder('an-exit')) . '><colgroup>'
             . '<col style="width:60%"><col style="width:16%"><col style="width:24%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('page') . '>Page</th>'
-            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>' . I18n::html('Page') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>' . I18n::html('Visits') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-exit-pager"></div>';
 
@@ -460,20 +462,20 @@ final class Pages extends Controller
         self::cardOpen(
             'an-trend',
             Layout::cardNum(self::SECTIONS, 'an-trend'),
-            'What is moving',
-            'Ranked by change against the period before.',
+            I18n::t('What is moving'),
+            I18n::t('Ranked by change against the period before.'),
             $this->exportTool('trend')
         );
-        self::skeleton('an-trend', 'rows', 0, 'Comparing this period against the one before');
+        self::skeleton('an-trend', 'rows', 0, I18n::t('Comparing this period against the one before'));
 
         echo '<div class="table-wrap"><table id="an-trend-table" class="table-fixed"><colgroup>'
             . '<col style="width:44%"><col style="width:13%"><col style="width:13%">'
             . '<col style="width:14%"><col style="width:16%"></colgroup><thead><tr>'
-            . '<th scope="col">Page</th>'
-            . '<th scope="col" class="num">This period</th>'
-            . '<th scope="col" class="num">Before</th>'
-            . '<th scope="col" class="num">Change</th>'
-            . '<th scope="col" class="bar-col">Movement</th>'
+            . '<th scope="col">' . I18n::html('Page') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('This period') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Before') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Change') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Movement') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-trend-pager"></div>';
 

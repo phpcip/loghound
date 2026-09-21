@@ -21,6 +21,7 @@ import { sparkline, tokens } from '../charts.js';
 import { clientNode, countryNode, dimValue, verdictChip } from '../identity.js';
 import { markSortable } from '../sorttable.js';
 import { renderPager } from '../pager.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** Rows currently expanded, so a re-sort can leave them open. */
 const expanded = new Set();
@@ -45,9 +46,9 @@ function signatureNode(row) {
         row.fleet
             ? el('span', {
                 class: 'chip chip-accent',
-                text: 'fleet',
-                title: 'Five or more distinct addresses wear this one client signature, on no mobile '
-                    + 'carrier and with nothing self-declared. That is the shape a rotating proxy pool makes.'
+                text: T('fleet'),
+                title: T('Five or more distinct addresses wear this one client signature, on no mobile '
+                    + 'carrier and with nothing self-declared. That is the shape a rotating proxy pool makes.')
             })
             : null
     ]);
@@ -90,7 +91,7 @@ function clusterRow(row, sparkBuckets) {
     const tr = el('tr', {
         class: 'row-link' + (row.fleet ? ' fleet' : ''),
         tabindex: '0',
-        title: 'Open everything known about this fingerprint',
+        title: T('Open everything known about this fingerprint'),
         dataset: { fp: row.fp, lhOpen: 'dim', field: 'fp_hash_s', value: row.fp }
     });
 
@@ -98,7 +99,7 @@ function clusterRow(row, sparkBuckets) {
         type: 'button',
         class: 'expander',
         'aria-expanded': expanded.has(row.fp) ? 'true' : 'false',
-        'aria-label': 'Show the addresses sharing this fingerprint',
+        'aria-label': T('Show the addresses sharing this fingerprint'),
         text: expanded.has(row.fp) ? '−' : '+'
     });
     tr.appendChild(el('td', {}, [button]));
@@ -106,27 +107,30 @@ function clusterRow(row, sparkBuckets) {
     tr.appendChild(el('td', {
         class: 'mono',
         'data-sort': row.fp,
-        title: 'Client signature ' + row.fp
+        title: T('Client signature {fp}', { fp: row.fp })
     }, [signatureNode(row)]));
 
     tr.appendChild(el('td', {
         class: 'num',
         'data-sort': String(row.uniq_ips),
-        title: num(row.uniq_ips) + ' addresses across ' + num(row.uniq_nets) + ' netblocks and '
-            + num(row.uniq_asns) + ' networks'
+        title: T('{ips} addresses across {nets} netblocks and {asns} networks', {
+            ips: num(row.uniq_ips),
+            nets: num(row.uniq_nets),
+            asns: num(row.uniq_asns)
+        })
     }, [
         el('div', { class: 'clip-line' }, [
             row.fleet
                 ? el('strong', { text: num(row.uniq_ips) })
                 : document.createTextNode(num(row.uniq_ips))
         ]),
-        el('div', { class: 'sub', text: num(row.uniq_nets) + ' nets · ' + num(row.uniq_asns) + ' AS' })
+        el('div', { class: 'sub', text: T('{nets} nets · {asns} AS', { nets: num(row.uniq_nets), asns: num(row.uniq_asns) }) })
     ]));
     tr.appendChild(el('td', { class: 'num', text: num(row.sessions), 'data-sort': String(row.sessions) }));
 
     const canvas = el('canvas', {
         class: 'spark',
-        'aria-label': 'Activity across the selected range, in ' + sparkBuckets + ' buckets',
+        'aria-label': T('Activity across the selected range, in {n} buckets', { n: sparkBuckets }),
         role: 'img'
     });
     canvas.__spark = row.spark;
@@ -147,14 +151,14 @@ function clusterRow(row, sparkBuckets) {
             row.declared
                 ? el('span', {
                     class: 'chip chip-good',
-                    title: 'Every address in this cluster identified itself in the User-Agent, and the claim checked out.',
-                    text: 'Declared'
+                    title: T('Every address in this cluster identified itself in the User-Agent, and the claim checked out.'),
+                    text: T('Declared')
                 })
                 : null
         ]),
         el('div', {
             class: 'sub mono',
-            text: row.avg_score === null ? '—' : 'score ' + dec(row.avg_score, 0)
+            text: row.avg_score === null ? '—' : T('score {n}', { n: dec(row.avg_score, 0) })
         })
     ]));
 
@@ -189,7 +193,7 @@ async function toggle(tr, row) {
 
     const holder = el('tr', { class: 'members' }, [
         el('td', { colspan: '7' }, [
-            el('div', { class: 'members-inner' }, [el('p', { class: 'muted', text: 'Loading addresses…' })])
+            el('div', { class: 'members-inner' }, [el('p', { class: 'muted', text: T('Loading addresses…') })])
         ])
     ]);
     tr.parentNode.insertBefore(holder, tr.nextSibling);
@@ -202,19 +206,19 @@ async function toggle(tr, row) {
         /* A RETRY IN PLACE. The expander is left reading "−", so pressing it again COLLAPSES
            the row rather than retrying it — the reader has to collapse and re-expand, and the
            control gives them no reason to think that would help. */
-        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
         again.addEventListener('click', () => {
             again.disabled = true;
-            inner.replaceChildren(el('p', { class: 'muted', text: 'Loading addresses\u2026' }));
+            inner.replaceChildren(el('p', { class: 'muted', text: T('Loading addresses\u2026') }));
             api('fingerprints', 'members', { fp: row.fp, start: 0 })
                 .then((data) => renderMembers(inner, data, row.fp))
                 .catch((e) => inner.replaceChildren(
-                    el('p', { class: 'muted', text: 'Could not load addresses: ' + e.message }),
+                    el('p', { class: 'muted', text: T('Could not load addresses: {error}', { error: e.message }) }),
                     el('div', { class: 'card-error-actions' }, [again])
                 ));
         });
         inner.replaceChildren(
-            el('p', { class: 'muted', text: 'Could not load addresses: ' + err.message }),
+            el('p', { class: 'muted', text: T('Could not load addresses: {error}', { error: err.message }) }),
             el('div', { class: 'card-error-actions' }, [again])
         );
     }
@@ -241,28 +245,29 @@ async function toggle(tr, row) {
  */
 function renderMembers(inner, data, fp) {
     if (!data.rows.length) {
-        inner.replaceChildren(el('p', { class: 'muted', text: 'No addresses returned for this fingerprint.' }));
+        inner.replaceChildren(el('p', { class: 'muted', text: T('No addresses returned for this fingerprint.') }));
         return;
     }
 
     const summary = el('p', { class: 'muted' }, [
-        num(data.page && data.page.total !== null ? data.page.total : data.rows.length) +
-        ' addresses across ' + num(data.uniq_asns) + ' autonomous system' + (data.uniq_asns === 1 ? '' : 's') +
-        ', ' + num(data.uniq_nets) + ' netblock' + (data.uniq_nets === 1 ? '' : 's') +
-        ' and ' + num(data.uniq_countries) + ' countr' + (data.uniq_countries === 1 ? 'y' : 'ies') +
-        ', all sharing one client signature. Each row opens everything known about that address, ' +
-        'including the netblock and the network it belongs to.'
+        T('{n} addresses across {asns}, {nets} and {countries}, all sharing one client signature. Each row opens everything known about that address, ' +
+        'including the netblock and the network it belongs to.', {
+            n: num(data.page && data.page.total !== null ? data.page.total : data.rows.length),
+            asns: Tn('{n} autonomous system', '{n} autonomous systems', data.uniq_asns, { n: num(data.uniq_asns) }),
+            nets: Tn('{n} netblock', '{n} netblocks', data.uniq_nets, { n: num(data.uniq_nets) }),
+            countries: Tn('{n} country', '{n} countries', data.uniq_countries, { n: num(data.uniq_countries) })
+        })
     ]);
 
     const table = el('table', { class: 'tight table-fixed' }, [
         el('colgroup', {}, ['22%', '20%', '28%', '10%', '20%'].map((w) => el('col', { style: 'width:' + w }))),
         el('thead', {}, [
             el('tr', {}, [
-                el('th', { scope: 'col', text: 'Address' }),
-                el('th', { scope: 'col', text: 'Country' }),
-                el('th', { scope: 'col', text: 'Network' }),
-                el('th', { scope: 'col', class: 'num', text: 'Visits' }),
-                el('th', { scope: 'col', text: 'Last seen' })
+                el('th', { scope: 'col', text: T('Address') }),
+                el('th', { scope: 'col', text: T('Country') }),
+                el('th', { scope: 'col', text: T('Network') }),
+                el('th', { scope: 'col', class: 'num', text: T('Visits') }),
+                el('th', { scope: 'col', text: T('Last seen') })
             ])
         ])
     ]);
@@ -276,18 +281,18 @@ function renderMembers(inner, data, fp) {
             body.appendChild(el('tr', {
                 class: 'row-link',
                 tabindex: '0',
-                title: 'Open everything known about this address',
+                title: T('Open everything known about this address'),
                 dataset: { lhOpen: 'dim', field: 'ip_s', value: m.ip }
             }, [
                 el('td', { class: 'mono nowrap', 'data-sort': m.ip || '' }, [dimValue('ip_s', m.ip, { mono: true })]),
                 el('td', {
                     class: 'clip',
-                    title: [m.city, m.country].filter(Boolean).join(', ') || 'Not geolocated',
+                    title: [m.city, m.country].filter(Boolean).join(', ') || T('Not geolocated'),
                     'data-sort': [m.country, m.city].filter(Boolean).join(' ')
                 }, [
                     m.country ? countryNode(m.country) : el('span', { class: 'muted', text: '\u2014' })
                 ]),
-                el('td', { class: 'clip', title: m.org || 'Network not resolved', 'data-sort': m.org || '' }, [
+                el('td', { class: 'clip', title: m.org || T('Network not resolved'), 'data-sort': m.org || '' }, [
                     m.org ? dimValue('as_org_s', m.org) : el('span', { class: 'muted', text: '\u2014' }),
                     m.as_type ? el('div', { class: 'sub' }, [dimValue('as_type_s', m.as_type)]) : null
                 ]),
@@ -300,7 +305,7 @@ function renderMembers(inner, data, fp) {
     const mount = el('div', { class: 'pager-mount' });
     const show = (state) => {
         renderPager(mount, state, async (start, rows) => {
-            mount.replaceChildren(el('p', { class: 'muted', text: 'Loading page\u2026' }));
+            mount.replaceChildren(el('p', { class: 'muted', text: T('Loading page\u2026') }));
             try {
                 const next = await api('fingerprints', 'members', {
                     fp: fp,
@@ -310,10 +315,10 @@ function renderMembers(inner, data, fp) {
                 paint(next.rows);
                 show(next.page);
             } catch (e) {
-                const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+                const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
                 again.addEventListener('click', () => show(state));
                 mount.replaceChildren(
-                    el('p', { class: 'muted', text: 'That page could not be loaded: ' + e.message }),
+                    el('p', { class: 'muted', text: T('That page could not be loaded: {error}', { error: e.message }) }),
                     el('div', { class: 'card-error-actions' }, [again])
                 );
             }
@@ -324,7 +329,7 @@ function renderMembers(inner, data, fp) {
     show(data.page);
 
     inner.replaceChildren(
-        el('h4', { text: 'Addresses sharing this client signature' }),
+        el('h4', { text: T('Addresses sharing this client signature') }),
         summary,
         el('div', { class: 'table-wrap' }, [table]),
         mount,
@@ -345,7 +350,7 @@ function loadClusters() {
        with "−" and `aria-expanded="true"` over content that does not exist. The two sort
        handlers cleared it by hand; the card's own Retry, which goes through core.js, could not. */
     expanded.clear();
-    return loadCard('fp-table', 'Building fingerprint clusters', async () => {
+    return loadCard('fp-table', T('Building fingerprint clusters'), async () => {
         const table = byId('fp-table-el');
         const sort = byId('fp-sort');
         const min = byId('fp-min');
@@ -358,16 +363,21 @@ function loadClusters() {
         table.tBodies[0].replaceChildren();
 
         const fleets = data.rows.filter((row) => row.fleet).length;
-        setPop('fp-table', num(data.total_sessions) + ' sessions in range across ' + num(data.total_fps) +
-            ' distinct header fingerprints. Showing ' + num(data.rows.length) + '. ' +
+        setPop('fp-table', T('{n} sessions in range across {fps} distinct header fingerprints. Showing {shown}.', {
+            n: num(data.total_sessions),
+            fps: num(data.total_fps),
+            shown: num(data.rows.length)
+        }) + ' ' +
             (fleets
-                ? fleets + ' cluster' + (fleets === 1 ? '' : 's') + ' below match the proxy-fleet pattern ' +
-                  '(five or more distinct addresses, not a mobile carrier, not self-declared) and are marked.'
-                : 'None match the proxy-fleet pattern in this range.') +
-            ' Distinct-IP counts use Solr unique(), exact for small counts and approximate for large ones.');
+                ? Tn('{n} cluster below match the proxy-fleet pattern ' +
+                  '(five or more distinct addresses, not a mobile carrier, not self-declared) and are marked.',
+                  '{n} clusters below match the proxy-fleet pattern ' +
+                  '(five or more distinct addresses, not a mobile carrier, not self-declared) and are marked.', fleets)
+                : T('None match the proxy-fleet pattern in this range.')) +
+            ' ' + T('Distinct-IP counts use Solr unique(), exact for small counts and approximate for large ones.'));
 
         if (!data.rows.length) {
-            noDataYet('fp-table-empty', 'fingerprint clusters');
+            noDataYet('fp-table-empty', T('fingerprint clusters'));
             return;
         }
         hideEmpty('fp-table-empty');

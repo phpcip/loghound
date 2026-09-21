@@ -21,6 +21,7 @@ import {
     chartOrEmpty, fieldSetter, handleState, histPercentile, lfAdd, lfRemove, plotOrNote,
     renderFilters, renderVolume, resolveCore, shareBar, stateMessage, tokens
 } from './opensolr.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /**
  * Plain-English meaning for the status codes an index actually answers with.
@@ -32,17 +33,17 @@ import {
  * so a reader moving between the two views never meets a code described two different ways.
  */
 const STATUS_MEANING = {
-    200: 'OK',
-    400: 'Bad request — the query was malformed',
-    401: 'Unauthorised — the caller did not authenticate',
-    403: 'Forbidden — blocked by the index firewall',
-    404: 'Not found — no such core or handler',
-    413: 'Payload too large',
-    429: 'Too many requests — rate limited',
-    500: 'Internal server error — inside Solr',
-    502: 'Bad gateway — the node did not answer',
-    503: 'Service unavailable — the node was busy or down',
-    504: 'Gateway timeout'
+    200: T('OK'),
+    400: T('Bad request — the query was malformed'),
+    401: T('Unauthorised — the caller did not authenticate'),
+    403: T('Forbidden — blocked by the index firewall'),
+    404: T('Not found — no such core or handler'),
+    413: T('Payload too large'),
+    429: T('Too many requests — rate limited'),
+    500: T('Internal server error — inside Solr'),
+    502: T('Bad gateway — the node did not answer'),
+    503: T('Service unavailable — the node was busy or down'),
+    504: T('Gateway timeout')
 };
 
 /**
@@ -69,12 +70,12 @@ function renderHeadline(data) {
     set('size', size.mean === null || size.mean === undefined ? '—' : bytes(size.mean * 1024));
 
     setPop('ix-headline',
-        num(data.requests) + ' requests logged for ' + (data.core || 'this index') + ' in this range. ' +
+        T('{n} requests logged for {core} in this range.', { n: num(data.requests), core: data.core || T('this index') }) + ' ' +
         (data.zero === null
-            ? 'The zero-result share could not be read.'
-            : num(data.zero) + ' of them (' + dec(data.zero_pct, 1) + '%) matched no documents.') +
-        ' QTime is Solr\'s own measure of time spent answering and excludes network and queueing. ' +
-        'Response size is what Opensolr recorded going back to the caller.');
+            ? T('The zero-result share could not be read.')
+            : T('{n} of them ({pct}%) matched no documents.', { n: num(data.zero), pct: dec(data.zero_pct, 1) })) +
+        ' ' + T('QTime is Solr\'s own measure of time spent answering and excludes network and queueing. ' +
+        'Response size is what Opensolr recorded going back to the caller.'));
 }
 
 /**
@@ -83,7 +84,7 @@ function renderHeadline(data) {
 function renderQtime(data) {
     const set = fieldSetter('ix-qtime');
 
-    if (handleState('ix-qtime-empty', data, 'requests')) {
+    if (handleState('ix-qtime-empty', data, T('requests'))) {
         return;
     }
 
@@ -91,8 +92,8 @@ function renderQtime(data) {
     const counts = edges.map((edge) => data.buckets[String(edge)] || 0);
     const over = data.over || 0;
 
-    if (chartOrEmpty('ix-qtime-chart', 'ix-qtime-empty', edges.length, 'No latency to plot', [
-        'The platform returned no QTime buckets for these requests, so there is no distribution to draw.'
+    if (chartOrEmpty('ix-qtime-chart', 'ix-qtime-empty', edges.length, T('No latency to plot'), [
+        T('The platform returned no QTime buckets for these requests, so there is no distribution to draw.')
     ])) {
         return;
     }
@@ -122,7 +123,7 @@ function renderQtime(data) {
             axisPointer: { type: 'shadow', shadowStyle: { color: theme.sunken } },
             formatter: (params) => {
                 const p = params[0];
-                return tip`${p.name} ms<br><strong>${num(p.value)}</strong> requests`;
+                return tip`${p.name} ms<br><strong>${num(p.value)}</strong> ${T('requests')}`;
             }
         },
         xAxis: {
@@ -151,12 +152,11 @@ function renderQtime(data) {
 
     const stats = data.stats || {};
     setPop('ix-qtime',
-        num(data.requests) + ' requests, bucketed into ' + data.gap + ' ms steps up to ' +
-        data.ceiling + ' ms. Percentiles are read off those buckets, so they are upper bounds ' +
-        'rather than exact values. The exact extremes are' +
+        T('{n} requests, bucketed into {gap} ms steps up to {ceiling} ms. Percentiles are read off those buckets, so they are upper bounds ' +
+        'rather than exact values.', { n: num(data.requests), gap: data.gap, ceiling: data.ceiling }) + ' ' +
         (stats.max === null || stats.max === undefined
-            ? ' not available from this index.'
-            : ' a minimum of ' + dur(stats.min) + ' and a maximum of ' + dur(stats.max) + '.'));
+            ? T('The exact extremes are not available from this index.')
+            : T('The exact extremes are a minimum of {min} and a maximum of {max}.', { min: dur(stats.min), max: dur(stats.max) })));
 }
 
 /**
@@ -174,7 +174,7 @@ function pickCell(field, value, active, text) {
     return {
         node: el('a', {
             href: on ? lfRemove(field, value) : lfAdd(field, value),
-            title: (on ? 'Remove this filter: ' : 'Filter this page to ') + value,
+            title: on ? T('Remove this filter: {value}', { value: value }) : T('Filter this page to {value}', { value: value }),
             text: text === undefined ? value : text
         })
     };
@@ -184,7 +184,7 @@ function pickCell(field, value, active, text) {
  * Fill the handler and status cards: a chart each, then the exact table.
  */
 function renderHandlers(data) {
-    if (handleState('ix-handlers-empty', data, 'requests')) {
+    if (handleState('ix-handlers-empty', data, T('requests'))) {
         tbody(byId('ix-paths-table'), []);
         tbody(byId('ix-status-table'), []);
         return;
@@ -198,11 +198,11 @@ function renderHandlers(data) {
     const t = tokens();
 
     if (!plotOrNote('ix-paths-chart', paths.length,
-        'The request log recorded no handler for these requests, so there is no endpoint to plot.')) {
+        T('The request log recorded no handler for these requests, so there is no endpoint to plot.'))) {
         barsH('ix-paths-chart', paths.slice(0, 10).map((path) => ({
             label: path,
             value: data.paths[path],
-            extra: pct(data.paths[path], pathTotal) + ' of requests'
+            extra: T('{pct} of requests', { pct: pct(data.paths[path], pathTotal) })
         })));
     }
 
@@ -220,12 +220,12 @@ function renderHandlers(data) {
        accent for anything at or above 400 and the neutral population ramp below it, because
        the design system has no red to reach for. */
     if (!plotOrNote('ix-status-chart', statuses.length,
-        'The request log recorded no status code for these requests, so there is nothing to break down.')) {
+        T('The request log recorded no status code for these requests, so there is nothing to break down.'))) {
         donut('ix-status-chart', statuses.map((status) => ({
             label: status + (STATUS_MEANING[Number(status)] ? ' · ' + STATUS_MEANING[Number(status)] : ''),
             value: data.statuses[status],
             color: Number(status) >= 400 ? t.pop.evasive : t.pop.human
-        })), 'requests', num(statusTotal));
+        })), T('requests'), num(statusTotal));
     }
 
     tbody(byId('ix-status-table'), statuses.map((status) => ({
@@ -238,7 +238,7 @@ function renderHandlers(data) {
                         && data.active.http_status.indexOf(status) !== -1
                         ? lfRemove('http_status', status)
                         : lfAdd('http_status', status),
-                    title: 'Filter this page to status ' + status,
+                    title: T('Filter this page to status {status}', { status: status }),
                     text: status
                 })
             },
@@ -254,47 +254,47 @@ function renderHandlers(data) {
     })));
 
     setPop('ix-handlers',
-        num(data.requests) + ' requests under the current filters. Handlers and status codes are faceted ' +
+        T('{n} requests under the current filters. Handlers and status codes are faceted ' +
         'independently, so each column totals the same population. The bar chart shows the ten busiest ' +
-        'handlers; the table below it is every one the facet returned.' +
+        'handlers; the table below it is every one the facet returned.', { n: num(data.requests) }) + ' ' +
         (statuses.some((s) => Number(s) >= 400)
-            ? ' Some requests were refused or failed — see the status column.'
-            : ' Every logged request was answered with a 2xx.'));
+            ? T('Some requests were refused or failed — see the status column.')
+            : T('Every logged request was answered with a 2xx.')));
 }
 
 /**
  * Load every card for the current index.
  */
 function refresh() {
-    loadCard('ix-headline', 'Reading the request log', async () => {
+    loadCard('ix-headline', T('Reading the request log'), async () => {
         const chosen = await resolveCore('indexes', 'ix-core', refresh);
         renderHeadline(chosen === null
-            ? { state: 'no_index', note: 'This Opensolr account has no indexes yet.' }
+            ? { state: 'no_index', note: T('This Opensolr account has no indexes yet.') }
             : await api('indexes', 'headline', { core: chosen }));
     });
 
-    loadCard('ix-filters', 'Faceting the request log', async () => {
+    loadCard('ix-filters', T('Faceting the request log'), async () => {
         const chosen = await resolveCore('indexes', 'ix-core', refresh);
         renderFilters('ix-filters', chosen === null
             ? { state: 'no_index', requests: 0, groups: [], active: {}, ignored: [] }
             : await api('indexes', 'facets', { core: chosen }));
     });
 
-    loadCard('ix-volume', 'Faceting request volume', async () => {
+    loadCard('ix-volume', T('Faceting request volume'), async () => {
         const chosen = await resolveCore('indexes', 'ix-core', refresh);
         renderVolume('ix-volume', chosen === null
             ? { state: 'no_index', requests: 0, all: [], times: [] }
             : await api('indexes', 'volume', { core: chosen }));
     });
 
-    loadCard('ix-qtime', 'Building the QTime histogram', async () => {
+    loadCard('ix-qtime', T('Building the QTime histogram'), async () => {
         const chosen = await resolveCore('indexes', 'ix-core', refresh);
         renderQtime(chosen === null
             ? { state: 'no_index', requests: 0 }
             : await api('indexes', 'qtime', { core: chosen }));
     });
 
-    loadCard('ix-handlers', 'Faceting handlers and status codes', async () => {
+    loadCard('ix-handlers', T('Faceting handlers and status codes'), async () => {
         const chosen = await resolveCore('indexes', 'ix-core', refresh);
         renderHandlers(chosen === null
             ? { state: 'no_index', requests: 0 }

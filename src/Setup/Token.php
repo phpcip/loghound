@@ -56,6 +56,7 @@ declare(strict_types=1);
 
 namespace Loghound\Setup;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Token
@@ -203,11 +204,12 @@ final class Token
     public function verify(string $given, string $clientIp): string
     {
         if (!$this->allow($clientIp)) {
-            return 'Too many attempts from this address. Wait an hour, or clear the counter with: '
-                . 'sudo rm ' . $this->varDir . '/' . self::ATTEMPTS;
+            return I18n::t('Too many attempts from this address. Wait an hour, or clear the counter with: {command}', [
+                'command' => 'sudo rm ' . $this->varDir . '/' . self::ATTEMPTS,
+            ]);
         }
         if (!$this->exists()) {
-            return 'No setup token has been created yet. Reload this page.';
+            return I18n::t('No setup token has been created yet. Reload this page.');
         }
 
         $stored = (string) @file_get_contents($this->path());
@@ -215,10 +217,10 @@ final class Token
         $given  = trim($given);
 
         if ($stored === '' || $given === '') {
-            return 'That is not the setup token.';
+            return I18n::t('That is not the setup token.');
         }
         if (!Security::equals($stored, $given)) {
-            return 'That is not the setup token. Read it again with: sudo cat ' . $this->path();
+            return I18n::t('That is not the setup token. Read it again with: {command}', ['command' => 'sudo cat ' . $this->path()]);
         }
 
         /* A CORRECT TOKEN GIVES THE BUDGET BACK. allow() counts unconditionally so that the

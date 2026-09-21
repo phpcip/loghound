@@ -23,6 +23,7 @@
 
 import { api, byId, dec, el, fill, hideEmpty, loadCard, noDataYet, num, setPop, tbody } from '../core.js';
 import { magnitudeBar } from '../cardtable.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** Hours of the day, as the grid's columns. */
 const HOURS = 24;
@@ -66,26 +67,32 @@ function hourLabel(hour) {
  */
 function cellTitle(cell, tz) {
     if (cell.observed === 0) {
-        return cell.day + ' at ' + hourLabel(cell.hour) + ':00 never occurred in this range. Not the same '
-            + 'as no traffic.';
+        return T('{day} at {hour}:00 never occurred in this range. Not the same '
+            + 'as no traffic.', { day: cell.day, hour: hourLabel(cell.hour) });
     }
-    return cell.day + ' at ' + hourLabel(cell.hour) + ':00 ' + tz + ': '
-        + dec(cell.avg, 1) + ' visits on a typical one, from ' + num(cell.total) + ' in all across '
-        + num(cell.observed) + ' occurrence' + (cell.observed === 1 ? '' : 's') + '.';
+    return Tn('{day} at {hour}:00 {tz}: {avg} visits on a typical one, from {total} in all across {n} occurrence.',
+        '{day} at {hour}:00 {tz}: {avg} visits on a typical one, from {total} in all across {n} occurrences.', cell.observed, {
+            day: cell.day,
+            hour: hourLabel(cell.hour),
+            tz: tz,
+            avg: dec(cell.avg, 1),
+            total: num(cell.total),
+            n: num(cell.observed)
+        });
 }
 
 /** The legend, which is what turns a shaded grid into something readable. */
 function legend(peak, tz) {
-    const swatches = [el('span', { class: 'heat-key-none', title: 'This hour never occurred in the range' })];
+    const swatches = [el('span', { class: 'heat-key-none', title: T('This hour never occurred in the range') })];
     for (let i = 1; i <= LEVELS; i++) {
         swatches.push(el('span', { class: 'heat-key-' + i }));
     }
 
     return el('div', { class: 'heat-legend' }, [
-        el('span', { class: 'faint', text: 'Never observed' }),
+        el('span', { class: 'faint', text: T('Never observed') }),
         el('span', { class: 'heat-key' }, swatches),
-        el('span', { class: 'faint', text: 'Busiest: ' + dec(peak, 1) + ' visits an hour' }),
-        el('span', { class: 'faint', text: 'Times shown in ' + tz })
+        el('span', { class: 'faint', text: T('Busiest: {n} visits an hour', { n: dec(peak, 1) }) }),
+        el('span', { class: 'faint', text: T('Times shown in {tz}', { tz: tz }) })
     ]);
 }
 
@@ -98,13 +105,12 @@ function renderHeat(data) {
         return;
     }
 
-    setPop('an-heat', data.population_label + ' · ' + num(data.total) + ' visits across '
-        + num(data.hours_observed) + ' observed hours, in ' + data.timezone + '. Shaded by the average per '
-        + 'occurrence, not the total.');
+    setPop('an-heat', data.population_label + ' · ' + T('{n} visits across {hours} observed hours, in {tz}. Shaded by the average per '
+        + 'occurrence, not the total.', { n: num(data.total), hours: num(data.hours_observed), tz: data.timezone }));
 
     if (data.hours_observed === 0) {
         fill(mount, []);
-        noDataYet('an-heat-empty', 'hours of traffic');
+        noDataYet('an-heat-empty', T('hours of traffic'));
         return;
     }
     hideEmpty('an-heat-empty');
@@ -114,7 +120,7 @@ function renderHeat(data) {
         byCell.set(cell.dow + ':' + cell.hour, cell);
     }
 
-    const grid = el('div', { class: 'heat', role: 'group', 'aria-label': 'Visits by hour of the week' });
+    const grid = el('div', { class: 'heat', role: 'group', 'aria-label': T('Visits by hour of the week') });
 
     grid.appendChild(el('span', { class: 'heat-corner', 'aria-hidden': 'true' }));
     for (let hour = 0; hour < HOURS; hour++) {
@@ -145,8 +151,8 @@ function renderHeat(data) {
     if (data.hours_observed < 48) {
         mount.appendChild(el('p', {
             class: 'muted',
-            text: 'This range covers ' + num(data.hours_observed) + ' hours, so most of the grid is an '
-                + 'absence rather than a quiet period. Try 30 or 90 days.'
+            text: T('This range covers {n} hours, so most of the grid is an '
+                + 'absence rather than a quiet period. Try 30 or 90 days.', { n: num(data.hours_observed) })
         }));
     }
 }
@@ -164,13 +170,13 @@ function renderHours(data) {
         .sort((a, b) => b.avg - a.avg)
         .slice(0, 20);
 
-    setPop('an-hours', 'The twenty busiest hours for ' + data.population_label.toLowerCase() + ', by average '
+    setPop('an-hours', T('The twenty busiest hours for {population}, by average '
         + 'per occurrence. An hour observed once has no average worth the name, which is what the observed '
-        + 'column is for.');
+        + 'column is for.', { population: data.population_label.toLowerCase() }));
 
     if (!rows.length) {
         tbody(byId('an-hours-table'), []);
-        noDataYet('an-hours-empty', 'hours with any traffic');
+        noDataYet('an-hours-empty', T('hours with any traffic'));
         return;
     }
     hideEmpty('an-hours-empty');
@@ -183,8 +189,8 @@ function renderHours(data) {
             { text: num(cell.total), num: true, sort: cell.total },
             { text: num(cell.observed), num: true, sort: cell.observed },
             {
-                node: magnitudeBar(cell.avg, peak, 'the busiest hour of the week',
-                    dec(cell.avg, 1) + ' visits on a typical ' + cell.day),
+                node: magnitudeBar(cell.avg, peak, T('the busiest hour of the week'),
+                    T('{n} visits on a typical {day}', { n: dec(cell.avg, 1), day: cell.day })),
                 sort: cell.avg
             }
         ]
@@ -194,10 +200,10 @@ function renderHours(data) {
 /** Load both cards from one request. */
 function load() {
     const data = api('rhythm', 'heat', { pop: population });
-    loadCard('an-heat', 'Folding the range into hours of the week', async () => {
+    loadCard('an-heat', T('Folding the range into hours of the week'), async () => {
         renderHeat(await data);
     });
-    loadCard('an-hours', 'Ranking the hours of the week', async () => {
+    loadCard('an-hours', T('Ranking the hours of the week'), async () => {
         renderHours(await data);
     });
 }

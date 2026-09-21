@@ -35,6 +35,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Quota;
 use Loghound\Security;
 use Loghound\Setup\Storage;
@@ -91,7 +92,7 @@ final class Usage extends Controller
 
     public function title(): string
     {
-        return 'Plan usage';
+        return I18n::t('Plan usage');
     }
 
 
@@ -172,7 +173,7 @@ final class Usage extends Controller
             'meter'   => $this->meter(),
             'plan'    => $this->plan(),
             'account' => $this->account(),
-            default   => ['error' => 'Unknown action'],
+            default   => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -262,7 +263,7 @@ final class Usage extends Controller
         return $this->envelope([
             'cores'       => $rows,
             'worst'       => self::worst($rows),
-            'consequence' => Quota::CONSEQUENCE,
+            'consequence' => I18n::t(Quota::CONSEQUENCE),
             'upgrade_url' => $quota->upgradeUrl(),
             'refresh_sec' => $quota->refreshSec(),
             'resets_at'   => Quota::nextReset(),
@@ -310,7 +311,7 @@ final class Usage extends Controller
             'cores'          => $rows,
             'retention_days' => (int) $this->cfg->get('privacy.retention_days', 0),
             'rollup_forever' => (bool) $this->cfg->get('privacy.rollup_forever', true),
-            'consequence'    => Quota::CONSEQUENCE,
+            'consequence'    => I18n::t(Quota::CONSEQUENCE),
             'upgrade_url'    => $quota->upgradeUrl(),
             'managed'        => (string) $this->cfg->get('solr.mode') === 'opensolr',
         ]);
@@ -335,10 +336,10 @@ final class Usage extends Controller
         return $this->envelope([
             'cores'          => [],
             'worst'          => null,
-            'demo_note'      => 'Plan usage is read from your Opensolr account and is never fabricated, '
+            'demo_note'      => I18n::t('Plan usage is read from your Opensolr account and is never fabricated, '
                 . 'so there is nothing to show in demo mode. Connect an account in '
-                . 'config/loghound.php to see bandwidth and the retention window.',
-            'consequence'    => Quota::CONSEQUENCE,
+                . 'config/loghound.php to see bandwidth and the retention window.'),
+            'consequence'    => I18n::t(Quota::CONSEQUENCE),
             'upgrade_url'    => 'https://opensolr.com/pricing',
             'refresh_sec'    => 0,
             'resets_at'      => Quota::nextReset(),
@@ -444,13 +445,18 @@ final class Usage extends Controller
 
         return [
             'over' => $over,
-            'text' => 'This index is over its ' . implode(' and ', $over) . ' quota, which means Opensolr is '
-                . 'denying every request to it — reads as well as writes, a 403 on /select too. '
+            'text' => I18n::t('This index is over its {what} quota, which means Opensolr is '
+                . 'denying every request to it — reads as well as writes, a 403 on /select too.', [
+                    'what' => implode(' ' . I18n::t('and') . ' ', array_map(
+                        static fn (string $o): string => ['bandwidth' => I18n::t('bandwidth'), 'disk' => I18n::t('disk')][$o] ?? $o,
+                        $over
+                    )),
+                ]) . ' '
                 . (in_array('bandwidth', $over, true)
-                    ? 'Bandwidth cannot be freed by deleting anything: it resets on the 1st, or an upgrade '
-                      . 'clears it now. '
+                    ? I18n::t('Bandwidth cannot be freed by deleting anything: it resets on the 1st, or an upgrade '
+                      . 'clears it now.') . ' '
                     : '')
-                . 'Access returns on its own about 17 minutes after usage is back under the limit.',
+                . I18n::t('Access returns on its own about 17 minutes after usage is back under the limit.'),
         ];
     }
 
@@ -493,35 +499,36 @@ final class Usage extends Controller
     {
         $tools = '<a class="ghost small" id="usage-upgrade" href="'
             . Security::esc($this->quota()->upgradeUrl())
-            . '" rel="noopener noreferrer" target="_blank">Upgrade plan</a>';
+            . '" rel="noopener noreferrer" target="_blank">' . I18n::html('Upgrade plan') . '</a>';
 
         self::cardOpen(
             'usage-bw',
             '01',
-            'Bandwidth this month',
-            'Traffic served by your Opensolr indexes since the 1st, against the plan limit.',
+            I18n::t('Bandwidth this month'),
+            I18n::t('Traffic served by your Opensolr indexes since the 1st, against the plan limit.'),
             $tools . $this->exportTool('plan')
         );
-        self::skeleton('usage-bw', 'stats', 0, 'Reading plan usage from Opensolr');
+        self::skeleton('usage-bw', 'stats', 0, I18n::t('Reading plan usage from Opensolr'));
 
         echo '<div class="meters" id="usage-bw-meters"></div>';
 
         echo '<div class="note note-hard">';
-        echo '<p><strong>Almost all of this is you, reading this dashboard.</strong> If the figure above is '
-            . 'climbing and you have not changed anything, the place to look is not your traffic &mdash; it is '
+        echo '<p><strong>' . I18n::html('Almost all of this is you, reading this dashboard.') . '</strong> '
+            . I18n::html('If the figure above is '
+            . 'climbing and you have not changed anything, the place to look is not your traffic — it is '
             . 'how many panel pages are open and how often they are refreshed. Opensolr meters what your index '
             . 'SENDS BACK, so a query that returns a facet block spends the allowance and the log lines going '
             . 'the other way barely touch it: the tailer uploads a batch and gets a short acknowledgement, '
             . 'which is why ingesting a busy site costs almost nothing and why one dashboard left open all day '
-            . 'on a small plan does not.</p>';
-        echo '<p><strong>What happens if you go over.</strong> ' . Security::esc(Quota::CONSEQUENCE) . '</p>';
-        echo '<p>Bandwidth is the one limit here that cannot be reclaimed by deleting anything. Disk can: '
+            . 'on a small plan does not.') . '</p>';
+        echo '<p><strong>' . I18n::html('What happens if you go over.') . '</strong> ' . Security::esc(I18n::t(Quota::CONSEQUENCE)) . '</p>';
+        echo '<p>' . I18n::html('Bandwidth is the one limit here that cannot be reclaimed by deleting anything. Disk can: '
             . 'Loghound deletes the oldest traffic before it writes new traffic, so the index stays inside '
-            . 'its disk quota on its own.</p>';
-        echo '<p class="faint">This dashboard\'s own queries count towards the figure above, and the reading '
+            . 'its disk quota on its own.') . '</p>';
+        echo '<p class="faint">' . I18n::html('This dashboard\'s own queries count towards the figure above, and the reading '
             . 'on this page is the cheap part of them: each open page refreshes it at most once every few '
             . 'minutes, and the refresh is a single call to the Opensolr control plane rather than to your '
-            . 'index. It is the cards on every other view that do the spending.</p>';
+            . 'index. It is the cards on every other view that do the spending.') . '</p>';
         echo '</div>';
 
         self::cardClose('usage-bw');
@@ -533,10 +540,10 @@ final class Usage extends Controller
         self::cardOpen(
             'usage-window',
             '02',
-            'How far back the data goes',
-            'The retention window, and what sets it.'
+            I18n::t('How far back the data goes'),
+            I18n::t('The retention window, and what sets it.')
         );
-        self::skeleton('usage-window', 'stats', 0, 'Measuring the retention window');
+        self::skeleton('usage-window', 'stats', 0, I18n::t('Measuring the retention window'));
 
         echo '<div id="usage-window-rows"></div>';
 
@@ -546,21 +553,25 @@ final class Usage extends Controller
            reach its quota, and the platform then blocks it for reads as well as writes. Settings
            says exactly that on the same installation; this card asserted the opposite. */
         if ($this->quota()->enabled()) {
-            echo '<p><strong>Disk looks after itself.</strong> Before each batch is written, Loghound checks how '
+            echo '<p><strong>' . I18n::html('Disk looks after itself.') . '</strong> '
+                . I18n::html('Before each batch is written, Loghound checks how '
                 . 'full the index is against your plan. Above the high-water mark it deletes the oldest data '
-                . 'first, by date, in bounded steps &mdash; so the index does not reach the quota and the window '
+                . 'first, by date, in bounded steps — so the index does not reach the quota and the window '
                 . 'simply rolls forward. There is nothing to act on here; it is a statement of how much history '
-                . 'the plan holds.</p>';
+                . 'the plan holds.') . '</p>';
         } else {
-            echo '<p><strong>Disk does not look after itself on this installation.</strong> Deleting for size '
+            echo '<p><strong>' . I18n::html('Disk does not look after itself on this installation.') . '</strong> '
+                . I18n::html('Deleting for size '
                 . 'is switched off, so nothing trims the index as it fills and it can reach its plan quota. '
-                . 'An index at its quota is blocked by Opensolr &mdash; every request is answered 403, reads '
-                . 'included. Turn it back on under <a href="?v=settings&s=privacy">Settings</a>, or keep '
-                . 'the index inside the plan some other way.</p>';
+                . 'An index at its quota is blocked by Opensolr — every request is answered 403, reads '
+                . 'included. Turn it back on under {settings}, or keep '
+                . 'the index inside the plan some other way.', [
+                    'settings' => '<a href="?v=settings&s=privacy">' . I18n::html('Settings') . '</a>',
+                ]) . '</p>';
         }
-        echo '<p class="faint">The projected window is an estimate from observed growth and is described as '
+        echo '<p class="faint">' . I18n::html('The projected window is an estimate from observed growth and is described as '
             . 'one. The span actually held is not an estimate: it is the newest timestamp in the index minus '
-            . 'the oldest.</p>';
+            . 'the oldest.') . '</p>';
         echo '</div>';
 
         self::cardClose('usage-window');
@@ -572,35 +583,41 @@ final class Usage extends Controller
         self::cardOpen(
             'usage-limits',
             '03',
-            'The two retention limits',
-            'Whichever comes first wins.'
+            I18n::t('The two retention limits'),
+            I18n::t('Whichever comes first wins.')
         );
-        self::skeleton('usage-limits', 'rows', 0, 'Comparing the retention limits');
+        self::skeleton('usage-limits', 'rows', 0, I18n::t('Comparing the retention limits'));
 
         echo '<div class="table-wrap"><table id="usage-limits-table" class="table-fixed"><colgroup>'
             . '<col style="width:30%"><col style="width:22%"><col style="width:20%"><col style="width:28%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Limit</th>'
-            . '<th scope="col">Set by</th>'
-            . '<th scope="col" class="num">Window</th>'
-            . '<th scope="col">In effect</th>'
+            . '<th scope="col">' . I18n::html('Limit') . '</th>'
+            . '<th scope="col">' . I18n::html('Set by') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Window') . '</th>'
+            . '<th scope="col">' . I18n::html('In effect') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         echo '<div class="note">';
-        echo '<p><strong>Time-based</strong> retention is <code>privacy.retention_days</code> in '
-            . '<code>config/loghound.php</code>, applied by <code>bin/loghound-retention</code> on its timer. '
-            . 'It is a privacy decision: how long you are willing to keep a record of a visitor.</p>';
+        echo '<p>' . I18n::html('{time} retention is {key} in {file}, applied by {bin} on its timer. '
+            . 'It is a privacy decision: how long you are willing to keep a record of a visitor.', [
+                'time' => '<strong>' . I18n::html('Time-based') . '</strong>',
+                'key'  => '<code>privacy.retention_days</code>',
+                'file' => '<code>config/loghound.php</code>',
+                'bin'  => '<code>bin/loghound-retention</code>',
+            ]) . '</p>';
         /* "BOTH RUN" IS ONLY TRUE WHEN BOTH ARE ON. Either can be switched off — an age limit of
            0, or `quota.enabled = false` — and the card said they both ran regardless. The row
            table above already reports which is in effect; this paragraph now agrees with it. */
-        echo '<p><strong>Size-based</strong> retention is this plan window, applied by the ingest daemon '
+        echo '<p>' . I18n::html('{size} retention is this plan window, applied by the ingest daemon '
             . 'before it writes. It is a capacity decision: how much history the index can hold. '
             . 'Whichever of the two is switched on and deletes sooner is the one you see in the table '
-            . 'above; a limit that is off does nothing and says so there.</p>';
-        echo '<p class="faint">Daily rollup documents are never deleted by either while '
-            . '<code>privacy.rollup_forever</code> is set. They carry counts rather than visitors, they cost '
+            . 'above; a limit that is off does nothing and says so there.', [
+                'size' => '<strong>' . I18n::html('Size-based') . '</strong>',
+            ]) . '</p>';
+        echo '<p class="faint">' . I18n::html('Daily rollup documents are never deleted by either while '
+            . '{key} is set. They carry counts rather than visitors, they cost '
             . 'almost nothing, and they are the difference between a 90-day tool and one that can show you '
-            . 'last year.</p>';
+            . 'last year.', ['key' => '<code>privacy.rollup_forever</code>']) . '</p>';
         echo '</div>';
 
         self::cardClose('usage-limits');

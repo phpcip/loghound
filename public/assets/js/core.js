@@ -36,6 +36,7 @@ import { initCopyButtons } from './copy.js';
    so a per-view initialiser would be ten chances to forget one — and a forgotten one is silent,
    producing a file scoped to the defaults with nothing on screen saying so. */
 import './export.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /**
  * Read the JSON island the server rendered.
@@ -369,31 +370,32 @@ export function noDataYet(id, what) {
            to check it, and it sent them to unset filters instead of to Settings. What IS known
            is that filters are in force and this card came back empty under them. Both routes
            out are offered, because either could be the one. */
-        showEmpty(id, 'No ' + what + ' match your filters', [
-            el('p', {}, [
-                'Nothing in range matched the ' + active.count + ' filter value'
-                    + (active.count === 1 ? '' : 's') + (named ? ' on ' + named : '') + '. ',
-                el('a', { href: clearFiltersUrl(), text: 'Clear every filter' }),
-                ', or check ',
-                el('a', { href: '?v=settings&s=sources', text: 'Settings' }),
-                ' if the range itself is empty.'
-            ])
+        const links = {
+            clear: el('a', { href: clearFiltersUrl(), text: T('Clear every filter') }),
+            settings: el('a', { href: '?v=settings&s=sources', text: T('Settings') }),
+            names: named
+        };
+        showEmpty(id, T('No {what} match your filters', { what: what }), [
+            el('p', {}, named
+                ? Tfn('Nothing in range matched the {n} filter value on {names}. {clear}, or check {settings} if the range itself is empty.',
+                    'Nothing in range matched the {n} filter values on {names}. {clear}, or check {settings} if the range itself is empty.',
+                    active.count, links)
+                : Tfn('Nothing in range matched the {n} filter value. {clear}, or check {settings} if the range itself is empty.',
+                    'Nothing in range matched the {n} filter values. {clear}, or check {settings} if the range itself is empty.',
+                    active.count, links))
         ]);
         return;
     }
 
-    showEmpty(id, 'No ' + what + ' in this time range', [
-        el('p', {}, [
-            'Try a wider duration. On a fresh install, confirm a log source under ',
-            el('a', { href: '?v=settings&s=sources', text: 'Settings' }),
-            ' and check that ',
+    showEmpty(id, T('No {what} in this time range', { what: what }), [
+        el('p', {}, Tf('Try a wider duration. On a fresh install, confirm a log source under {settings} and check that {command} is running.', {
+            settings: el('a', { href: '?v=settings&s=sources', text: T('Settings') }),
             /* ABSOLUTE. The reader is on a shell somewhere else on the machine, and this was
                the one command in the panel still named by a relative path — in the empty state
                every async card in the product falls back to. The root comes from the boot
                payload because only the server knows it. */
-            el('code', { text: tailCommand() }),
-            ' is running.'
-        ])
+            command: el('code', { text: tailCommand() })
+        }))
     ]);
 }
 
@@ -422,11 +424,11 @@ export function tailCommand() {
  */
 export function noPivotYet(id, both) {
     const active = activeFilterSummary();
-    showEmpty(id, 'Nothing to cross-tabulate', [
-        'A row needs ' + both + ', and no session in this range carries both.',
+    showEmpty(id, T('Nothing to cross-tabulate'), [
+        T('A row needs {both}, and no session in this range carries both.', { both: both }),
         active.count > 0
-            ? el('p', {}, [el('a', { href: clearFiltersUrl(), text: 'Clear every filter' }), ' to check.'])
-            : 'Both are recorded once a session has been scored.'
+            ? el('p', {}, Tf('{clear} to check.', { clear: el('a', { href: clearFiltersUrl(), text: T('Clear every filter') }) }))
+            : T('Both are recorded once a session has been scored.')
     ]);
 }
 
@@ -451,7 +453,7 @@ export function snippet(text) {
     const id = 'lh-snip-' + snippetSeq;
     const block = el('div', { class: 'snippet-block' }, [
         el('pre', { class: 'snippet mono', id: id, text: text }),
-        el('button', { type: 'button', class: 'copy-btn', 'data-copy': id, 'aria-live': 'polite', text: 'Copy' })
+        el('button', { type: 'button', class: 'copy-btn', 'data-copy': id, 'aria-live': 'polite', text: T('Copy') })
     ]);
     /* Wired on the microtask after this returns, because copy.js scans the DOCUMENT for
        `[data-copy]` and the caller has not inserted the block yet. A microtask runs after the
@@ -668,7 +670,7 @@ export function durClock(ms) {
     const days = Math.floor(total / 86400);
     if (days > 0) {
         const h = Math.floor((total % 86400) / 3600);
-        return days + (days === 1 ? ' Day ' : ' Days ') + pad(h) + ':' + pad(Math.floor((total % 3600) / 60));
+        return Tn('{n} Day {time}', '{n} Days {time}', days, { time: pad(h) + ':' + pad(Math.floor((total % 3600) / 60)) });
     }
     if (total < 3600) {
         return pad(Math.floor(total / 60)) + ':' + pad(total % 60);
@@ -838,14 +840,13 @@ export async function api(view, action, extra, signal) {
     } catch (err) {
         window.clearTimeout(timer);
         if (err && err.name === 'AbortError') {
-            const e = new Error(
-                'The request took longer than ' + Math.round(REQUEST_TIMEOUT_MS / 1000) +
-                ' seconds and was given up on. Try a shorter time range, or check that Solr is responding.'
-            );
+            const e = new Error(T('The request took longer than {n} seconds and was given up on. Try a shorter time range, or check that Solr is responding.', {
+                n: Math.round(REQUEST_TIMEOUT_MS / 1000)
+            }));
             e.transport = true;
             throw e;
         }
-        const e = new Error('Could not reach the panel: ' + (err && err.message ? err.message : err));
+        const e = new Error(T('Could not reach the panel: {error}', { error: err && err.message ? err.message : err }));
         e.transport = true;
         throw e;
     }
@@ -855,7 +856,7 @@ export async function api(view, action, extra, signal) {
     try {
         data = await res.json();
     } catch (e) {
-        const err = new Error('The panel returned a response that was not JSON (HTTP ' + res.status + ').');
+        const err = new Error(T('The panel returned a response that was not JSON (HTTP {status}).', { status: res.status }));
         err.transport = true;
         throw err;
     }
@@ -863,8 +864,9 @@ export async function api(view, action, extra, signal) {
         return data;
     }
     if (!res.ok || (data && data.error)) {
-        const err = new Error((data && data.error) || 'Request failed with HTTP ' + res.status + '.');
-        err.transport = /solr|timed out|timeout|refused|resolve|unreachable|credentials/i.test(err.message);
+        const err = new Error((data && data.error) || T('Request failed with HTTP {status}.', { status: res.status }));
+        err.transport = (data && data.error_transport === true)
+            || /solr|timed out|timeout|refused|resolve|unreachable|credentials/i.test(err.message);
         throw err;
     }
     if (data && data.cache) {
@@ -949,14 +951,16 @@ function renderStamp(id) {
 
     const node = existing || head.appendChild(el('span', { class: 'card-stamp' }));
     if (!lastStamp.cached) {
-        node.textContent = 'Live';
-        node.title = 'Computed for this request. Nothing was served from the query cache.';
+        node.textContent = T('Live');
+        node.title = T('Computed for this request. Nothing was served from the query cache.');
         return;
     }
 
-    node.textContent = 'Computed ' + when(lastStamp.computed_at, true)
-        + ' \u00b7 ' + stampAge(Number(lastStamp.age) || 0) + ' old';
-    node.title = 'Read from the query cache. Press Clear cache in the page header to recompute it.';
+    node.textContent = T('Computed {when} · {age} old', {
+        when: when(lastStamp.computed_at, true),
+        age: stampAge(Number(lastStamp.age) || 0)
+    });
+    node.title = T('Read from the query cache. Press Clear cache in the page header to recompute it.');
 }
 
 /**
@@ -968,15 +972,15 @@ function renderStamp(id) {
  */
 function stampAge(seconds) {
     if (seconds < 60) {
-        return seconds + 's';
+        return T('{n}s', { n: seconds });
     }
     if (seconds < 3600) {
-        return Math.round(seconds / 60) + ' min';
+        return T('{n} min', { n: Math.round(seconds / 60) });
     }
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.round((seconds % 3600) / 60);
 
-    return minutes === 0 ? hours + 'h' : hours + 'h ' + minutes + ' min';
+    return minutes === 0 ? T('{n}h', { n: hours }) : T('{h}h {m} min', { h: hours, m: minutes });
 }
 
 /**
@@ -1011,14 +1015,14 @@ export async function post(fields) {
     } catch (err) {
         window.clearTimeout(timer);
         throw new Error(err && err.name === 'AbortError'
-            ? 'The operation did not respond in time.'
-            : 'Could not reach the panel: ' + (err && err.message ? err.message : err));
+            ? T('The operation did not respond in time.')
+            : T('Could not reach the panel: {error}', { error: err && err.message ? err.message : err }));
     }
     window.clearTimeout(timer);
 
     const data = await res.json().catch(() => null);
     if (!data) {
-        throw new Error('The panel returned a response that was not JSON (HTTP ' + res.status + ').');
+        throw new Error(T('The panel returned a response that was not JSON (HTTP {status}).', { status: res.status }));
     }
     if (goneToSetup(data)) {
         return data;
@@ -1035,7 +1039,7 @@ export async function post(fields) {
        "step NaN of undefined · undefineds" and never stopping. A response that is not OK is a
        failure whatever shape its body took. */
     if (!res.ok) {
-        const err = new Error('The operation failed with HTTP ' + res.status + '.');
+        const err = new Error(T('The operation failed with HTTP {status}.', { status: res.status }));
         err.transport = res.status >= 500;
         throw err;
     }
@@ -1089,8 +1093,8 @@ function raiseConnectionBanner(message) {
 
     if (heading) {
         heading.textContent = platform
-            ? 'The Opensolr API is not answering.'
-            : 'Your search index is not answering.';
+            ? T('The Opensolr API is not answering.')
+            : T('Your search index is not answering.');
     }
     detail.textContent = message;
     banner.hidden = false;
@@ -1165,7 +1169,7 @@ installOrderReload();
  * back the same figure it had a second ago. That is the half a reader would get wrong, and it is
  * the half the tip states; the rest of what pressing a refresh control does needs no explaining.
  */
-const REFRESH_TIP = 'Reload this section. A cached answer is reused; Settings is where the cache is cleared.';
+const REFRESH_TIP = T('Reload this section. A cached answer is reused; Settings is where the cache is cleared.');
 
 /** Where the SVG the reload mark is drawn in lives. */
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -1248,7 +1252,7 @@ function ensureRefresh(id, label) {
         'data-lh-tip': '1',
         'data-full': REFRESH_TIP,
         'aria-disabled': 'false',
-        'aria-label': 'Refresh ' + cardHeadingText(card, label)
+        'aria-label': T('Refresh {section}', { section: cardHeadingText(card, label) })
     }, [refreshMark()]);
 
     const heading = head.querySelector('h2');
@@ -1369,11 +1373,11 @@ export async function loadCard(id, label, loader) {
     const ticker = window.setInterval(() => {
         const seconds = Math.floor((Date.now() - started) / 1000);
         if (elapsedNode && seconds >= SHOW_ELAPSED_AFTER) {
-            elapsedNode.textContent = seconds + 's';
+            elapsedNode.textContent = T('{n}s', { n: seconds });
             elapsedNode.classList.toggle('loading-slow', seconds >= 20);
         }
         if (labelNode && seconds === 20) {
-            labelNode.textContent = label + ' \u2014 still working';
+            labelNode.textContent = T('{label} — still working', { label: label });
         }
     }, 1000);
 
@@ -1426,16 +1430,16 @@ function renderCardError(id, label, err, retry) {
     if (!card) {
         return;
     }
-    const button = el('button', { type: 'button', class: 'small', text: 'Retry' });
+    const button = el('button', { type: 'button', class: 'small', text: T('Retry') });
     button.addEventListener('click', () => {
         button.disabled = true;
         retry();
     });
 
     const box = el('div', { class: 'card-error', role: 'alert' }, [
-        el('h4', { text: 'This section could not load' }),
+        el('h4', { text: T('This section could not load') }),
         el('p', { text: String(err && err.message ? err.message : err) }),
-        el('p', { class: 'faint', text: 'Everything else on this page is unaffected.' }),
+        el('p', { class: 'faint', text: T('Everything else on this page is unaffected.') }),
         el('div', { class: 'card-error-actions' }, [button])
     ]);
 
@@ -1587,13 +1591,13 @@ export async function runJob(kind, mountId, opts) {
            way to retry a scan that lost its connection halfway was to reload the page. `polling`
            is released in the finally below before the button can be pressed, so the retry is a
            genuine restart and not a second loop over the first. */
-        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
         again.addEventListener('click', () => {
             again.disabled = true;
             runJob(kind, mountId, options);
         });
         mount.replaceChildren(el('div', { class: 'card-error', role: 'alert' }, [
-            el('h4', { text: 'The operation could not run' }),
+            el('h4', { text: T('The operation could not run') }),
             el('p', { text: String(err && err.message ? err.message : err) }),
             el('div', { class: 'card-error-actions' }, [again])
         ]));
@@ -1641,7 +1645,7 @@ export async function reattachJob(kind, mountId, opts) {
  */
 function requireJob(job) {
     if (!job || typeof job !== 'object' || typeof job.id !== 'string' || job.id === '') {
-        throw new Error('The panel did not answer with a usable job state, so the operation cannot be followed. Reload the page and start it again.');
+        throw new Error(T('The panel did not answer with a usable job state, so the operation cannot be followed. Reload the page and start it again.'));
     }
 }
 
@@ -1653,6 +1657,16 @@ function requireJob(job) {
  * rather than as another sentence. It scrolls inside itself, so a long path or a long platform
  * message cannot widen the page it is on.
  */
+function jobState(state) {
+    return {
+        done: T('done'),
+        failed: T('failed'),
+        running: T('running'),
+        cancelled: T('cancelled'),
+        pending: T('pending')
+    }[String(state)] || String(state);
+}
+
 function renderJob(mount, job, kind, options) {
     if (!job) {
         return;
@@ -1664,11 +1678,11 @@ function renderJob(mount, job, kind, options) {
     ]);
 
     const head = el('div', { class: 'job-head' }, [
-        el('span', { class: 'job-title', text: options.title || 'Operation' }),
+        el('span', { class: 'job-title', text: options.title || T('Operation') }),
         el('span', {
             class: 'job-meta',
-            text: (running ? 'step ' + Math.min(job.step + 1, job.total) + ' of ' + job.total : job.state) +
-                ' \u00b7 ' + job.elapsed + 's'
+            text: (running ? T('step {n} of {total}', { n: Math.min(job.step + 1, job.total), total: job.total }) : jobState(job.state)) +
+                ' \u00b7 ' + T('{n}s', { n: job.elapsed })
         })
     ]);
 
@@ -1679,7 +1693,7 @@ function renderJob(mount, job, kind, options) {
         const li = el('li', { class: 'job-step-' + state }, [
             el('span', { class: 'job-mark', 'aria-hidden': 'true', text: mark }),
             el('span', { text: step.label }),
-            el('span', { class: 'job-step-note', text: step.note || (state === 'pending' ? '' : state) })
+            el('span', { class: 'job-step-note', text: step.note || (state === 'pending' ? '' : jobState(state)) })
         ]);
         if (step.detail) {
             li.appendChild(el('span', { class: 'job-step-detail', text: step.detail }));
@@ -1692,10 +1706,10 @@ function renderJob(mount, job, kind, options) {
 
     const actions = el('div', { class: 'job-actions' });
     if (running) {
-        const cancel = el('button', { type: 'button', class: 'ghost small', text: 'Cancel' });
+        const cancel = el('button', { type: 'button', class: 'ghost small', text: T('Cancel') });
         cancel.addEventListener('click', async () => {
             cancel.disabled = true;
-            cancel.textContent = 'Cancelling\u2026';
+            cancel.textContent = T('Cancelling…');
             try {
                 await post({ action: 'job_cancel', id: job.id });
             } catch (e) {
@@ -1703,7 +1717,7 @@ function renderJob(mount, job, kind, options) {
                    "Cancel failed" and stay disabled forever — a dead control reporting a dead
                    end, on the one operation the operator was trying to stop. */
                 cancel.disabled = false;
-                cancel.textContent = 'Cancel failed — try again';
+                cancel.textContent = T('Cancel failed — try again');
                 cancel.title = String(e && e.message ? e.message : e);
             }
         });
@@ -1714,7 +1728,7 @@ function renderJob(mount, job, kind, options) {
        into a meta line beside the elapsed time and nothing else did anything with it, so a scan
        that failed on the server looked exactly like one that had finished. */
     if (!running && String(job.state) === 'failed') {
-        const again = el('button', { type: 'button', class: 'small', text: 'Run it again' });
+        const again = el('button', { type: 'button', class: 'small', text: T('Run it again') });
         again.addEventListener('click', () => {
             again.disabled = true;
             runJob(kind, mount.id, options);
@@ -1727,7 +1741,7 @@ function renderJob(mount, job, kind, options) {
         bar,
         el('div', { class: 'loading' }, [
             el('span', { class: 'loading-label', text: job.label || '' }),
-            el('span', { class: 'loading-elapsed', text: running ? job.elapsed + 's' : '' })
+            el('span', { class: 'loading-elapsed', text: running ? T('{n}s', { n: job.elapsed }) : '' })
         ]),
         steps,
         actions
@@ -1812,7 +1826,8 @@ export function initTheme() {
     const button = byId('theme-toggle');
     const label = () => {
         if (button) {
-            button.textContent = 'Theme: ' + themeMode();
+            const mode = themeMode();
+            button.textContent = T('Theme: {mode}', { mode: { auto: T('auto'), light: T('light'), dark: T('dark') }[mode] || mode });
         }
     };
     label();

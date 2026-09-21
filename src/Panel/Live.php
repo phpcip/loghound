@@ -57,6 +57,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Live\Reader;
 use Loghound\Live\Rules;
 use Loghound\Security;
@@ -187,7 +188,7 @@ final class Live extends Controller implements JobHost
 
     public function title(): string
     {
-        return 'Live';
+        return I18n::t('Live');
     }
 
 
@@ -200,7 +201,7 @@ final class Live extends Controller implements JobHost
             'stream'     => $this->stream(),
             'client'     => $this->client(),
             'exclusions' => $this->exclusionsPayload(),
-            default      => ['error' => 'Unknown action'],
+            default      => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -217,17 +218,23 @@ final class Live extends Controller implements JobHost
     {
         $rules = Rules::fromConfig($this->cfg);
 
+        $builtin = Rules::BUILTIN;
+        foreach ($builtin as $key => $spec) {
+            $builtin[$key]['label'] = I18n::t($spec['label']);
+            $builtin[$key]['why'] = I18n::t($spec['why']);
+        }
+
         return [
             'rules'   => $rules->all(),
             'active'  => $rules->activeCount(),
-            'fields'  => Rules::FIELDS,
+            'fields'  => array_map([I18n::class, 't'], Rules::FIELDS),
             'max'     => Rules::MAX_RULES,
 
             /* THE BUILT-IN GROUPS AND WHICH ARE ON. Sent as the catalogue plus the switches
                rather than as rules, because the dialog must not be able to edit or delete one:
                they are a fixed set the operator turns on and off, and the list they type sits
                underneath them. */
-            'builtin' => Rules::BUILTIN,
+            'builtin' => $builtin,
             'builtin_on' => $rules->builtinOn(),
         ];
     }
@@ -317,7 +324,7 @@ final class Live extends Controller implements JobHost
         try {
             $this->cfg->save();
         } catch (\Throwable $e) {
-            \json_out(['error' => 'The rules could not be written to the configuration file.'], 500);
+            \json_out(['error' => I18n::t('The rules could not be written to the configuration file.')], 500);
         }
 
         /* THE FILE IS PHP, SO THE OPCODE CACHE HAS TO BE TOLD. Settings::persist() does this and
@@ -351,13 +358,13 @@ final class Live extends Controller implements JobHost
     {
         $csv = is_string($_POST['csv'] ?? null) ? $_POST['csv'] : '';
         if (strlen($csv) > self::IMPORT_MAX_BYTES) {
-            \json_out(['error' => 'That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.'], 413);
+            \json_out(['error' => I18n::t('That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.')], 413);
         }
 
         $imported = Rules::fromCsv($csv);
         if ($imported['rules'] === [] && $imported['on'] === [] && $imported['off'] === []) {
-            \json_out(['error' => 'Nothing was imported: the file has no table with Field and Pattern columns. '
-                . 'Import a CSV exported from this dialog.'], 422);
+            \json_out(['error' => I18n::t('Nothing was imported: the file has no table with Field and Pattern columns. '
+                . 'Import a CSV exported from this dialog.')], 422);
         }
 
         $stored = Rules::fromConfig($this->cfg);
@@ -385,7 +392,7 @@ final class Live extends Controller implements JobHost
         try {
             $this->cfg->save();
         } catch (\Throwable $e) {
-            \json_out(['error' => 'The rules could not be written to the configuration file.'], 500);
+            \json_out(['error' => I18n::t('The rules could not be written to the configuration file.')], 500);
         }
 
         if (function_exists('opcache_invalidate')) {
@@ -675,10 +682,10 @@ final class Live extends Controller implements JobHost
     {
         $ip = self::text('ip', 64);
         if ($ip === '') {
-            return ['error' => 'No client was named.'];
+            return ['error' => I18n::t('No client was named.')];
         }
         if (preg_match(self::ADDRESS_RE, $ip) !== 1) {
-            return ['error' => 'That is not the shape of a client address, so there is nothing to look up.'];
+            return ['error' => I18n::t('That is not the shape of a client address, so there is nothing to look up.')];
         }
 
         $hosts = $this->selectedHosts();
@@ -735,9 +742,10 @@ final class Live extends Controller implements JobHost
             'verdicts' => self::countedBuckets($facets, 'verdicts'),
             'classes'  => self::countedBuckets($facets, 'classes'),
             'visits'   => $visits,
-            'page'     => Paging::block($start, $rows, (int) $res['numFound'], 'visits', count($visits)),
+            'page'     => Paging::block($start, $rows, (int) $res['numFound'], I18n::t('visits'), count($visits)),
             'demo'     => $this->gw->isDemo(),
             'error'    => $this->gw->error(),
+            'error_transport' => $this->gw->error() !== null,
         ];
     }
 
@@ -823,15 +831,15 @@ final class Live extends Controller implements JobHost
         self::cardOpen(
             'lv-stream',
             Layout::cardNum(self::SECTIONS, 'lv-stream'),
-            'As it happens',
-            'Requests as they reach the log, one row each.',
-            '<div class="controls"><button type="button" class="small" id="lv-toggle">Pause</button></div>'
+            I18n::t('As it happens'),
+            I18n::t('Requests as they reach the log, one row each.'),
+            '<div class="controls"><button type="button" class="small" id="lv-toggle">' . I18n::html('Pause') . '</button></div>'
         );
 
         echo '<div class="live-bar">'
             . '<span class="live-state" id="lv-state" data-state="off">'
             . '<span class="live-dot" aria-hidden="true"></span>'
-            . '<span id="lv-state-text">Connecting</span>'
+            . '<span id="lv-state-text">' . I18n::html('Connecting') . '</span>'
             . '</span>'
             . '<span class="live-counts muted" id="lv-counts"></span>'
             . '</div>';
@@ -843,18 +851,19 @@ final class Live extends Controller implements JobHost
            touches what is stored: that is per hostname, in Settings. */
         echo '<div class="live-tools">'
             . '<input type="search" id="lv-find" class="live-find" '
-            . 'placeholder="Filter these rows — host, address, path, status, client" '
-            . 'autocomplete="off" spellcheck="false" aria-label="Filter the rows on screen">'
-            . '<button type="button" class="small" id="lv-excl">Exclusions</button>'
+            . 'placeholder="' . I18n::html('Filter these rows — host, address, path, status, client') . '" '
+            . 'autocomplete="off" spellcheck="false" aria-label="' . I18n::html('Filter the rows on screen') . '">'
+            . '<button type="button" class="small" id="lv-excl">' . I18n::html('Exclusions') . '</button>'
             . '<span class="muted live-excl-note" id="lv-excl-note"></span>'
             . '</div>';
 
         echo '<div class="live-chart" id="lv-chart" role="img" '
-            . 'aria-label="Requests per second, as they arrive"></div>';
+            . 'aria-label="' . I18n::html('Requests per second, as they arrive') . '"></div>';
 
-        echo '<div class="note"><p><strong>One line is not a session.</strong> A verdict is scored over '
+        echo '<div class="note"><p><strong>' . I18n::html('One line is not a session.') . '</strong> '
+            . I18n::html('A verdict is scored over '
             . 'a whole visit; the last column says what this request shows. Open a row for what the index '
-            . 'already knows about the client.</p></div>';
+            . 'already knows about the client.') . '</p></div>';
 
         /* SIX COLUMNS, AND THE REQUEST GETS WHAT THE SEVENTH WAS USING. "This line" said the
            same thing as Client — "no User-Agent" beside "No User-Agent", "curl" beside "Says
@@ -866,15 +875,15 @@ final class Live extends Controller implements JobHost
             . '<col style="width:8%"><col style="width:15%"><col style="width:15%">'
             . '<col style="width:40%"><col style="width:6%"><col style="width:16%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Time</th>'
-            . '<th scope="col">Host</th>'
-            . '<th scope="col">Client address</th>'
-            . '<th scope="col">Request</th>'
-            . '<th scope="col" class="num">Status</th>'
-            . '<th scope="col">Client</th>'
+            . '<th scope="col">' . I18n::html('Time') . '</th>'
+            . '<th scope="col">' . I18n::html('Host') . '</th>'
+            . '<th scope="col">' . I18n::html('Client address') . '</th>'
+            . '<th scope="col">' . I18n::html('Request') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Status') . '</th>'
+            . '<th scope="col">' . I18n::html('Client') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
-        echo '<p class="pop" id="lv-empty-note">Waiting for the first request.</p>';
+        echo '<p class="pop" id="lv-empty-note">' . I18n::html('Waiting for the first request.') . '</p>';
 
         self::watchingBlock($watching);
 
@@ -892,12 +901,12 @@ final class Live extends Controller implements JobHost
      */
     private static function watchingBlock(array $watching): void
     {
-        echo '<details class="fold live-sources"><summary>Files being read ('
-            . count($watching) . ')</summary>';
+        echo '<details class="fold live-sources"><summary>'
+            . I18n::html('Files being read ({n})', ['n' => (string) count($watching)]) . '</summary>';
 
         if ($watching === []) {
-            echo '<p class="muted">No log source is configured, or none of the configured paths is '
-                . 'readable by the panel. Settings is where the sources are listed.</p></details>';
+            echo '<p class="muted">' . I18n::html('No log source is configured, or none of the configured paths is '
+                . 'readable by the panel. Settings is where the sources are listed.') . '</p></details>';
             return;
         }
 
@@ -905,20 +914,20 @@ final class Live extends Controller implements JobHost
             . '<col style="width:34%"><col style="width:24%">'
             . '<col style="width:24%"><col style="width:18%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">File</th><th scope="col">Pinned host</th>'
-            . '<th scope="col">Format</th><th scope="col">Readable</th>'
+            . '<th scope="col">' . I18n::html('File') . '</th><th scope="col">' . I18n::html('Pinned host') . '</th>'
+            . '<th scope="col">' . I18n::html('Format') . '</th><th scope="col">' . I18n::html('Readable') . '</th>'
             . '</tr></thead><tbody>';
 
         foreach ($watching as $src) {
             echo '<tr>'
                 . '<td class="mono">' . Security::esc($src['label']) . '</td>'
                 . '<td>' . ($src['host'] === null
-                    ? '<span class="muted">every host in the line</span>'
+                    ? '<span class="muted">' . I18n::html('every host in the line') . '</span>'
                     : Security::esc($src['host'])) . '</td>'
                 . '<td class="mono">' . Security::esc(mb_substr($src['format'], 0, 40)) . '</td>'
                 . '<td>' . ($src['readable']
-                    ? '<span class="state">yes</span>'
-                    : '<span class="state">no</span>') . '</td>'
+                    ? '<span class="state">' . I18n::html('yes') . '</span>'
+                    : '<span class="state">' . I18n::html('no') . '</span>') . '</td>'
                 . '</tr>';
         }
 

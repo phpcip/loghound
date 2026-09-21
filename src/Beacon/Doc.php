@@ -35,6 +35,7 @@ declare(strict_types=1);
 namespace Loghound\Beacon;
 
 use Loghound\Config;
+use Loghound\I18n;
 
 final class Doc
 {
@@ -128,101 +129,103 @@ final class Doc
             [
                 'name'    => 'data-endpoint',
                 'kind'    => 'attribute',
-                'what'    => 'Collector URL, when it is not a sibling of `b.js`.',
-                'default' => 'the script’s own `src` with `' . self::FILE . '` → `' . self::COLLECTOR . '`',
-                'limits'  => 'Any URL. Set it only if you serve the script from a CDN or a different path.',
+                'what'    => I18n::t('Collector URL, when it is not a sibling of `b.js`.'),
+                'default' => I18n::t('the script’s own `src` with `{file}` → `{collector}`', ['file' => self::FILE, 'collector' => self::COLLECTOR]),
+                'limits'  => I18n::t('Any URL. Set it only if you serve the script from a CDN or a different path.'),
                 'example' => 'data-endpoint="https://loghound.example.com/collect.php"',
                 'switch'  => null,
             ],
             [
                 'name'    => 'data-hb',
                 'kind'    => 'attribute',
-                'what'    => 'Heartbeat interval, in milliseconds. A beat is sent only when engaged time '
-                    . 'actually advanced, so an idle tab produces one, not hundreds.',
+                'what'    => I18n::t('Heartbeat interval, in milliseconds. A beat is sent only when engaged time '
+                    . 'actually advanced, so an idle tab produces one, not hundreds.'),
                 'default' => '15000',
-                'limits'  => 'Integer, clamped to 2 000–300 000. Anything else is ignored and the default '
-                    . 'is used.',
+                'limits'  => I18n::t('Integer, clamped to 2 000–300 000. Anything else is ignored and the default '
+                    . 'is used.'),
                 'example' => 'data-hb="30000"',
                 'switch'  => null,
             ],
             [
                 'name'    => 'data-idle',
                 'kind'    => 'attribute',
-                'what'    => 'How long after a real interaction a visitor still counts as engaged, in '
-                    . 'milliseconds. This is the definition of the **Engaged** clock.',
+                'what'    => I18n::t('How long after a real interaction a visitor still counts as engaged, in '
+                    . 'milliseconds. This is the definition of the **Engaged** clock.'),
                 'default' => '30000',
-                'limits'  => 'Integer, clamped to 1 000–600 000.',
+                'limits'  => I18n::t('Integer, clamped to 1 000–600 000.'),
                 'example' => 'data-idle="60000"',
                 'switch'  => null,
             ],
             [
                 'name'    => 'data-ident',
                 'kind'    => 'attribute',
-                'what'    => 'The email address of the signed-in visitor. **A valid email is the only thing '
-                    . 'that makes a visitor signed in.** Never guessed.',
-                'default' => 'absent, and absent is not empty',
-                'limits'  => 'Must be a valid email address of at most ' . \Loghound\Beacon::MAX_IDENT
-                    . ' bytes. Anything else is discarded.',
+                'what'    => I18n::t('The email address of the signed-in visitor. **A valid email is the only thing '
+                    . 'that makes a visitor signed in.** Never guessed.'),
+                'default' => I18n::t('absent, and absent is not empty'),
+                'limits'  => I18n::t('Must be a valid email address of at most {n} bytes. Anything else is discarded.', ['n' => \Loghound\Beacon::MAX_IDENT]),
                 'example' => 'data-ident="<?= htmlspecialchars($user->email, ENT_QUOTES) ?>"',
                 'switch'  => null,
             ],
             [
                 'name'    => 'data-signed-in',
                 'kind'    => 'attribute',
-                'what'    => 'Lets a page say the visitor is **not** signed in. Signed in is true only when '
-                    . '`data-ident` carries a valid email; this flag alone never marks anybody signed in.',
-                'default' => 'absent — which means **not reported**, never “no”. An attribute that is '
-                    . 'present but empty is an answer, and the answer is **no**',
-                'limits'  => '`1`/`0` or `true`/`false`. An empty attribute — the usual shape of a '
+                'what'    => I18n::t('Lets a page say the visitor is **not** signed in. Signed in is true only when '
+                    . '`data-ident` carries a valid email; this flag alone never marks anybody signed in.'),
+                'default' => I18n::t('absent — which means **not reported**, never “no”. An attribute that is '
+                    . 'present but empty is an answer, and the answer is **no**'),
+                'limits'  => I18n::t('`1`/`0` or `true`/`false`. An empty attribute — the usual shape of a '
                     . 'template that renders nothing for a visitor who is not signed in — is read as '
                     . '**false**, so `data-signed-in="{{ user.id }}"` works unchanged for both. Any '
-                    . 'other value is read as not reported.',
+                    . 'other value is read as not reported.'),
                 'example' => 'data-signed-in="<?= $user->isSignedIn() ? \'1\' : \'0\' ?>"',
                 'switch'  => 'beacon.store_signed_in',
             ],
             [
                 'name'    => 'data-params',
                 'kind'    => 'attribute',
-                'what'    => 'URL query parameter **names** whose values are kept as search terms. Nothing '
-                    . 'else in the query string is read.',
-                'default' => 'absent — no parameter is collected',
-                'limits'  => 'Comma separated. At most ' . \Loghound\Beacon::MAX_TERMS . ' names, each at '
+                'what'    => I18n::t('URL query parameter **names** whose values are kept as search terms. Nothing '
+                    . 'else in the query string is read.'),
+                'default' => I18n::t('absent — no parameter is collected'),
+                'limits'  => I18n::t('Comma separated. At most {terms} names, each at '
                     . 'most 40 characters of `a-z 0-9 _ - . [ ]`. Each value is capped at '
-                    . \Loghound\Beacon::MAX_TERM . ' characters and dropped, not truncated, if longer.',
+                    . '{term} characters and dropped, not truncated, if longer.', [
+                    'terms' => \Loghound\Beacon::MAX_TERMS,
+                    'term'  => \Loghound\Beacon::MAX_TERM,
+                ]),
                 'example' => 'data-params="q,category,sort"',
                 'switch'  => 'beacon.query_params',
             ],
             [
                 'name'    => 'window.LoghoundIdent',
                 'kind'    => 'global',
-                'what'    => 'The same value as `data-ident`, for a template where adding an attribute to '
-                    . 'the tag is awkward but setting a variable above it is not.',
+                'what'    => I18n::t('The same value as `data-ident`, for a template where adding an attribute to '
+                    . 'the tag is awkward but setting a variable above it is not.'),
                 'default' => 'unset',
-                'limits'  => 'A string. Must be set **before** b.js executes — with `defer` that means '
-                    . 'anywhere in the document. The attribute wins if both are present.',
+                'limits'  => I18n::t('A string. Must be set **before** b.js executes — with `defer` that means '
+                    . 'anywhere in the document. The attribute wins if both are present.'),
                 'example' => '<script>window.LoghoundIdent = "ada@example.com";</script>',
                 'switch'  => null,
             ],
             [
                 'name'    => 'window.LoghoundSignedIn',
                 'kind'    => 'global',
-                'what'    => 'The same value as `data-signed-in`.',
-                'default' => 'unset — not reported',
-                'limits'  => 'A real boolean, or the same strings the attribute accepts. Must be set '
-                    . 'before b.js executes.',
+                'what'    => I18n::t('The same value as `data-signed-in`.'),
+                'default' => I18n::t('unset — not reported'),
+                'limits'  => I18n::t('A real boolean, or the same strings the attribute accepts. Must be set '
+                    . 'before b.js executes.'),
                 'example' => '<script>window.LoghoundSignedIn = true;</script>',
                 'switch'  => 'beacon.store_signed_in',
             ],
             [
                 'name'    => 'window.loghound.identify(ident, signedIn)',
                 'kind'    => 'function',
-                'what'    => 'Attach either value **after** the page has loaded — a single-page '
+                'what'    => I18n::t('Attach either value **after** the page has loaded — a single-page '
                     . 'application that signs somebody in without a navigation, which no attribute can '
-                    . 'express.',
-                'default' => 'never called',
-                'limits'  => 'Both arguments optional; signed in requires a valid email as `ident`. **Makes no request of its own:** '
+                    . 'express.'),
+                'default' => I18n::t('never called'),
+                'limits'  => I18n::t('Both arguments optional; signed in requires a valid email as `ident`. **Makes no request of its own:** '
                     . 'the values ride the heartbeat that is already scheduled. Safe to call with '
-                    . 'anything — it cannot throw into your code.',
+                    . 'anything — it cannot throw into your code.'),
                 'example' => 'window.loghound.identify(user.email, true);',
                 'switch'  => 'beacon.store_signed_in',
             ],
@@ -248,10 +251,10 @@ final class Doc
         return [
             [
                 'key'   => 'attributes',
-                'title' => 'Attributes on the script tag',
-                'when'  => '**When your server already knows who it is at render time.** The normal case: '
+                'title' => I18n::t('Attributes on the script tag'),
+                'when'  => I18n::t('**When your server already knows who it is at render time.** The normal case: '
                     . 'the template that renders the page renders the tag, in the same response, so there '
-                    . 'is no second request, no extra script and no ordering problem.',
+                    . 'is no second request, no extra script and no ordering problem.'),
                 'code'  => '<script src="' . $src . '"' . "\n"
                     . '        data-ident="<?= htmlspecialchars($user->email, ENT_QUOTES) ?>"' . "\n"
                     . '        data-signed-in="<?= $user->isSignedIn() ? \'1\' : \'0\' ?>"' . "\n"
@@ -259,11 +262,11 @@ final class Doc
             ],
             [
                 'key'   => 'globals',
-                'title' => '`window.LoghoundIdent` / `window.LoghoundSignedIn`',
-                'when'  => '**When adding an attribute to the tag is awkward but setting a variable above '
+                'title' => I18n::t('`window.LoghoundIdent` / `window.LoghoundSignedIn`'),
+                'when'  => I18n::t('**When adding an attribute to the tag is awkward but setting a variable above '
                     . 'it is not** — a tag manager, a templating system that owns the script element, a '
                     . 'CMS block you cannot edit. They must be set **before** b.js executes, which with '
-                    . '`defer` means anywhere in the document.',
+                    . '`defer` means anywhere in the document.'),
                 'code'  => '<script>' . "\n"
                     . '  window.LoghoundIdent = "<?= htmlspecialchars($user->email, ENT_QUOTES) ?>";' . "\n"
                     . '  window.LoghoundSignedIn = <?= $user->isSignedIn() ? \'true\' : \'false\' ?>;' . "\n"
@@ -271,11 +274,11 @@ final class Doc
             ],
             [
                 'key'   => 'identify',
-                'title' => '`window.loghound.identify(ident, signedIn)`',
-                'when'  => '**When the identity arrives after the page has loaded** — a single-page '
+                'title' => I18n::t('`window.loghound.identify(ident, signedIn)`'),
+                'when'  => I18n::t('**When the identity arrives after the page has loaded** — a single-page '
                     . 'application that signs somebody in without a navigation, which no attribute can '
                     . 'express. It **makes no request of its own**: the values ride the heartbeat that is '
-                    . 'already scheduled, so attaching an identity costs your site nothing extra.',
+                    . 'already scheduled, so attaching an identity costs your site nothing extra.'),
                 'code'  => 'window.loghound.identify(user.email, true);',
             ],
         ];
@@ -296,92 +299,92 @@ final class Doc
         return [
             [
                 'key'   => 'storage',
-                'title' => 'What is stored, and what is quietly thrown away',
+                'title' => I18n::t('What is stored, and what is quietly thrown away'),
                 'paras' => [
-                    'default' => 'An identity your site declares is **kept**, with no setting to turn on first. '
+                    'default' => I18n::t('An identity your site declares is **kept**, with no setting to turn on first. '
                         . 'There used to be one, `beacon.store_identity`, and it defaulted to off — so a '
                         . 'site that pasted `data-ident` had the address dropped by the collector, saw '
                         . 'nothing in the panel, and got no error explaining why. Loghound still never '
-                        . 'guesses an identity: leave the attribute out and there is none.',
-                    'independent' => '`beacon.store_signed_in` is on in a new installation. A visitor is signed in '
+                        . 'guesses an identity: leave the attribute out and there is none.'),
+                    'independent' => I18n::t('`beacon.store_signed_in` is on in a new installation. A visitor is signed in '
                         . 'only when the page sends a valid email address; no flag and no other signal ever '
                         . 'marks anybody signed in. The email is personal data that lands on the session '
                         . 'document, shows in the panel, lives in the search index and sits in every backup '
-                        . 'of it until retention deletes the session.',
-                    'third_state' => 'A site that says nothing is **not reported**, which is a third state and not '
+                        . 'of it until retention deletes the session.'),
+                    'third_state' => I18n::t('A site that says nothing is **not reported**, which is a third state and not '
                         . '“anonymous”. `signed_in_b` is written only when a page actually said one or '
                         . 'the other, so a site that has not adopted the attribute cannot be read as a '
-                        . 'site full of anonymous visitors.',
+                        . 'site full of anonymous visitors.'),
                 ],
             ],
             [
                 'key'   => 'params',
-                'title' => 'Search terms, and the two halves of the whitelist',
+                'title' => I18n::t('Search terms, and the two halves of the whitelist'),
                 'paras' => [
-                    'names' => '`data-params` names the URL query parameters whose values are kept — `q`, `s`, '
+                    'names' => I18n::t('`data-params` names the URL query parameters whose values are kept — `q`, `s`, '
                         . '`search`, whatever your search box uses. Nothing else in the query string is '
                         . 'read. This is the one place Loghound stores something a person typed rather '
                         . 'than a measurement or a hash, so it is a whitelist of parameter **names** and '
                         . 'never the whole URL: a page address carries session tokens and password-reset '
-                        . 'codes, and none of those may become a facet value.',
-                    'server_half' => 'The attribute is only half of it. `beacon.query_params` on the server is the other '
+                        . 'codes, and none of those may become a facet value.'),
+                    'server_half' => I18n::t('The attribute is only half of it. `beacon.query_params` on the server is the other '
                         . 'half and it is authoritative: a name the page sends and the server has not '
                         . 'listed is discarded on arrival. The attribute is a promise to the visitor '
                         . 'about what leaves their browser; the setting is the decision about what is '
                         . 'stored. Both are empty in a new installation, so upgrading the beacon cannot '
-                        . 'start shipping URLs that were not being shipped before.',
+                        . 'start shipping URLs that were not being shipped before.'),
                 ],
             ],
             [
                 'key'   => 'standalone',
-                'title' => 'A site on another server',
+                'title' => I18n::t('A site on another server'),
                 'paras' => [
-                    'allowlist' => 'The beacon works unchanged on a host this machine has no access log for — a search '
+                    'allowlist' => I18n::t('The beacon works unchanged on a host this machine has no access log for — a search '
                         . 'page, a marketing site, anything on another server. Paste the same snippet, '
                         . 'and nothing else has to be installed there. The page reports its own hostname '
                         . 'and a session is created for it when that hostname is listed in '
-                        . '`beacon.allowed_hosts`, which is empty in a new installation.',
-                    'limits' => '**Treat the allowlist as a permission, not as a password.** A browser cannot forge '
+                        . '`beacon.allowed_hosts`, which is empty in a new installation.'),
+                    'limits' => I18n::t('**Treat the allowlist as a permission, not as a password.** A browser cannot forge '
                         . 'the `Origin` header, so an ordinary web page cannot impersonate a site you '
                         . 'listed. Anything that is not a browser can send any header it likes, so '
                         . 'somebody who knows a hostname is listed can fabricate sessions attributed to '
                         . 'it. That exposure is bounded to the hosts you listed, it cannot read anything '
                         . 'and it cannot reach your log-backed data — and it is exactly why a session '
                         . 'measured by the beacon alone is stored as `planes_s:beacon_only` and shown as '
-                        . 'single-plane wherever it is counted.',
+                        . 'single-plane wherever it is counted.'),
                 ],
             ],
             [
                 'key'   => 'ordering',
-                'title' => 'What has to be in the page before b.js runs',
+                'title' => I18n::t('What has to be in the page before b.js runs'),
                 'paras' => [
-                    'globals' => 'The six `data-` attributes are read off the script tag itself, so where they sit '
+                    'globals' => I18n::t('The six `data-` attributes are read off the script tag itself, so where they sit '
                         . 'in the document cannot be wrong. The two globals can be: '
                         . '`window.LoghoundIdent` and `window.LoghoundSignedIn` are read **once**, at the '
                         . 'moment b.js executes, so a script that sets them after that has set them for '
                         . 'nothing — the beacon has already sent its first payload and neither value is '
                         . 'in it. With `defer` on the tag, b.js runs only after the document is parsed, '
-                        . 'which means anywhere in the page is early enough.',
-                    'late' => 'For a value that genuinely is not known until later — a single-page application '
+                        . 'which means anywhere in the page is early enough.'),
+                    'late' => I18n::t('For a value that genuinely is not known until later — a single-page application '
                         . 'that signs somebody in without a navigation — the globals are the wrong '
                         . 'instrument and `window.loghound.identify(ident, signedIn)` is the right one. It '
                         . 'may be called at any point after b.js has run, and it sends nothing by itself: '
-                        . 'the values ride the next heartbeat.',
+                        . 'the values ride the next heartbeat.'),
                 ],
             ],
             [
                 'key'   => 'csp',
-                'title' => 'Content-Security-Policy on the measured site',
+                'title' => I18n::t('Content-Security-Policy on the measured site'),
                 'paras' => [
-                    'directives' => 'A site that sends a Content-Security-Policy needs two directives, and the second is '
+                    'directives' => I18n::t('A site that sends a Content-Security-Policy needs two directives, and the second is '
                         . 'the one that gets forgotten: `script-src` for the tag and `connect-src` for '
                         . 'the collector the beacon posts back to. Without `connect-src` the browser '
                         . 'blocks the POST silently — the script loads, nothing arrives, and there is no '
-                        . 'error to find.',
-                    'fallback' => 'Both are needed even though the beacon tries `navigator.sendBeacon` first: a '
+                        . 'error to find.'),
+                    'fallback' => I18n::t('Both are needed even though the beacon tries `navigator.sendBeacon` first: a '
                         . 'browser that does not have it, or refuses the call, falls back to `fetch`, and '
                         . '`connect-src` governs both. The beacon uses no `eval`, no `new Function`, no '
-                        . 'inline handler and no `innerHTML`, so nothing else has to be relaxed.',
+                        . 'inline handler and no `innerHTML`, so nothing else has to be relaxed.'),
                 ],
             ],
         ];
@@ -413,7 +416,7 @@ final class Doc
      */
     public static function rationale(): string
     {
-        return 'If your site sends a Content-Security-Policy, the browser will refuse this script '
+        return I18n::t('If your site sends a Content-Security-Policy, the browser will refuse this script '
             . 'until you allow it: add this panel\'s origin to script-src and to connect-src, '
             . 'because the tag loads from there and the beacon posts back to the same place. '
             . 'Miss connect-src and the browser blocks the POST silently, so the script loads and '
@@ -422,7 +425,7 @@ final class Doc
             . 'listed in beacon.allowed_hosts, which is a permission rather than a password. '
             . 'Without the beacon Loghound still works, but the execution plane is blind — '
             . 'headless automation is inferred rather than proven, and time-on-site falls back '
-            . 'to the weak log-derived number every other log analyser reports.';
+            . 'to the weak log-derived number every other log analyser reports.');
     }
 
     /**
@@ -439,7 +442,7 @@ final class Doc
      */
     public static function optionsNote(): string
     {
-        return 'Optional, and only your site can supply them: add data-signed-in="1" or "0" to '
+        return I18n::t('Optional, and only your site can supply them: add data-signed-in="1" or "0" to '
             . 'record whether the visitor was signed in, and data-ident="..." to attach an '
             . 'identity — an email address, a customer number, whatever you call the person. '
             . 'Omit an attribute and Loghound stores nothing for it; it never guesses either, '
@@ -453,10 +456,10 @@ final class Doc
             . 'come from window.LoghoundIdent and window.LoghoundSignedIn, set before b.js runs, '
             . 'or from window.loghound.identify(ident, signedIn) when somebody signs in after the '
             . 'page loaded; identify() sends nothing of its own, the values ride the heartbeat '
-            . 'that is already scheduled. An identity is truncated to ' . \Loghound\Beacon::MAX_IDENT
-            . ' bytes. data-params names the URL query parameters kept as search terms, at most '
-            . \Loghound\Beacon::MAX_TERMS . ' of them and each value capped at '
-            . \Loghound\Beacon::MAX_TERM . ' characters, and the server\'s own beacon.query_params '
+            . 'that is already scheduled. An identity is truncated to {ident} '
+            . 'bytes. data-params names the URL query parameters kept as search terms, at most '
+            . '{terms} of them and each value capped at '
+            . '{term} characters, and the server\'s own beacon.query_params '
             . 'list decides which of those names are stored — both are empty until you fill them '
             . 'in, and no other part of the query string is ever read. The three remaining '
             . 'attributes tune the script itself and nothing can discard what they do: data-hb is '
@@ -464,7 +467,11 @@ final class Doc
             . 'data-idle is how long after a real interaction a visitor still counts as engaged '
             . 'and defaults to 30000, clamped to 1000-600000; data-endpoint overrides the '
             . 'collector URL, which otherwise is the script\'s own src with b.js swapped for '
-            . 'collect.php, and is only needed behind a CDN or a different path.';
+            . 'collect.php, and is only needed behind a CDN or a different path.', [
+            'ident' => \Loghound\Beacon::MAX_IDENT,
+            'terms' => \Loghound\Beacon::MAX_TERMS,
+            'term'  => \Loghound\Beacon::MAX_TERM,
+        ]);
     }
 
     /**
@@ -518,7 +525,7 @@ final class Doc
     public static function optionState(?string $switch, Config $cfg): array
     {
         if ($switch === null) {
-            return ['state' => 'always', 'detail' => 'no setting gates this'];
+            return ['state' => 'always', 'detail' => I18n::t('no setting gates this')];
         }
 
         if ($switch === 'beacon.query_params') {
@@ -526,7 +533,7 @@ final class Doc
             if ($collected === []) {
                 return [
                     'state'  => 'discarded',
-                    'detail' => '`beacon.query_params` is empty, so no parameter is accepted',
+                    'detail' => I18n::t('`beacon.query_params` is empty, so no parameter is accepted'),
                 ];
             }
             $names = [];
@@ -534,7 +541,7 @@ final class Doc
                 $names[] = '`' . $name . '`';
             }
 
-            return ['state' => 'yes', 'detail' => 'accepting ' . implode(', ', $names)];
+            return ['state' => 'yes', 'detail' => I18n::t('accepting {names}', ['names' => implode(', ', $names)])];
         }
 
         /* `beacon.store_identity` is not here because it no longer exists: an identity the site
@@ -552,7 +559,7 @@ final class Doc
         }
 
         if ($off === []) {
-            return ['state' => 'yes', 'detail' => '`' . $keys[0] . '` is on'];
+            return ['state' => 'yes', 'detail' => I18n::t('{key} is on', ['key' => '`' . $keys[0] . '`'])];
         }
 
         $named = [];
@@ -562,7 +569,7 @@ final class Doc
 
         return [
             'state'  => count($off) === count($keys) ? 'discarded' : 'partly',
-            'detail' => implode(' and ', $named) . (count($off) === 1 ? ' is off' : ' are off'),
+            'detail' => I18n::tn('{keys} is off', '{keys} are off', count($off), ['keys' => implode(' ' . I18n::t('and') . ' ', $named)]),
         ];
     }
 
@@ -609,7 +616,7 @@ final class Doc
         $base = rtrim(trim($base), '/');
         $out = [];
 
-        $out[] = 'THE BEACON — one line of JavaScript, optional, on every page you measure.';
+        $out[] = I18n::t('THE BEACON — one line of JavaScript, optional, on every page you measure.');
         $out[] = '';
 
         if ($base === '') {

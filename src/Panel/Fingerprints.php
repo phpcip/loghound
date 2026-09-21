@@ -30,6 +30,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Fingerprints extends Controller
@@ -92,7 +93,7 @@ final class Fingerprints extends Controller
 
     public function title(): string
     {
-        return 'Fingerprint clusters';
+        return I18n::t('Fingerprint clusters');
     }
 
 
@@ -165,7 +166,7 @@ final class Fingerprints extends Controller
         return match ($action) {
             'clusters' => $this->clusters(),
             'members'  => $this->members(),
-            default    => ['error' => 'Unknown action'],
+            default    => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -313,7 +314,7 @@ final class Fingerprints extends Controller
     {
         $fp = self::text('fp', 64);
         if (!preg_match('/^[a-f0-9]{8,64}$/iD', $fp)) {
-            return $this->envelope(['rows' => [], 'error' => 'Not a fingerprint hash.']);
+            return $this->envelope(['rows' => [], 'error' => I18n::t('Not a fingerprint hash.')]);
         }
 
         $start = Paging::start();
@@ -368,7 +369,7 @@ final class Fingerprints extends Controller
                 $start,
                 $limit,
                 Paging::distinct($f, 'ips'),
-                'addresses',
+                I18n::t('addresses'),
                 count($rows)
             ),
         ]);
@@ -406,20 +407,24 @@ final class Fingerprints extends Controller
      */
     private function explainCard(): void
     {
-        self::cardOpen('fp-explain', '01', 'What this table is');
+        self::cardOpen('fp-explain', '01', I18n::t('What this table is'));
         echo '<div class="explain">';
-        echo '<p>A <strong>fingerprint</strong> is a hash of the request headers <strong>with the IP address '
-            . 'deliberately left out</strong>: User-Agent, Accept, Accept-Language, Accept-Encoding, the Sec-CH-UA set, the '
+        echo '<p>' . I18n::html('A {fingerprint} is a hash of the request headers {without}: User-Agent, Accept, '
+            . 'Accept-Language, Accept-Encoding, the Sec-CH-UA set, the '
             . 'Sec-Fetch set, and the HTTP version. Two requests share a fingerprint when they were made by the '
-            . 'same client software configured the same way — regardless of where they came from.</p>';
-        echo '<p>A person browsing produces a fingerprint seen from one, two, maybe three addresses. A scraper '
-            . 'behind a rotating proxy pool produces <strong>one fingerprint seen from dozens of unrelated '
-            . 'addresses across unrelated networks</strong>, because the proxy swaps the address and nothing else. '
-            . 'Sort by distinct IPs and the fleet is the first row.</p>';
-        echo '<p class="caveat">Two honest caveats. A large corporate NAT or a mobile carrier gateway can put many '
+            . 'same client software configured the same way — regardless of where they came from.', [
+                'fingerprint' => '<strong>' . I18n::html('fingerprint') . '</strong>',
+                'without'     => '<strong>' . I18n::html('with the IP address deliberately left out') . '</strong>',
+            ]) . '</p>';
+        echo '<p>' . I18n::html('A person browsing produces a fingerprint seen from one, two, maybe three addresses. A scraper '
+            . 'behind a rotating proxy pool produces {fleet}, because the proxy swaps the address and nothing else. '
+            . 'Sort by distinct IPs and the fleet is the first row.', [
+                'fleet' => '<strong>' . I18n::html('one fingerprint seen from dozens of unrelated addresses across unrelated networks') . '</strong>',
+            ]) . '</p>';
+        echo '<p class="caveat">' . I18n::html('Two honest caveats. A large corporate NAT or a mobile carrier gateway can put many '
             . 'real people behind one fingerprint, which is why mobile networks are excluded from the fleet flag. '
-            . 'And distinct-IP counts come from Solr&rsquo;s <code>unique()</code>, which is exact for small counts '
-            . 'and approximate for large ones.</p>';
+            . 'And distinct-IP counts come from Solr’s {unique}, which is exact for small counts '
+            . 'and approximate for large ones.', ['unique' => '<code>unique()</code>']) . '</p>';
         echo '</div>';
         self::cardEnd();
     }
@@ -430,18 +435,18 @@ final class Fingerprints extends Controller
     private function clustersCard(): void
     {
         $tools = '<div class="controls">';
-        $tools .= '<label for="fp-sort">Sort</label><select id="fp-sort">';
+        $tools .= '<label for="fp-sort">' . I18n::html('Sort') . '</label><select id="fp-sort">';
         foreach ([
-            'ips'      => 'Distinct IPs',
-            'sessions' => 'Sessions',
-            'hits'     => 'Requests',
-            'score'    => 'Bot score',
-            'recent'   => 'Most recent',
+            'ips'      => I18n::t('Distinct IPs'),
+            'sessions' => I18n::t('Sessions'),
+            'hits'     => I18n::t('Requests'),
+            'score'    => I18n::t('Bot score'),
+            'recent'   => I18n::t('Most recent'),
         ] as $value => $label) {
             $tools .= '<option value="' . Security::esc($value) . '">' . Security::esc($label) . '</option>';
         }
         $tools .= '</select>';
-        $tools .= '<label for="fp-min">Min IPs</label>';
+        $tools .= '<label for="fp-min">' . I18n::html('Min IPs') . '</label>';
         $tools .= '<input type="number" id="fp-min" min="1" max="500" value="1" inputmode="numeric">';
         $tools .= '</div>';
         $tools .= $this->exportTool('clusters');
@@ -449,11 +454,11 @@ final class Fingerprints extends Controller
         self::cardOpen(
             'fp-table',
             '02',
-            'Clusters',
-            'All sessions in the selected range, grouped by header fingerprint.',
+            I18n::t('Clusters'),
+            I18n::t('All sessions in the selected range, grouped by header fingerprint.'),
             $tools
         );
-        self::skeleton('fp-table', 'rows', 0, 'Building fingerprint clusters');
+        self::skeleton('fp-table', 'rows', 0, I18n::t('Building fingerprint clusters'));
 
         echo '<div class="table-wrap"><table id="fp-table-el" class="table-fixed"'
             . Sorting::tableAttrs('fp-table', self::clustersOrder()) . '><colgroup>'
@@ -461,14 +466,14 @@ final class Fingerprints extends Controller
             . '<col style="width:9%"><col style="width:16%"><col style="width:21%">'
             . '<col style="width:17%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col" class="w-expand"><span class="sr-only">Expand</span></th>'
-            . '<th scope="col"' . Sorting::th('signature') . '>Signature</th>'
-            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . ' title="Distinct addresses, and under it the netblocks '
-            . 'and networks they are spread across">IPs</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sess.</th>'
-            . '<th scope="col"' . Sorting::th('activity', 'desc') . '>Activity</th>'
-            . '<th scope="col">Client</th>'
-            . '<th scope="col"' . Sorting::th('verdict', 'desc') . '>Verdict</th>'
+            . '<th scope="col" class="w-expand"><span class="sr-only">' . I18n::html('Expand') . '</span></th>'
+            . '<th scope="col"' . Sorting::th('signature') . '>' . I18n::html('Signature') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . ' title="'
+            . I18n::html('Distinct addresses, and under it the netblocks and networks they are spread across') . '">' . I18n::html('IPs') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sess.') . '</th>'
+            . '<th scope="col"' . Sorting::th('activity', 'desc') . '>' . I18n::html('Activity') . '</th>'
+            . '<th scope="col">' . I18n::html('Client') . '</th>'
+            . '<th scope="col"' . Sorting::th('verdict', 'desc') . '>' . I18n::html('Verdict') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         /* THE ORANGE RULE HAS A MEANING AND NOW IT IS WRITTEN DOWN. Some rows in this table carry
@@ -477,10 +482,13 @@ final class Fingerprints extends Controller
            rather than as a finding. It marks the proxy-fleet pattern, which is the whole point of
            the view, and the legend states the three conditions and the threshold. */
         echo '<p class="legend"><span class="legend-fleet" aria-hidden="true"></span>'
-            . '<span>An orange rule marks the <strong>proxy-fleet pattern</strong>: ' . self::FLEET_IPS
-            . ' or more distinct addresses on one client signature, no mobile carrier, nothing '
+            . '<span>' . I18n::html('An orange rule marks the {pattern}: {n} or more distinct addresses on one client signature, '
+            . 'no mobile carrier, nothing '
             . 'self-declared. Carriers are excluded because a gateway legitimately puts many people behind '
-            . 'one fingerprint.</span></p>';
+            . 'one fingerprint.', [
+                'pattern' => '<strong>' . I18n::html('proxy-fleet pattern') . '</strong>',
+                'n'       => (string) self::FLEET_IPS,
+            ]) . '</span></p>';
 
         self::cardClose('fp-table');
     }

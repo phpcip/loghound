@@ -27,6 +27,7 @@ import { countryNode, dimRow, dimValue, drillRow, openButton, valueText, valueWo
 import { renderPivot } from '../facetfilter.js';
 import { bindPath, claimPath, pathCopy } from '../url.js';
 import { pagedCard } from '../cardtable.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /**
  * The colour of a status class, used by both charts so they cannot disagree.
@@ -47,11 +48,11 @@ function statusColour(t, key) {
 
 /** The four status classes in the order every table and chart on this page uses them. */
 const STATUS_KEYS = [
-    ['ok', '2xx Answered'],
-    ['redirect', '3xx Redirected'],
-    ['refused', '4xx Refused'],
-    ['broke', '5xx Server error'],
-    ['unknown', 'Status not recorded']
+    ['ok', T('2xx Answered')],
+    ['redirect', T('3xx Redirected')],
+    ['refused', T('4xx Refused')],
+    ['broke', T('5xx Server error')],
+    ['unknown', T('Status not recorded')]
 ];
 
 /**
@@ -80,10 +81,10 @@ function statusBar(row) {
  */
 function severityNote(severity) {
     switch (severity) {
-        case 'high': return 'High if answered';
-        case 'med':  return 'Medium if answered';
-        case 'low':  return 'Low — usually noise';
-        default:     return 'Informational';
+        case 'high': return T('High if answered');
+        case 'med':  return T('Medium if answered');
+        case 'low':  return T('Low — usually noise');
+        default:     return T('Informational');
     }
 }
 
@@ -117,10 +118,9 @@ function ignoredFilterNote(data) {
     if (ignored.length === 0) {
         return '';
     }
-    return ' NOTE: ' + ignored.join(', ') +
-        (ignored.length === 1 ? ' is a session-level filter' : ' are session-level filters') +
-        ' and could not be applied to these numbers, which cover every request in range that ' +
-        'the other filters match.';
+    return ' ' + Tn('NOTE: {filters} is a session-level filter and could not be applied to these numbers, which cover every request in range that the other filters match.',
+        'NOTE: {filters} are session-level filters and could not be applied to these numbers, which cover every request in range that the other filters match.',
+        ignored.length, { filters: ignored.join(', ') });
 }
 
 /**
@@ -166,19 +166,23 @@ function renderAnswered(data) {
        wrong number this product refuses everywhere else. */
     const parts = [];
     if (data.unevaluated > 0) {
-        parts.push('Of ' + num(data.requests) + ' requests in range, ' + num(data.evaluated) + ' (' +
-            pct(data.evaluated, data.requests, 0) + ') have been evaluated by the detector and ' +
-            num(data.unevaluated) + ' were indexed before it existed. Those ' + num(data.unevaluated) +
-            ' were never looked at, which is not the same as finding nothing in them — this page ' +
-            'cannot speak for them either way.');
+        parts.push(T('Of {requests} requests in range, {evaluated} ({pct}) have been evaluated by the detector and ' +
+            '{unevaluated} were indexed before it existed. Those {unevaluated} ' +
+            'were never looked at, which is not the same as finding nothing in them — this page ' +
+            'cannot speak for them either way.', {
+            requests: num(data.requests),
+            evaluated: num(data.evaluated),
+            pct: pct(data.evaluated, data.requests, 0),
+            unevaluated: num(data.unevaluated)
+        }));
     } else if (data.requests > 0) {
-        parts.push('Every one of the ' + num(data.requests) + ' requests in range has been evaluated ' +
-            'by the detector, so this page covers the whole window.');
+        parts.push(T('Every one of the {n} requests in range has been evaluated ' +
+            'by the detector, so this page covers the whole window.', { n: num(data.requests) }));
     }
     if (data.matched > 0 && s.ok === 0 && s.redirect === 0) {
-        parts.push('Nothing that matched a pattern was answered with a 2xx or a 3xx: the server ' +
-            'refused all ' + num(data.matched) + ' of them, which is what a webserver is supposed ' +
-            'to do to a probe.');
+        parts.push(T('Nothing that matched a pattern was answered with a 2xx or a 3xx: the server ' +
+            'refused all {n} of them, which is what a webserver is supposed ' +
+            'to do to a probe.', { n: num(data.matched) }));
     }
     const ignored = ignoredFilterNote(data);
     if (ignored !== '') {
@@ -195,7 +199,7 @@ function renderAnswered(data) {
 function renderPatterns(data) {
     if (!data.patterns.length) {
         tbody(byId('atk-patterns-table'), []);
-        noDataYet('atk-patterns-empty', 'matched patterns');
+        noDataYet('atk-patterns-empty', T('matched patterns'));
         return;
     }
     hideEmpty('atk-patterns-empty');
@@ -219,9 +223,9 @@ function renderPatterns(data) {
                 num: true,
                 sort: row.answered,
                 title: row.answered
-                    ? num(row.ok) + ' answered with a body, ' + num(row.redirect) + ' redirected. The server ' +
-                        'returned something — that is not proof anything was disclosed.'
-                    : 'Nothing that matched this pattern was answered with a 2xx or a 3xx.'
+                    ? T('{ok} answered with a body, {redirect} redirected. The server ' +
+                        'returned something — that is not proof anything was disclosed.', { ok: num(row.ok), redirect: num(row.redirect) })
+                    : T('Nothing that matched this pattern was answered with a 2xx or a 3xx.')
             },
             { text: num(row.redirect), num: true, sort: row.redirect },
             { text: num(row.refused), num: true, sort: row.refused },
@@ -261,9 +265,8 @@ function stackedBarsFor(rows, t) {
  * becomes an element.
  */
 function renderRequests(data) {
-    setPop('atk-requests', num(data.page && data.page.total !== null ? data.page.total : data.total) +
-        ' matched requests the server answered with a 2xx or a 3xx. A 2xx means a body came back, not ' +
-        'that it was the body asked for.' + ignoredFilterNote(data));
+    setPop('atk-requests', T('{n} matched requests the server answered with a 2xx or a 3xx. A 2xx means a body came back, not ' +
+        'that it was the body asked for.', { n: num(data.page && data.page.total !== null ? data.page.total : data.total) }) + ignoredFilterNote(data));
 
     if (!data.requests.length) {
         tbody(byId('atk-requests-table'), []);
@@ -280,7 +283,7 @@ function renderRequests(data) {
                     ? dimValue('ip_s', row.ip, { mono: true })
                     : el('span', { class: 'muted', text: '\u2014' }),
                 class: 'mono clip',
-                title: row.ip || 'Address not recorded',
+                title: row.ip || T('Address not recorded'),
                 sort: row.ip || ''
             },
             {
@@ -288,7 +291,7 @@ function renderRequests(data) {
                     ? countryNode(row.country)
                     : el('span', { class: 'muted', text: '\u2014' }),
                 class: 'clip',
-                title: [row.city, row.country].filter(Boolean).join(', ') || 'Not geolocated',
+                title: [row.city, row.country].filter(Boolean).join(', ') || T('Not geolocated'),
                 sort: [row.country, row.city].filter(Boolean).join(' ')
             },
             { node: requestCell(row), clip: true, title: requestText(row), sort: row.path || '' },
@@ -318,16 +321,16 @@ function verdictCell(row) {
     return el('div', { class: 'client' }, [
         el('div', { class: 'clip-line' }, [
             klass === ''
-                ? el('span', { class: 'muted', text: 'no status logged' })
+                ? el('span', { class: 'muted', text: T('no status logged') })
                 : dimValue('status_class_s', klass, {
                     title: String(row.status) + ' \u2014 ' + statusHint(row.status)
                 }),
-            row.session ? openButton('session', { id: row.session }, 'Open this visit') : null
+            row.session ? openButton('session', { id: row.session }, T('Open this visit')) : null
         ]),
         el('div', {
             class: 'sub clip-line',
             title: row.patterns || ''
-        }, [el('span', { text: row.patterns || 'no pattern named' })])
+        }, [el('span', { text: row.patterns || T('no pattern named') })])
     ]);
 }
 
@@ -340,7 +343,7 @@ function verdictCell(row) {
  */
 function statusHint(status) {
     if (status === null || status === undefined) {
-        return 'The log line carried no parseable status.';
+        return T('The log line carried no parseable status.');
     }
     const spoken = valueWords('status_class_s', String(Math.floor(status / 100)) + 'xx');
     return spoken && spoken.why ? spoken.why : '';
@@ -380,7 +383,7 @@ function renderWho(data) {
         tbody(byId('atk-who-table'), []);
         tbody(byId('atk-networks-table'), []);
         clearTableChart('atk-who');
-        noDataYet('atk-who-empty', 'matched addresses');
+        noDataYet('atk-who-empty', T('matched addresses'));
         return;
     }
     hideEmpty('atk-who-empty');
@@ -410,9 +413,9 @@ function renderWho(data) {
                 text: num(row.uniq_patterns),
                 num: true,
                 sort: row.uniq_patterns,
-                title: 'Distinct patterns this address tried, across ' + num(row.uniq_paths) + ' distinct ' +
+                title: T('Distinct patterns this address tried, across {n} distinct ' +
                     'paths. One pattern on one path is a misconfigured client; many patterns on many paths ' +
-                    'is a scanner walking a list.'
+                    'is a scanner walking a list.', { n: num(row.uniq_paths) })
             },
             { node: row.last ? stamp(row.last) : null, sort: row.last || '' }
         ]
@@ -422,10 +425,10 @@ function renderWho(data) {
     splitChart('atk-who', data.actors.map((row) => ({
         label: row.ip,
         parts: [
-            { name: 'Answered', value: row.answered, color: t.accent },
-            { name: 'Refused', value: row.refused, color: t.pop.human }
+            { name: T('Answered'), value: row.answered, color: t.accent },
+            { name: T('Refused'), value: row.refused, color: t.pop.human }
         ]
-    })), { label: 'Matched requests per address, answered and refused' });
+    })), { label: T('Matched requests per address, answered and refused') });
 
     tbody(byId('atk-networks-table'), (data.networks || []).map((row) => ({
         attrs: dimRow('as_org_s', row.org),
@@ -484,7 +487,7 @@ function renderImpersonation(data) {
     if (!data.crawlers.length) {
         tbody(byId('atk-crawlers-table'), []);
         clearTableChart('atk-impersonation');
-        noDataYet('atk-impersonation-empty', 'declared crawler sessions');
+        noDataYet('atk-impersonation-empty', T('declared crawler sessions'));
         return;
     }
     hideEmpty('atk-impersonation-empty');
@@ -499,20 +502,20 @@ function renderImpersonation(data) {
                 text: num(row.verified),
                 num: true,
                 sort: row.verified,
-                title: 'Sessions whose crawler claim passed forward-confirmed reverse DNS.'
+                title: T('Sessions whose crawler claim passed forward-confirmed reverse DNS.')
             },
             {
                 text: num(row.rdns_failed),
                 num: true,
                 sort: row.rdns_failed,
-                title: 'This operator publishes reverse DNS and it did not back the claim up.'
+                title: T('This operator publishes reverse DNS and it did not back the claim up.')
             },
             {
                 text: num(row.tenant),
                 num: true,
                 sort: row.tenant,
-                title: 'Answered from general-purpose cloud tenant address space. A named search or AI ' +
-                    'crawler does not run on somebody\'s rented VM.'
+                title: T('Answered from general-purpose cloud tenant address space. A named search or AI ' +
+                    'crawler does not run on somebody\'s rented VM.')
             },
             { node: row.last ? stamp(row.last) : null, sort: row.last || '' }
         ]
@@ -522,11 +525,11 @@ function renderImpersonation(data) {
     splitChart('atk-impersonation', data.crawlers.map((row) => ({
         label: valueText('ua_bot_name_s', row.name),
         parts: [
-            { name: 'Verified', value: row.verified, color: t.pop.ai },
-            { name: 'rDNS failed', value: row.rdns_failed, color: t.accent },
-            { name: 'Cloud tenant', value: row.tenant, color: t.pop.unknown }
+            { name: T('Verified'), value: row.verified, color: t.pop.ai },
+            { name: T('rDNS failed'), value: row.rdns_failed, color: t.accent },
+            { name: T('Cloud tenant'), value: row.tenant, color: t.pop.unknown }
         ]
-    })), { label: 'Declared crawler sessions: verified, failed reverse DNS, or answered from a rented cloud machine' });
+    })), { label: T('Declared crawler sessions: verified, failed reverse DNS, or answered from a rented cloud machine') });
 }
 
 /**
@@ -534,7 +537,7 @@ function renderImpersonation(data) {
  */
 function renderWhen(data) {
     if (!data.times.length) {
-        noDataYet('atk-when-empty', 'matched requests');
+        noDataYet('atk-when-empty', T('matched requests'));
         return;
     }
     hideEmpty('atk-when-empty');
@@ -542,9 +545,9 @@ function renderWhen(data) {
 
     const t = tokens();
     lines('atk-when-chart', data.times, [
-        { name: 'Matched a pattern', color: t.pop.human, data: data.matched },
-        { name: 'Answered 2xx or 3xx', color: t.accent, data: data.answered },
-        { name: 'Distinct addresses', color: t.pop.declared, data: data.ips }
+        { name: T('Matched a pattern'), color: t.pop.human, data: data.matched },
+        { name: T('Answered 2xx or 3xx'), color: t.accent, data: data.answered },
+        { name: T('Distinct addresses'), color: t.pop.declared, data: data.ips }
     ]);
 }
 
@@ -556,37 +559,37 @@ function renderWhen(data) {
  * progress line and its own failure state, and both await the same promise.
  */
 export default function init() {
-    loadCard('atk-answered', 'Correlating matched requests with response codes', async () => {
+    loadCard('atk-answered', T('Correlating matched requests with response codes'), async () => {
         renderAnswered(await api('attacks', 'answered'));
     });
 
     const patterns = api('attacks', 'patterns');
-    loadCard('atk-patterns', 'Faceting detection patterns against status codes', async () => {
+    loadCard('atk-patterns', T('Faceting detection patterns against status codes'), async () => {
         renderPatterns(await patterns);
     });
     if (byId('atk-pivot-table')) {
-        loadCard('atk-pivot', 'Cross-tabulating patterns by status class', async () => {
+        loadCard('atk-pivot', T('Cross-tabulating patterns by status class'), async () => {
             const data = await patterns;
             if (!renderPivot('atk-pivot', data.pivot)) {
-                noPivotYet('atk-pivot-empty', 'both a detection pattern and a recorded status');
+                noPivotYet('atk-pivot-empty', T('both a detection pattern and a recorded status'));
             }
         });
     }
 
     pagedCard({
         id: 'atk-requests',
-        label: 'Reading the answered requests',
-        empty: 'answered matched requests',
+        label: T('Reading the answered requests'),
+        empty: T('answered matched requests'),
         fetch: (start, rows) => api('attacks', 'requests', { start: start, rows: rows }),
         render: renderRequests
     });
-    loadCard('atk-who', 'Faceting addresses and networks', async () => {
+    loadCard('atk-who', T('Faceting addresses and networks'), async () => {
         renderWho(await api('attacks', 'who'));
     });
-    loadCard('atk-impersonation', 'Checking declared crawler claims', async () => {
+    loadCard('atk-impersonation', T('Checking declared crawler claims'), async () => {
         renderImpersonation(await api('attacks', 'impersonation'));
     });
-    loadCard('atk-when', 'Bucketing matched requests over time', async () => {
+    loadCard('atk-when', T('Bucketing matched requests over time'), async () => {
         renderWhen(await api('attacks', 'when'));
     });
 }

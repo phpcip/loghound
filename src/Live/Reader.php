@@ -61,6 +61,7 @@ declare(strict_types=1);
 namespace Loghound\Live;
 
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\LogDetect;
 use Loghound\LogFormat;
 use Loghound\Parser;
@@ -629,8 +630,8 @@ final class Reader
             return [
                 'code'  => 'matched',
                 'label' => count($flags) === 1 ? $named['label'] : $named['label'] . ' +' . (count($flags) - 1),
-                'why'   => 'The request matched a named pattern. Whether it achieved anything depends on '
-                    . 'what the server answered.',
+                'why'   => I18n::t('The request matched a named pattern. Whether it achieved anything depends on '
+                    . 'what the server answered.'),
                 'tone'  => $decisive === null ? 'watch' : 'alarm',
             ];
         }
@@ -638,8 +639,8 @@ final class Reader
         if ($status !== null && $status >= 500) {
             return [
                 'code'  => 'server_error',
-                'label' => 'Server error',
-                'why'   => 'The server broke trying to answer this request.',
+                'label' => I18n::t('Server error'),
+                'why'   => I18n::t('The server broke trying to answer this request.'),
                 'tone'  => 'alarm',
             ];
         }
@@ -647,8 +648,8 @@ final class Reader
         if ($status !== null && $status >= 400) {
             return [
                 'code'  => 'refused',
-                'label' => 'Refused',
-                'why'   => 'The server declined. Nothing was served.',
+                'label' => I18n::t('Refused'),
+                'why'   => I18n::t('The server declined. Nothing was served.'),
                 'tone'  => 'watch',
             ];
         }
@@ -657,9 +658,9 @@ final class Reader
             $name = isset($doc['ua_bot_name_s']) ? (string) $doc['ua_bot_name_s'] : '';
             return [
                 'code'  => 'declared_bot',
-                'label' => $name === '' ? 'Declared crawler' : 'Says it is ' . $name,
-                'why'   => 'The User-Agent names a crawler. Nothing in one line confirms the claim; the '
-                    . 'reverse-DNS check that would is part of scoring a session.',
+                'label' => $name === '' ? I18n::t('Declared crawler') : I18n::t('Says it is {name}', ['name' => $name]),
+                'why'   => I18n::t('The User-Agent names a crawler. Nothing in one line confirms the claim; the '
+                    . 'reverse-DNS check that would is part of scoring a session.'),
                 'tone'  => 'watch',
             ];
         }
@@ -667,8 +668,8 @@ final class Reader
         if (array_key_exists('ua_hash_s', $doc) && ($doc['ua_s'] ?? '') === '') {
             return [
                 'code'  => 'no_ua',
-                'label' => 'No User-Agent',
-                'why'   => 'The client sent no User-Agent at all. Browsers always send one.',
+                'label' => I18n::t('No User-Agent'),
+                'why'   => I18n::t('The client sent no User-Agent at all. Browsers always send one.'),
                 'tone'  => 'watch',
             ];
         }
@@ -677,40 +678,40 @@ final class Reader
         if ($kind === 'asset' || $kind === 'favicon') {
             return [
                 'code'  => 'sub_resource',
-                'label' => 'Sub-resource',
-                'why'   => 'A file a page pulled in, not a page anybody asked for.',
+                'label' => I18n::t('Sub-resource'),
+                'why'   => I18n::t('A file a page pulled in, not a page anybody asked for.'),
                 'tone'  => 'plain',
             ];
         }
         if ($kind === 'robots') {
             return [
                 'code'  => 'crawl_file',
-                'label' => 'Crawl file',
-                'why'   => 'robots.txt, a sitemap or a .well-known path.',
+                'label' => I18n::t('Crawl file'),
+                'why'   => I18n::t('robots.txt, a sitemap or a .well-known path.'),
                 'tone'  => 'plain',
             ];
         }
         if ($kind === 'api') {
             return [
                 'code'  => 'api',
-                'label' => 'API call',
-                'why'   => 'A machine-readable endpoint rather than a page.',
+                'label' => I18n::t('API call'),
+                'why'   => I18n::t('A machine-readable endpoint rather than a page.'),
                 'tone'  => 'plain',
             ];
         }
         if ($kind === 'beacon') {
             return [
                 'code'  => 'beacon',
-                'label' => 'Beacon',
-                'why'   => 'An analytics collector on the measured site.',
+                'label' => I18n::t('Beacon'),
+                'why'   => I18n::t('An analytics collector on the measured site.'),
                 'tone'  => 'plain',
             ];
         }
 
         return [
             'code'  => 'page',
-            'label' => 'Page',
-            'why'   => 'An ordinary page request with nothing notable in the line itself.',
+            'label' => I18n::t('Page'),
+            'why'   => I18n::t('An ordinary page request with nothing notable in the line itself.'),
             'tone'  => 'plain',
         ];
     }
@@ -728,24 +729,24 @@ final class Reader
         $asset = is_string($assetKind) && $assetKind !== '' ? $assetKind : '';
 
         $named = match ($asset) {
-            'js'    => 'Script',
-            'css'   => 'Stylesheet',
-            'map'   => 'Source map',
-            'img'   => 'Image',
-            'font'  => 'Font',
-            'media' => 'Media',
+            'js'    => I18n::t('Script'),
+            'css'   => I18n::t('Stylesheet'),
+            'map'   => I18n::t('Source map'),
+            'img'   => I18n::t('Image'),
+            'font'  => I18n::t('Font'),
+            'media' => I18n::t('Media'),
             default => $asset,
         };
 
         return match ($kind) {
-            'html'    => 'Page',
-            'api'     => 'API',
-            'asset'   => $named === '' ? 'Sub-resource' : $named,
-            'favicon' => 'Icon',
-            'robots'  => 'Crawl file',
-            'beacon'  => 'Beacon',
-            'other'   => 'File',
-            default   => $kind === '' ? 'Unclassified' : $kind,
+            'html'    => I18n::t('Page'),
+            'api'     => I18n::t('API'),
+            'asset'   => $named === '' ? I18n::t('Sub-resource') : $named,
+            'favicon' => I18n::t('Icon'),
+            'robots'  => I18n::t('Crawl file'),
+            'beacon'  => I18n::t('Beacon'),
+            'other'   => I18n::t('File'),
+            default   => $kind === '' ? I18n::t('Unclassified') : $kind,
         };
     }
 

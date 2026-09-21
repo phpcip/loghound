@@ -28,6 +28,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Sessions extends Controller
@@ -279,7 +280,7 @@ final class Sessions extends Controller
 
     public function title(): string
     {
-        return 'Session explorer';
+        return I18n::t('Session explorer');
     }
 
     /**
@@ -361,7 +362,7 @@ final class Sessions extends Controller
             'dimpages'   => $this->dimPages(),
             'dimensions' => $this->dimensions(),
             'values'     => $this->values(),
-            default      => ['error' => 'Unknown action'],
+            default      => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -456,15 +457,15 @@ final class Sessions extends Controller
             'q'        => $text,
             'sort'     => $sortKey,
             'sort_label' => $legacy
-                ? (self::SORT_LABELS[$sortKey] ?? $sortKey)
-                : (self::ORDER_LABELS[$order['key']] ?? $order['key'])
-                    . ($order['dir'] === 'desc' ? ', descending' : ', ascending'),
+                ? (isset(self::SORT_LABELS[$sortKey]) ? I18n::t(self::SORT_LABELS[$sortKey]) : $sortKey)
+                : (isset(self::ORDER_LABELS[$order['key']]) ? I18n::t(self::ORDER_LABELS[$order['key']]) : $order['key'])
+                    . ($order['dir'] === 'desc' ? I18n::t(', descending') : I18n::t(', ascending')),
             'order'    => ['key' => $order['key'], 'dir' => $order['dir']],
             'rows'     => $rows,
             'start'    => $start,
             'numFound' => $res['numFound'],
             'docs'     => $docs,
-            'page'     => Paging::block($start, $rows, (int) $res['numFound'], 'visits', count($docs)),
+            'page'     => Paging::block($start, $rows, (int) $res['numFound'], I18n::t('visits'), count($docs)),
             'active'   => $this->filters,
         ]);
     }
@@ -572,7 +573,7 @@ final class Sessions extends Controller
         $fields = self::listableFields();
         $field = self::param('field', array_keys($fields), '');
         if ($field === '') {
-            return $this->envelope(['error' => 'That is not a dimension this panel can list.']);
+            return $this->envelope(['error' => I18n::t('That is not a dimension this panel can list.')]);
         }
 
         $search = Facets::searchTerm($_GET['vq'] ?? null);
@@ -795,17 +796,17 @@ final class Sessions extends Controller
         $fields = self::dimensionFields();
         $field = self::param('field', array_keys($fields), '');
         if ($field === '') {
-            return $this->envelope(['error' => 'That is not a dimension this panel can open.']);
+            return $this->envelope(['error' => I18n::t('That is not a dimension this panel can open.')]);
         }
 
         $value = self::text('value', 256);
         if ($value === '') {
-            return $this->envelope(['error' => 'That row carries no value to open.']);
+            return $this->envelope(['error' => I18n::t('That row carries no value to open.')]);
         }
 
         $scope = $this->dimensionScope($field, $value);
         if ($scope === null) {
-            return $this->envelope(['error' => 'That value is not in the form this dimension holds.']);
+            return $this->envelope(['error' => I18n::t('That value is not in the form this dimension holds.')]);
         }
 
         $definitions = [
@@ -986,11 +987,11 @@ final class Sessions extends Controller
         if ($field !== '') {
             $value = self::text('value', 256);
             if ($value === '') {
-                return $this->envelope(['error' => 'That row carries no value to open.']);
+                return $this->envelope(['error' => I18n::t('That row carries no value to open.')]);
             }
             $scoped = $this->dimensionScope($field, $value);
             if ($scoped === null) {
-                return $this->envelope(['error' => 'That value is not in the form this dimension holds.']);
+                return $this->envelope(['error' => I18n::t('That value is not in the form this dimension holds.')]);
             }
             $scope = $pop === '' ? $scoped : array_merge($scoped, [Query::populations()[$pop]]);
             $subject = ($fields[$field] ?? $field) . ': ' . $value;
@@ -1006,6 +1007,7 @@ final class Sessions extends Controller
             $band = self::param('band', array_keys(self::BAND_FIELDS), '');
             if ($band !== '') {
                 [$min, $max, $label] = self::BAND_FIELDS[$band];
+                $label = I18n::t($label);
                 $from = Security::clampInt($_GET['from'] ?? null, $min, $max, $min);
                 $to = Security::clampInt($_GET['to'] ?? null, $min, $max, $max);
                 if ($to < $from) {
@@ -1026,7 +1028,7 @@ final class Sessions extends Controller
                 ]);
             }
 
-            return $this->envelope(['error' => 'Nothing was named to list the visits of.']);
+            return $this->envelope(['error' => I18n::t('Nothing was named to list the visits of.')]);
         }
 
         $page = $this->visitorPage('sessions.visitors', $scope, Paging::start(), Paging::rows());
@@ -1065,7 +1067,7 @@ final class Sessions extends Controller
 
         return [
             'rows' => $out,
-            'page' => Paging::block($start, $rows, (int) $res['numFound'], 'visits', count($out)),
+            'page' => Paging::block($start, $rows, (int) $res['numFound'], I18n::t('visits'), count($out)),
         ];
     }
 
@@ -1093,17 +1095,17 @@ final class Sessions extends Controller
         $fields = self::dimensionFields();
         $field = self::param('field', array_keys($fields), '');
         if ($field === '') {
-            return $this->envelope(['error' => 'That is not a dimension this panel can open.']);
+            return $this->envelope(['error' => I18n::t('That is not a dimension this panel can open.')]);
         }
 
         $value = self::text('value', 256);
         if ($value === '') {
-            return $this->envelope(['error' => 'That row carries no value to open.']);
+            return $this->envelope(['error' => I18n::t('That row carries no value to open.')]);
         }
 
         $scope = $this->dimensionScope($field, $value);
         if ($scope === null) {
-            return $this->envelope(['error' => 'That value is not in the form this dimension holds.']);
+            return $this->envelope(['error' => I18n::t('That value is not in the form this dimension holds.')]);
         }
 
         $start = Paging::start();
@@ -1138,7 +1140,7 @@ final class Sessions extends Controller
 
         return $this->envelope([
             'rows' => $out,
-            'page' => Paging::block($start, $rows, Paging::distinct($f, 'paths'), 'pages', count($out)),
+            'page' => Paging::block($start, $rows, Paging::distinct($f, 'paths'), I18n::t('pages'), count($out)),
         ]);
     }
 
@@ -1358,7 +1360,7 @@ final class Sessions extends Controller
     {
         $id = self::sessionId();
         if ($id === '') {
-            return $this->envelope(['error' => 'Not a session id.']);
+            return $this->envelope(['error' => I18n::t('Not a session id.')]);
         }
 
         $sess = $this->gw->select('sessions.one', $this->gw->sessionsCore(), [
@@ -1369,7 +1371,7 @@ final class Sessions extends Controller
         ]);
 
         if ($sess['docs'] === []) {
-            return $this->envelope(['error' => 'That session is not in the index (it may have aged past retention).']);
+            return $this->envelope(['error' => I18n::t('That session is not in the index (it may have aged past retention).')]);
         }
 
         $trail = $this->trailPage($id, 0, Paging::PAGE);
@@ -1395,7 +1397,7 @@ final class Sessions extends Controller
     {
         $id = self::sessionId();
         if ($id === '') {
-            return $this->envelope(['error' => 'Not a session id.']);
+            return $this->envelope(['error' => I18n::t('Not a session id.')]);
         }
 
         $page = $this->trailPage($id, Paging::start(), Paging::rows());
@@ -1461,7 +1463,7 @@ final class Sessions extends Controller
                 $start,
                 $rows,
                 (int) $hits['numFound'],
-                'requests',
+                I18n::t('requests'),
                 count($timeline),
                 Paging::sizesUpTo(self::MAX_TIMELINE)
             ),
@@ -1603,19 +1605,19 @@ final class Sessions extends Controller
         self::cardOpen(
             'se-search',
             '01',
-            'Search',
-            'Matched across path, User-Agent, AS organisation, netname, reverse DNS, city and country.'
+            I18n::t('Search'),
+            I18n::t('Matched across path, User-Agent, AS organisation, netname, reverse DNS, city and country.')
         );
 
         echo '<form class="searchbar" method="get" action="" id="se-form">';
         echo Layout::hiddenFields(['v' => 'sessions'], ['q', 'sort', 'start']);
-        echo '<label class="sr-only" for="se-q">Search sessions</label>';
+        echo '<label class="sr-only" for="se-q">' . I18n::html('Search sessions') . '</label>';
         echo '<input type="search" id="se-q" name="q" '
-            . 'placeholder="Search paths, User-Agents, organisations, netnames, cities" '
+            . 'placeholder="' . I18n::html('Search paths, User-Agents, organisations, netnames, cities') . '" '
             . 'value="' . Security::esc(self::text('q', 200)) . '" autocomplete="off" spellcheck="false">';
         echo '<input type="hidden" id="se-sort" name="sort" value="'
             . Security::esc(self::param('sort', array_keys(Query::sorts()), 'recent')) . '">';
-        echo '<button type="submit" class="primary">Search</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Search') . '</button>';
         echo '</form>';
 
         self::cardEnd();
@@ -1666,8 +1668,8 @@ final class Sessions extends Controller
      */
     public static function bounceCard(string $id, string $num): void
     {
-        self::cardOpen($id, $num, 'Bounce rate', Bounce::definition());
-        self::skeleton($id, 'stats', 0, 'Measuring engagement on single-page visits');
+        self::cardOpen($id, $num, I18n::t('Bounce rate'), Bounce::definition());
+        self::skeleton($id, 'stats', 0, I18n::t('Measuring engagement on single-page visits'));
 
         echo '<div class="stats" id="' . Security::esc($id) . '-stats"></div>';
         echo '<div id="' . Security::esc($id) . '-detail"></div>';
@@ -1732,11 +1734,11 @@ final class Sessions extends Controller
         self::cardOpen(
             'se-results',
             '02',
-            'Recent visitors',
+            I18n::t('Recent visitors'),
             '',
             '<span class="job-meta" id="se-count"></span>' . $this->exportTool('sessions')
         );
-        self::skeleton('se-results', 'rows', 0, 'Searching sessions');
+        self::skeleton('se-results', 'rows', 0, I18n::t('Searching sessions'));
 
         echo '<div class="table-wrap"><table id="se-table" class="table-fixed visits"'
             . Sorting::tableAttrs(self::RESULTS, self::resultsOrder(), 'start') . '><colgroup>'
@@ -1755,12 +1757,12 @@ final class Sessions extends Controller
             . '</colgroup><thead><tr>'
             /* `data-lh-nosort` marks a column a phone does not show, so responsive.js leaves it
                out of the sort control rather than offering an order by something invisible. */
-            . '<th scope="col"' . Sorting::th('date', 'desc') . '>Date</th>'
+            . '<th scope="col"' . Sorting::th('date', 'desc') . '>' . I18n::html('Date') . '</th>'
             . '<th scope="col" data-lh-nosort="1"' . Sorting::th('ip') . '>IP</th>'
-            . '<th scope="col"' . Sorting::th('page') . '>Page</th>'
-            . '<th scope="col"' . Sorting::th('email') . '>Email</th>'
-            . '<th scope="col"' . Sorting::th('span', 'desc') . '>Sess time</th>'
-            . '<th scope="col" class="visit-verdict" data-lh-nosort="1">Bounce</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>' . I18n::html('Page') . '</th>'
+            . '<th scope="col"' . Sorting::th('email') . '>' . I18n::html('Email') . '</th>'
+            . '<th scope="col"' . Sorting::th('span', 'desc') . '>' . I18n::html('Sess time') . '</th>'
+            . '<th scope="col" class="visit-verdict" data-lh-nosort="1">' . I18n::html('Bounce') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="se-pager"></div>';
 

@@ -37,6 +37,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Config;
 use Loghound\Security;
 
@@ -237,12 +238,12 @@ final class Jobs
     public function start(string $kind, array $params = []): array
     {
         if (!in_array($kind, $this->kinds(), true)) {
-            return ['error' => 'Unknown operation.'];
+            return ['error' => I18n::t('Unknown operation.')];
         }
 
         $clean = self::normaliseParams($params);
         if ($clean === null) {
-            return ['error' => 'Those operation parameters are not acceptable.'];
+            return ['error' => I18n::t('Those operation parameters are not acceptable.')];
         }
 
         $target = $clean === [] ? '' : hash('sha256', (string) json_encode($clean));
@@ -264,7 +265,7 @@ final class Jobs
 
         $plan = $this->plan($kind, $clean);
         if ($plan === []) {
-            return ['error' => 'Unknown operation.'];
+            return ['error' => I18n::t('Unknown operation.')];
         }
 
         $steps = array_map(
@@ -290,7 +291,7 @@ final class Jobs
         $insert->bindValue(':kind', $kind, SQLITE3_TEXT);
         $insert->bindValue(':target', $target, SQLITE3_TEXT);
         $insert->bindValue(':total', count($steps), SQLITE3_INTEGER);
-        $insert->bindValue(':label', $steps[0]['label'] ?? 'Starting', SQLITE3_TEXT);
+        $insert->bindValue(':label', $steps[0]['label'] ?? I18n::t('Starting'), SQLITE3_TEXT);
         $insert->bindValue(':steps', (string) json_encode($steps), SQLITE3_TEXT);
         $insert->bindValue(':context', (string) json_encode($clean), SQLITE3_TEXT);
         $insert->bindValue(':now', $now, SQLITE3_INTEGER);
@@ -347,13 +348,13 @@ final class Jobs
     {
         $row = $this->row($id);
         if ($row === null) {
-            return ['error' => self::NOT_AVAILABLE];
+            return ['error' => I18n::t(self::NOT_AVAILABLE)];
         }
         if (in_array($row['state'], ['done', 'failed', 'cancelled'], true)) {
             return $this->shape($row);
         }
         if ((int) $row['cancelled'] === 1) {
-            $this->finish($id, 'cancelled', 'Cancelled.');
+            $this->finish($id, 'cancelled', I18n::t('Cancelled.'));
             return $this->get($id);
         }
 
@@ -371,7 +372,7 @@ final class Jobs
         $index = (int) $row['step'];
 
         if (!isset($plan[$index])) {
-            $this->finish($id, 'done', 'Finished.');
+            $this->finish($id, 'done', I18n::t('Finished.'));
             return $this->get($id);
         }
 
@@ -387,9 +388,9 @@ final class Jobs
             $index,
             $steps,
             $ctx,
-            $done ? 'Finished.' : (string) ($plan[$index]['label'] ?? 'Working'),
+            $done ? I18n::t('Finished.') : (string) ($plan[$index]['label'] ?? I18n::t('Working')),
             $done ? ($outcome['failed'] ? 'failed' : 'done') : 'running',
-            $outcome['failed'] ? (string) ($outcome['step']['detail'] ?? 'The operation failed.') : null
+            $outcome['failed'] ? (string) ($outcome['step']['detail'] ?? I18n::t('The operation failed.')) : null
         );
 
         return $this->get($id);
@@ -509,7 +510,7 @@ final class Jobs
     public function cancel(string $id): array
     {
         if (!self::isJobId($id)) {
-            return ['error' => self::NOT_AVAILABLE];
+            return ['error' => I18n::t(self::NOT_AVAILABLE)];
         }
         $stmt = $this->db->prepare(
             'UPDATE jobs SET cancelled = 1, updated = :now
@@ -530,7 +531,7 @@ final class Jobs
     public function get(string $id): array
     {
         $row = $this->row($id);
-        return $row === null ? ['error' => self::NOT_AVAILABLE] : $this->shape($row);
+        return $row === null ? ['error' => I18n::t(self::NOT_AVAILABLE)] : $this->shape($row);
     }
 
     /**
@@ -708,54 +709,54 @@ final class Jobs
     {
         return [
             [
-                'label' => 'Checking the configuration',
+                'label' => I18n::t('Checking the configuration'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $problems = array_values(array_filter(
                         $cfg->validate(),
                         static fn (string $e): bool => str_starts_with($e, 'solr') || str_starts_with($e, 'opensolr')
                     ));
                     if ($problems !== []) {
-                        return ['ok' => false, 'note' => 'invalid', 'detail' => implode(' ', $problems)];
+                        return ['ok' => false, 'note' => I18n::t('invalid'), 'detail' => implode(' ', array_map([I18n::class, 't'], $problems))];
                     }
                     $mode = (string) $cfg->get('solr.mode');
                     return [
                         'ok'     => true,
                         'note'   => $mode,
                         'detail' => $mode === 'opensolr'
-                            ? 'Managed by Opensolr.'
-                            : 'Custom Solr at ' . (string) $cfg->get('solr.base_url'),
+                            ? I18n::t('Managed by Opensolr.')
+                            : I18n::t('Custom Solr at {url}', ['url' => (string) $cfg->get('solr.base_url')]),
                     ];
                 },
             ],
             [
-                'label' => 'Pinging the sessions core',
+                'label' => I18n::t('Pinging the sessions core'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $gw->resetError();
                     $ok = $gw->ping();
                     return [
                         'ok'      => $ok,
-                        'note'    => $ok ? 'up' : 'down',
+                        'note'    => $ok ? I18n::t('up') : I18n::t('down'),
                         'detail'  => $ok
-                            ? 'Core "' . $gw->sessionsCore() . '" answered its ping handler.'
-                            : (string) ($gw->error() ?? 'No response.'),
+                            ? I18n::t('Core "{core}" answered its ping handler.', ['core' => $gw->sessionsCore()])
+                            : (string) ($gw->error() ?? I18n::t('No response.')),
                         'context' => ['sessions_up' => $ok],
                     ];
                 },
             ],
             [
-                'label' => 'Counting session documents',
+                'label' => I18n::t('Counting session documents'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
-                    return self::countStep($gw, $gw->sessionsCore(), 'job.count.sessions', 'sessions', 'Sessions core');
+                    return self::countStep($gw, $gw->sessionsCore(), 'job.count.sessions', 'sessions', I18n::t('Sessions core'));
                 },
             ],
             [
-                'label' => 'Counting hit documents',
+                'label' => I18n::t('Counting hit documents'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
-                    return self::countStep($gw, $gw->hitsCore(), 'job.count.hits', 'hits', 'Hits core');
+                    return self::countStep($gw, $gw->hitsCore(), 'job.count.hits', 'hits', I18n::t('Hits core'));
                 },
             ],
             [
-                'label' => 'Checking how fresh the data is',
+                'label' => I18n::t('Checking how fresh the data is'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $gw->resetError();
                     $f = $gw->facet('job.freshness', $gw->sessionsCore(), ['q' => '*:*'], [
@@ -764,28 +765,33 @@ final class Jobs
                     ]);
                     $err = $gw->error();
                     if ($err !== null) {
-                        return ['ok' => false, 'note' => 'failed', 'detail' => $err];
+                        return ['ok' => false, 'note' => I18n::t('failed'), 'detail' => $err];
                     }
                     $newest = is_string($f['newest'] ?? null) ? $f['newest'] : null;
                     if ($newest === null) {
                         return [
                             'ok'     => true,
-                            'note'   => 'empty',
+                            'note'   => I18n::t('empty'),
                             /* ABSOLUTE, like every other command this class emits —
                                binPath() exists for exactly this and this one line did not
                                use it. The reader is on a shell somewhere else. */
-                            'detail' => 'No sessions indexed yet. Confirm a log source and check that '
-                                . self::binPath('loghound-tail') . ' is running.',
+                            'detail' => I18n::t('No sessions indexed yet. Confirm a log source and check that {command} is running.', [
+                                'command' => self::binPath('loghound-tail'),
+                            ]),
                         ];
                     }
                     $age = time() - (int) strtotime($newest);
                     return [
                         'ok'      => true,
-                        'note'    => $age < 300 ? 'live' : 'stale',
-                        'detail'  => 'Newest session ' . gmdate('m/d/Y H:i:s', (int) strtotime($newest)) . ' UTC'
-                            . ($age >= 300
-                                ? ' — that is ' . (int) round($age / 60) . ' minutes ago, so ingestion may have stopped.'
-                                : ' — ingestion is live.'),
+                        'note'    => $age < 300 ? I18n::t('live') : I18n::t('stale'),
+                        'detail'  => $age >= 300
+                            ? I18n::t('Newest session {at} UTC — that is {minutes} minutes ago, so ingestion may have stopped.', [
+                                'at'      => gmdate('m/d/Y H:i:s', (int) strtotime($newest)),
+                                'minutes' => (int) round($age / 60),
+                            ])
+                            : I18n::t('Newest session {at} UTC — ingestion is live.', [
+                                'at' => gmdate('m/d/Y H:i:s', (int) strtotime($newest)),
+                            ]),
                         'context' => ['newest' => $newest],
                     ];
                 },
@@ -806,14 +812,14 @@ final class Jobs
         $res = $gw->select($tag, $core, ['q' => '*:*', 'rows' => 0]);
         $err = $gw->error();
         if ($err !== null) {
-            return ['ok' => false, 'note' => 'failed', 'detail' => $err];
+            return ['ok' => false, 'note' => I18n::t('failed'), 'detail' => $err];
         }
         return [
             'ok'      => true,
-            'note'    => number_format($res['numFound']) . ' docs',
+            'note'    => I18n::t('{n} docs', ['n' => number_format($res['numFound'])]),
             'detail'  => $res['numFound'] === 0
-                ? $label . ' is reachable but empty.'
-                : $label . ' holds ' . number_format($res['numFound']) . ' documents.',
+                ? I18n::t('{label} is reachable but empty.', ['label' => $label])
+                : I18n::t('{label} holds {n} documents.', ['label' => $label, 'n' => number_format($res['numFound'])]),
             'context' => [$key => $res['numFound']],
         ];
     }
@@ -831,28 +837,28 @@ final class Jobs
     {
         return [
             [
-                'label' => 'Checking the credentials are present',
+                'label' => I18n::t('Checking the credentials are present'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     if ((string) $cfg->get('solr.mode') !== 'opensolr') {
                         return [
                             'ok'     => true,
                             'stop'   => true,
-                            'note'   => 'n/a',
-                            'detail' => 'This install uses a custom Solr, so there is nothing to check with Opensolr.',
+                            'note'   => I18n::t('n/a'),
+                            'detail' => I18n::t('This install uses a custom Solr, so there is nothing to check with Opensolr.'),
                         ];
                     }
                     if ((string) $cfg->get('opensolr.email') === '' || (string) $cfg->get('opensolr.api_key') === '') {
                         return [
                             'ok'     => false,
-                            'note'   => 'missing',
-                            'detail' => 'opensolr.email and opensolr.api_key must both be set in config/loghound.php.',
+                            'note'   => I18n::t('missing'),
+                            'detail' => I18n::t('opensolr.email and opensolr.api_key must both be set in config/loghound.php.'),
                         ];
                     }
-                    return ['ok' => true, 'note' => 'present', 'detail' => 'Account credentials are configured.'];
+                    return ['ok' => true, 'note' => I18n::t('present'), 'detail' => I18n::t('Account credentials are configured.')];
                 },
             ],
             [
-                'label' => 'Contacting the Opensolr API',
+                'label' => I18n::t('Contacting the Opensolr API'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $url = rtrim((string) $cfg->get('opensolr.api_base'), '/')
                         . '/regions?email=' . rawurlencode((string) $cfg->get('opensolr.email'))
@@ -860,44 +866,44 @@ final class Jobs
 
                     [$body, $error] = self::fetch($url, 15);
                     if ($error !== null) {
-                        return ['ok' => false, 'note' => 'unreachable', 'detail' => $error];
+                        return ['ok' => false, 'note' => I18n::t('unreachable'), 'detail' => $error];
                     }
                     $names = self::regionNames($body);
                     if ($names === []) {
                         return [
                             'ok'     => false,
-                            'note'   => 'rejected',
-                            'detail' => 'The API answered but listed no regions — usually a wrong email or API key.',
+                            'note'   => I18n::t('rejected'),
+                            'detail' => I18n::t('The API answered but listed no regions — usually a wrong email or API key.'),
                         ];
                     }
                     return [
                         'ok'      => true,
-                        'note'    => count($names) . ' regions',
-                        'detail'  => 'Credentials accepted.',
+                        'note'    => I18n::t('{n} regions', ['n' => count($names)]),
+                        'detail'  => I18n::t('Credentials accepted.'),
                         'context' => ['regions' => array_slice($names, 0, 60)],
                     ];
                 },
             ],
             [
-                'label' => 'Matching the configured region',
+                'label' => I18n::t('Matching the configured region'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $want = (string) $cfg->get('opensolr.region');
                     $have = array_values(array_filter((array) ($ctx['regions'] ?? []), 'is_string'));
                     if ($want === '') {
                         return [
                             'ok'     => true,
-                            'note'   => 'unset',
-                            'detail' => 'No region configured. Available: ' . implode(', ', array_slice($have, 0, 12)),
+                            'note'   => I18n::t('unset'),
+                            'detail' => I18n::t('No region configured. Available: {regions}', ['regions' => implode(', ', array_slice($have, 0, 12))]),
                         ];
                     }
                     if (!in_array($want, $have, true)) {
                         return [
                             'ok'     => false,
-                            'note'   => 'unknown',
-                            'detail' => 'That region is not in the list this account can use.',
+                            'note'   => I18n::t('unknown'),
+                            'detail' => I18n::t('That region is not in the list this account can use.'),
                         ];
                     }
-                    return ['ok' => true, 'note' => $want, 'detail' => 'Region is valid for this account.'];
+                    return ['ok' => true, 'note' => $want, 'detail' => I18n::t('Region is valid for this account.')];
                 },
             ],
         ];
@@ -942,7 +948,7 @@ final class Jobs
     {
         return [
             [
-                'label' => 'Reading the retention policy',
+                'label' => I18n::t('Reading the retention policy'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $days = (int) $cfg->get('privacy.retention_days', 0);
                     if ($days <= 0) {
@@ -957,47 +963,49 @@ final class Jobs
                         return [
                             'ok'     => true,
                             'stop'   => true,
-                            'note'   => 'no age limit',
-                            'detail' => 'No age limit is set, so there is nothing for this preview to count. '
+                            'note'   => I18n::t('no age limit'),
+                            'detail' => I18n::t('No age limit is set, so there is nothing for this preview to count.') . ' '
                                 . ($rolling
-                                    ? 'Data is still deleted when an index runs out of its plan\'s disk, oldest '
-                                      . 'first — that rule is separate and it is on.'
-                                    : 'The rolling disk trim is off as well, so nothing is deleted for either '
-                                      . 'reason and an index can reach its plan quota and be blocked.'),
+                                    ? I18n::t('Data is still deleted when an index runs out of its plan\'s disk, oldest '
+                                      . 'first — that rule is separate and it is on.')
+                                    : I18n::t('The rolling disk trim is off as well, so nothing is deleted for either '
+                                      . 'reason and an index can reach its plan quota and be blocked.')),
                         ];
                     }
                     return [
                         'ok'      => true,
-                        'note'    => $days . ' days',
-                        'detail'  => 'Documents older than ' . $days . ' days are eligible for deletion.',
+                        'note'    => I18n::tn('{n} day', '{n} days', $days),
+                        'detail'  => I18n::tn('Documents older than {n} day are eligible for deletion.', 'Documents older than {n} days are eligible for deletion.', $days),
                         'context' => ['days' => $days, 'cutoff' => 'NOW-' . $days . 'DAY'],
                     ];
                 },
             ],
             [
-                'label' => 'Counting sessions past retention',
+                'label' => I18n::t('Counting sessions past retention'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     return self::retentionCount($gw, $gw->sessionsCore(), 'ts_start', $ctx, 'sessions', 'session');
                 },
             ],
             [
-                'label' => 'Counting hits past retention',
+                'label' => I18n::t('Counting hits past retention'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     return self::retentionCount($gw, $gw->hitsCore(), 'ts', $ctx, 'hits', 'hit');
                 },
             ],
             [
-                'label' => 'Summarising',
+                'label' => I18n::t('Summarising'),
                 'run' => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $total = (int) ($ctx['sessions'] ?? 0) + (int) ($ctx['hits'] ?? 0);
                     return [
                         'ok'     => true,
-                        'note'   => number_format($total) . ' docs',
+                        'note'   => I18n::t('{n} docs', ['n' => number_format($total)]),
                         'detail' => $total === 0
-                            ? 'Nothing is past the age limit. Both indexes are already within it.'
-                            : number_format($total) . ' documents are past the age limit. The panel does not '
-                              . 'delete: run ' . self::binPath('loghound-retention') . ', or enable '
-                              . 'loghound-retention.timer, to apply it.',
+                            ? I18n::t('Nothing is past the age limit. Both indexes are already within it.')
+                            : I18n::t('{n} documents are past the age limit. The panel does not '
+                              . 'delete: run {command}, or enable loghound-retention.timer, to apply it.', [
+                                  'n'       => number_format($total),
+                                  'command' => self::binPath('loghound-retention'),
+                              ]),
                     ];
                 },
             ],
@@ -1038,8 +1046,8 @@ final class Jobs
         if ($days <= 0) {
             return [
                 'ok'     => true,
-                'note'   => 'skipped',
-                'detail' => 'No age limit is set, so nothing is deleted for being old.',
+                'note'   => I18n::t('skipped'),
+                'detail' => I18n::t('No age limit is set, so nothing is deleted for being old.'),
             ];
         }
         $gw->resetError();
@@ -1055,7 +1063,9 @@ final class Jobs
         return [
             'ok'      => true,
             'note'    => number_format($res['numFound']),
-            'detail'  => number_format($res['numFound']) . ' ' . $noun . ' documents are past the retention window.',
+            'detail'  => $noun === 'session'
+                ? I18n::t('{n} session documents are past the retention window.', ['n' => number_format($res['numFound'])])
+                : I18n::t('{n} hit documents are past the retention window.', ['n' => number_format($res['numFound'])]),
             'context' => [$key => $res['numFound']],
         ];
     }
@@ -1073,7 +1083,7 @@ final class Jobs
     private static function fetch(string $url, int $timeout): array
     {
         if (!function_exists('curl_init')) {
-            return ['', 'ext-curl is not available, so the panel cannot reach the API.'];
+            return ['', I18n::t('ext-curl is not available, so the panel cannot reach the API.')];
         }
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -1093,14 +1103,14 @@ final class Jobs
         curl_close($ch);
 
         if ($errno === CURLE_OPERATION_TIMEDOUT) {
-            return ['', 'Timed out after ' . $timeout . 's contacting the Opensolr API. '
-                . 'Check outbound HTTPS from this host and any egress firewall.'];
+            return ['', I18n::t('Timed out after {n}s contacting the Opensolr API. '
+                . 'Check outbound HTTPS from this host and any egress firewall.', ['n' => $timeout])];
         }
         if ($errno !== 0 || !is_string($body)) {
-            return ['', self::redact('Could not reach the Opensolr API: ' . $error)];
+            return ['', self::redact(I18n::t('Could not reach the Opensolr API: {error}', ['error' => $error]))];
         }
         if ($status < 200 || $status >= 300) {
-            return ['', 'The Opensolr API answered HTTP ' . $status . '.'];
+            return ['', I18n::t('The Opensolr API answered HTTP {status}.', ['status' => $status])];
         }
         return [$body, null];
     }

@@ -37,6 +37,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Score\Attacks;
 use Loghound\Score\Rules;
 
@@ -312,12 +313,12 @@ final class Vocabulary
             return ['label' => $value, 'why' => '', 'severity' => ''];
         }
 
-        $why = $entry['why'];
+        $why = I18n::t($entry['why']);
         if ($field === 'bot_verdict_s') {
             $why .= ' ' . self::populationNote($value);
         }
 
-        return ['label' => $entry['label'], 'why' => $why, 'severity' => ''];
+        return ['label' => I18n::t($entry['label']), 'why' => $why, 'severity' => ''];
     }
 
     /**
@@ -340,11 +341,14 @@ final class Vocabulary
         $key = Query::populationOfVerdict()[$verdict] ?? null;
 
         if ($key !== null) {
-            return 'Counted under "' . ($labels[$key] ?? $key) . '" on the Overview.';
+            return I18n::t('Counted under "{population}" on the Overview.', ['population' => $labels[$key] ?? $key]);
         }
 
-        return 'Counted on the Overview under "' . $labels['declared'] . '", "' . $labels['ai']
-            . '" or "' . $labels['evasive'] . '", depending on the bot class.';
+        return I18n::t('Counted on the Overview under "{declared}", "{ai}" or "{evasive}", depending on the bot class.', [
+            'declared' => $labels['declared'],
+            'ai'       => $labels['ai'],
+            'evasive'  => $labels['evasive'],
+        ]);
     }
 
     /** Just the label, for a caller that has no room for a sentence. */

@@ -31,6 +31,7 @@ namespace Loghound\Setup;
 
 use Loghound\Assets;
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Security;
 
 final class View
@@ -88,11 +89,11 @@ final class View
         $asset = fn (string $rel): string => Assets::url($rel, $this->root);
 
         echo "<!doctype html>\n";
-        echo '<html lang="en" data-theme="auto">' . "\n<head>\n";
+        echo '<html ' . I18n::htmlAttrs() . ' data-theme="auto">' . "\n<head>\n";
         echo '<meta charset="utf-8">' . "\n";
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\n";
         echo '<meta name="robots" content="noindex, nofollow">' . "\n";
-        echo '<title>Set up Loghound</title>' . "\n";
+        echo '<title>' . I18n::html('Set up Loghound') . '</title>' . "\n";
         echo '<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">' . "\n";
         echo '<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">' . "\n";
         echo '<link rel="stylesheet" href="' . Security::esc($asset('assets/css/panel.css')) . '">' . "\n";
@@ -115,6 +116,7 @@ final class View
         echo '<main class="setup" id="main">' . "\n";
 
         $this->heading($step);
+        $this->languages($step);
         $this->rail($step);
         $this->flash();
         $this->bounce();
@@ -147,11 +149,11 @@ final class View
      */
     private function heading(string $step): void
     {
-        static $titles = [
-            Installer::STEP_STATUS  => ['Set up Loghound', 'Everything this server needs, checked one item at a time. Anything that needs fixing comes with the command that fixes it.'],
-            Installer::STEP_SOURCES => ['Choose your access logs', 'Loghound reads your webserver\'s own log files. Check that it has understood the format before anything is indexed.'],
-            Installer::STEP_STORAGE => ['Where should the index live?', 'Loghound keeps what it learns in two Solr indexes that it creates and manages for you on your Opensolr account.'],
-            Installer::STEP_ADMIN   => ['Create your sign-in', 'Set the username and password you will use to sign in to Loghound.'],
+        $titles = [
+            Installer::STEP_STATUS  => [I18n::t('Set up Loghound'), I18n::t('Everything this server needs, checked one item at a time. Anything that needs fixing comes with the command that fixes it.')],
+            Installer::STEP_SOURCES => [I18n::t('Choose your access logs'), I18n::t('Loghound reads your webserver\'s own log files. Check that it has understood the format before anything is indexed.')],
+            Installer::STEP_STORAGE => [I18n::t('Where should the index live?'), I18n::t('Loghound keeps what it learns in two Solr indexes that it creates and manages for you on your Opensolr account.')],
+            Installer::STEP_ADMIN   => [I18n::t('Create your sign-in'), I18n::t('Set the username and password you will use to sign in to Loghound.')],
         ];
 
         [$title, $lead] = $titles[$step] ?? $titles[Installer::STEP_STATUS];
@@ -170,6 +172,24 @@ final class View
      * The names come from Installer::LABELS rather than from a copy kept here, so the rail
      * and any sentence that has to refer to a step cannot call it two different things.
      */
+    private function languages(string $step): void
+    {
+        $offered = I18n::available($this->root);
+        if (count($offered) < 2) {
+            return;
+        }
+        $current = I18n::language();
+        $links = [];
+        foreach ($offered as $code => $name) {
+            $links[] = $code === $current
+                ? '<strong lang="' . Security::esc($code) . '">' . Security::esc($name) . '</strong>'
+                : '<a href="?setup=' . Security::esc(rawurlencode($step)) . '&amp;lang=' . Security::esc(rawurlencode($code))
+                    . '" lang="' . Security::esc($code) . '" hreflang="' . Security::esc($code) . '">' . Security::esc($name) . '</a>';
+        }
+        echo '<nav class="setup-lang" aria-label="' . Security::esc(I18n::t('Language')) . '">'
+            . implode('<span aria-hidden="true"> · </span>', $links) . "</nav>\n";
+    }
+
     private function rail(string $current): void
     {
         $progress = (array) ($this->ctx['progress'] ?? []);
@@ -264,15 +284,18 @@ final class View
         $configured = is_file($this->cfg->path());
 
         echo '<section class="card">';
-        echo '<h2>' . ($configured ? 'This installation is not finished' : 'Loghound has not been set up yet') . '</h2>';
+        echo '<h2>' . ($configured ? I18n::html('This installation is not finished') : I18n::html('Loghound has not been set up yet')) . '</h2>';
 
         if ($configured) {
-            echo '<p>A configuration file already exists, so nothing you have done is lost. '
-                . 'These are the pieces that are still missing:</p>';
+            echo '<p>'
+                . I18n::html('A configuration file already exists, so nothing you have done is lost. These are the '
+                    . 'pieces that are still missing:')
+                . '</p>';
         } else {
-            echo '<p>Nothing has been configured yet. This takes three short steps: which log '
-                . 'files to read, where to keep the index, and the password you will sign in '
-                . 'with.</p>';
+            echo '<p>'
+                . I18n::html('Nothing has been configured yet. This takes three short steps: which log files to read, '
+                    . 'where to keep the index, and the password you will sign in with.')
+                . '</p>';
         }
 
         if ($missing !== []) {
@@ -311,9 +334,9 @@ final class View
             return '';
         }
         if (empty($this->ctx['unlocked'])) {
-            return ' <a href="#unlock">Unlock setup first</a>';
+            return ' <a href="#unlock">' . I18n::html('Unlock setup first') . '</a>';
         }
-        return ' <a href="?setup=' . Security::esc((string) $item['step']) . '">Fix this</a>';
+        return ' <a href="?setup=' . Security::esc((string) $item['step']) . '">' . I18n::html('Fix this') . '</a>';
     }
 
     /**
@@ -330,15 +353,18 @@ final class View
     {
         if (!empty($this->ctx['unlocked'])) {
             echo '<section class="card" id="unlock">';
-            echo '<h2>Ready to continue</h2>';
-            echo '<p><span class="chip chip-good">Unlocked</span> This browser has proved it can read '
-                . 'a file on this server.</p>';
+            echo '<h2>' . I18n::html('Ready to continue') . '</h2>';
+            echo '<p>'
+                . I18n::html('{span} This browser has proved it can read a file on this server.', ['span' => '<span class="chip chip-good">' . I18n::html('Unlocked') . '</span>'])
+                . '</p>';
             if ($blocked) {
-                echo '<p class="muted">Some checks below are still failing. You can carry on, but '
-                    . 'fix them before starting the ingest daemon or it will read nothing.</p>';
+                echo '<p class="muted">'
+                    . I18n::html('Some checks below are still failing. You can carry on, but fix them before starting the '
+                        . 'ingest daemon or it will read nothing.')
+                    . '</p>';
             }
             echo '<p><a class="btn" href="?setup=' . Security::esc(Steps::firstIncomplete($this->cfg))
-                . '">Continue</a></p>';
+                . '">' . I18n::html('Continue') . '</a></p>';
             echo '</section>';
             return;
         }
@@ -346,7 +372,7 @@ final class View
         $haveToken = $this->token->ensure();
 
         echo '<section class="card" id="unlock">';
-        echo '<h2>Prove you have access to this server</h2>';
+        echo '<h2>' . I18n::html('Prove you have access to this server') . '</h2>';
 
         /* THE READ WAS PRINTED UNDER THE SENTENCE SAYING THE FILE DOES NOT EXIST. The `sudo
            cat` went out unconditionally, directly beneath a banner that had just said the
@@ -357,42 +383,46 @@ final class View
            guess. The way out is to make the directory writable, or to run the wizard in a
            shell, where no token exists at all; both are named, with absolute paths. */
         if (!$haveToken) {
-            echo '<div class="banner banner-bad" role="alert">The setup token could not be '
-                . 'created, because Loghound cannot write to its own <code class="mono">var</code> '
-                . 'directory. There is nothing to paste yet, so this form is not shown.</div>';
-            echo '<p>Give this directory to the user this page runs as '
-                . '(<code class="mono">' . Security::esc(Requirements::phpUser()) . '</code>), '
-                . 'then reload:</p>';
+            echo '<div class="banner banner-bad" role="alert">'
+                . I18n::html('The setup token could not be created, because Loghound cannot write to its own {code} '
+                    . 'directory. There is nothing to paste yet, so this form is not shown.', ['code' => '<code class="mono">var</code>'])
+                . '</div>';
+            echo '<p>'
+                . I18n::html('Give this directory to the user this page runs as ({code}), then reload:', ['code' => '<code class="mono">' . Security::esc(Requirements::phpUser()) . '</code>'])
+                . '</p>';
             echo '<pre class="snippet mono">sudo mkdir -p ' . Security::esc(dirname($this->token->path())) . "\n"
                 . 'sudo chown ' . Security::esc(Requirements::phpUser()) . ' '
                 . Security::esc(dirname($this->token->path())) . "\n"
                 . 'sudo chmod 0750 ' . Security::esc(dirname($this->token->path())) . '</pre>';
-            echo '<p class="muted">The System check below says the same thing about every '
-                . 'directory Loghound needs. Or skip the browser entirely: '
-                . '<code class="mono">' . Security::esc($this->req->cliCommand()) . '</code> runs '
-                . 'the same setup as a terminal wizard, needs no token, and produces exactly the '
-                . 'same configuration.</p>';
+            echo '<p class="muted">'
+                . I18n::html('The System check below says the same thing about every directory Loghound needs. Or skip '
+                    . 'the browser entirely: {code} runs the same setup as a terminal wizard, needs no token, '
+                    . 'and produces exactly the same configuration.', ['code' => '<code class="mono">' . Security::esc($this->req->cliCommand()) . '</code>'])
+                . '</p>';
             echo '</section>';
             return;
         }
 
-        echo '<p>Anyone can reach this page — it is on the internet, and Loghound is not '
-            . 'configured yet. So before anything can be saved, paste the setup token. It is in a '
-            . 'file only this server\'s administrator can read:</p>';
+        echo '<p>'
+            . I18n::html('Anyone can reach this page — it is on the internet, and Loghound is not configured yet. '
+                . 'So before anything can be saved, paste the setup token. It is in a file only this '
+                . 'server\'s administrator can read:')
+            . '</p>';
 
         echo '<pre class="snippet mono">sudo cat ' . Security::esc($this->token->path()) . '</pre>';
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STATUS) . '" class="setup-form">';
         $this->csrf(Installer::STEP_STATUS, 'unlock');
-        echo '<label for="token">Setup token</label>';
+        echo '<label for="token">' . I18n::html('Setup token') . '</label>';
         echo '<input type="text" id="token" name="token" autocomplete="off" spellcheck="false" '
             . 'inputmode="latin" size="40" required>';
-        echo '<button type="submit" class="primary">Unlock setup</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Unlock setup') . '</button>';
         echo '</form>';
 
-        echo '<p class="muted">Would rather do it in the shell? '
-            . '<code>' . Security::esc($this->req->cliCommand()) . '</code> runs the same setup as a '
-            . 'terminal wizard and produces exactly the same configuration.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Would rather do it in the shell? {code} runs the same setup as a terminal wizard and '
+                . 'produces exactly the same configuration.', ['code' => '<code>' . Security::esc($this->req->cliCommand()) . '</code>'])
+            . '</p>';
         echo '</section>';
     }
 
@@ -404,19 +434,20 @@ final class View
     private function checksTable(array $rows): void
     {
         echo '<section class="card">';
-        echo '<h2>System check</h2>';
-        echo '<p class="pop">Checked as <code>' . Security::esc(Requirements::phpUser())
-            . '</code>, the user this page runs as. Every fix below names that user and those '
-            . 'paths; the ones that genuinely need root carry <code class="mono">sudo</code>.</p>';
+        echo '<h2>' . I18n::html('System check') . '</h2>';
+        echo '<p class="pop">'
+            . I18n::html('Checked as {code}, the user this page runs as. Every fix below names that user and those '
+                . 'paths; the ones that genuinely need root carry {code2}.', ['code' => '<code>' . Security::esc(Requirements::phpUser()) . '</code>', 'code2' => '<code class="mono">sudo</code>'])
+            . '</p>';
 
         echo '<div class="table-wrap"><table class="tight checks"><thead><tr>'
-            . '<th scope="col">Status</th><th scope="col">Requirement</th><th scope="col">Detail</th>'
+            . '<th scope="col">' . I18n::html('Status') . '</th><th scope="col">' . I18n::html('Requirement') . '</th><th scope="col">' . I18n::html('Detail') . '</th>'
             . '</tr></thead><tbody>';
 
         foreach ($rows as $row) {
             $state = (string) $row['state'];
             $chip = $state === 'pass' ? 'chip-good' : ($state === 'warn' ? 'chip-warn' : 'chip-bad');
-            $word = $state === 'pass' ? 'OK' : ($state === 'warn' ? 'Note' : 'Fix');
+            $word = $state === 'pass' ? I18n::html('OK') : ($state === 'warn' ? I18n::html('Note') : I18n::html('Fix'));
 
             echo '<tr>';
             echo '<td class="nowrap"><span class="chip ' . $chip . '">' . $word . '</span></td>';
@@ -455,28 +486,28 @@ final class View
         $jobs = (array) ($this->ctx['jobs'] ?? []);
 
         echo '<section class="card">';
-        echo '<h2>Search index</h2>';
+        echo '<h2>' . I18n::html('Search index') . '</h2>';
         echo '<dl class="kv">';
-        echo '<dt>Hits index</dt><dd class="mono">'
+        echo '<dt>' . I18n::html('Hits index') . '</dt><dd class="mono">'
             . Security::esc((string) $this->cfg->get('solr.hits_core', '-')) . '</dd>';
-        echo '<dt>Sessions index</dt><dd class="mono">'
+        echo '<dt>' . I18n::html('Sessions index') . '</dt><dd class="mono">'
             . Security::esc((string) $this->cfg->get('solr.sessions_core', '-')) . '</dd>';
         echo '</dl>';
 
         if (empty($this->ctx['unlocked'])) {
-            echo '<p class="muted">Unlock setup above to test the connection.</p>';
+            echo '<p class="muted">' . I18n::html('Unlock setup above to test the connection.') . '</p>';
             echo '</section>';
             return;
         }
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '">';
         $this->csrf(Installer::STEP_STORAGE, 'test');
-        echo '<button type="submit">Test the connection</button>';
+        echo '<button type="submit">' . I18n::html('Test the connection') . '</button>';
         echo '</form>';
         echo '</section>';
 
         if (isset($jobs[Job::KIND_SOLRTEST])) {
-            $this->jobPanel(Job::KIND_SOLRTEST, (string) $jobs[Job::KIND_SOLRTEST], 'Testing the connection');
+            $this->jobPanel(Job::KIND_SOLRTEST, (string) $jobs[Job::KIND_SOLRTEST], I18n::t('Testing the connection'));
         }
     }
 
@@ -513,20 +544,22 @@ final class View
         $jobId = (string) ($jobs[Job::KIND_DETECT] ?? '');
 
         echo '<section class="card">';
-        echo '<h2>Find the logs</h2>';
-        echo '<p>Loghound reads your Apache or nginx configuration where it can — that gives the '
-            . 'exact format and the virtual host of every access log, with nothing guessed. Where it '
-            . 'cannot, it scores real sample lines against the formats it knows.</p>';
+        echo '<h2>' . I18n::html('Find the logs') . '</h2>';
+        echo '<p>'
+            . I18n::html('Loghound reads your Apache or nginx configuration where it can — that gives the exact '
+                . 'format and the virtual host of every access log, with nothing guessed. Where it cannot, '
+                . 'it scores real sample lines against the formats it knows.')
+            . '</p>';
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_SOURCES) . '">';
         $this->csrf(Installer::STEP_SOURCES, 'detect');
         echo '<button type="submit" class="primary">'
-            . ($sources === [] ? 'Scan this server' : 'Scan again') . '</button>';
+            . ($sources === [] ? I18n::html('Scan this server') : I18n::html('Scan again')) . '</button>';
         echo '</form>';
         echo '</section>';
 
         if ($jobId !== '') {
-            $this->jobPanel(Job::KIND_DETECT, $jobId, 'Scanning');
+            $this->jobPanel(Job::KIND_DETECT, $jobId, I18n::t('Scanning'));
         }
 
         foreach ($sources as $i => $src) {
@@ -536,21 +569,24 @@ final class View
         if ($sources !== []) {
             echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_SOURCES) . '" class="card">';
             $this->csrf(Installer::STEP_SOURCES, 'confirm');
-            echo '<h2>Confirm</h2>';
-            echo '<p>Everything found is ticked. Untick anything whose parsed lines above look wrong, '
-                . 'then confirm. You can change this later in Settings.</p>';
+            echo '<h2>' . I18n::html('Confirm') . '</h2>';
+            echo '<p>'
+                . I18n::html('Everything found is ticked. Untick anything whose parsed lines above look wrong, then '
+                    . 'confirm. You can change this later in Settings.')
+                . '</p>';
             foreach ($sources as $i => $src) {
                 $path = (string) ($src['path'] ?? '');
                 echo '<label class="check"><input type="checkbox" name="pick[]" value="' . (int) $i . '" checked>'
                     . '<span class="mono">' . Security::esc($path) . '</span></label>';
                 if (!empty($src['outside_roots'])) {
                     echo '<label class="check setup-widen"><input type="checkbox" name="widen[]" value="' . (int) $i . '">'
-                        . '<span>Also allow Loghound to read files under <span class="mono">'
-                        . Security::esc(dirname($path)) . '</span> — it is outside the directories it '
-                        . 'may read today, and it will be refused without this.</span></label>';
+                        . '<span>' . I18n::html('Also allow Loghound to read files under {dir} — it is outside the directories it '
+                        . 'may read today, and it will be refused without this.', [
+                            'dir' => '<span class="mono">' . Security::esc(dirname($path)) . '</span>',
+                        ]) . '</span></label>';
                 }
             }
-            echo '<button type="submit" class="primary">These look right — continue</button>';
+            echo '<button type="submit" class="primary">' . I18n::html('These look right — continue') . '</button>';
             echo '</form>';
         }
 
@@ -576,16 +612,16 @@ final class View
         echo '</div>';
 
         echo '<dl class="kv">';
-        echo '<dt>Detected from</dt><dd>' . Security::esc((string) ($src['source'] ?? 'unknown')) . '</dd>';
-        echo '<dt>Format</dt><dd class="mono">' . Security::esc((string) ($src['format_name'] ?? '')) . '</dd>';
+        echo '<dt>' . I18n::html('Detected from') . '</dt><dd>' . Security::esc((string) ($src['source'] ?? 'unknown')) . '</dd>';
+        echo '<dt>' . I18n::html('Format') . '</dt><dd class="mono">' . Security::esc(I18n::t((string) ($src['format_name'] ?? ''))) . '</dd>';
         if ((string) ($src['format_string'] ?? '') !== '') {
-            echo '<dt>Format string</dt><dd><code class="mono wrap">'
+            echo '<dt>' . I18n::html('Format string') . '</dt><dd><code class="mono wrap">'
                 . Security::esc((string) $src['format_string']) . '</code></dd>';
         }
         if (!empty($src['vhost'])) {
-            echo '<dt>Website</dt><dd class="mono">' . Security::esc((string) $src['vhost']) . '</dd>';
+            echo '<dt>' . I18n::html('Website') . '</dt><dd class="mono">' . Security::esc((string) $src['vhost']) . '</dd>';
         }
-        echo '<dt>Sample</dt><dd>' . (int) ($src['lines_parsed'] ?? 0) . ' of '
+        echo '<dt>' . I18n::html('Sample') . '</dt><dd>' . (int) ($src['lines_parsed'] ?? 0) . ' of '
             . (int) ($src['lines_tested'] ?? 0) . ' recent lines parsed cleanly '
             . '<span class="meter" role="img" aria-label="'
             . Security::esc(number_format($confidence, 1)) . ' percent"><span class="meter-fill" style="width:'
@@ -593,8 +629,10 @@ final class View
         echo '</dl>';
 
         if (!empty($src['outside_roots'])) {
-            echo '<div class="banner banner-warn">This file is outside the directories Loghound is '
-                . 'allowed to read. Confirming it needs the extra tick below the list.</div>';
+            echo '<div class="banner banner-warn">'
+                . I18n::html('This file is outside the directories Loghound is allowed to read. Confirming it needs the '
+                    . 'extra tick below the list.')
+                . '</div>';
         }
 
         $this->mappingTable((array) ($src['mapping'] ?? []));
@@ -606,7 +644,9 @@ final class View
             foreach ((array) $src['alternatives'] as $alt) {
                 $alts[] = (string) $alt['name'] . ' (' . number_format((float) $alt['confidence'], 1) . '%)';
             }
-            echo '<p class="muted">Also considered: ' . Security::esc(implode(', ', $alts)) . '</p>';
+            echo '<p class="muted">'
+                . I18n::html('Also considered: {alts}', ['alts' => Security::esc(implode(', ', $alts))])
+                . '</p>';
         }
 
         echo '</section>';
@@ -622,14 +662,14 @@ final class View
         if ($mapping === []) {
             return;
         }
-        echo '<h4>Field mapping</h4>';
+        echo '<h4>' . I18n::html('Field mapping') . '</h4>';
         echo '<div class="table-wrap"><table class="tight"><thead><tr>'
-            . '<th scope="col">Log field</th><th scope="col">Loghound field</th><th scope="col">Example</th>'
+            . '<th scope="col">' . I18n::html('Log field') . '</th><th scope="col">' . I18n::html('Loghound field') . '</th><th scope="col">' . I18n::html('Example') . '</th>'
             . '</tr></thead><tbody>';
         foreach ($mapping as $m) {
             echo '<tr>';
             echo '<td class="mono nowrap">' . Security::esc((string) ($m['token'] ?? '')) . '</td>';
-            echo '<td class="mono nowrap">' . Security::esc((string) ($m['field'] ?? '')) . '</td>';
+            echo '<td class="mono nowrap">' . Security::esc(I18n::t((string) ($m['field'] ?? ''))) . '</td>';
             echo '<td class="mono clip">' . Security::esc((string) ($m['example'] ?? '')) . '</td>';
             echo '</tr>';
         }
@@ -646,7 +686,7 @@ final class View
         if ($missing === []) {
             return;
         }
-        echo '<h4>Not logged — and what that costs you</h4>';
+        echo '<h4>' . I18n::html('Not logged — and what that costs you') . '</h4>';
         echo '<ul class="missing">';
         foreach ($missing as $m) {
             echo '<li><code class="mono">' . Security::esc((string) ($m['token'] ?? '')) . '</code> → '
@@ -654,8 +694,10 @@ final class View
                 . Security::esc((string) ($m['why'] ?? '')) . '</li>';
         }
         echo '</ul>';
-        echo '<p class="muted">Plain <code>combined</code> works — it just detects less. '
-            . '<code>docs/INSTALL.md</code> has a copy-paste <code>LogFormat</code> that adds all of these.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Plain {code} works — it just detects less. {code2} has a copy-paste {code3} that adds '
+                . 'all of these.', ['code' => '<code>combined</code>', 'code2' => '<code>docs/INSTALL.md</code>', 'code3' => '<code>LogFormat</code>'])
+            . '</p>';
     }
 
     /**
@@ -671,13 +713,15 @@ final class View
     private function sampleLines(array $samples): void
     {
         if ($samples === []) {
-            echo '<p class="muted">No line in this file could be parsed with that format. '
-                . 'Confirming it would fill the index with nothing.</p>';
+            echo '<p class="muted">'
+                . I18n::html('No line in this file could be parsed with that format. Confirming it would fill the index '
+                    . 'with nothing.')
+                . '</p>';
             return;
         }
 
-        echo '<h4>Lines from this file, as Loghound reads them</h4>';
-        echo '<p class="muted">Read these. If a value is in the wrong column, the format is wrong.</p>';
+        echo '<h4>' . I18n::html('Lines from this file, as Loghound reads them') . '</h4>';
+        echo '<p class="muted">' . I18n::html('Read these. If a value is in the wrong column, the format is wrong.') . '</p>';
 
         foreach ($samples as $sample) {
             echo '<div class="sample">';
@@ -706,15 +750,16 @@ final class View
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_SOURCES) . '" class="card">';
         $this->csrf(Installer::STEP_SOURCES, 'manual');
-        echo '<h2>Add a log file by hand</h2>';
-        echo '<p>If your logs are somewhere unusual, name the file. It has to be inside '
-            . Security::esc(implode(', ', $roots)) . '.</p>';
+        echo '<h2>' . I18n::html('Add a log file by hand') . '</h2>';
+        echo '<p>'
+            . I18n::html('If your logs are somewhere unusual, name the file. It has to be inside {roots}.', ['roots' => Security::esc(implode(', ', $roots))])
+            . '</p>';
 
-        echo '<label for="path">Path to the access log</label>';
+        echo '<label for="path">' . I18n::html('Path to the access log') . '</label>';
         echo '<input type="text" id="path" name="path" class="mono" size="48" '
             . 'placeholder="/var/log/apache2/example_com_access.log">';
 
-        echo '<label for="format">Format</label>';
+        echo '<label for="format">' . I18n::html('Format') . '</label>';
         echo '<select id="format" name="format">';
         foreach (Detector::formatChoices() as $value => $label) {
             echo '<option value="' . Security::esc((string) $value) . '">'
@@ -723,15 +768,16 @@ final class View
         echo '</select>';
 
         echo '<div id="regex-row" hidden>';
-        echo '<label for="regex">Pattern, with named groups</label>';
+        echo '<label for="regex">' . I18n::html('Pattern, with named groups') . '</label>';
         echo '<input type="text" id="regex" name="regex" class="mono" size="60" '
             . 'placeholder="/^(?&lt;remote_addr&gt;\S+) \S+ \S+ \[(?&lt;time&gt;[^\]]+)\].*$/">';
-        echo '<p class="muted">Checked before it is stored: a pattern that does not compile, or one '
-            . 'that backtracks badly enough to stall ingestion, is refused here rather than at '
-            . 'three in the morning.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Checked before it is stored: a pattern that does not compile, or one that backtracks '
+                . 'badly enough to stall ingestion, is refused here rather than at three in the morning.')
+            . '</p>';
         echo '</div>';
 
-        echo '<button type="submit">Add this file</button>';
+        echo '<button type="submit">' . I18n::html('Add this file') . '</button>';
         echo '</form>';
     }
 
@@ -748,38 +794,39 @@ final class View
         $jobs = (array) ($this->ctx['jobs'] ?? []);
 
         if (isset($jobs[Job::KIND_OPENSOLR])) {
-            $this->jobPanel(Job::KIND_OPENSOLR, (string) $jobs[Job::KIND_OPENSOLR], 'Creating your indexes');
+            $this->jobPanel(Job::KIND_OPENSOLR, (string) $jobs[Job::KIND_OPENSOLR], I18n::t('Creating your indexes'));
         }
         if (isset($jobs[Job::KIND_REUSE])) {
-            $this->jobPanel(Job::KIND_REUSE, (string) $jobs[Job::KIND_REUSE], 'Joining your existing indexes');
+            $this->jobPanel(Job::KIND_REUSE, (string) $jobs[Job::KIND_REUSE], I18n::t('Joining your existing indexes'));
         }
         if (isset($jobs[Job::KIND_SOLRTEST])) {
-            $this->jobPanel(Job::KIND_SOLRTEST, (string) $jobs[Job::KIND_SOLRTEST], 'Testing the connection');
+            $this->jobPanel(Job::KIND_SOLRTEST, (string) $jobs[Job::KIND_SOLRTEST], I18n::t('Testing the connection'));
         }
 
         if (!empty(((array) ($this->ctx['progress'] ?? []))[Installer::STEP_STORAGE])) {
             echo '<section class="card">';
-            echo '<h2>Storage is configured</h2>';
+            echo '<h2>' . I18n::html('Storage is configured') . '</h2>';
             echo '<dl class="kv">';
-            echo '<dt>Hits index</dt><dd class="mono">'
+            echo '<dt>' . I18n::html('Hits index') . '</dt><dd class="mono">'
                 . Security::esc((string) $this->cfg->get('solr.hits_core')) . '</dd>';
-            echo '<dt>Sessions index</dt><dd class="mono">'
+            echo '<dt>' . I18n::html('Sessions index') . '</dt><dd class="mono">'
                 . Security::esc((string) $this->cfg->get('solr.sessions_core')) . '</dd>';
-            echo '<dt>Address</dt><dd class="mono wrap">'
+            echo '<dt>' . I18n::html('Address') . '</dt><dd class="mono wrap">'
                 . Security::esc((string) $this->cfg->get('solr.base_url')) . '</dd>';
             echo '</dl>';
             echo '<p><a class="btn primary" href="?setup=' . Security::esc(Installer::STEP_ADMIN)
-                . '">Continue</a></p>';
+                . '">' . I18n::html('Continue') . '</a></p>';
             echo '</section>';
 
             echo '<details class="card">';
-            echo '<summary>Point this installation at different indexes</summary>';
-            echo '<p class="muted">The two indexes above already exist and answer, so normally '
-                . 'there is nothing to do here — carry on with Continue. Opening this shows the '
-                . 'same one-choice list as a fresh install: any pair your account already holds, '
-                . 'which creates nothing, or a new pair under a fresh name. Picking a new pair '
-                . 'leaves the current two on your account, where they keep counting against your '
-                . 'plan until you delete them.</p>';
+            echo '<summary>' . I18n::html('Point this installation at different indexes') . '</summary>';
+            echo '<p class="muted">'
+                . I18n::html('The two indexes above already exist and answer, so normally there is nothing to do here '
+                    . '— carry on with Continue. Opening this shows the same one-choice list as a fresh '
+                    . 'install: any pair your account already holds, which creates nothing, or a new pair under '
+                    . 'a fresh name. Picking a new pair leaves the current two on your account, where they keep '
+                    . 'counting against your plan until you delete them.')
+                . '</p>';
             $this->opensolrPanel();
             echo '</details>';
 
@@ -811,43 +858,49 @@ final class View
         $email = (string) $this->cfg->get('opensolr.email', '');
 
         echo '<section class="card storage-option on">';
-        echo '<h2>Let Opensolr host it</h2>';
-        echo '<p><strong>You do not need to run Solr.</strong> Enter your Opensolr account details '
-            . 'and Loghound creates both indexes, uploads their configuration and checks that they '
-            . 'answer. Backups, downloads and restores are then available in your Opensolr control '
-            . 'panel; you never have to learn what a configset is.</p>';
-        echo '<p class="muted">An Opensolr account is required. Loghound provisions and manages its '
-            . 'own two indexes — creating them, uploading their configsets and reloading them — and '
-            . 'it cannot do that on a Solr it does not administer, so there is no option to point it '
-            . 'at one.</p>';
-
-        echo '<p class="muted"><strong>You need an Opensolr account to get started, and it is free '
-            . 'forever to start — no credit card, no expiry date.</strong> Retention scales with the '
-            . 'plan rather than being cut off by it: Loghound trims its oldest data before the account '
-            . 'reaches its disk limit, so the free tier keeps running and simply holds less history.</p>';
+        echo '<h2>' . I18n::html('Let Opensolr host it') . '</h2>';
+        echo '<p>'
+            . I18n::html('{strong} Enter your Opensolr account details and Loghound creates both indexes, uploads '
+                . 'their configuration and checks that they answer. Backups, downloads and restores are then '
+                . 'available in your Opensolr control panel; you never have to learn what a configset is.', ['strong' => '<strong>' . I18n::html('You do not need to run Solr.') . '</strong>'])
+            . '</p>';
+        echo '<p class="muted">'
+            . I18n::html('An Opensolr account is required. Loghound provisions and manages its own two indexes — '
+                . 'creating them, uploading their configsets and reloading them — and it cannot do that on '
+                . 'a Solr it does not administer, so there is no option to point it at one.')
+            . '</p>';
 
         echo '<p class="muted">'
-            . '<a href="' . Security::safeUrl(self::URL_REGISTER) . '" target="_blank" rel="noopener noreferrer">Create a free account</a> &middot; '
-            . '<a href="' . Security::safeUrl(self::URL_LOGIN) . '" target="_blank" rel="noopener noreferrer">Sign in</a> &middot; '
-            . '<a href="' . Security::safeUrl(self::URL_PLANS) . '" target="_blank" rel="noopener noreferrer">What the plans hold</a>'
+            . I18n::html('{strong} Retention scales with the plan rather than being cut off by it: Loghound trims '
+                . 'its oldest data before the account reaches its disk limit, so the free tier keeps running '
+                . 'and simply holds less history.', ['strong' => '<strong>' . I18n::html('You need an Opensolr account to get started, and it is free forever to start — no credit card, no expiry date.') . '</strong>'])
+            . '</p>';
+
+        echo '<p class="muted">'
+            . '<a href="' . Security::safeUrl(self::URL_REGISTER) . '" target="_blank" rel="noopener noreferrer">' . I18n::html('Create a free account') . '</a> &middot; '
+            . '<a href="' . Security::safeUrl(self::URL_LOGIN) . '" target="_blank" rel="noopener noreferrer">' . I18n::html('Sign in') . '</a> &middot; '
+            . '<a href="' . Security::safeUrl(self::URL_PLANS) . '" target="_blank" rel="noopener noreferrer">' . I18n::html('What the plans hold') . '</a>'
             . '</p>';
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
         $this->csrf(Installer::STEP_STORAGE, 'credentials');
 
-        echo '<label for="email">Opensolr account email</label>';
+        echo '<label for="email">' . I18n::html('Opensolr account email') . '</label>';
         echo '<input type="email" id="email" name="email" size="34" autocomplete="off" required '
             . 'value="' . Security::esc($email) . '">';
 
-        echo '<label for="api_key">API key'
-            . ($haveKey ? ' <span class="chip chip-good">stored</span>' : '') . '</label>';
+        echo '<label for="api_key">'
+            . I18n::html('API key{html}', ['html' => ($haveKey ? ' <span class="chip chip-good">' . I18n::html('stored') . '</span>' : '')])
+            . '</label>';
         echo '<input type="password" id="api_key" name="api_key" size="34" autocomplete="off" '
             . 'spellcheck="false"' . ($haveKey ? '' : ' required') . '>';
-        echo '<p class="muted">In your Opensolr control panel it is under <strong>Account</strong>. '
-            . 'It is stored in a file outside the web root that only this server can read, and it is '
-            . 'never shown again — not here, not in the dashboard, not in a log.</p>';
+        echo '<p class="muted">'
+            . I18n::html('In your Opensolr control panel it is under {strong}. It is stored in a file outside the '
+                . 'web root that only this server can read, and it is never shown again — not here, not in '
+                . 'the dashboard, not in a log.', ['strong' => '<strong>' . I18n::html('Account') . '</strong>'])
+            . '</p>';
 
-        echo '<button type="submit" class="primary">Check these credentials</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Check these credentials') . '</button>';
         echo '</form>';
 
         echo '</section>';
@@ -886,7 +939,7 @@ final class View
         $failed   = empty($account['ok']);
 
         echo '<section class="card">';
-        echo '<h2>Your Opensolr account</h2>';
+        echo '<h2>' . I18n::html('Your Opensolr account') . '</h2>';
 
         if ($failed) {
             echo '<div class="banner banner-bad" role="alert">'
@@ -900,7 +953,7 @@ final class View
 
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_STORAGE) . '" class="setup-form">';
         $this->csrf(Installer::STEP_STORAGE, 'refresh');
-        echo '<button type="submit">Check the account again</button>';
+        echo '<button type="submit">' . I18n::html('Check the account again') . '</button>';
         echo '</form>';
         echo '</section>';
     }
@@ -954,7 +1007,7 @@ final class View
                 echo '<li>' . Security::esc($way['text']);
                 if ($way['url'] !== '') {
                     echo ' <a href="' . Security::safeUrl($way['url'])
-                        . '" target="_blank" rel="noopener noreferrer">Open your Opensolr account</a>';
+                        . '" target="_blank" rel="noopener noreferrer">' . I18n::html('Open your Opensolr account') . '</a>';
                 }
                 echo '</li>';
             }
@@ -979,7 +1032,7 @@ final class View
                 (string) $pair['install_id'],
                 [(string) $pair['hits'], (string) $pair['sessions']],
                 $first,
-                $pair['current'] ? 'In use here' : ''
+                $pair['current'] ? I18n::t('In use here') : ''
             );
             $first = false;
         }
@@ -996,7 +1049,7 @@ final class View
             );
             echo '</div>';
 
-            echo '<label for="region">Region for a new pair</label>';
+            echo '<label for="region">' . I18n::html('Region for a new pair') . '</label>';
             echo '<select id="region" name="region">';
             foreach ($regions as $region) {
                 $region = (string) $region;
@@ -1015,10 +1068,10 @@ final class View
         if ($step['pairs'] !== []) {
             echo '<p class="muted">' . Security::esc($step['consequence']) . '</p>';
             echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
-                . 'Add the fields this version writes, if the pair was made by an older Loghound</label>';
+                . I18n::html('Add the fields this version writes, if the pair was made by an older Loghound') . '</label>';
         }
 
-        echo '<button type="submit" class="primary">Use these indexes</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Use these indexes') . '</button>';
         echo '</form>';
         echo '</section>';
     }
@@ -1075,36 +1128,41 @@ final class View
         echo '<form method="post" action="?setup=' . Security::esc(Installer::STEP_ADMIN) . '" class="card">';
         $this->csrf(Installer::STEP_ADMIN, 'finish');
 
-        echo '<h2>Your sign-in</h2>';
-        echo '<p>Loghound shows every visitor, page and address on your site, so it is never served '
-            . 'without a password.</p>';
+        echo '<h2>' . I18n::html('Your sign-in') . '</h2>';
+        echo '<p>'
+            . I18n::html('Loghound shows every visitor, page and address on your site, so it is never served '
+                . 'without a password.')
+            . '</p>';
 
-        echo '<label for="user">Username</label>';
+        echo '<label for="user">' . I18n::html('Username') . '</label>';
         echo '<input type="text" id="user" name="user" size="24" autocomplete="username" required value="'
             . Security::esc((string) $this->cfg->get('auth.user', 'admin')) . '">';
 
-        echo '<label for="password">Password</label>';
+        echo '<label for="password">' . I18n::html('Password') . '</label>';
         echo '<input type="password" id="password" name="password" size="24" '
             . 'autocomplete="new-password" minlength="' . Steps::MIN_PASSWORD . '" required>';
 
-        echo '<label for="password2">Password again</label>';
+        echo '<label for="password2">' . I18n::html('Password again') . '</label>';
         echo '<input type="password" id="password2" name="password2" size="24" '
             . 'autocomplete="new-password" minlength="' . Steps::MIN_PASSWORD . '" required>';
-        echo '<p class="muted">At least ' . Steps::MIN_PASSWORD . ' characters. Stored as a hash; '
-            . 'nobody, including this page, can read it back.</p>';
+        echo '<p class="muted">'
+            . I18n::html('At least {min_password} characters. Stored as a hash; nobody, including this page, can read it back.', ['min_password' => Steps::MIN_PASSWORD])
+            . '</p>';
 
         $this->authModeChoice();
 
-        echo '<h2>Address of this panel</h2>';
-        echo '<label for="base_url">Public URL</label>';
+        echo '<h2>' . I18n::html('Address of this panel') . '</h2>';
+        echo '<label for="base_url">' . I18n::html('Public URL') . '</label>';
         echo '<input type="url" id="base_url" name="base_url" class="mono" size="40" value="'
             . Security::esc($guessed) . '">';
-        echo '<p class="muted">Used to build the one-line beacon snippet you add to your site.</p>';
+        echo '<p class="muted">' . I18n::html('Used to build the one-line beacon snippet you add to your site.') . '</p>';
 
-        echo '<button type="submit" class="primary">Finish and open the dashboard</button>';
-        echo '<p class="muted">Loghound will then ask you to sign in for the first time, with the '
-            . 'username and password you just chose — either through your browser\'s own prompt or '
-            . 'through its sign-in page, depending on which you picked above.</p>';
+        echo '<button type="submit" class="primary">' . I18n::html('Finish and open the dashboard') . '</button>';
+        echo '<p class="muted">'
+            . I18n::html('Loghound will then ask you to sign in for the first time, with the username and password '
+                . 'you just chose — either through your browser\'s own prompt or through its sign-in page, '
+                . 'depending on which you picked above.')
+            . '</p>';
         echo '</form>';
 
         $this->nextStepsCard();
@@ -1128,9 +1186,9 @@ final class View
             $current = 'basic';
         }
 
-        echo '<h2>How you sign in</h2>';
+        echo '<h2>' . I18n::html('How you sign in') . '</h2>';
         echo '<fieldset>';
-        echo '<legend>Which sign-in should Loghound use?</legend>';
+        echo '<legend>' . I18n::html('Which sign-in should Loghound use?') . '</legend>';
 
         echo '<div class="optlist">';
         foreach (Steps::authModes() as $key => $mode) {
@@ -1147,7 +1205,7 @@ final class View
         echo '</div>';
 
         echo '</fieldset>';
-        echo '<p class="muted">Changeable later under Settings, without setting the password again.</p>';
+        echo '<p class="muted">' . I18n::html('Changeable later under Settings, without setting the password again.') . '</p>';
     }
 
     /**
@@ -1160,10 +1218,12 @@ final class View
     private function nextStepsCard(): void
     {
         echo '<section class="card">';
-        echo '<h2>After you finish</h2>';
-        echo '<p>Loghound reads logs from a small daemon, not from this page. These commands are kept '
-            . 'under <strong>Settings</strong> in the panel as well, together with whether each one has '
-            . 'actually taken effect, so nothing here is lost when this screen goes away.</p>';
+        echo '<h2>' . I18n::html('After you finish') . '</h2>';
+        echo '<p>'
+            . I18n::html('Loghound reads logs from a small daemon, not from this page. These commands are kept '
+                . 'under {strong} in the panel as well, together with whether each one has actually taken '
+                . 'effect, so nothing here is lost when this screen goes away.', ['strong' => '<strong>' . I18n::html('Settings') . '</strong>'])
+            . '</p>';
 
         foreach (Steps::nextSteps($this->cfg, $this->root, true) as $group) {
             echo '<h4>' . Security::esc($group['title']) . '</h4>';
@@ -1198,7 +1258,7 @@ final class View
         echo Security::esc(implode("\n", $group['lines']));
         echo '</pre>';
         echo '<button type="button" class="copy-btn" data-copy="' . Security::esc($id) . '"'
-            . ' aria-live="polite">Copy</button>';
+            . ' aria-live="polite">' . I18n::html('Copy') . '</button>';
         echo '</div>';
     }
 
@@ -1272,7 +1332,7 @@ final class View
                     echo '<input type="hidden" name="upgrade_schema" value="1">';
                 }
             }
-            echo '<button type="submit">Try again</button>';
+            echo '<button type="submit">' . I18n::html('Try again') . '</button>';
             echo '</form>';
         }
         echo '</div>';
@@ -1282,9 +1342,10 @@ final class View
                 . Security::esc((string) $status['error']) . '</div>';
         }
 
-        echo '<noscript><p class="muted">This step reports progress with JavaScript. Without it, '
-            . 'run <code>' . Security::esc($this->req->cliCommand()) . '</code> in a shell instead — '
-            . 'it does exactly the same work.</p></noscript>';
+        echo '<noscript><p class="muted">'
+            . I18n::html('This step reports progress with JavaScript. Without it, run {code} in a shell instead — '
+                . 'it does exactly the same work.', ['code' => '<code>' . Security::esc($this->req->cliCommand()) . '</code>'])
+            . '</p></noscript>';
 
         echo '</section>';
     }
@@ -1344,7 +1405,7 @@ final class View
     private function footer(): void
     {
         echo '<footer class="foot">';
-        echo '<span>Loghound setup</span>';
+        echo '<span>' . I18n::html('Loghound setup') . '</span>';
         echo '<span class="mono">' . Security::esc(gmdate('m/d/Y H:i:s')) . ' UTC</span>';
         echo '</footer>' . "\n";
     }

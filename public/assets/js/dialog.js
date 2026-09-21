@@ -32,6 +32,7 @@
 'use strict';
 
 import { byId, el, fill } from './core.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /** Subject kind → opener. A view registers what it knows how to open. */
 const openers = new Map();
@@ -108,8 +109,8 @@ function ensureDialog() {
         type: 'button',
         class: 'lh-dialog-x',
         id: 'lh-dialog-close',
-        'aria-label': 'Close',
-        title: 'Close',
+        'aria-label': T('Close'),
+        title: T('Close'),
         text: '×'
     });
     const body = el('div', { class: 'lh-dialog-body', id: 'lh-dialog-body', tabindex: '-1' });
@@ -248,13 +249,13 @@ export function openDialog(title, subtitle) {
     const root = ensureDialog();
     generation += 1;
 
-    byId('lh-dialog-title').textContent = String(title || 'Detail');
+    byId('lh-dialog-title').textContent = String(title || T('Detail'));
     const sub = byId('lh-dialog-sub');
     sub.textContent = String(subtitle || '');
     sub.hidden = !subtitle;
 
     const body = byId('lh-dialog-body');
-    fill(body, [el('p', { class: 'muted', text: 'Loading…' })]);
+    fill(body, [el('p', { class: 'muted', text: T('Loading…') })]);
 
     /* WHOEVER OPENED IT GETS FOCUS BACK, however it was opened. A dialog opened straight from
        code — the value browser, reached by pressing "Show all" in a facet list — has no row
@@ -391,7 +392,7 @@ export function closeDialog() {
  */
 export function dialogFail(body, err, retry) {
     const parts = [
-        el('h3', { text: 'This could not be loaded' }),
+        el('h3', { text: T('This could not be loaded') }),
         el('p', { text: String(err && err.message ? err.message : err) })
     ];
 
@@ -402,7 +403,7 @@ export function dialogFail(body, err, retry) {
        place. Callers that genuinely have nothing to re-run pass nothing and get the message
        alone, which is what this always did. */
     if (typeof retry === 'function') {
-        const button = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        const button = el('button', { type: 'button', class: 'small', text: T('Try again') });
         button.addEventListener('click', () => {
             button.disabled = true;
             fill(body, [el('p', { class: 'muted', text: 'Loading\u2026' })]);
@@ -459,11 +460,11 @@ function dispatch(kind, data, opener) {
     const run = () => Promise.resolve(fn(data)).catch((err) => {
         let body = byId('lh-dialog-body');
         if (!body) {
-            openDialog('That could not be opened', '');
+            openDialog(T('That could not be opened'), '');
             body = byId('lh-dialog-body');
         }
         if (body) {
-            dialogFail(body, err instanceof Error ? err : new Error('The detail view failed to render.'), run);
+            dialogFail(body, err instanceof Error ? err : new Error(T('The detail view failed to render.')), run);
         }
         console.error('loghound: opening a ' + kind + ' failed', err);
     });

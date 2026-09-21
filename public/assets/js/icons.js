@@ -35,6 +35,8 @@
 
 'use strict';
 
+import { t as T } from './i18n.js';
+
 const NS = 'http://www.w3.org/2000/svg';
 
 /**
@@ -299,7 +301,7 @@ export function identMark(device) {
     if (mark) {
         mark.classList.add('vglyph', 'ident-mark');
         const title = document.createElementNS(NS, 'title');
-        title.textContent = IDENT_DEVICES.includes(key) ? key.charAt(0).toUpperCase() + key.slice(1) : 'Email';
+        title.textContent = IDENT_DEVICES.includes(key) ? key.charAt(0).toUpperCase() + key.slice(1) : T('Email');
         mark.appendChild(title);
     }
     return mark;

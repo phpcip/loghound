@@ -21,6 +21,7 @@ import { dimRow, dimValue } from '../identity.js';
 import { pathCell } from '../url.js';
 import { tokens } from '../charts.js';
 import { clearTableChart, rankChart, splitChart } from '../tablecharts.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /**
  * The split bar: what share of a landing page's measurable visits bounced against what share
@@ -40,17 +41,17 @@ function splitBar(row) {
         el('span', {
             class: 'bar-evasive',
             style: 'width:' + width(bounced),
-            title: num(bounced) + ' bounced'
+            title: T('{n} bounced', { n: num(bounced) })
         }),
         el('span', {
             class: 'bar-human',
             style: 'width:' + width(satisfied),
-            title: num(satisfied) + ' saw one page and stayed on it'
+            title: T('{n} saw one page and stayed on it', { n: num(satisfied) })
         }),
         el('span', {
             class: 'bar-declared',
             style: 'width:' + width(Math.max(0, measured - bounced - satisfied)),
-            title: num(Math.max(0, measured - bounced - satisfied)) + ' went further than the landing page'
+            title: T('{n} went further than the landing page', { n: num(Math.max(0, measured - bounced - satisfied)) })
         })
     ]);
 }
@@ -86,8 +87,8 @@ function renderPages(data) {
                 num: true,
                 sort: row.measured ? row.bounced / row.measured : -1,
                 title: row.measured
-                    ? num(row.bounced) + ' of ' + num(row.measured) + ' measurable visits bounced.'
-                    : 'No visit that landed here had a beacon, so the bounce rate is unknown rather than zero.'
+                    ? T('{n} of {total} measurable visits bounced.', { n: num(row.bounced), total: num(row.measured) })
+                    : T('No visit that landed here had a beacon, so the bounce rate is unknown rather than zero.')
             },
             { node: splitBar(row), sort: row.measured ? row.bounced / row.measured : -1 }
         ]
@@ -101,12 +102,12 @@ function renderPages(data) {
         return {
             label: row.path,
             parts: [
-                { name: 'Stayed on the page', value: satisfied, color: t.pop.human },
-                { name: 'Bounced', value: bounced, color: t.pop.evasive },
-                { name: 'Went further', value: Math.max(0, measured - bounced - satisfied), color: t.pop.ai }
+                { name: T('Stayed on the page'), value: satisfied, color: t.pop.human },
+                { name: T('Bounced'), value: bounced, color: t.pop.evasive },
+                { name: T('Went further'), value: Math.max(0, measured - bounced - satisfied), color: t.pop.ai }
             ]
         };
-    }), { label: 'Measurable visits per landing page: stayed, bounced or went further' });
+    }), { label: T('Measurable visits per landing page: stayed, bounced or went further') });
 
     return true;
 }
@@ -124,11 +125,13 @@ function renderPeople(data) {
     const rows = data.people || [];
 
     setPop('an-people', rows.length
-        ? num(data.named) + ' of ' + num(data.total) + ' visits carried an identity, across '
-            + num(data.distinct) + (data.distinct === 1 ? ' person' : ' people')
-            + (data.distinct > rows.length ? ' — the ' + num(rows.length) + ' most frequent are listed' : '')
-        : 'No visit in range carried an identity. Your site declares one by passing it to the '
-            + 'beacon; nothing is guessed, so until it does this stays empty.');
+        ? T('{n} of {total} visits carried an identity, across {people}', {
+            n: num(data.named),
+            total: num(data.total),
+            people: Tn('{n} person', '{n} people', data.distinct, { n: num(data.distinct) })
+        }) + (data.distinct > rows.length ? ' ' + T('— the {n} most frequent are listed', { n: num(rows.length) }) : '')
+        : T('No visit in range carried an identity. Your site declares one by passing it to the '
+            + 'beacon; nothing is guessed, so until it does this stays empty.'));
 
     if (!rows.length) {
         tbody(byId('an-people-table'), []);
@@ -150,24 +153,24 @@ function renderPeople(data) {
     })));
 
     rankChart('an-people', rows.map((row) => ({ label: row.ident, value: row.sessions })),
-        { label: 'Visits per signed-in visitor' });
+        { label: T('Visits per signed-in visitor') });
 
     return true;
 }
 
 export default function init() {
-    loadCard('an-people', 'Counting visits per signed-in visitor', async () => {
+    loadCard('an-people', T('Counting visits per signed-in visitor'), async () => {
         renderPeople(await api('engagement', 'people'));
     });
 
-    loadCard('an-bounce', 'Measuring engagement on single-page visits', async () => {
+    loadCard('an-bounce', T('Measuring engagement on single-page visits'), async () => {
         renderBounce('an-bounce', await api('engagement', 'bounce'));
     });
 
     pagedCard({
         id: 'an-bouncepages',
-        label: 'Measuring engagement per landing page',
-        empty: 'landing pages',
+        label: T('Measuring engagement per landing page'),
+        empty: T('landing pages'),
         fetch: (start, rows) => api('engagement', 'pages', { start: start, rows: rows }),
         render: renderPages
     });

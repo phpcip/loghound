@@ -34,6 +34,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Beacon;
 
 final class Searches extends Controller
@@ -71,7 +72,7 @@ final class Searches extends Controller
 
     public function title(): string
     {
-        return 'Site search';
+        return I18n::t('Site search');
     }
 
 
@@ -119,7 +120,7 @@ final class Searches extends Controller
         return match ($action) {
             'terms'    => $this->terms(),
             'trending' => $this->trending(),
-            default    => ['error' => 'Unknown action'],
+            default    => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -180,7 +181,7 @@ final class Searches extends Controller
             'total'      => (int) ($f['count'] ?? 0),
             'searched'   => self::qcount($f, 'searched'),
             'rows'       => $out,
-            'page'       => Paging::block($start, $rows, Paging::distinct($f, 'terms'), 'search terms', count($out)),
+            'page'       => Paging::block($start, $rows, Paging::distinct($f, 'terms'), I18n::t('search terms'), count($out)),
         ]);
     }
 
@@ -242,7 +243,7 @@ final class Searches extends Controller
             'considered' => count($candidates),
             'baseline'   => (string) ($this->range['baseline'] ?? 'the ' . mb_strtolower((string) $this->range['label']) . ' immediately before this one'),
             'rows'       => array_values($page),
-            'page'       => Paging::block($start, $rows, count($candidates), 'search terms', count($page)),
+            'page'       => Paging::block($start, $rows, count($candidates), I18n::t('search terms'), count($page)),
         ]);
     }
 
@@ -254,19 +255,19 @@ final class Searches extends Controller
         self::cardOpen(
             'an-terms',
             Layout::cardNum(self::SECTIONS, 'an-terms'),
-            'What they searched for',
-            'Visits that ran a search, by term.',
+            I18n::t('What they searched for'),
+            I18n::t('Visits that ran a search, by term.'),
             $this->exportTool('terms')
         );
-        self::skeleton('an-terms', 'rows', 0, 'Faceting search terms');
+        self::skeleton('an-terms', 'rows', 0, I18n::t('Faceting search terms'));
         echo '<div class="table-wrap"><table id="an-terms-table" class="table-fixed"'
             . Sorting::tableAttrs('an-terms', self::termsOrder()) . '><colgroup>'
             . '<col style="width:18%"><col style="width:42%"><col style="width:16%"><col style="width:24%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('term') . '>Parameter</th>'
-            . '<th scope="col">Search term</th>'
-            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
+            . '<th scope="col"' . Sorting::th('term') . '>' . I18n::html('Parameter') . '</th>'
+            . '<th scope="col">' . I18n::html('Search term') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>' . I18n::html('Visits') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-terms-pager"></div>';
         self::cardClose('an-terms');
@@ -274,20 +275,20 @@ final class Searches extends Controller
         self::cardOpen(
             'an-termtrend',
             Layout::cardNum(self::SECTIONS, 'an-termtrend'),
-            'What they started searching for',
-            'Terms ranked by how much more they were searched for than in the period before.',
+            I18n::t('What they started searching for'),
+            I18n::t('Terms ranked by how much more they were searched for than in the period before.'),
             $this->exportTool('termtrend')
         );
-        self::skeleton('an-termtrend', 'rows', 0, 'Comparing this period against the one before');
+        self::skeleton('an-termtrend', 'rows', 0, I18n::t('Comparing this period against the one before'));
         echo '<div class="table-wrap"><table id="an-termtrend-table" class="table-fixed"><colgroup>'
             . '<col style="width:16%"><col style="width:28%"><col style="width:13%"><col style="width:13%">'
             . '<col style="width:14%"><col style="width:16%"></colgroup><thead><tr>'
-            . '<th scope="col">Parameter</th>'
-            . '<th scope="col">Search term</th>'
-            . '<th scope="col" class="num">This period</th>'
-            . '<th scope="col" class="num">Before</th>'
-            . '<th scope="col" class="num">Change</th>'
-            . '<th scope="col" class="bar-col">Movement</th>'
+            . '<th scope="col">' . I18n::html('Parameter') . '</th>'
+            . '<th scope="col">' . I18n::html('Search term') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('This period') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Before') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Change') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Movement') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-termtrend-pager"></div>';
         self::cardClose('an-termtrend');

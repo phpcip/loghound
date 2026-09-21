@@ -48,6 +48,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Opensolr;
 use Loghound\OpensolrLog;
 use Loghound\Security;
@@ -91,10 +92,10 @@ abstract class OpensolrView extends Controller implements Sections
     public static function logFilterFields(): array
     {
         return [
-            'path'           => 'Handler',
-            'http_status'    => 'Status',
-            'param_hostname' => 'Node',
-            'ip'             => 'Caller',
+            'path'           => I18n::t('Handler'),
+            'http_status'    => I18n::t('Status'),
+            'param_hostname' => I18n::t('Node'),
+            'ip'             => I18n::t('Caller'),
         ];
     }
 
@@ -212,7 +213,7 @@ abstract class OpensolrView extends Controller implements Sections
         if (!$this->configured()) {
             return $this->indexMemo = [
                 'state'   => 'not_configured',
-                'message' => 'No Opensolr account is configured.',
+                'message' => I18n::t('No Opensolr account is configured.'),
                 'indexes' => [],
             ];
         }
@@ -228,8 +229,8 @@ abstract class OpensolrView extends Controller implements Sections
         } catch (\Throwable $e) {
             return $this->indexMemo = [
                 'state'   => 'unreachable',
-                'message' => 'The list of indexes could not be read from Opensolr. '
-                    . 'Check outbound HTTPS from this host and the credentials in config/loghound.php.',
+                'message' => I18n::t('The list of indexes could not be read from Opensolr. '
+                    . 'Check outbound HTTPS from this host and the credentials in config/loghound.php.'),
                 'indexes' => [],
             ];
         }
@@ -261,8 +262,8 @@ abstract class OpensolrView extends Controller implements Sections
         if ($this->gw->isDemo()) {
             return self::stub(
                 'demo',
-                'Demo mode fabricates web traffic only. Opensolr index analytics are read live from '
-                . 'your account, so there is nothing to show while the panel is running on sample data.'
+                I18n::t('Demo mode fabricates web traffic only. Opensolr index analytics are read live from '
+                . 'your account, so there is nothing to show while the panel is running on sample data.')
             );
         }
 
@@ -667,9 +668,10 @@ abstract class OpensolrView extends Controller implements Sections
                 'truncated'  => count($buckets) >= self::FILTER_FACET_LIMIT,
                 'basis'      => $excluded ? 'excluded' : 'filtered',
                 'basis_note' => $excluded
-                    ? 'Counts are what each value would match with the ' . mb_strtolower($label)
-                        . ' filter lifted, so a second value can be added.'
-                    : 'Counts are what each value matches on this page as filtered.',
+                    ? I18n::t('Counts are what each value would match with the {filter} filter lifted, so a second value can be added.', [
+                        'filter' => mb_strtolower($label),
+                    ])
+                    : I18n::t('Counts are what each value matches on this page as filtered.'),
                 'overlaps'   => false,
             ];
         }
@@ -785,27 +787,27 @@ abstract class OpensolrView extends Controller implements Sections
      */
     protected static function noCredentials(): void
     {
-        self::cardOpen('os-none', '01', 'Not connected to Opensolr');
+        self::cardOpen('os-none', '01', I18n::t('Not connected to Opensolr'));
         echo '<div class="explain">';
-        echo '<p>This section reads the request log of your Opensolr search indexes and lines it up '
+        echo '<p>' . I18n::html('This section reads the request log of your Opensolr search indexes and lines it up '
             . 'against the web traffic Loghound already analyses. Everything else in Loghound works '
             . 'without it — this is the search half, and it is switched off because there is no '
-            . 'Opensolr account configured.</p>';
-        echo '<p>With an account connected, this section answers:</p>';
+            . 'Opensolr account configured.') . '</p>';
+        echo '<p>' . I18n::html('With an account connected, this section answers:') . '</p>';
         echo '<ul>';
-        echo '<li>how many queries each index served, and how long they took;</li>';
-        echo '<li>how often a query came back with nothing at all;</li>';
-        echo '<li>which handler on the index took the traffic, and what it answered with.</li>';
+        echo '<li>' . I18n::html('how many queries each index served, and how long they took;') . '</li>';
+        echo '<li>' . I18n::html('how often a query came back with nothing at all;') . '</li>';
+        echo '<li>' . I18n::html('which handler on the index took the traffic, and what it answered with.') . '</li>';
         echo '</ul>';
-        echo '<p>To connect one, put the email address of your Opensolr account and its API key into the '
-            . '<code>opensolr</code> section of <code>config/loghound.php</code>, which lives outside the '
-            . 'document root:</p>';
+        echo '<p>' . I18n::html('To connect one, put the email address of your Opensolr account and its API key into the '
+            . '{section} section of {file}, which lives outside the '
+            . 'document root:', ['section' => '<code>opensolr</code>', 'file' => '<code>config/loghound.php</code>']) . '</p>';
         echo '<pre class="snippet mono">\'opensolr\' =&gt; [' . "\n"
             . '    \'email\'   =&gt; \'you@example.com\',' . "\n"
             . '    \'api_key\' =&gt; \'&hellip;\',' . "\n"
             . '],</pre>';
-        echo '<p class="faint">The key is read server-side only. It is never rendered into a page, never '
-            . 'put in a URL your browser sees, and never written to a log.</p>';
+        echo '<p class="faint">' . I18n::html('The key is read server-side only. It is never rendered into a page, never '
+            . 'put in a URL your browser sees, and never written to a log.') . '</p>';
         echo '</div>';
         self::cardEnd();
     }
@@ -821,8 +823,8 @@ abstract class OpensolrView extends Controller implements Sections
     {
         $e = Security::esc($id);
         return '<div class="controls">'
-            . '<label for="' . $e . '">Index</label>'
-            . '<select id="' . $e . '" disabled><option value="">Loading&#8230;</option></select>'
+            . '<label for="' . $e . '">' . I18n::html('Index') . '</label>'
+            . '<select id="' . $e . '" disabled><option value="">' . I18n::html('Loading…') . '</option></select>'
             . '</div>';
     }
 
@@ -881,11 +883,11 @@ abstract class OpensolrView extends Controller implements Sections
         self::cardOpen(
             $id,
             $this->cardNumber($id),
-            'Slice these figures',
-            'Every page of this view answers under the filters set here.',
+            I18n::t('Slice these figures'),
+            I18n::t('Every page of this view answers under the filters set here.'),
             $tools
         );
-        self::skeleton($id, 'rows', 0, 'Faceting the request log');
+        self::skeleton($id, 'rows', 0, I18n::t('Faceting the request log'));
 
         echo '<div class="lf-active" id="' . Security::esc($id) . '-active"></div>';
         echo '<div class="lf-outcomes" id="' . Security::esc($id) . '-outcomes"></div>';
@@ -905,16 +907,16 @@ abstract class OpensolrView extends Controller implements Sections
         self::cardOpen(
             $id,
             $this->cardNumber($id),
-            'Requests over time',
-            'Every request the platform logged for this index under the current filters.'
+            I18n::t('Requests over time'),
+            I18n::t('Every request the platform logged for this index under the current filters.')
         );
-        self::skeleton($id, 'chart', 300, 'Faceting request volume');
+        self::skeleton($id, 'chart', 300, I18n::t('Faceting request volume'));
 
         self::statRow([
-            ['total', 'Requests', 'Logged by Opensolr in this range, under the current filters'],
-            ['mean', 'Average per bucket', 'Requests divided by the number of buckets in the chart'],
-            ['peak', 'Peak bucket', 'The busiest single bucket in the chart'],
-            ['points', 'Data points', 'How many buckets the range was divided into'],
+            ['total', I18n::t('Requests'), I18n::t('Logged by Opensolr in this range, under the current filters')],
+            ['mean', I18n::t('Average per bucket'), I18n::t('Requests divided by the number of buckets in the chart')],
+            ['peak', I18n::t('Peak bucket'), I18n::t('The busiest single bucket in the chart')],
+            ['points', I18n::t('Data points'), I18n::t('How many buckets the range was divided into')],
         ]);
         echo '<div class="chart" id="' . Security::esc($id) . '-chart" style="height:300px"></div>';
 

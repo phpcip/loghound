@@ -9,6 +9,7 @@
 
 import { draw, ramp, shadowPointer, valueAxis } from './charts.js';
 import { boot, markup, num, tip } from './core.js';
+import { t as T } from './i18n.js';
 
 /**
  * The label of a bucket that starts at an instant, in the display timezone, at the bucket's grain.
@@ -114,8 +115,8 @@ export function compareLines(id, spec) {
                 }
                 const i = params[0].dataIndex;
                 const line = (name, times, values) => {
-                    const when = i < times.length ? bucketLabel(times[i], spec.step) : 'no matching point';
-                    const value = values[i] === null || values[i] === undefined ? 'none' : num(values[i]);
+                    const when = i < times.length ? bucketLabel(times[i], spec.step) : T('no matching point');
+                    const value = values[i] === null || values[i] === undefined ? T('none') : num(values[i]);
                     return tip`${name} <span style="color:${t.muted}">${when}</span>` +
                         tip`<span style="float:right;padding-left:18px;font-weight:600">${value}</span>`;
                 };
@@ -147,7 +148,7 @@ export function compareLines(id, spec) {
 export function compareBars(id, rows, nameA, nameB, opts) {
     const options = opts || {};
     const format = options.format || num;
-    const say = (value) => (value === null || value === undefined ? 'not measured' : format(value));
+    const say = (value) => (value === null || value === undefined ? T('not measured') : format(value));
     const node = document.getElementById(id);
     const labels = rows.map((r) => r.label).reverse();
     const width = (node && node.clientWidth) || 480;

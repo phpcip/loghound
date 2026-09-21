@@ -14,6 +14,7 @@ import { api, byId, el, hideEmpty, num, setPop, showEmpty, tbody } from '../core
 import { changeCell, magnitudeBar, pagedCard, shareBar } from '../cardtable.js';
 import { dimRow } from '../identity.js';
 import { clearTableChart, rankChart } from '../tablecharts.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /**
  * The empty state for an installation that has never named a search parameter.
@@ -22,29 +23,27 @@ import { clearTableChart, rankChart } from '../tablecharts.js';
  * rather than printing a configuration key into a heading and leaving the reader to find it.
  */
 function notConfigured(id) {
-    showEmpty(id + '-empty', 'Search terms are not being collected', [
-        el('p', {}, [
-            'No query parameter is named on this installation, so nothing is collected. Name the one your '
-            + 'search box uses under ',
-            el('a', { href: '?v=settings&s=beacon', text: 'Settings, in the beacon section' }),
-            '. Terms appear from the next visit onwards; nothing is recovered retrospectively.'
-        ])
+    showEmpty(id + '-empty', T('Search terms are not being collected'), [
+        el('p', {}, Tf('No query parameter is named on this installation, so nothing is collected. Name the one your '
+            + 'search box uses under {settings}. Terms appear from the next visit onwards; nothing is recovered retrospectively.', {
+            settings: el('a', { href: '?v=settings&s=beacon', text: T('Settings, in the beacon section') })
+        }))
     ]);
 }
 
 /** Fill the top-terms table. */
 function renderTerms(data) {
     if (!data.configured.length) {
-        setPop('an-terms', 'Not collecting any search terms.');
+        setPop('an-terms', T('Not collecting any search terms.'));
         tbody(byId('an-terms-table'), []);
         clearTableChart('an-terms');
         notConfigured('an-terms');
         return 'own';
     }
 
-    setPop('an-terms', num(data.searched) + ' of ' + num(data.total) + ' visits in range ran a search, read '
-        + 'from ' + data.configured.join(', ') + '. Counted as visits, not searches: the same search run six '
-        + 'times counts once.');
+    setPop('an-terms', T('{n} of {total} visits in range ran a search, read '
+        + 'from {params}. Counted as visits, not searches: the same search run six '
+        + 'times counts once.', { n: num(data.searched), total: num(data.total), params: data.configured.join(', ') }));
 
     if (!data.rows.length) {
         tbody(byId('an-terms-table'), []);
@@ -59,12 +58,12 @@ function renderTerms(data) {
             { text: row.param || '—', clip: true, sort: row.param },
             { text: row.term, clip: true, sort: row.term },
             { text: num(row.sessions), num: true, sort: row.sessions },
-            { node: shareBar(row.sessions, data.searched, 'visits that searched'), sort: row.sessions }
+            { node: shareBar(row.sessions, data.searched, T('visits that searched')), sort: row.sessions }
         ]
     })));
 
     rankChart('an-terms', data.rows.map((row) => ({ label: row.term, value: row.sessions })),
-        { label: 'Visits per search term' });
+        { label: T('Visits per search term') });
 
     return true;
 }
@@ -72,15 +71,15 @@ function renderTerms(data) {
 /** Fill the trending-terms table. */
 function renderTrend(data) {
     if (!data.configured.length) {
-        setPop('an-termtrend', 'Not collecting any search terms.');
+        setPop('an-termtrend', T('Not collecting any search terms.'));
         tbody(byId('an-termtrend-table'), []);
         clearTableChart('an-termtrend');
         notConfigured('an-termtrend');
         return 'own';
     }
 
-    setPop('an-termtrend', 'Against ' + data.baseline + '. Ranked from the ' + num(data.considered) + ' most '
-        + 'searched terms across both windows. This window is still filling and the baseline is complete.');
+    setPop('an-termtrend', T('Against {baseline}. Ranked from the {n} most '
+        + 'searched terms across both windows. This window is still filling and the baseline is complete.', { baseline: data.baseline, n: num(data.considered) }));
 
     if (!data.rows.length) {
         tbody(byId('an-termtrend-table'), []);
@@ -99,8 +98,8 @@ function renderTrend(data) {
             { text: num(row.prev), num: true, sort: row.prev },
             { node: changeCell(row.now, row.prev), class: 'num', sort: row.delta },
             {
-                node: magnitudeBar(Math.abs(row.delta), top, 'the largest change on this page',
-                    num(row.prev) + ' before, ' + num(row.now) + ' now'),
+                node: magnitudeBar(Math.abs(row.delta), top, T('the largest change on this page'),
+                    T('{prev} before, {now} now', { prev: num(row.prev), now: num(row.now) })),
                 sort: row.delta
             }
         ]
@@ -109,11 +108,11 @@ function renderTrend(data) {
     rankChart('an-termtrend', data.rows.map((row) => ({
         label: row.term,
         value: row.delta,
-        extra: num(row.prev) + ' before, ' + num(row.now) + ' now'
+        extra: T('{prev} before, {now} now', { prev: num(row.prev), now: num(row.now) })
     })), {
         signed: true,
         format: (v) => (v > 0 ? '+' : '') + num(v),
-        label: 'Change in visits per search term against the previous period'
+        label: T('Change in visits per search term against the previous period')
     });
 
     return true;
@@ -123,16 +122,16 @@ function renderTrend(data) {
 export default function init() {
     pagedCard({
         id: 'an-terms',
-        label: 'Faceting search terms',
-        empty: 'search terms',
+        label: T('Faceting search terms'),
+        empty: T('search terms'),
         fetch: (start, rows) => api('searches', 'terms', { start: start, rows: rows }),
         render: renderTerms
     });
 
     pagedCard({
         id: 'an-termtrend',
-        label: 'Comparing this period against the one before',
-        empty: 'search terms with any movement',
+        label: T('Comparing this period against the one before'),
+        empty: T('search terms with any movement'),
         fetch: (start, rows) => api('searches', 'trending', { start: start, rows: rows }),
         render: renderTrend
     });

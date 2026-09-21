@@ -32,6 +32,8 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
+
 final class Indexes extends OpensolrView
 {
     /** Upper edge of the QTime histogram, in milliseconds. Anything slower lands in `after`. */
@@ -74,7 +76,7 @@ final class Indexes extends OpensolrView
 
     public function title(): string
     {
-        return 'Index analytics';
+        return I18n::t('Index analytics');
     }
 
 
@@ -141,7 +143,7 @@ final class Indexes extends OpensolrView
             'headline' => $this->headline(),
             'qtime'    => $this->qtime(),
             'handlers' => $this->handlers(),
-            default    => ['error' => 'Unknown action'],
+            default    => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -290,15 +292,15 @@ final class Indexes extends OpensolrView
     /** Volume, latency and zero-result share, with the index picker. */
     private function headlineCard(): void
     {
-        self::cardOpen('ix-headline', $this->cardNumber('ix-headline'), 'This index', '', self::indexPicker('ix-core'));
-        self::skeleton('ix-headline', 'stats', 0, 'Reading the request log');
+        self::cardOpen('ix-headline', $this->cardNumber('ix-headline'), I18n::t('This index'), '', self::indexPicker('ix-core'));
+        self::skeleton('ix-headline', 'stats', 0, I18n::t('Reading the request log'));
 
         self::statRow([
-            ['requests', 'Requests',      'Logged by Opensolr for this index in the selected range'],
-            ['zero',     'Zero results',  'Requests that matched no documents at all'],
-            ['qmean',    'Mean QTime',    'Solr\'s own measure of the time spent answering'],
-            ['qmax',     'Slowest',       'The single worst QTime in this range'],
-            ['size',     'Mean response', 'How much data each answer carried back'],
+            ['requests', I18n::t('Requests'),      I18n::t('Logged by Opensolr for this index in the selected range')],
+            ['zero',     I18n::t('Zero results'),  I18n::t('Requests that matched no documents at all')],
+            ['qmean',    I18n::t('Mean QTime'),    I18n::t('Solr\'s own measure of the time spent answering')],
+            ['qmax',     I18n::t('Slowest'),       I18n::t('The single worst QTime in this range')],
+            ['size',     I18n::t('Mean response'), I18n::t('How much data each answer carried back')],
         ]);
 
         /* THE CARD SAYS WHAT THE PLATFORM DOES AND DOES NOT RECORD. `size` is read off an Apache
@@ -307,10 +309,10 @@ final class Indexes extends OpensolrView
            document and the figure above is an em-dash rather than a fabricated zero. An operator
            who is not told that reads the dash as a Loghound failure and goes looking for a bug
            in the panel. */
-        echo '<p class="note">Mean response is read from the platform\'s access-log records, which '
-            . 'Opensolr keeps for handlers other than <code>/select</code>. A search index whose traffic '
-            . 'is all <code>/select</code> has no response size recorded at all, and the figure is shown '
-            . 'as an em-dash rather than as a zero.</p>';
+        echo '<p class="note">' . I18n::html('Mean response is read from the platform\'s access-log records, which '
+            . 'Opensolr keeps for handlers other than {select}. A search index whose traffic '
+            . 'is all {select} has no response size recorded at all, and the figure is shown '
+            . 'as an em-dash rather than as a zero.', ['select' => '<code>/select</code>']) . '</p>';
 
         self::cardClose('ix-headline');
     }
@@ -321,18 +323,18 @@ final class Indexes extends OpensolrView
         self::cardOpen(
             'ix-qtime',
             $this->cardNumber('ix-qtime'),
-            'How long answers take',
-            'All logged requests for this index under the current filters. QTime is Solr\'s own measure of '
+            I18n::t('How long answers take'),
+            I18n::t('All logged requests for this index under the current filters. QTime is Solr\'s own measure of '
             . 'the time it spent answering, and it excludes network time and any time the request spent '
-            . 'queued — a slow page can have a fast QTime.'
+            . 'queued — a slow page can have a fast QTime.')
         );
-        self::skeleton('ix-qtime', 'chart', 300, 'Building the QTime histogram');
+        self::skeleton('ix-qtime', 'chart', 300, I18n::t('Building the QTime histogram'));
 
         self::statRow([
-            ['p50',  'p50',              'Half of requests were answered within this'],
-            ['p95',  'p95',              'One request in twenty took longer'],
-            ['p99',  'p99',              'The worst one percent'],
-            ['over', 'Over the ceiling', 'Requests slower than the histogram\'s last bucket'],
+            ['p50',  I18n::t('p50'),              I18n::t('Half of requests were answered within this')],
+            ['p95',  I18n::t('p95'),              I18n::t('One request in twenty took longer')],
+            ['p99',  I18n::t('p99'),              I18n::t('The worst one percent')],
+            ['over', I18n::t('Over the ceiling'), I18n::t('Requests slower than the histogram\'s last bucket')],
         ]);
         echo '<div class="chart" id="ix-qtime-chart" style="height:280px"></div>';
 
@@ -345,32 +347,32 @@ final class Indexes extends OpensolrView
         self::cardOpen(
             'ix-handlers',
             $this->cardNumber('ix-handlers'),
-            'Handlers and status codes',
-            'All logged requests for this index under the current filters, grouped by the handler that '
-            . 'served them and by the status the platform recorded.',
+            I18n::t('Handlers and status codes'),
+            I18n::t('All logged requests for this index under the current filters, grouped by the handler that '
+            . 'served them and by the status the platform recorded.'),
             $this->exportTool('handlers') . $this->exportTool('statuses')
         );
-        self::skeleton('ix-handlers', 'rows', 0, 'Faceting handlers and status codes');
+        self::skeleton('ix-handlers', 'rows', 0, I18n::t('Faceting handlers and status codes'));
 
         echo '<div class="split-card">';
-        echo '<div class="split-half"><h2>Handlers</h2>'
-            . '<p class="split-note">Which endpoint on the index took the request. A handler that is '
+        echo '<div class="split-half"><h2>' . I18n::html('Handlers') . '</h2>'
+            . '<p class="split-note">' . I18n::html('Which endpoint on the index took the request. A handler that is '
             . 'neither your search box nor a crawler — an ingest or callback path, say — is a caller '
-            . 'worth naming, and clicking a row filters the whole page to it.</p>'
+            . 'worth naming, and clicking a row filters the whole page to it.') . '</p>'
             . '<div class="chart" id="ix-paths-chart" style="height:240px"></div>'
             . '<div class="table-wrap"><table id="ix-paths-table" class="table-fixed"><colgroup>'
             . '<col style="width:50%"><col style="width:22%"><col style="width:28%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Handler</th><th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="bar-col">Share</th></tr></thead><tbody></tbody></table></div></div>';
-        echo '<div class="split-half"><h2>Status codes</h2>'
-            . '<p class="split-note">Anything other than 200 is the index refusing or failing.</p>'
+            . '<th scope="col">' . I18n::html('Handler') . '</th><th scope="col" class="num">' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th></tr></thead><tbody></tbody></table></div></div>';
+        echo '<div class="split-half"><h2>' . I18n::html('Status codes') . '</h2>'
+            . '<p class="split-note">' . I18n::html('Anything other than 200 is the index refusing or failing.') . '</p>'
             . '<div class="chart" id="ix-status-chart" style="height:240px"></div>'
             . '<div class="table-wrap"><table id="ix-status-table" class="table-fixed"><colgroup>'
             . '<col style="width:20%"><col style="width:30%"><col style="width:50%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Status</th><th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="bar-col">Share</th></tr></thead><tbody></tbody></table></div></div>';
+            . '<th scope="col">' . I18n::html('Status') . '</th><th scope="col" class="num">' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th></tr></thead><tbody></tbody></table></div></div>';
         echo '</div>';
 
         self::cardClose('ix-handlers');

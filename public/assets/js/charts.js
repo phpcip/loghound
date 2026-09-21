@@ -18,6 +18,7 @@
 'use strict';
 
 import { clockOnly, dur, durUs, markup, num, tip } from './core.js';
+import { t as T } from './i18n.js';
 
 /**
  * Strip the characters that mean something to ECharts' rich-text grammar.
@@ -542,7 +543,7 @@ export function stackedTraffic(id, data, order) {
                     );
                 }
                 lines.push(tip`<div style="border-top:1px solid ${t.border};margin-top:5px;padding-top:5px">` +
-                    tip`Total<span style="float:right;padding-left:18px;font-weight:600">${num(total)}</span></div>`);
+                    tip`${T('Total')}<span style="float:right;padding-left:18px;font-weight:600">${num(total)}</span></div>`);
                 return lines.join('<br>');
             }
         },
@@ -664,7 +665,7 @@ export function barsHStacked(id, rows) {
                         tip`<span style="float:right;padding-left:18px;font-weight:600">${num(p.value)}</span>`);
                 }
                 lines.push(tip`<div style="border-top:1px solid ${t.border};margin-top:5px;padding-top:5px">` +
-                    tip`Total<span style="float:right;padding-left:18px;font-weight:600">${num(total)}</span></div>`);
+                    tip`${T('Total')}<span style="float:right;padding-left:18px;font-weight:600">${num(total)}</span></div>`);
                 return lines.join('<br>');
             }
         },
@@ -798,8 +799,8 @@ export function donut(id, rows, centreLabel, centreValue) {
  */
 export function histogram(id, rows, colorFor, opts) {
     const options = opts || {};
-    const noun = options.noun || 'sessions';
-    const prefix = options.prefix === undefined ? 'Score ' : options.prefix;
+    const noun = options.noun || T('sessions');
+    const prefix = options.prefix === undefined ? T('Score') + ' ' : options.prefix;
     const interval = options.interval === undefined ? 3 : options.interval;
 
     /* A BAR IS A POPULATION, SO IT OPENS. `onPick` is optional and the chart is inert without
@@ -937,10 +938,10 @@ export function treemap(id, nodes, colorForType, legend) {
                 const d = p.data;
                 return tip`<strong>${d.name}</strong><br>` +
                     (d.org ? tip`${d.org}<br>` : '') +
-                    tip`<span style="color:${t.muted}">${d.astype || 'unknown'}</span><br>` +
-                    tip`${num(d.value)} sessions · ${num(d.uniqIps)} IPs<br>` +
-                    tip`<span style="color:${t.muted}">${num(d.human)} human · ` +
-                    tip`${num(d.evasive)} evasive</span>`;
+                    tip`<span style="color:${t.muted}">${d.astype || T('unknown')}</span><br>` +
+                    tip`${T('{n} sessions', { n: num(d.value) })} · ${T('{n} IPs', { n: num(d.uniqIps) })}<br>` +
+                    tip`<span style="color:${t.muted}">${T('{n} human', { n: num(d.human) })} · ` +
+                    tip`${T('{n} evasive', { n: num(d.evasive) })}</span>`;
             }
         },
         grid: null,
@@ -1070,10 +1071,10 @@ export function geoScatter(id, points, onPick) {
         tooltip: {
             trigger: 'item',
             formatter: (p) => tip`<strong>${p.data.name}</strong><br>` +
-                tip`${num(p.data.sessions)} sessions · ${num(p.data.ips)} IPs<br>` +
-                tip`<span style="color:${t.muted}">${num(p.data.human)} human · ` +
-                tip`${num(p.data.evasive)} evasive</span>` +
-                (pickable ? tip`<br><span style="color:${t.muted}">Press for every visit from here</span>` : '')
+                tip`${T('{n} sessions', { n: num(p.data.sessions) })} · ${T('{n} IPs', { n: num(p.data.ips) })}<br>` +
+                tip`<span style="color:${t.muted}">${T('{n} human', { n: num(p.data.human) })} · ` +
+                tip`${T('{n} evasive', { n: num(p.data.evasive) })}</span>` +
+                (pickable ? tip`<br><span style="color:${t.muted}">${T('Press for every visit from here')}</span>` : '')
         },
         geo: mapped ? {
             map: WORLD,

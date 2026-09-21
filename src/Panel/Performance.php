@@ -26,6 +26,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 use Loghound\Setup\Steps;
 
@@ -64,7 +65,7 @@ final class Performance extends Controller
 
     public function title(): string
     {
-        return 'Performance';
+        return I18n::t('Performance');
     }
 
 
@@ -170,7 +171,7 @@ final class Performance extends Controller
             'paths'    => $this->paths(),
             'status'   => $this->status(),
             'hitdim'   => $this->hitDimension(),
-            default    => ['error' => 'Unknown action'],
+            default    => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -498,6 +499,7 @@ final class Performance extends Controller
         $band = self::param('band', array_keys(self::HIT_BAND_FIELDS), '');
         if ($band !== '') {
             [$min, $max, $bandLabel] = self::HIT_BAND_FIELDS[$band];
+            $bandLabel = I18n::t($bandLabel);
             $from = Security::clampInt($_GET['from'] ?? null, $min, $max, $min);
             $to = Security::clampInt($_GET['to'] ?? null, $min, $max, $max);
             if ($to < $from) {
@@ -510,12 +512,12 @@ final class Performance extends Controller
         } else {
             $field = (string) ($_GET['field'] ?? '');
             if (!isset($fields[$field])) {
-                return $this->envelope(['error' => 'That is not a dimension the request plane can open.']);
+                return $this->envelope(['error' => I18n::t('That is not a dimension the request plane can open.')]);
             }
 
             $value = (string) ($_GET['value'] ?? '');
             if ($value === '') {
-                return $this->envelope(['error' => 'That row carries no value to open.']);
+                return $this->envelope(['error' => I18n::t('That row carries no value to open.')]);
             }
 
             $fqs[] = Query::term($field, $value);
@@ -585,7 +587,7 @@ final class Performance extends Controller
                 ['netname_s', 'host_s', 'sec_ch_ua_s', 'tls_proto_s']
             ),
             'ignored'       => $this->ignoredHitFilters(),
-            'page'          => Paging::block($start, $rows, (int) $res['numFound'], 'requests', count($out)),
+            'page'          => Paging::block($start, $rows, (int) $res['numFound'], I18n::t('requests'), count($out)),
         ]);
     }
 
@@ -595,10 +597,10 @@ final class Performance extends Controller
         self::chart(
             'pf-time',
             '02',
-            'Latency over time',
-            'Matched requests that carry a duration. p50 and p95 per bucket.',
+            I18n::t('Latency over time'),
+            I18n::t('Matched requests that carry a duration. p50 and p95 per bucket.'),
             300,
-            'Computing latency percentiles'
+            I18n::t('Computing latency percentiles')
         );
         $this->pathsCard();
         $this->statusCard();
@@ -608,24 +610,24 @@ final class Performance extends Controller
     private function headlineCard(): void
     {
         $tools = '<div class="controls">';
-        $tools .= '<label for="pf-kind">Requests</label><select id="pf-kind">';
+        $tools .= '<label for="pf-kind">' . I18n::html('Requests') . '</label><select id="pf-kind">';
         foreach ([
-            'html'  => 'HTML pages',
-            'api'   => 'API endpoints',
-            'asset' => 'Static assets',
-            'all'   => 'Everything',
+            'html'  => I18n::t('HTML pages'),
+            'api'   => I18n::t('API endpoints'),
+            'asset' => I18n::t('Static assets'),
+            'all'   => I18n::t('Everything'),
         ] as $value => $label) {
             $tools .= '<option value="' . Security::esc($value) . '">' . Security::esc($label) . '</option>';
         }
         $tools .= '</select>';
-        $tools .= '<label for="pf-who">Traffic</label><select id="pf-who">';
-        foreach (['all' => 'All clients', 'human' => 'Humans only'] as $value => $label) {
+        $tools .= '<label for="pf-who">' . I18n::html('Traffic') . '</label><select id="pf-who">';
+        foreach (['all' => I18n::t('All clients'), 'human' => I18n::t('Humans only')] as $value => $label) {
             $tools .= '<option value="' . Security::esc($value) . '">' . Security::esc($label) . '</option>';
         }
         $tools .= '</select></div>';
 
-        self::cardOpen('pf-headline', '01', 'What to measure', '', $tools);
-        self::skeleton('pf-headline', 'stats', 0, 'Computing latency percentiles');
+        self::cardOpen('pf-headline', '01', I18n::t('What to measure'), '', $tools);
+        self::skeleton('pf-headline', 'stats', 0, I18n::t('Computing latency percentiles'));
 
         /* A PERCENTILE IS A DOORWAY, NOT A DECORATION. "p95 is 749 ms" raises exactly one
            question — which requests were the slow ones — and the tile answered none of it.
@@ -636,15 +638,15 @@ final class Performance extends Controller
            asked for, so it stays a plain figure. */
         echo '<div class="stats">';
         foreach ([
-            ['p50', 'p50 latency',  'Half of requests were faster than this', true],
-            ['p95', 'p95 latency',  'One request in twenty was slower', true],
-            ['p99', 'p99 latency',  'The worst one percent — where timeouts live', true],
-            ['avg', 'Mean latency', 'Shown for contrast; a long tail drags it away from p50', false],
+            ['p50', I18n::t('p50 latency'),  I18n::t('Half of requests were faster than this'), true],
+            ['p95', I18n::t('p95 latency'),  I18n::t('One request in twenty was slower'), true],
+            ['p99', I18n::t('p99 latency'),  I18n::t('The worst one percent — where timeouts live'), true],
+            ['avg', I18n::t('Mean latency'), I18n::t('Shown for contrast; a long tail drags it away from p50'), false],
         ] as [$key, $label, $hint, $openable]) {
             $tag = $openable ? 'button' : 'div';
             echo '<' . $tag . ($openable ? ' type="button" class="stat stat-open" data-lh-open="hitband"'
                 . ' data-band="dur_us_l" data-view="performance"'
-                . ' aria-label="' . Security::esc('Open the requests slower than ' . $label) . '"'
+                . ' aria-label="' . Security::esc(I18n::t('Open the requests slower than {label}', ['label' => $label])) . '"'
                 : ' class="stat"') . '>';
             echo '<span class="stat-label">' . Security::esc($label) . '</span>';
             echo '<span class="stat-value mono" data-field="' . Security::esc($key) . '">—</span>';
@@ -689,12 +691,12 @@ final class Performance extends Controller
         self::cardOpen(
             'pf-paths',
             '03',
-            'Slowest paths',
-            'The busiest paths in this range, with their latency percentiles. The bar compares p50 to p99 on a '
-            . 'shared scale — a long bar means the median visitor and the unlucky one percent had different days.',
+            I18n::t('Slowest paths'),
+            I18n::t('The busiest paths in this range, with their latency percentiles. The bar compares p50 to p99 on a '
+            . 'shared scale — a long bar means the median visitor and the unlucky one percent had different days.'),
             $this->exportTool('paths')
         );
-        self::skeleton('pf-paths', 'rows', 0, 'Computing per-path percentiles');
+        self::skeleton('pf-paths', 'rows', 0, I18n::t('Computing per-path percentiles'));
 
         echo '<div class="table-wrap"><table id="pf-paths-table" class="table-fixed"'
             . Sorting::tableAttrs('pf-paths', self::pathsOrder())
@@ -702,12 +704,12 @@ final class Performance extends Controller
             . '<col style="width:28%"><col style="width:10%"><col style="width:9%"><col style="width:9%">'
             . '<col style="width:9%"><col style="width:17%"><col style="width:9%"><col style="width:9%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('path') . '>Path</th>'
-            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
-            . '<th scope="col" class="num"' . Sorting::th('p50', 'desc') . '>p50</th>'
-            . '<th scope="col" class="num"' . Sorting::th('p95', 'desc') . '>p95</th>'
-            . '<th scope="col" class="num"' . Sorting::th('p99', 'desc') . '>p99</th>'
-            . '<th scope="col" class="bar-col">p50 vs p99</th>'
+            . '<th scope="col"' . Sorting::th('path') . '>' . I18n::html('Path') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('p50', 'desc') . '>' . I18n::html('p50') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('p95', 'desc') . '>' . I18n::html('p95') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('p99', 'desc') . '>' . I18n::html('p99') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('p50 vs p99') . '</th>'
             . '<th scope="col" class="num">4xx</th>'
             . '<th scope="col" class="num">5xx</th>'
             . '</tr></thead><tbody></tbody></table></div>';
@@ -721,21 +723,21 @@ final class Performance extends Controller
         self::cardOpen(
             'pf-status',
             '04',
-            'Status codes',
-            'All matched requests in the selected range, grouped into 2xx / 3xx / 4xx / 5xx.',
+            I18n::t('Status codes'),
+            I18n::t('All matched requests in the selected range, grouped into 2xx / 3xx / 4xx / 5xx.'),
             $this->exportTool('statuses')
         );
-        self::skeleton('pf-status', 'chart', 320, 'Faceting response codes');
+        self::skeleton('pf-status', 'chart', 320, I18n::t('Faceting response codes'));
 
         echo '<div class="chart" id="pf-heat" style="height:320px"></div>';
         echo '<div class="table-wrap"><table id="pf-status-table" class="table-fixed"'
             . Sorting::tableAttrs('pf-status', self::statusOrder()) . '><colgroup>'
             . '<col style="width:12%"><col style="width:44%"><col style="width:18%"><col style="width:26%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('status') . '>Status</th>'
-            . '<th scope="col">Meaning</th>'
-            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
-            . '<th scope="col" class="bar-col">Share</th>'
+            . '<th scope="col"' . Sorting::th('status') . '>' . I18n::html('Status') . '</th>'
+            . '<th scope="col">' . I18n::html('Meaning') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Share') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('pf-status');

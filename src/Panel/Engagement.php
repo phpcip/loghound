@@ -27,6 +27,8 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
+
 final class Engagement extends Controller
 {
     /**
@@ -63,7 +65,7 @@ final class Engagement extends Controller
 
     public function title(): string
     {
-        return 'Engagement';
+        return I18n::t('Engagement');
     }
 
 
@@ -98,7 +100,7 @@ final class Engagement extends Controller
             'bounce' => $this->bounce(),
             'pages'  => $this->pages(),
             'people' => $this->people(),
-            default  => ['error' => 'Unknown action'],
+            default  => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -160,7 +162,7 @@ final class Engagement extends Controller
                 $start,
                 $rows,
                 Paging::distinct($f, 'paths'),
-                'landing pages',
+                I18n::t('landing pages'),
                 count($out)
             ),
         ]);
@@ -181,23 +183,23 @@ final class Engagement extends Controller
         self::cardOpen(
             'an-people',
             Layout::cardNum(self::SECTIONS, 'an-people'),
-            'Signed-in visitors',
-            'Everyone your site named through the beacon, with what each of them did. '
-            . 'Loghound never guesses an identity: these are the ones your own template declared.'
+            I18n::t('Signed-in visitors'),
+            I18n::t('Everyone your site named through the beacon, with what each of them did. '
+            . 'Loghound never guesses an identity: these are the ones your own template declared.')
         );
-        self::skeleton('an-people', 'rows', 0, 'Counting visits per signed-in visitor');
+        self::skeleton('an-people', 'rows', 0, I18n::t('Counting visits per signed-in visitor'));
 
         echo '<div class="table-wrap"><table id="an-people-table" class="table-fixed"'
             . Sorting::tableAttrs('an-people', self::peopleOrder()) . '><colgroup>'
             . '<col style="width:32%"><col style="width:11%"><col style="width:11%">'
             . '<col style="width:11%"><col style="width:12%"><col style="width:23%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('who') . '>Who</th>'
-            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>Visits</th>'
-            . '<th scope="col" class="num"' . Sorting::th('pages', 'desc') . '>Pages</th>'
-            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
-            . '<th scope="col" class="num"' . Sorting::th('addresses', 'desc') . '>Addresses</th>'
-            . '<th scope="col"' . Sorting::th('last', 'desc') . '>Last seen</th>'
+            . '<th scope="col"' . Sorting::th('who') . '>' . I18n::html('Who') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('visits', 'desc') . '>' . I18n::html('Visits') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('pages', 'desc') . '>' . I18n::html('Pages') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('addresses', 'desc') . '>' . I18n::html('Addresses') . '</th>'
+            . '<th scope="col"' . Sorting::th('last', 'desc') . '>' . I18n::html('Last seen') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('an-people');
@@ -301,19 +303,19 @@ final class Engagement extends Controller
         self::cardOpen(
             'an-bouncepages',
             Layout::cardNum(self::SECTIONS, 'an-bouncepages'),
-            'Bounce rate by landing page',
-            'The same definition, per landing page. The measurable count is the denominator that matters.',
+            I18n::t('Bounce rate by landing page'),
+            I18n::t('The same definition, per landing page. The measurable count is the denominator that matters.'),
             $this->exportTool('bouncepages')
         );
-        self::skeleton('an-bouncepages', 'rows', 0, 'Measuring engagement per landing page');
+        self::skeleton('an-bouncepages', 'rows', 0, I18n::t('Measuring engagement per landing page'));
 
         echo '<div class="table-wrap"><table id="an-bouncepages-table" class="table-fixed"'
             . Sorting::tableAttrs('an-bouncepages', self::bouncePagesOrder()) . '><colgroup>'
             . '<col style="width:45%"><col style="width:15%"><col style="width:40%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('page') . '>Landing page</th>'
-            . '<th scope="col" class="num">Bounce rate</th>'
-            . '<th scope="col" class="bar-col">Bounced against engaged</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>' . I18n::html('Landing page') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Bounce rate') . '</th>'
+            . '<th scope="col" class="bar-col">' . I18n::html('Bounced against engaged') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="an-bouncepages-pager"></div>';
 

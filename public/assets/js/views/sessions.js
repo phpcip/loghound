@@ -29,6 +29,7 @@
 import { api, byId, loadCard, noDataYet, num, hideEmpty, pct } from '../core.js';
 import { renderLinkPager } from '../pager.js';
 import { fillVisits } from '../visits.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /**
  * Fill the table, or say why it is empty.
@@ -41,7 +42,7 @@ import { fillVisits } from '../visits.js';
 function renderRows(data) {
     if (!data.docs.length) {
         fillVisits(byId('se-table'), []);
-        noDataYet('se-results-empty', 'visits');
+        noDataYet('se-results-empty', T('visits'));
         return;
     }
     hideEmpty('se-results-empty');
@@ -71,7 +72,7 @@ function renderCount(data) {
  * link sent to somebody else.
  */
 function loadResults() {
-    return loadCard('se-results', 'Searching visits', async () => {
+    return loadCard('se-results', T('Searching visits'), async () => {
         const data = await api('sessions', 'list');
         renderRows(data);
         renderCount(data);

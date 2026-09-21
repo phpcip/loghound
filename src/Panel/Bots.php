@@ -26,6 +26,7 @@ declare(strict_types=1);
 namespace Loghound\Panel;
 
 use Loghound\Enrich\Ua;
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Bots extends Controller
@@ -92,7 +93,7 @@ final class Bots extends Controller
            for a shared code and the literal supplies only what it alone has: the floor reasons
            (short_visit, no_page_requested, no_duration_measured, short_visit_no_beacon), which
            are recorded by the verdict floors rather than by a weighted rule. */
-        return self::fromScorer() + [
+        $catalogue = self::fromScorer() + [
             'automation_marker'      => ['label' => 'Automation marker', 'severity' => 'high', 'why' => 'The page exposed a definitive driver artefact — navigator.webdriver, a chromedriver global, Puppeteer/Playwright/Selenium hooks. Browsers do not have these; drivers do.'],
             'headless_renderer'      => ['label' => 'Headless renderer', 'severity' => 'high', 'why' => 'WebGL reported SwiftShader, llvmpipe, Mesa OffScreen or Microsoft Basic Render: software rasterisation, which is what you get when there is no screen.'],
             'ua_claim_failed'        => ['label' => 'UA claim failed', 'severity' => 'high', 'why' => 'The User-Agent claimed a Chrome version whose engine features the page does not actually have. A spoofed UA string cannot retrofit V8.'],
@@ -115,6 +116,12 @@ final class Bots extends Controller
             'beacon_forged'          => ['label' => 'Forged beacon timing', 'severity' => 'high', 'why' => 'The claimed dwell time is impossible against the issue time of its own token. The lie is recorded rather than discarded, because the lie is the evidence.'],
             'ua_declared_bot'        => ['label' => 'Declared crawler', 'severity' => 'info', 'why' => 'It said it was a bot and it was telling the truth. Verdict bot, threat none.'],
         ];
+
+        foreach ($catalogue as $code => $meta) {
+            $catalogue[$code]['label'] = I18n::t($meta['label']);
+            $catalogue[$code]['why'] = I18n::t($meta['why']);
+        }
+        return $catalogue;
     }
 
     /**
@@ -136,7 +143,7 @@ final class Bots extends Controller
 
     public function title(): string
     {
-        return 'Bot forensics';
+        return I18n::t('Bot forensics');
     }
 
 
@@ -231,7 +238,7 @@ final class Bots extends Controller
             'histogram' => $this->histogram(),
             'classes'   => $this->classes(),
             'crawlers'  => $this->crawlers(),
-            default     => ['error' => 'Unknown action'],
+            default     => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -314,7 +321,7 @@ final class Bots extends Controller
             $code = (string) ($bucket['val'] ?? '');
             $meta = $catalogue[$code] ?? [
                 'label'    => $code,
-                'why'      => 'No description for this rule code in this panel version.',
+                'why'      => I18n::t('No description for this rule code in this panel version.'),
                 'severity' => 'med',
             ];
             $count = (int) ($bucket['count'] ?? 0);
@@ -518,18 +525,18 @@ final class Bots extends Controller
         self::chart(
             'bf-verdicts',
             '03',
-            'Verdict distribution',
-            'All scored sessions in the selected range.',
+            I18n::t('Verdict distribution'),
+            I18n::t('All scored sessions in the selected range.'),
             300,
-            'Faceting verdicts'
+            I18n::t('Faceting verdicts')
         );
         self::chart(
             'bf-histogram',
             '04',
-            'Score distribution',
-            'All scored sessions. A healthy ruleset is bimodal — a pile-up in the middle means the weights need tuning.',
+            I18n::t('Score distribution'),
+            I18n::t('All scored sessions. A healthy ruleset is bimodal — a pile-up in the middle means the weights need tuning.'),
             300,
-            'Bucketing bot scores'
+            I18n::t('Bucketing bot scores')
         );
         echo '</div>';
 
@@ -541,35 +548,35 @@ final class Bots extends Controller
     /** The two halves, stated before anything else on the page. */
     private function splitCard(): void
     {
-        self::cardOpen('bf-split', '01', 'Declared versus evasive');
-        self::skeleton('bf-split', 'stats', 0, 'Separating declared crawlers from evasive automation');
+        self::cardOpen('bf-split', '01', I18n::t('Declared versus evasive'));
+        self::skeleton('bf-split', 'stats', 0, I18n::t('Separating declared crawlers from evasive automation'));
 
         echo '<div class="split-card">';
 
         echo '<div class="split-half split-declared">';
-        echo '<h2>Declared crawlers</h2>';
-        echo '<p class="split-note">Told us what they were, and the claim held up. Verdict <code>bot</code>, '
-            . 'threat none. They are counted separately everywhere in this panel.</p>';
+        echo '<h2>' . I18n::html('Declared crawlers') . '</h2>';
+        echo '<p class="split-note">' . I18n::html('Told us what they were, and the claim held up. Verdict {bot}, '
+            . 'threat none. They are counted separately everywhere in this panel.', ['bot' => '<code>bot</code>']) . '</p>';
         echo '<div class="split-stats">';
         echo '<div><span class="stat-value mono" data-field="declared_sessions">—</span>'
-            . '<span class="stat-label">Search &amp; SEO</span></div>';
+            . '<span class="stat-label">' . I18n::html('Search & SEO') . '</span></div>';
         echo '<div><span class="stat-value mono" data-field="ai_sessions">—</span>'
-            . '<span class="stat-label">AI crawlers</span></div>';
+            . '<span class="stat-label">' . I18n::html('AI crawlers') . '</span></div>';
         echo '<div><span class="stat-value mono" data-field="declared_hits">—</span>'
-            . '<span class="stat-label">Requests</span></div>';
+            . '<span class="stat-label">' . I18n::html('Requests') . '</span></div>';
         echo '</div></div>';
 
         echo '<div class="split-half split-evasive">';
-        echo '<h2>Evasive automation</h2>';
-        echo '<p class="split-note">Scored as automation and did not say so: headless browsers, scripted clients, '
-            . 'spoofed User-Agents, rotating-proxy fleets. This is the half that matters.</p>';
+        echo '<h2>' . I18n::html('Evasive automation') . '</h2>';
+        echo '<p class="split-note">' . I18n::html('Scored as automation and did not say so: headless browsers, scripted clients, '
+            . 'spoofed User-Agents, rotating-proxy fleets. This is the half that matters.') . '</p>';
         echo '<div class="split-stats">';
         echo '<div><span class="stat-value mono" data-field="evasive_sessions">—</span>'
-            . '<span class="stat-label">Sessions</span></div>';
+            . '<span class="stat-label">' . I18n::html('Sessions') . '</span></div>';
         echo '<div><span class="stat-value mono" data-field="evasive_ips">—</span>'
-            . '<span class="stat-label">Distinct IPs</span></div>';
+            . '<span class="stat-label">' . I18n::html('Distinct IPs') . '</span></div>';
         echo '<div><span class="stat-value mono" data-field="evasive_hits">—</span>'
-            . '<span class="stat-label">Requests</span></div>';
+            . '<span class="stat-label">' . I18n::html('Requests') . '</span></div>';
         echo '</div></div>';
 
         echo '</div>';
@@ -582,12 +589,12 @@ final class Bots extends Controller
         self::cardOpen(
             'bf-reasons',
             '02',
-            'Why each session was scored',
-            'Sessions judged Bot or Likely bot. A session fires several rules, so the bars sum to more than '
-            . 'the session count.',
+            I18n::t('Why each session was scored'),
+            I18n::t('Sessions judged Bot or Likely bot. A session fires several rules, so the bars sum to more than '
+            . 'the session count.'),
             $this->exportTool('signals')
         );
-        self::skeleton('bf-reasons', 'chart', 420, 'Faceting signal codes');
+        self::skeleton('bf-reasons', 'chart', 420, I18n::t('Faceting signal codes'));
 
         echo '<div class="chart" id="bf-reasons-chart" style="height:460px"></div>';
         echo '<div class="table-wrap"><table id="bf-reason-table" class="table-fixed"'
@@ -595,11 +602,11 @@ final class Bots extends Controller
             . '<col style="width:24%"><col style="width:40%"><col style="width:12%">'
             . '<col style="width:12%"><col style="width:12%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('signal') . '>Signal</th>'
-            . '<th scope="col">What it means</th>'
-            . '<th scope="col" class="num">Evasive</th>'
-            . '<th scope="col" class="num">Declared</th>'
-            . '<th scope="col" class="num"' . Sorting::th('score', 'desc') . '>Avg score</th>'
+            . '<th scope="col"' . Sorting::th('signal') . '>' . I18n::html('Signal') . '</th>'
+            . '<th scope="col">' . I18n::html('What it means') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Evasive') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Declared') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('score', 'desc') . '>' . I18n::html('Avg score') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('bf-reasons');
@@ -611,24 +618,24 @@ final class Bots extends Controller
         self::cardOpen(
             'bf-classes',
             '05',
-            'Bot classes',
-            'Sessions judged Bot or Likely bot, grouped by what kind of automation they are. '
-            . 'Declared classes are marked.',
+            I18n::t('Bot classes'),
+            I18n::t('Sessions judged Bot or Likely bot, grouped by what kind of automation they are. '
+            . 'Declared classes are marked.'),
             $this->exportTool('classes')
         );
-        self::skeleton('bf-classes', 'rows', 0, 'Faceting bot classes');
+        self::skeleton('bf-classes', 'rows', 0, I18n::t('Faceting bot classes'));
 
         echo '<div class="table-wrap"><table id="bf-classes-table" class="table-fixed"'
             . Sorting::tableAttrs('bf-classes', self::classesOrder()) . '><colgroup>'
             . '<col style="width:26%"><col style="width:16%"><col style="width:14%">'
             . '<col style="width:16%"><col style="width:14%"><col style="width:14%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('class') . '>Class</th>'
-            . '<th scope="col">Kind</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
-            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>Distinct IPs</th>'
-            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
-            . '<th scope="col" class="num"' . Sorting::th('score', 'desc') . '>Avg score</th>'
+            . '<th scope="col"' . Sorting::th('class') . '>' . I18n::html('Class') . '</th>'
+            . '<th scope="col">' . I18n::html('Kind') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>' . I18n::html('Distinct IPs') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('score', 'desc') . '>' . I18n::html('Avg score') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('bf-classes');
@@ -640,12 +647,12 @@ final class Bots extends Controller
         self::cardOpen(
             'bf-crawlers',
             '06',
-            'Declared crawlers, by name',
-            'Sessions whose User-Agent self-identifies as a bot. Verified means forward-confirmed reverse DNS '
-            . 'passed; an unverified Googlebot is an impersonator, not a crawler.',
+            I18n::t('Declared crawlers, by name'),
+            I18n::t('Sessions whose User-Agent self-identifies as a bot. Verified means forward-confirmed reverse DNS '
+            . 'passed; an unverified Googlebot is an impersonator, not a crawler.'),
             $this->exportTool('crawlers')
         );
-        self::skeleton('bf-crawlers', 'rows', 0, 'Faceting crawler names');
+        self::skeleton('bf-crawlers', 'rows', 0, I18n::t('Faceting crawler names'));
 
         echo '<div class="table-wrap"><table id="bf-crawlers-table" class="table-fixed"'
             . Sorting::tableAttrs('bf-crawlers', self::crawlersOrder()) . '><colgroup>'
@@ -653,13 +660,13 @@ final class Bots extends Controller
             . '<col style="width:12%"><col style="width:9%"><col style="width:12%">'
             . '<col style="width:20%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col"' . Sorting::th('crawler') . '>Crawler</th>'
-            . '<th scope="col">Category</th>'
-            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>Sessions</th>'
-            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>Requests</th>'
-            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>IPs</th>'
-            . '<th scope="col" class="num">Verified</th>'
-            . '<th scope="col"' . Sorting::th('last', 'desc') . '>Last seen</th>'
+            . '<th scope="col"' . Sorting::th('crawler') . '>' . I18n::html('Crawler') . '</th>'
+            . '<th scope="col">' . I18n::html('Category') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('sessions', 'desc') . '>' . I18n::html('Sessions') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('requests', 'desc') . '>' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num"' . Sorting::th('ips', 'desc') . '>' . I18n::html('IPs') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Verified') . '</th>'
+            . '<th scope="col"' . Sorting::th('last', 'desc') . '>' . I18n::html('Last seen') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
 
         self::cardClose('bf-crawlers');

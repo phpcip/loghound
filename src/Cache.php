@@ -594,7 +594,7 @@ final class Cache
 
         [$host, $port] = self::splitServer($this->server);
         if ($host === '') {
-            $this->reason = 'cache.server is not a host:port or a socket path';
+            $this->reason = I18n::t('cache.server is not a host:port or a socket path');
             $this->dead = true;
             return null;
         }
@@ -653,7 +653,7 @@ final class Cache
             return null;
         }
 
-        $this->reason = 'neither the memcached nor the memcache PHP extension is installed';
+        $this->reason = I18n::t('neither the memcached nor the memcache PHP extension is installed');
         $this->dead = true;
         return null;
     }

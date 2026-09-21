@@ -97,6 +97,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Facets
@@ -781,9 +782,9 @@ final class Facets
     public static function operatorLabel(string $op): string
     {
         return match ($op) {
-            self::OP_ALL  => 'All of',
-            self::OP_NONE => 'None of',
-            default       => 'Any of',
+            self::OP_ALL  => I18n::t('All of'),
+            self::OP_NONE => I18n::t('None of'),
+            default       => I18n::t('Any of'),
         };
     }
 
@@ -797,9 +798,9 @@ final class Facets
     public static function operatorHint(string $op, string $label): string
     {
         return match ($op) {
-            self::OP_ALL  => 'Match only traffic carrying EVERY selected ' . mb_strtolower($label) . ' value.',
-            self::OP_NONE => 'Exclude every selected ' . mb_strtolower($label) . ' value; keep the rest.',
-            default       => 'Match traffic carrying ANY selected ' . mb_strtolower($label) . ' value.',
+            self::OP_ALL  => I18n::t('Match only traffic carrying EVERY selected {dimension} value.', ['dimension' => mb_strtolower($label)]),
+            self::OP_NONE => I18n::t('Exclude every selected {dimension} value; keep the rest.', ['dimension' => mb_strtolower($label)]),
+            default       => I18n::t('Match traffic carrying ANY selected {dimension} value.', ['dimension' => mb_strtolower($label)]),
         };
     }
 
@@ -939,8 +940,8 @@ final class Facets
             'value'    => $value,
             'label'    => $spoken['label'],
             'why'      => $state === 'unfilterable'
-                ? 'This value contains query syntax that the filter layer refuses to carry, so it '
-                    . 'can be counted but not selected.'
+                ? I18n::t('This value contains query syntax that the filter layer refuses to carry, so it '
+                    . 'can be counted but not selected.')
                 : $spoken['why'],
             'severity' => $spoken['severity'],
             'count'    => $count,
@@ -995,10 +996,10 @@ final class Facets
         }
 
         $group['absent'] = [
-            'label'  => 'Not reported',
+            'label'  => I18n::t('Not reported'),
             'count'  => $absent,
-            'why'    => 'The measured site never reported this for these sessions, so the field is absent '
-                . 'rather than false. Selecting it excludes every value it could have had.',
+            'why'    => I18n::t('The measured site never reported this for these sessions, so the field is absent '
+                . 'rather than false. Selecting it excludes every value it could have had.'),
             'op'     => self::OP_NONE,
             'values' => $known,
             'state'  => $this->op($field) === self::OP_NONE && $this->values($field) === $known ? 'on' : 'off',
@@ -1070,10 +1071,10 @@ final class Facets
         $parts = [];
 
         if ($excluded) {
-            $parts[] = 'Counted with the ' . $label . ' filter lifted.';
+            $parts[] = I18n::t('Counted with the {filter} filter lifted.', ['filter' => $label]);
         }
         if ($this->arity($field) === self::ARITY_MULTI) {
-            $parts[] = 'Values overlap; they do not sum to the total.';
+            $parts[] = I18n::t('Values overlap; they do not sum to the total.');
         }
         return implode(' ', $parts);
     }

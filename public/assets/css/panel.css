@@ -1841,6 +1841,8 @@ label.radio input, label.check input { margin-top: 4px; flex: none; accent-color
     color: var(--faint);
 }
 
+.setup-lang { margin: -16px 0 24px; font-size: 14px; color: var(--faint); }
+.setup-lang strong { color: var(--ink); }
 .setup-rail {
     display: flex;
     flex-wrap: wrap;

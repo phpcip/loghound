@@ -32,6 +32,7 @@ import { copyValue } from './copy.js';
 import { glyph, identMark } from './icons.js';
 import { countryNode, dimValue, drillRow, openButton } from './identity.js';
 import { pathCell, urlMark } from './url.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /**
  * The column classes, one per column, in order.
@@ -52,7 +53,7 @@ const COLS = ['vc-when', 'vc-who', 'vc-page', 'vc-email', 'vc-span', 'vc-bounce'
    above it and the room belongs to the columns that hold real text. */
 /* "BOUNCED", NOT "BOUNCE". The cell answers yes or no for one visit; a rate is something you
    average over many, and the old heading made two legitimate values look like a broken sum. */
-const HEADINGS = ['Last seen', 'IP', 'Page', 'Email', 'Sess time', 'Bounced'];
+const HEADINGS = [T('Last seen'), T('IP'), T('Page'), T('Email'), T('Sess time'), T('Bounced')];
 
 /**
  * The `<colgroup>` and `<thead>` a visit table starts with, for a table built in the browser.
@@ -135,7 +136,7 @@ export function visitRow(v) {
         /* WRAPPED SO THE PHONE CAN DROP IT. The flag answers "where from" in one glyph; the
            address is a line of its own at 375px and the stylesheet hides it there. */
         el('span', { class: 'visit-ip' }, [
-            v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: 'not recorded' })
+            v.ip ? dimValue('ip_s', v.ip, { mono: true }) : el('span', { class: 'muted', text: T('not recorded') })
         ])
     ]));
 
@@ -153,7 +154,7 @@ export function visitRow(v) {
        because "we were not told" is a different fact from "there is no value". */
     tr.appendChild(el('td', {
         class: 'clip visit-email',
-        title: v.ident || 'No identity was sent for this visit',
+        title: v.ident || T('No identity was sent for this visit'),
         'data-sort': v.ident || ''
     }, [
         v.ident ? identMark(v.device) : null,
@@ -180,14 +181,14 @@ export function visitRow(v) {
     tr.appendChild(el('td', {
         class: 'visit-span ' + (unmeasured ? 'nowrap muted' : 'mono nowrap' + (measured ? ' visit-engaged' : ' muted')),
         title: shown === null || shown <= 0
-            ? 'Nothing measured a duration for this visit'
+            ? T('Nothing measured a duration for this visit')
             : (measured
-                ? 'Engaged time, measured by the beacon'
-                : 'Log span: first request to last. Blind to the final page.'),
+                ? T('Engaged time, measured by the beacon')
+                : T('Log span: first request to last. Blind to the final page.')),
         'data-sort': String(shown === null ? -1 : shown)
     }, [
-        unmeasured ? el('span', { text: 'not measured' }) : durStamp(shown),
-        openButton('session', { id: v.id }, 'Open this visit')
+        unmeasured ? el('span', { text: T('not measured') }) : durStamp(shown),
+        openButton('session', { id: v.id }, T('Open this visit'))
     ]));
 
     /* SORTED THE WAY IT READS. The cell says Yes, No or an em dash now, so sorting on the raw
@@ -230,9 +231,9 @@ function openMark(v) {
 
     return el('span', {
         class: 'chip chip-open',
-        text: 'OPEN',
-        title: 'Still open: this visitor was last seen less than the idle timeout ago, so the'
-            + ' counts and the verdict on this row are still moving.'
+        text: T('OPEN'),
+        title: T('Still open: this visitor was last seen less than the idle timeout ago, so the'
+            + ' counts and the verdict on this row are still moving.')
     });
 }
 
@@ -249,7 +250,7 @@ function bounceMark(v) {
        printing it as 0% or 100% made a column that could only ever hold two values look like a
        broken calculation. A rate is something you average over many visits, which is what the
        Engagement view is for. Null is neither: the server sends it when nothing could decide. */
-    const pct = v.bounced === true ? 'Yes' : (v.bounced === false ? 'No' : '—');
+    const pct = v.bounced === true ? T('Yes') : (v.bounced === false ? T('No') : '—');
 
     /* MEASURED, so the figure is stated plainly. The beacon recorded engagement in the browser,
        which is the only way to tell a four-minute read of one page from a visitor who left
@@ -259,8 +260,8 @@ function bounceMark(v) {
             class: v.bounced === true ? 'chip chip-accent' : 'chip',
             text: pct,
             title: v.bounced === true
-                ? 'Bounced: one page, and the beacon measured no engagement on it.'
-                : 'Did not bounce: more than one page, or measured engagement on the one page.'
+                ? T('Bounced: one page, and the beacon measured no engagement on it.')
+                : T('Did not bounce: more than one page, or measured engagement on the one page.')
         });
     }
 
@@ -271,10 +272,10 @@ function bounceMark(v) {
     return el('span', {
         class: 'nobeacon',
         'data-lh-tip': '1',
-        'data-full': 'No beacon data for this visit, so this is inferred from the page count '
+        'data-full': T('No beacon data for this visit, so this is inferred from the page count '
             + 'alone. Either the site is not carrying the beacon snippet, or the browser never '
-            + 'ran it — an extension, a blocked script, or the visitor left before it loaded.',
-        'aria-label': 'Bounce inferred: no beacon data for this visit'
+            + 'ran it — an extension, a blocked script, or the visitor left before it loaded.'),
+        'aria-label': T('Bounce inferred: no beacon data for this visit')
     }, [
         noBeaconMark(),
         el('span', { class: 'muted', text: pct })
@@ -298,11 +299,11 @@ function bounceMark(v) {
 function noPageMark() {
     return el('span', {
         class: 'nopage',
-        text: 'no page',
+        text: T('no page'),
         'data-lh-tip': '1',
-        'data-full': 'This visit never requested an HTML page — it fetched only assets, such as '
+        'data-full': T('This visit never requested an HTML page — it fetched only assets, such as '
             + 'an image, a script or /robots.txt. Visits recorded before this was tracked cannot '
-            + 'name the asset, because asset requests are not indexed by default.'
+            + 'name the asset, because asset requests are not indexed by default.')
     });
 }
 
@@ -385,12 +386,12 @@ export function fillVisits(table, rows) {
 export function visitCaption(page) {
     const total = page && page.total !== null && page.total !== undefined ? Number(page.total) : null;
     if (total === null) {
-        return 'Every visit in scope.';
+        return T('Every visit in scope.');
     }
     if (total === 0) {
-        return 'No visit in scope.';
+        return T('No visit in scope.');
     }
-    return num(total) + (total === 1 ? ' visit.' : ' visits, all of them reachable.');
+    return Tn('{n} visit.', '{n} visits, all of them reachable.', total, { n: num(total) });
 }
 
 
@@ -410,7 +411,7 @@ function dayOrdinal(iso) {
     }
     const teen = day % 100 >= 11 && day % 100 <= 13;
     const suffix = teen ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[day % 10] || 'th');
-    return day + suffix;
+    return T('{day}{suffix}', { day: day, suffix: suffix });
 }
 
 /**
@@ -436,7 +437,7 @@ function stampLine(seen, v) {
     const half = text.split(' ');
     const clock = half.length > 1 ? half[1].split(':') : [];
     const opener = el('span', { class: 'vbox-item' }, [
-        openButton('session', { id: v.id }, 'Open this visit')
+        openButton('session', { id: v.id }, T('Open this visit'))
     ]);
 
     if (clock.length < 3) {
@@ -481,11 +482,11 @@ function visitBox(v, seen, shown, unmeasured) {
         el('span', { class: 'vbox-item' }, [
             v.country ? countryNode(v.country, { flagOnly: true }) : null,
             v.ip
-                ? copyValue(v.ip, { cls: 'mono', label: 'IP address' })
-                : el('span', { class: 'muted', text: 'not recorded' })
+                ? copyValue(v.ip, { cls: 'mono', label: T('IP address') })
+                : el('span', { class: 'muted', text: T('not recorded') })
         ]),
         el('span', { class: 'vbox-item' }, [
-            unmeasured ? el('span', { class: 'muted', text: 'not measured' }) : durStamp(shown)
+            unmeasured ? el('span', { class: 'muted', text: T('not measured') }) : durStamp(shown)
         ]),
         el('span', { class: 'vbox-item' }, [
             bounceMark(v)
@@ -493,11 +494,11 @@ function visitBox(v, seen, shown, unmeasured) {
     ]);
 
     const page = el('div', { class: 'vbox-line vbox-page' }, v.entry
-        ? [urlMark(v.entry, { host: v.host }), copyValue(v.entry, { cls: 'mono', end: true, url: true, label: 'Page' })]
+        ? [urlMark(v.entry, { host: v.host }), copyValue(v.entry, { cls: 'mono', end: true, url: true, label: T('Page') })]
         : [glyph('page'), noPageMark()]);
 
     const mail = v.ident
-        ? el('div', { class: 'vbox-line vbox-mail' }, [identMark(v.device), copyValue(v.ident, { label: 'Email' })])
+        ? el('div', { class: 'vbox-line vbox-mail' }, [identMark(v.device), copyValue(v.ident, { label: T('Email') })])
         : null;
 
     return el('td', { class: 'visit-box', colspan: '6' }, [stamp, meta, mail, page]);

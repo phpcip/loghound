@@ -17,6 +17,7 @@
 'use strict';
 
 import { byId, el, fill, num, pct, setPop } from './core.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /** A percentage of a total, or an em-dash when the denominator is zero. */
 function rate(part, total) {
@@ -47,36 +48,36 @@ function tiles(b) {
 
     return [
         tile(
-            'Bounce rate',
+            T('Bounce rate'),
             rate(m.bounced, m.sessions),
             m.sessions
-                ? num(m.bounced) + ' of ' + num(m.sessions) + ' human visits that loaded a page and ran a beacon.'
-                : 'No human visit that loaded a page reported a beacon.'
+                ? T('{n} of {total} human visits that loaded a page and ran a beacon.', { n: num(m.bounced), total: num(m.sessions) })
+                : T('No human visit that loaded a page reported a beacon.')
         ),
         tile(
-            'Read one page and stayed',
+            T('Read one page and stayed'),
             rate(m.satisfied, m.sessions),
             m.sessions
-                ? num(m.satisfied) + ' visits: one page, ' + seconds + ' seconds or more engaged. Another tool '
-                    + 'counts these as bounces.'
-                : 'Needs a beacon, and none ran in this range.'
+                ? T('{n} visits: one page, {seconds} seconds or more engaged. Another tool '
+                    + 'counts these as bounces.', { n: num(m.satisfied), seconds: seconds })
+                : T('Needs a beacon, and none ran in this range.')
         ),
         tile(
-            'One page, engagement unknown',
+            T('One page, engagement unknown'),
             rate(a.single, a.sessions),
             a.sessions
-                ? num(a.single) + ' of ' + num(a.sessions) + ' human visits that loaded a page had no beacon. '
-                    + 'Not part of the rate above.'
-                : 'Every human visit that loaded a page reported a beacon.'
+                ? T('{n} of {total} human visits that loaded a page had no beacon. '
+                    + 'Not part of the rate above.', { n: num(a.single), total: num(a.sessions) })
+                : T('Every human visit that loaded a page reported a beacon.')
         ),
 
         /* DIVIDED BY THE SESSIONS THAT LOADED A PAGE, not by every session: the tool this
            imitates counts pageviews, so a session that never loaded one does not exist in it. */
         tile(
-            'The conventional definition',
+            T('The conventional definition'),
             rate(b.conventional, b.all_landed),
-            num(b.conventional) + ' of ' + num(b.all_landed) + ' sessions with a pageview had exactly one, bots '
-                + 'included. The figure another tool would print for this traffic.'
+            T('{n} of {total} sessions with a pageview had exactly one, bots '
+                + 'included. The figure another tool would print for this traffic.', { n: num(b.conventional), total: num(b.all_landed) })
         )
     ];
 }
@@ -94,36 +95,41 @@ function coverage(b) {
 
     if (b.people === 0) {
         out.push(el('p', { class: 'muted', text:
-            'No human visit in this range has finished yet, so there is nothing to measure.' }));
+            T('No human visit in this range has finished yet, so there is nothing to measure.') }));
         return out;
     }
 
     if (b.landed === 0) {
         out.push(el('p', { class: 'muted', text:
-            'None of the ' + num(b.people) + ' completed human visits in this range loaded a page, so there is ' +
-            'no bounce rate to state.' }));
+            T('None of the {n} completed human visits in this range loaded a page, so there is ' +
+            'no bounce rate to state.', { n: num(b.people) }) }));
         return out;
     }
 
     out.push(el('p', { class: 'muted', text:
-        num(m.sessions) + ' of ' + num(b.landed) + ' completed human visits that loaded a page (' +
-        pct(m.sessions, b.landed, 0) + ') had a beacon and are what the rate is measured on. The other ' +
-        num(a.sessions) + ' are judged on page count and reported separately.' }));
+        T('{n} of {total} completed human visits that loaded a page ({pct}) had a beacon and are what the rate is measured on. The other ' +
+        '{rest} are judged on page count and reported separately.', {
+            n: num(m.sessions),
+            total: num(b.landed),
+            pct: pct(m.sessions, b.landed, 0),
+            rest: num(a.sessions)
+        }) }));
 
     /* THE PAGE-LESS VISITS ARE NAMED, NOT DROPPED QUIETLY. They used to be counted as one-page
        visits, which is what made the metric wrong; saying how many there were is what stops the
        correction from looking like sessions going missing. */
     if (b.nopage > 0) {
         out.push(el('p', { class: 'muted', text:
-            num(b.nopage) + ' further human visit' + (b.nopage === 1 ? '' : 's') +
-            ' loaded no page at all — assets, feeds, robots.txt or API endpoints only — so nobody arrived ' +
-            'anywhere to bounce from, and they are outside every figure on this card.' }));
+            Tn('{n} further human visit loaded no page at all — assets, feeds, robots.txt or API endpoints only — so nobody arrived ' +
+            'anywhere to bounce from, and they are outside every figure on this card.',
+            '{n} further human visits loaded no page at all — assets, feeds, robots.txt or API endpoints only — so nobody arrived ' +
+            'anywhere to bounce from, and they are outside every figure on this card.', b.nopage, { n: num(b.nopage) }) }));
     }
 
     if (b.unclassified > 0) {
         out.push(el('p', { class: 'muted', text:
-            num(b.unclassified) + ' visit' + (b.unclassified === 1 ? '' : 's') +
-            ' carried no page count at all and are excluded from every figure above.' }));
+            Tn('{n} visit carried no page count at all and are excluded from every figure above.',
+            '{n} visits carried no page count at all and are excluded from every figure above.', b.unclassified, { n: num(b.unclassified) }) }));
     }
 
     return out;
@@ -143,11 +149,11 @@ function outcomes(b) {
 
     const seconds = Math.round(b.threshold_ms / 1000);
     const rows = [
-        ['Bounced', m.bounced, 'One page, under ' + seconds + 's engaged'],
-        ['One page, but engaged', m.satisfied, 'One page, ' + seconds + 's or more engaged'],
-        ['More than one page', m.multi, 'Beacon present'],
-        ['One page, no beacon', a.single, 'Engagement not measured'],
-        ['More than one page, no beacon', a.multi, 'Engagement not measured']
+        [T('Bounced'), m.bounced, T('One page, under {seconds}s engaged', { seconds: seconds })],
+        [T('One page, but engaged'), m.satisfied, T('One page, {seconds}s or more engaged', { seconds: seconds })],
+        [T('More than one page'), m.multi, T('Beacon present')],
+        [T('One page, no beacon'), a.single, T('Engagement not measured')],
+        [T('More than one page, no beacon'), a.multi, T('Engagement not measured')]
     ];
 
     /* THE SHARE IS OF THE VISITS THAT LOADED A PAGE, which is what the five rows partition. It
@@ -163,16 +169,16 @@ function outcomes(b) {
     const table = el('table', { class: 'tight table-fixed' }, [
         el('colgroup', {}, ['30%', '12%', '12%', '46%'].map((w) => el('col', { style: 'width:' + w }))),
         el('thead', {}, [el('tr', {}, [
-            el('th', { scope: 'col', text: 'Outcome' }),
-            el('th', { scope: 'col', class: 'num', text: 'Visits' }),
-            el('th', { scope: 'col', class: 'num', text: 'Share' }),
-            el('th', { scope: 'col', text: 'Evidence' })
+            el('th', { scope: 'col', text: T('Outcome') }),
+            el('th', { scope: 'col', class: 'num', text: T('Visits') }),
+            el('th', { scope: 'col', class: 'num', text: T('Share') }),
+            el('th', { scope: 'col', text: T('Evidence') })
         ])]),
         body
     ]);
 
     return el('div', {}, [
-        el('h3', { text: 'Outcomes' }),
+        el('h3', { text: T('Outcomes') }),
         el('div', { class: 'table-wrap' }, [table])
     ]);
 }

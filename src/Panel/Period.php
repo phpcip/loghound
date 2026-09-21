@@ -26,6 +26,7 @@ namespace Loghound\Panel;
 
 use DateTimeImmutable;
 use DateTimeZone;
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Period
@@ -50,14 +51,14 @@ final class Period
     public static function presets(): array
     {
         return [
-            'today'     => 'Today so far',
-            'yesterday' => 'Yesterday',
-            '7d'        => 'Last 7 days',
-            '28d'       => 'Last 28 days',
-            '90d'       => 'Last 90 days',
-            'month'     => 'This month so far',
-            'lastmonth' => 'Last month',
-            'custom'    => 'Custom dates',
+            'today'     => I18n::t('Today so far'),
+            'yesterday' => I18n::t('Yesterday'),
+            '7d'        => I18n::t('Last 7 days'),
+            '28d'       => I18n::t('Last 28 days'),
+            '90d'       => I18n::t('Last 90 days'),
+            'month'     => I18n::t('This month so far'),
+            'lastmonth' => I18n::t('Last month'),
+            'custom'    => I18n::t('Custom dates'),
         ];
     }
 
@@ -69,9 +70,9 @@ final class Period
     public static function comparisons(): array
     {
         return [
-            'previous' => 'Previous period',
-            'year'     => 'Same period a year earlier',
-            'custom'   => 'Custom dates',
+            'previous' => I18n::t('Previous period'),
+            'year'     => I18n::t('Same period a year earlier'),
+            'custom'   => I18n::t('Custom dates'),
         ];
     }
 
@@ -412,7 +413,7 @@ final class Period
     private static function label(array $interval, DateTimeZone $tz): string
     {
         $at = static fn (int $ts): string => (new DateTimeImmutable('@' . $ts))->setTimezone($tz)->format('m/d/Y H:i:s');
-        return $at($interval['start']) . ' to ' . $at($interval['end'] - 1);
+        return I18n::t('{from} to {to}', ['from' => $at($interval['start']), 'to' => $at($interval['end'] - 1)]);
     }
 
     /** The calendar date an instant falls on in the display timezone, as `YYYY-MM-DD`. */

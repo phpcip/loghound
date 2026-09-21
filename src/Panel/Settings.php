@@ -43,6 +43,7 @@ use Loghound\Auth\TwoFactor;
 use Loghound\Beacon\Doc;
 use Loghound\Cache;
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Diagnostics;
 use Loghound\Exclusions;
 use Loghound\AttackPatterns;
@@ -156,7 +157,7 @@ final class Settings extends Controller implements JobHost, Sections
 
     public function title(): string
     {
-        return 'Settings';
+        return I18n::t('Settings');
     }
 
 
@@ -176,7 +177,7 @@ final class Settings extends Controller implements JobHost, Sections
             'job_latest' => $this->latestJob(),
             'regions'    => $this->regions(),
             'hosts'      => $this->hostChoices(),
-            default      => ['error' => 'Unknown action'],
+            default      => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -250,8 +251,8 @@ final class Settings extends Controller implements JobHost, Sections
             return $this->envelope([
                 'regions'  => [],
                 'selected' => $chosen,
-                'note'     => 'Opensolr did not answer with the list of regions, so this is a free-text '
-                    . 'field for now. What came back: ' . Jobs::redact($e->getMessage()),
+                'note'     => I18n::t('Opensolr did not answer with the list of regions, so this is a free-text '
+                    . 'field for now. What came back: {error}', ['error' => Jobs::redact($e->getMessage())]),
             ]);
         }
 
@@ -259,7 +260,7 @@ final class Settings extends Controller implements JobHost, Sections
             'regions'  => $regions,
             'selected' => $chosen,
             'note'     => $regions === []
-                ? 'This account was offered no regions at all, so this is a free-text field for now.'
+                ? I18n::t('This account was offered no regions at all, so this is a free-text field for now.')
                 : '',
         ]);
     }
@@ -327,25 +328,24 @@ final class Settings extends Controller implements JobHost, Sections
     {
         return [
             [
-                'label' => 'Looking for access logs',
+                'label' => I18n::t('Looking for access logs'),
                 'run'   => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $candidates = Detector::candidates($cfg, null);
                     $found = count($candidates);
 
                     return [
-                        'note'    => $found . ' candidate file' . ($found === 1 ? '' : 's'),
+                        'note'    => I18n::tn('{n} candidate file', '{n} candidate files', $found),
                         'detail'  => $found === 0
-                            ? 'Nothing matched your webserver configuration or the usual locations. '
-                                . 'A path can still be added by hand below, or with '
-                                . self::setupCommand() . '.'
-                            : 'Read from your webserver configuration where it could be, and from the '
-                                . 'usual locations where it could not.',
+                            ? I18n::t('Nothing matched your webserver configuration or the usual locations. '
+                                . 'A path can still be added by hand below, or with {command}.', ['command' => self::setupCommand()])
+                            : I18n::t('Read from your webserver configuration where it could be, and from the '
+                                . 'usual locations where it could not.'),
                         'context' => ['candidates' => $candidates],
                     ];
                 },
             ],
             [
-                'label' => 'Reading each file and saving the report',
+                'label' => I18n::t('Reading each file and saving the report'),
                 'run'   => static function (array $ctx, Config $cfg, Gateway $gw): array {
                     $candidates = is_array($ctx['candidates'] ?? null)
                         ? $ctx['candidates']
@@ -360,17 +360,17 @@ final class Settings extends Controller implements JobHost, Sections
                     if ($written === null) {
                         return [
                             'ok'     => false,
-                            'note'   => 'not saved',
-                            'detail' => 'The detection report could not be written. Check that var/ exists '
-                                . 'and is writable by the user this panel runs as.',
+                            'note'   => I18n::t('not saved'),
+                            'detail' => I18n::t('The detection report could not be written. Check that var/ exists '
+                                . 'and is writable by the user this panel runs as.'),
                         ];
                     }
 
                     $examined = count($sources);
                     return [
-                        'note'    => $examined . ' file' . ($examined === 1 ? '' : 's') . ' examined',
-                        'detail'  => 'The review below has been rebuilt. Nothing is ingested from a new '
-                            . 'file until you confirm it.',
+                        'note'    => I18n::tn('{n} file examined', '{n} files examined', $examined),
+                        'detail'  => I18n::t('The review below has been rebuilt. Nothing is ingested from a new '
+                            . 'file until you confirm it.'),
                         'context' => ['candidates' => [], 'examined' => $examined],
                     ];
                 },
@@ -397,7 +397,7 @@ final class Settings extends Controller implements JobHost, Sections
         $steps = [];
         foreach (Teardown::STEPS as $id => $label) {
             $steps[] = [
-                'label' => $label,
+                'label' => I18n::t($label),
                 'run'   => static function (array $ctx, Config $cfg, Gateway $gw) use ($id): array {
                     return self::uninstallStep($id, $ctx, $cfg);
                 },
@@ -429,10 +429,10 @@ final class Settings extends Controller implements JobHost, Sections
         if (!Teardown::isPanelStep($id)) {
             return [
                 'ok'     => true,
-                'note'   => 'left in place',
-                'detail' => (Teardown::shellOnlyReasons()[$id] ?? 'Left in place; removing it needs root.')
-                    . ' Run ' . Teardown::shellCommand(self::root()) . ' to take Loghound off this '
-                    . 'machine instead of setting it up again.',
+                'note'   => I18n::t('left in place'),
+                'detail' => (Teardown::shellOnlyReasons()[$id] ?? I18n::t('Left in place; removing it needs root.'))
+                    . ' ' . I18n::t('Run {command} to take Loghound off this '
+                    . 'machine instead of setting it up again.', ['command' => Teardown::shellCommand(self::root())]),
             ];
         }
 
@@ -446,10 +446,10 @@ final class Settings extends Controller implements JobHost, Sections
             };
         } catch (\Throwable $e) {
             $report = Diagnostics::capture(
-                'Removing Loghound from this machine',
-                Teardown::label($id),
+                I18n::mark('Removing Loghound from this machine'),
+                Teardown::STEPS[$id] ?? $id,
                 $e,
-                ['Step' => $id],
+                [I18n::t('Step') => $id],
                 $cfg,
                 self::root()
             );
@@ -457,7 +457,7 @@ final class Settings extends Controller implements JobHost, Sections
 
             return [
                 'ok'     => false,
-                'note'   => 'failed',
+                'note'   => I18n::t('failed'),
                 'detail' => $report['error'],
                 'report' => Diagnostics::block($report),
             ];
@@ -484,16 +484,16 @@ final class Settings extends Controller implements JobHost, Sections
         if ($plan['status'] === OpensolrTeardown::CUSTOM) {
             return [
                 'ok'      => true,
-                'note'    => 'custom Solr',
-                'detail'  => $plan['reason'] . '. Loghound will not unload a core from a Solr it does '
+                'note'    => I18n::t('custom Solr'),
+                'detail'  => $plan['reason'] . '. ' . I18n::t('Loghound will not unload a core from a Solr it does '
                     . 'not manage: it cannot tell a dedicated node from one your other applications '
-                    . 'also write to. Remove the two cores yourself if you want them gone.',
+                    . 'also write to. Remove the two cores yourself if you want them gone.'),
                 'context' => ['names' => [], 'custom' => true],
             ];
         }
 
         if ($plan['status'] !== OpensolrTeardown::OK) {
-            return self::teardownRefusal($cfg, 'No index was touched: ' . $plan['reason'] . '.');
+            return self::teardownRefusal($cfg, I18n::t('No index was touched: {reason}.', ['reason' => $plan['reason']]));
         }
 
         $account = (self::control($cfg))->listIndexes();
@@ -501,11 +501,12 @@ final class Settings extends Controller implements JobHost, Sections
 
         return [
             'ok'      => true,
-            'note'    => count($owned['present']) . ' of ' . count($plan['names']) . ' held',
-            'detail'  => 'Your account holds ' . (implode(' and ', $owned['present']) ?: 'neither name')
-                . '.' . ($owned['absent'] === []
+            'note'    => I18n::t('{n} of {total} held', ['n' => count($owned['present']), 'total' => count($plan['names'])]),
+            'detail'  => I18n::t('Your account holds {names}.', [
+                'names' => implode(' ' . I18n::t('and') . ' ', $owned['present']) ?: I18n::t('neither name'),
+            ]) . ($owned['absent'] === []
                     ? ''
-                    : ' Already gone: ' . implode(', ', $owned['absent']) . '.'),
+                    : ' ' . I18n::t('Already gone: {names}.', ['names' => implode(', ', $owned['absent'])])),
             'context' => ['names' => $owned['present'], 'absent' => $owned['absent'], 'custom' => false],
         ];
     }
@@ -522,10 +523,10 @@ final class Settings extends Controller implements JobHost, Sections
         if ($names === []) {
             return [
                 'ok'     => true,
-                'note'   => 'nothing to delete',
+                'note'   => I18n::t('nothing to delete'),
                 'detail' => ($ctx['custom'] ?? false) === true
-                    ? 'This installation uses its own Solr, so the platform holds nothing for this to remove.'
-                    : 'Your account already held neither of the two names.',
+                    ? I18n::t('This installation uses its own Solr, so the platform holds nothing for this to remove.')
+                    : I18n::t('Your account already held neither of the two names.'),
             ];
         }
 
@@ -536,25 +537,25 @@ final class Settings extends Controller implements JobHost, Sections
 
         $lines = [];
         foreach ($outcome['deleted'] as $name) {
-            $lines[] = $name . ' deleted';
+            $lines[] = I18n::t('{name} deleted', ['name' => $name]);
         }
         foreach ($outcome['failed'] as $name => $why) {
-            $lines[] = $name . ' NOT deleted — ' . $why;
+            $lines[] = I18n::t('{name} NOT deleted — {why}', ['name' => $name, 'why' => $why]);
         }
 
         if ($outcome['failed'] !== []) {
             return self::teardownRefusal(
                 $cfg,
-                'The platform refused to delete ' . implode(', ', array_keys($outcome['failed']))
-                . '. ' . implode(' ', $outcome['failed'])
-                . ' Nothing local has been removed, so this can be run again once the platform is '
-                . 'answering. Delete them at https://opensolr.com if it will not.'
+                I18n::t('The platform refused to delete {names}.', ['names' => implode(', ', array_keys($outcome['failed']))])
+                . ' ' . implode(' ', $outcome['failed'])
+                . ' ' . I18n::t('Nothing local has been removed, so this can be run again once the platform is '
+                . 'answering. Delete them at https://opensolr.com if it will not.')
             );
         }
 
         return [
             'ok'      => true,
-            'note'    => count($outcome['deleted']) . ' deleted',
+            'note'    => I18n::t('{n} deleted', ['n' => count($outcome['deleted'])]),
             'detail'  => implode(' · ', $lines),
             'context' => ['deleted' => $outcome['deleted']],
         ];
@@ -589,8 +590,8 @@ final class Settings extends Controller implements JobHost, Sections
         if ($deleted === []) {
             return [
                 'ok'     => true,
-                'note'   => 'nothing to confirm',
-                'detail' => 'No index was deleted, so there is nothing to prove absent.',
+                'note'   => I18n::t('nothing to confirm'),
+                'detail' => I18n::t('No index was deleted, so there is nothing to prove absent.'),
             ];
         }
 
@@ -604,11 +605,11 @@ final class Settings extends Controller implements JobHost, Sections
         } catch (\Throwable $e) {
             return [
                 'ok'      => true,
-                'note'    => 'unproven',
-                'detail'  => 'Your account now lists nothing at all. That is what an account holding '
+                'note'    => I18n::t('unproven'),
+                'detail'  => I18n::t('Your account now lists nothing at all. That is what an account holding '
                     . 'only these two indexes looks like once they are deleted, and it is also what a '
                     . 'listing that did not work looks like, so it is not proof. The platform accepted '
-                    . 'both deletes. Check ' . implode(' and ', $deleted) . ' at https://opensolr.com.',
+                    . 'both deletes. Check {names} at https://opensolr.com.', ['names' => implode(' ' . I18n::t('and') . ' ', $deleted)]),
                 'context' => ['unproven' => $deleted],
             ];
         }
@@ -616,18 +617,20 @@ final class Settings extends Controller implements JobHost, Sections
         if ($check['present'] !== []) {
             return self::teardownRefusal(
                 $cfg,
-                'Your Opensolr account still lists ' . implode(' and ', $check['present'])
-                . ' after the delete was accepted. Nothing local has been removed. Check the '
+                I18n::t('Your Opensolr account still lists {names} after the delete was accepted. Nothing local has been removed. Check the '
                 . 'account at https://opensolr.com before going any further — this machine is '
-                . 'still able to name those indexes, and once the configuration is gone it is not.'
+                . 'still able to name those indexes, and once the configuration is gone it is not.', [
+                    'names' => implode(' ' . I18n::t('and') . ' ', $check['present']),
+                ])
             );
         }
 
         return [
             'ok'     => true,
-            'note'   => 'confirmed gone',
-            'detail' => 'The account listing no longer holds ' . implode(' or ', $check['gone'])
-                . '. They are off your plan\'s index allowance and off its disk.',
+            'note'   => I18n::t('confirmed gone'),
+            'detail' => I18n::t('The account listing no longer holds {names}. They are off your plan\'s index allowance and off its disk.', [
+                'names' => implode(' ' . I18n::t('or') . ' ', $check['gone']),
+            ]),
         ];
     }
 
@@ -660,22 +663,25 @@ final class Settings extends Controller implements JobHost, Sections
         $wipe = Teardown::wipeState($cfg, self::TEARDOWN_KEEP);
         Teardown::ensureSessionDir($cfg);
 
-        $detail = $wipe['removed'] . ' item' . ($wipe['removed'] === 1 ? '' : 's')
-            . ' removed from ' . $cfg->varDir() . ', including the state database with the reader\'s '
+        $detail = I18n::tn('{n} item removed from {dir}, including the state database with the reader\'s '
             . 'position in every log file, the setup token, signed-in sessions, remembered '
             . 'browsers, recovery code hashes, the rate-limit ledgers and the saved schema check. '
-            . 'Every persistent-login token was revoked first, this browser\'s included.';
+            . 'Every persistent-login token was revoked first, this browser\'s included.', '{n} items removed from {dir}, including the state database with the reader\'s '
+            . 'position in every log file, the setup token, signed-in sessions, remembered '
+            . 'browsers, recovery code hashes, the rate-limit ledgers and the saved schema check. '
+            . 'Every persistent-login token was revoked first, this browser\'s included.', $wipe['removed'], ['dir' => $cfg->varDir()]);
 
         if ($wipe['failed'] !== []) {
-            $detail .= ' Could not remove: ' . implode(', ', $wipe['failed'])
-                . ' — check the ownership of that directory.';
+            $detail .= ' ' . I18n::t('Could not remove: {files} — check the ownership of that directory.', [
+                'files' => implode(', ', $wipe['failed']),
+            ]);
         }
 
         return [
             'ok'      => true,
-            'note'    => $wipe['removed'] . ' removed',
-            'detail'  => $detail . ' The configuration is removed in the closing step, because this '
-                . 'panel reads it on every request and the run has to be able to finish.',
+            'note'    => I18n::t('{n} removed', ['n' => $wipe['removed']]),
+            'detail'  => $detail . ' ' . I18n::t('The configuration is removed in the closing step, because this '
+                . 'panel reads it on every request and the run has to be able to finish.'),
             'context' => ['wiped' => $wipe['removed']],
         ];
     }
@@ -712,36 +718,35 @@ final class Settings extends Controller implements JobHost, Sections
         if ($unproven !== []) {
             array_unshift(
                 $left,
-                'PROOF that ' . implode(' and ', $unproven) . ' are gone — the account listing came '
+                I18n::t('PROOF that {names} are gone — the account listing came '
                 . 'back empty afterwards, which is consistent with both being deleted and is not '
-                . 'evidence of it. Check those two names at https://opensolr.com.'
+                . 'evidence of it. Check those two names at https://opensolr.com.', ['names' => implode(' ' . I18n::t('and') . ' ', $unproven)])
             );
         }
 
         $config = Teardown::wipeConfig($cfg);
         $rest   = Teardown::wipeRemaining($cfg, ['panel-jobs.db', 'panel-jobs.db-wal', 'panel-jobs.db-shm']);
 
-        $done = 'Removed: ' . (implode(', ', $config['removed']) ?: 'nothing — the configuration was '
-            . 'already gone') . '.';
+        $done = I18n::t('Removed: {files}.', ['files' => implode(', ', $config['removed']) ?: I18n::t('nothing — the configuration was '
+            . 'already gone')]);
         if ($config['failed'] !== []) {
-            $done .= ' COULD NOT REMOVE ' . implode(', ', $config['failed'])
-                . ' — that file still holds your Opensolr API key, so delete it by hand and rotate '
-                . 'the key.';
+            $done .= ' ' . I18n::t('COULD NOT REMOVE {files} — that file still holds your Opensolr API key, so delete it by hand and rotate '
+                . 'the key.', ['files' => implode(', ', $config['failed'])]);
         }
         if ($rest['failed'] !== []) {
-            $done .= ' Left under var/: ' . implode(', ', $rest['failed']) . '.';
+            $done .= ' ' . I18n::t('Left under var/: {files}.', ['files' => implode(', ', $rest['failed'])]);
         }
 
         return [
             'ok'      => true,
-            'note'    => 'finished',
-            'detail'  => $done . ' Everything Loghound created on the platform and in this tree\'s '
+            'note'    => I18n::t('finished'),
+            'detail'  => $done . ' ' . I18n::t('Everything Loghound created on the platform and in this tree\'s '
                 . 'own state is gone, the Opensolr account details with it. Setup starts from '
-                . 'nothing. What is left is listed below, and none of it is data.',
-            'report'  => "What was left standing, and why\n\n  - " . implode("\n  - ", $left)
-                . "\n\n  One session file is written after the wipe: your own, carrying the one-time\n"
-                . "  grant that lets you reach the installer without reading var/install-token over\n"
-                . "  a shell. " . Teardown::shellCommand(self::root()) . " removes the tree and it.",
+                . 'nothing. What is left is listed below, and none of it is data.'),
+            'report'  => I18n::t('What was left standing, and why') . "\n\n  - " . implode("\n  - ", $left)
+                . "\n\n  " . str_replace("\n", "\n  ", I18n::t("One session file is written after the wipe: your own, carrying the one-time\n"
+                . "grant that lets you reach the installer without reading var/install-token over\n"
+                . "a shell. {command} removes the tree and it.", ['command' => Teardown::shellCommand(self::root())])),
             'context' => ['finished' => true],
         ];
     }
@@ -771,10 +776,10 @@ final class Settings extends Controller implements JobHost, Sections
     private static function teardownRefusal(Config $cfg, string $why): array
     {
         $report = Diagnostics::capture(
-            'Removing Loghound from this machine',
-            'Deleting the Opensolr indexes',
+            I18n::mark('Removing Loghound from this machine'),
+            I18n::mark('Deleting the Opensolr indexes'),
             $why,
-            ['Solr mode' => (string) $cfg->get('solr.mode', 'unset')],
+            [I18n::t('Solr mode') => (string) $cfg->get('solr.mode', 'unset')],
             $cfg,
             self::root()
         );
@@ -788,7 +793,7 @@ final class Settings extends Controller implements JobHost, Sections
            the platform verbatim was the one that published it. */
         return [
             'ok'     => false,
-            'note'   => 'stopped',
+            'note'   => I18n::t('stopped'),
             'detail' => (string) $report['error'],
             'report' => Diagnostics::block($report),
         ];
@@ -807,12 +812,12 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $kind = self::param('kind', $this->jobKinds(), '');
         if ($kind === '') {
-            return ['error' => 'Unknown operation.'];
+            return ['error' => I18n::t('Unknown operation.')];
         }
         try {
             $job = $this->jobs()->latest($kind);
         } catch (\Throwable $e) {
-            return ['error' => 'The job store is unavailable.'];
+            return ['error' => I18n::t('The job store is unavailable.')];
         }
         return $this->envelope(['job' => $job]);
     }
@@ -836,11 +841,11 @@ final class Settings extends Controller implements JobHost, Sections
     private function onOwnJob(Jobs $jobs, string $id, callable $fn): array
     {
         if ($id === '') {
-            return ['error' => 'That operation is no longer available. Start it again.'];
+            return ['error' => I18n::t('That operation is no longer available. Start it again.')];
         }
         $job = $jobs->get($id);
         if (!isset($job['kind']) || !in_array($job['kind'], $this->jobKinds(), true)) {
-            return ['error' => 'That operation is no longer available. Start it again.'];
+            return ['error' => I18n::t('That operation is no longer available. Start it again.')];
         }
         return $fn($jobs, $id);
     }
@@ -867,7 +872,7 @@ final class Settings extends Controller implements JobHost, Sections
             $jobs = $this->jobs();
         } catch (\Throwable $e) {
             error_log('[loghound-panel] job store: ' . Jobs::redact($e->getMessage()));
-            self::sendJson(['error' => 'The job store could not be opened. Check that var/ is writable.'], 500);
+            self::sendJson(['error' => I18n::t('The job store could not be opened. Check that var/ is writable.')], 500);
         }
         $result = $fn($jobs);
         self::sendJson($result, isset($result['error']) ? 400 : 200);
@@ -997,12 +1002,12 @@ final class Settings extends Controller implements JobHost, Sections
                 return $this->jobJson(function (Jobs $jobs): array {
                     $kind = self::postParam('kind', $this->jobKinds());
                     if ($kind === '') {
-                        return ['error' => 'Unknown operation.'];
+                        return ['error' => I18n::t('Unknown operation.')];
                     }
 
                     if ($kind === self::KIND_UNINSTALL) {
                         if (!Teardown::spendArm()) {
-                            return ['error' => 'That operation is no longer available. Start it again.'];
+                            return ['error' => I18n::t('That operation is no longer available. Start it again.')];
                         }
                         Teardown::markRunning();
                     }
@@ -1311,43 +1316,47 @@ final class Settings extends Controller implements JobHost, Sections
     {
         self::problemBanner(self::takeAuthNote());
 
-        echo '<h4>Changing your username or password</h4>';
-        echo '<p class="muted">The current password is required, because staying signed in means a '
-            . 'session can outlive a closed browser — and a stolen one must not be enough to change '
-            . 'the password out from under you. Every browser that was staying signed in is signed '
-            . 'out when it changes, including this one.</p>';
+        echo '<h4>' . I18n::html('Changing your username or password') . '</h4>';
+        echo '<p class="muted">'
+            . I18n::html('The current password is required, because staying signed in means a session can outlive a '
+                . 'closed browser — and a stolen one must not be enough to change the password out from '
+                . 'under you. Every browser that was staying signed in is signed out when it changes, '
+                . 'including this one.')
+            . '</p>';
 
         echo '<form method="post" action="?v=settings" class="setup-form" autocomplete="off">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="panel_password">';
 
-        echo '<label for="pw_user">Username</label>';
+        echo '<label for="pw_user">' . I18n::html('Username') . '</label>';
         echo '<input type="text" id="pw_user" name="user" size="24" autocomplete="username" '
             . 'value="' . Security::esc((string) $this->cfg->get('auth.user', '')) . '" required>';
 
-        echo '<label for="pw_current">Current password</label>';
+        echo '<label for="pw_current">' . I18n::html('Current password') . '</label>';
         echo '<input type="password" id="pw_current" name="current_password" size="34" '
             . 'autocomplete="current-password" required>';
 
-        echo '<label for="pw_new">New password</label>';
+        echo '<label for="pw_new">' . I18n::html('New password') . '</label>';
         echo '<input type="password" id="pw_new" name="password" size="34" '
             . 'autocomplete="new-password" required>';
 
-        echo '<label for="pw_new2">New password again</label>';
+        echo '<label for="pw_new2">' . I18n::html('New password again') . '</label>';
         echo '<input type="password" id="pw_new2" name="password2" size="34" '
             . 'autocomplete="new-password" required>';
-        echo '<p class="muted">At least ' . (int) Steps::MIN_PASSWORD . ' characters. This page shows '
-            . 'every visitor, path and address on your site.</p>';
+        echo '<p class="muted">'
+            . I18n::html('At least {min_password} characters. This page shows every visitor, path and address on your site.', ['min_password' => (int) Steps::MIN_PASSWORD])
+            . '</p>';
 
         if (TwoFactor::isEnabled((array) $this->cfg->get('auth', []))) {
-            echo '<label for="pw_code">Code from your authenticator</label>';
+            echo '<label for="pw_code">' . I18n::html('Code from your authenticator') . '</label>';
             echo '<input type="text" id="pw_code" name="code" inputmode="numeric" '
                 . 'autocomplete="one-time-code" size="12" spellcheck="false" required>';
-            echo '<p class="muted">Two-factor stays on and keeps the same phone — changing a '
-                . 'password is not a reason to lose it.</p>';
+            echo '<p class="muted">'
+                . I18n::html('Two-factor stays on and keeps the same phone — changing a password is not a reason to lose it.')
+                . '</p>';
         }
 
-        echo '<button type="submit" class="primary">Change it</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Change it') . '</button>';
         echo '</form>';
     }
 
@@ -1504,23 +1513,22 @@ final class Settings extends Controller implements JobHost, Sections
 
         $roots = (array) $this->cfg->get('allowed_log_roots', []);
 
-        echo '<h4>Add a log file by hand</h4>';
-        echo '<p class="muted">For a log the scan cannot see. It has to be inside '
-            . Security::esc(implode(', ', array_map('strval', $roots)))
-            . ' — that list is a safety control and it is never widened from a web form. To read a '
-            . 'file outside it, run <code class="mono">' . Security::esc(self::setupCommand())
-            . '</code>, which asks at a terminal, or add the directory to '
-            . '<code>allowed_log_roots</code> in the config file.</p>';
+        echo '<h4>' . I18n::html('Add a log file by hand') . '</h4>';
+        echo '<p class="muted">'
+            . I18n::html('For a log the scan cannot see. It has to be inside {roots} — that list is a safety '
+                . 'control and it is never widened from a web form. To read a file outside it, run {code}, '
+                . 'which asks at a terminal, or add the directory to {code2} in the config file.', ['code' => '<code class="mono">' . Security::esc(self::setupCommand()) . '</code>', 'code2' => '<code>allowed_log_roots</code>', 'roots' => Security::esc(implode(', ', array_map('strval', $roots)))])
+            . '</p>';
 
         echo '<form method="post" action="?v=settings" class="setup-form">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="add_source">';
 
-        echo '<label for="src_path">Path to the access log</label>';
+        echo '<label for="src_path">' . I18n::html('Path to the access log') . '</label>';
         echo '<input type="text" id="src_path" name="path" size="44" autocomplete="off" '
             . 'spellcheck="false" required>';
 
-        echo '<label for="format">Format</label>';
+        echo '<label for="format">' . I18n::html('Format') . '</label>';
         echo '<select id="format" name="format">';
         foreach (Detector::formatChoices() as $value => $label) {
             echo '<option value="' . Security::esc((string) $value) . '">'
@@ -1529,14 +1537,15 @@ final class Settings extends Controller implements JobHost, Sections
         echo '</select>';
 
         echo '<div id="regex-row" hidden>';
-        echo '<label for="regex">Pattern, with named groups</label>';
+        echo '<label for="regex">' . I18n::html('Pattern, with named groups') . '</label>';
         echo '<input type="text" id="regex" name="regex" size="44" autocomplete="off" spellcheck="false">';
-        echo '<p class="muted">Checked before it is stored: a pattern that does not compile, or one '
-            . 'that backtracks badly enough to stall ingestion, is refused here rather than at three '
-            . 'in the morning.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Checked before it is stored: a pattern that does not compile, or one that backtracks '
+                . 'badly enough to stall ingestion, is refused here rather than at three in the morning.')
+            . '</p>';
         echo '</div>';
 
-        echo '<button type="submit" class="primary">Add this file</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Add this file') . '</button>';
         echo '</form>';
     }
 
@@ -1619,7 +1628,7 @@ final class Settings extends Controller implements JobHost, Sections
                 $params
             );
         } catch (\Throwable $e) {
-            self::stashSolrNote('bad', 'The job store could not be opened: ' . Jobs::redact($e->getMessage()));
+            self::stashSolrNote('bad', I18n::t('The job store could not be opened: {error}', ['error' => Jobs::redact($e->getMessage())]));
             return '?v=settings&err=pair_failed' . $back;
         }
 
@@ -1680,18 +1689,18 @@ final class Settings extends Controller implements JobHost, Sections
         $sessions = (string) $this->cfg->get('solr.sessions_core', '');
 
         $text = $created
-            ? 'This installation has a new pair of its own, ' . $now . ' and ' . $sessions
-                . ', and reads and writes those from now on. They count against your plan.'
-            : 'This installation now reads and writes ' . $now . ' and ' . $sessions . '.';
+            ? I18n::t('This installation has a new pair of its own, {hits} and {sessions}, and reads and writes those from now on. '
+                . 'They count against your plan.', ['hits' => $now, 'sessions' => $sessions])
+            : I18n::t('This installation now reads and writes {hits} and {sessions}.', ['hits' => $now, 'sessions' => $sessions]);
 
         if ($was['hits'] === '' || $was['hits'] === $now) {
-            return $text . ' Nothing else changed.';
+            return $text . ' ' . I18n::t('Nothing else changed.');
         }
 
-        return $text . ' Nothing in ' . $was['hits'] . ' or ' . $was['sessions'] . ' was deleted, '
+        return $text . ' ' . I18n::t('Nothing in {hits} or {sessions} was deleted, '
             . 'cleared or moved — they are still on your account with everything in them, and this '
             . 'installation has simply stopped using them. The panel now shows what is in the new '
-            . 'pair, which is not the same history.';
+            . 'pair, which is not the same history.', ['hits' => $was['hits'], 'sessions' => $was['sessions']]);
     }
 
     /**
@@ -1733,7 +1742,7 @@ final class Settings extends Controller implements JobHost, Sections
                 echo '<li>' . Security::esc($way['text']);
                 if ($way['url'] !== '') {
                     echo ' <a href="' . Security::safeUrl($way['url'])
-                        . '" target="_blank" rel="noopener noreferrer">Open your Opensolr account</a>';
+                        . '" target="_blank" rel="noopener noreferrer">' . I18n::html('Open your Opensolr account') . '</a>';
                 }
                 echo '</li>';
             }
@@ -1759,7 +1768,7 @@ final class Settings extends Controller implements JobHost, Sections
                 (string) $pair['install_id'],
                 [(string) $pair['hits'], (string) $pair['sessions']],
                 $first,
-                $pair['current'] ? 'In use here' : ''
+                $pair['current'] ? I18n::t('In use here') : ''
             );
             $first = false;
         }
@@ -1783,10 +1792,10 @@ final class Settings extends Controller implements JobHost, Sections
         if ($step['pairs'] !== []) {
             echo '<p class="muted">' . Security::esc($step['consequence']) . '</p>';
             echo '<label class="check"><input type="checkbox" name="upgrade_schema" value="1"> '
-                . 'Add the fields this version writes, if the pair was made by an older Loghound</label>';
+                . I18n::html('Add the fields this version writes, if the pair was made by an older Loghound') . '</label>';
         }
 
-        echo '<button type="submit" class="primary">Use these indexes</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Use these indexes') . '</button>';
         echo '</form>';
     }
 
@@ -1936,16 +1945,15 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function credentialOutcome(array $before, string $region, bool $moved, string $ownership): string
     {
-        $text = 'Opensolr accepted these credentials and they are stored.';
+        $text = I18n::t('Opensolr accepted these credentials and they are stored.');
 
         if ($region !== $before['region']) {
-            $text .= ' The region is now ' . ($region === '' ? 'unset' : $region)
-                . ', which decides where any indexes created from here LAND — the two you already '
-                . 'have stay exactly where they were made.';
+            $text .= ' ' . I18n::t('The region is now {region}, which decides where any indexes created from here LAND — the two you already '
+                . 'have stay exactly where they were made.', ['region' => $region === '' ? I18n::t('unset') : $region]);
         }
 
         if ($moved) {
-            $text .= ' This is a different account.';
+            $text .= ' ' . I18n::t('This is a different account.');
         }
 
         $hits     = (string) $this->cfg->get('solr.hits_core', '');
@@ -1953,11 +1961,13 @@ final class Settings extends Controller implements JobHost, Sections
 
         return match ($ownership) {
             'missing' => $text . ' ' . Pairs::pendingDetail($this->cfg)
-                . ' The list is under "' . Pairs::choiceHeading() . '" on this card.',
-            'unknown' => $text . ' Whether it holds ' . $hits . ' and ' . $sessions
-                . ' could not be checked just now — run the connection check below.',
+                . ' ' . I18n::t('The list is under "{heading}" on this card.', ['heading' => Pairs::choiceHeading()]),
+            'unknown' => $text . ' ' . I18n::t('Whether it holds {hits} and {sessions} could not be checked just now — run the connection check below.', [
+                'hits'     => $hits,
+                'sessions' => $sessions,
+            ]),
             'owned'   => $moved
-                ? $text . ' It holds the pair this installation uses, so nothing else changes.'
+                ? $text . ' ' . I18n::t('It holds the pair this installation uses, so nothing else changes.')
                 : $text,
             default   => $text,
         };
@@ -2345,14 +2355,15 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-auth',
             self::sectionNum('set-auth'),
-            'Sign-in',
-            'Applies to the next request. Your username and password are changed further down this card.'
+            I18n::t('Sign-in'),
+            I18n::t('Applies to the next request. Your username and password are changed further down this card.')
         );
 
         if (!$haveAccount) {
-            echo '<div class="banner banner-warn">No username and password are stored, so there is nothing to '
-                . 'sign in with yet. Set them with <code class="mono">' . Security::esc(self::setupCommand())
-                . '</code> first.</div>';
+            echo '<div class="banner banner-warn">'
+                . I18n::html('No username and password are stored, so there is nothing to sign in with yet. Set them '
+                    . 'with {code} first.', ['code' => '<code class="mono">' . Security::esc(self::setupCommand()) . '</code>'])
+                . '</div>';
             self::cardEnd();
             return;
         }
@@ -2361,7 +2372,7 @@ final class Settings extends Controller implements JobHost, Sections
         self::csrfField();
         echo '<input type="hidden" name="action" value="auth_mode">';
 
-        echo '<fieldset><legend>How you sign in</legend>';
+        echo '<fieldset><legend>' . I18n::html('How you sign in') . '</legend>';
         echo '<div class="optlist">';
         foreach (Security::authModes() as $val => $meta) {
             self::option(
@@ -2376,7 +2387,7 @@ final class Settings extends Controller implements JobHost, Sections
         }
         echo '</div></fieldset>';
 
-        echo '<button type="submit" class="primary">Save sign-in method</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Save sign-in method') . '</button>';
         echo '</form>';
         /* NAME THE DIRECTORY AND THE USER. "create that directory" left the operator to work
            out which directory, on a page where every other instruction is an absolute command,
@@ -2386,20 +2397,20 @@ final class Settings extends Controller implements JobHost, Sections
         $savePath = trim((string) ini_get('session.save_path'));
         $sessionUser = Requirements::phpUser();
 
-        echo '<p class="muted">The sign-in page keeps session files in the directory named by '
-            . '<code class="mono">session.save_path</code> in your PHP-FPM pool'
-            . ($savePath === ''
-                ? ', which is unset here, so PHP uses its own default — usually '
-                    . '<code class="mono">/var/lib/php/sessions</code> or '
-                    . '<code class="mono">/tmp</code>. Set it explicitly before switching.'
-                : ': <code class="mono">' . Security::esc($savePath) . '</code>.')
-            . ' It has to exist and be writable by <code class="mono">'
-            . Security::esc($sessionUser) . '</code>, the user this panel runs as.</p>';
+        echo '<p class="muted">'
+            . I18n::html('The sign-in page keeps session files in the directory named by {code} in your PHP-FPM '
+                . 'pool{save_path} It has to exist and be writable by {code2}, the user this panel runs as.', ['code' => '<code class="mono">session.save_path</code>', 'code2' => '<code class="mono">' . Security::esc($sessionUser) . '</code>', 'save_path' => ($savePath === ''
+                ? I18n::html(', which is unset here, so PHP uses its own default — usually {a} or {b}. Set it explicitly before switching.', [
+                    'a' => '<code class="mono">/var/lib/php/sessions</code>',
+                    'b' => '<code class="mono">/tmp</code>',
+                ])
+                : ': <code class="mono">' . Security::esc($savePath) . '</code>.')])
+            . '</p>';
 
         if ($savePath !== '' && !str_contains($savePath, ';')) {
             self::commandBlock('set-auth-session-dir', [
                 'key'     => 'sessiondir',
-                'title'   => 'Create it, if it is not there',
+                'title'   => I18n::t('Create it, if it is not there'),
                 'lines'   => [
                     'sudo mkdir -p ' . $savePath,
                     'sudo chown ' . $sessionUser . ' ' . $savePath,
@@ -2411,8 +2422,9 @@ final class Settings extends Controller implements JobHost, Sections
 
         $this->passwordPart();
 
-        echo '<p class="muted">Or from a shell, which a headless install needs. Every prompt is defaulted '
-            . 'to the stored value.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Or from a shell, which a headless install needs. Every prompt is defaulted to the stored value.')
+            . '</p>';
         self::commandBlock('set-auth-setup', self::setupGroup());
 
         $this->rememberedPart($mode);
@@ -2441,32 +2453,32 @@ final class Settings extends Controller implements JobHost, Sections
 
         $count = Persistence::count($this->cfg->varDir());
 
-        echo '<h3>Stay signed in</h3>';
-        echo '<p class="muted">The sign-in form offers a <strong>Stay signed in on this browser</strong> '
-            . 'box. A browser that takes it is signed in with <strong>no idle timeout and no maximum '
-            . 'session age</strong> — it survives closing the browser and restarting the machine, and it '
-            . 'ends only when somebody presses Sign out. Whoever has that browser profile has this panel. '
-            . 'Sessions that do not take it still expire after '
-            . Security::esc(self::minutes((int) $this->cfg->get('auth.idle_timeout', 1800)))
-            . ' idle and '
-            . Security::esc(self::minutes((int) $this->cfg->get('auth.absolute_timeout', 43200)))
-            . ' in total, exactly as before.</p>';
+        echo '<h3>' . I18n::html('Stay signed in') . '</h3>';
+        echo '<p class="muted">'
+            . I18n::html('The sign-in form offers a {strong} box. A browser that takes it is signed in with '
+                . '{strong2} — it survives closing the browser and restarting the machine, and it ends '
+                . 'only when somebody presses Sign out. Whoever has that browser profile has this panel. '
+                . 'Sessions that do not take it still expire after {minutes} idle and {minutes2} in total, '
+                . 'exactly as before.', ['strong' => '<strong>' . I18n::html('Stay signed in on this browser') . '</strong>', 'strong2' => '<strong>' . I18n::html('no idle timeout and no maximum session age') . '</strong>', 'minutes' => Security::esc(self::minutes((int) $this->cfg->get('auth.idle_timeout', 1800))), 'minutes2' => Security::esc(self::minutes((int) $this->cfg->get('auth.absolute_timeout', 43200)))])
+            . '</p>';
 
         echo '<p>' . ($count === 0
-            ? 'No browser is currently remembered.'
+            ? I18n::html('No browser is currently remembered.')
             : Security::esc($count === 1
-                ? 'One browser is currently remembered.'
-                : $count . ' browsers are currently remembered.'))
+                ? I18n::t('One browser is currently remembered.')
+                : I18n::t('{n} browsers are currently remembered.', ['n' => $count])))
             . '</p>';
 
         if ($count > 0) {
             echo '<form method="post" action="?v=settings">';
             self::csrfField();
             echo '<input type="hidden" name="action" value="revoke_remembered">';
-            echo '<button type="submit" class="ghost">Sign every remembered browser out</button>';
+            echo '<button type="submit" class="ghost">' . I18n::html('Sign every remembered browser out') . '</button>';
             echo '</form>';
-            echo '<p class="muted">Including this one, if it is one of them. Signing out, changing your '
-                . 'password and changing the sign-in method above all do the same thing.</p>';
+            echo '<p class="muted">'
+                . I18n::html('Including this one, if it is one of them. Signing out, changing your password and '
+                    . 'changing the sign-in method above all do the same thing.')
+                . '</p>';
         }
     }
 
@@ -2514,16 +2526,18 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-2fa',
             self::sectionNum('set-2fa'),
-            'Two-factor authentication',
+            I18n::t('Two-factor authentication'),
             $on
-                ? 'On. Signing in needs your password and a code from your authenticator app.'
-                : 'Off. A stolen password is enough to sign in.'
+                ? I18n::t('On. Signing in needs your password and a code from your authenticator app.')
+                : I18n::t('Off. A stolen password is enough to sign in.')
         );
 
         if ((string) $this->cfg->get('auth.mode', 'none') !== 'session') {
-            echo '<div class="banner banner-warn">Two-factor needs the sign-in page. HTTP Basic has no '
-                . 'second step to put a code in — the browser\'s own prompt asks for a username and a '
-                . 'password and nothing else. Switch the sign-in method above to the sign-in page first.</div>';
+            echo '<div class="banner banner-warn">'
+                . I18n::html('Two-factor needs the sign-in page. HTTP Basic has no second step to put a code in — the '
+                    . 'browser\'s own prompt asks for a username and a password and nothing else. Switch the '
+                    . 'sign-in method above to the sign-in page first.')
+                . '</div>';
             self::cardEnd();
             return;
         }
@@ -2546,17 +2560,21 @@ final class Settings extends Controller implements JobHost, Sections
     /** The off state: what it buys, and the one button that starts it. */
     private function twoFactorOffPart(): void
     {
-        echo '<p>With two-factor on, signing in takes your password <em>and</em> a six-digit code from an '
-            . 'authenticator app on your phone. Somebody who learns your password — from a reused '
-            . 'credential, a keylogger, a look over your shoulder — still cannot get in.</p>';
-        echo '<p class="muted">Any standard app works: Google Authenticator, Aegis, 1Password, Bitwarden, '
-            . 'FreeOTP. Loghound draws the QR code itself, on this machine, so the shared secret is never '
-            . 'sent to anybody else.</p>';
+        echo '<p>'
+            . I18n::html('With two-factor on, signing in takes your password {em} a six-digit code from an '
+                . 'authenticator app on your phone. Somebody who learns your password — from a reused '
+                . 'credential, a keylogger, a look over your shoulder — still cannot get in.', ['em' => '<em>' . I18n::html('and') . '</em>'])
+            . '</p>';
+        echo '<p class="muted">'
+            . I18n::html('Any standard app works: Google Authenticator, Aegis, 1Password, Bitwarden, FreeOTP. '
+                . 'Loghound draws the QR code itself, on this machine, so the shared secret is never sent to '
+                . 'anybody else.')
+            . '</p>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="totp_begin">';
-        echo '<button type="submit" class="primary">Set up two-factor authentication</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Set up two-factor authentication') . '</button>';
         echo '</form>';
     }
 
@@ -2573,39 +2591,45 @@ final class Settings extends Controller implements JobHost, Sections
         $svg = TwoFactor::qr($this->cfg, $secret);
 
         echo '<ol class="steps-2fa">';
-        echo '<li><strong>Scan this with your authenticator app.</strong>';
+        echo '<li><strong>' . I18n::html('Scan this with your authenticator app.') . '</strong>';
         if ($svg !== null) {
             echo '<div class="qr-frame">' . $svg . '</div>';
         } else {
-            echo '<p class="muted">The QR code could not be drawn for this account name. Type the key '
-                . 'below into the app by hand instead — it is exactly equivalent.</p>';
+            echo '<p class="muted">'
+                . I18n::html('The QR code could not be drawn for this account name. Type the key below into the app by '
+                    . 'hand instead — it is exactly equivalent.')
+                . '</p>';
         }
         echo '</li>';
 
-        echo '<li><strong>Or type the key in by hand.</strong>';
+        echo '<li><strong>' . I18n::html('Or type the key in by hand.') . '</strong>';
         echo '<p class="qr-key mono">' . Security::esc(Base32::group($secret)) . '</p>';
-        echo '<p class="muted">Time-based, six digits, 30 seconds — the defaults every app uses. The '
-            . 'spaces are only there to be read; leave them out or type them, it makes no difference.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Time-based, six digits, 30 seconds — the defaults every app uses. The spaces are only '
+                . 'there to be read; leave them out or type them, it makes no difference.')
+            . '</p>';
         echo '</li>';
 
-        echo '<li><strong>Enter the code the app shows now.</strong>';
+        echo '<li><strong>' . I18n::html('Enter the code the app shows now.') . '</strong>';
         echo '<form method="post" action="?v=settings" class="setup-form">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="totp_enable">';
-        echo '<label for="totp-confirm">Six-digit code</label>';
+        echo '<label for="totp-confirm">' . I18n::html('Six-digit code') . '</label>';
         echo '<input type="text" id="totp-confirm" name="code" size="12" inputmode="numeric" '
             . 'autocomplete="one-time-code" spellcheck="false" required>';
-        echo '<button type="submit" class="primary">Turn on two-factor</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Turn on two-factor') . '</button>';
         echo '</form>';
-        echo '<p class="muted">Nothing is saved until this code is accepted, so closing this page now '
-            . 'leaves two-factor off and locks nobody out.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Nothing is saved until this code is accepted, so closing this page now leaves two-factor '
+                . 'off and locks nobody out.')
+            . '</p>';
         echo '</li>';
         echo '</ol>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="totp_cancel">';
-        echo '<button type="submit" class="ghost small">Cancel this setup</button>';
+        echo '<button type="submit" class="ghost small">' . I18n::html('Cancel this setup') . '</button>';
         echo '</form>';
     }
 
@@ -2620,10 +2644,12 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function recoveryCodesPart(array $codes): void
     {
-        echo '<div class="banner banner-warn" role="alert">These ten codes are shown <strong>once</strong>. '
-            . 'Only their hashes are stored, so this page cannot show them again. Each one works once in '
-            . 'place of a code from your app, and they are the only way back in if you lose the phone. '
-            . 'Save them somewhere a stranger cannot reach, and not beside your password.</div>';
+        echo '<div class="banner banner-warn" role="alert">'
+            . I18n::html('These ten codes are shown {strong}. Only their hashes are stored, so this page cannot '
+                . 'show them again. Each one works once in place of a code from your app, and they are the '
+                . 'only way back in if you lose the phone. Save them somewhere a stranger cannot reach, and '
+                . 'not beside your password.', ['strong' => '<strong>' . I18n::html('once') . '</strong>'])
+            . '</div>';
 
         echo '<ul class="recovery-codes mono">';
         foreach ($codes as $code) {
@@ -2637,7 +2663,7 @@ final class Settings extends Controller implements JobHost, Sections
         foreach ($codes as $code) {
             echo '<input type="hidden" name="codes[]" value="' . Security::esc($code) . '">';
         }
-        echo '<button type="submit" class="primary">Download them as a text file</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Download them as a text file') . '</button>';
         echo '</form>';
     }
 
@@ -2654,43 +2680,48 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $left = TwoFactor::recoveryRemaining($auth);
 
-        echo '<p>Two-factor is on. Signing in asks for your password, then a six-digit code.</p>';
+        echo '<p>' . I18n::html('Two-factor is on. Signing in asks for your password, then a six-digit code.') . '</p>';
 
         echo '<p' . ($left <= 2 ? ' class="warn-text"' : '') . '>'
             . Security::esc($left === 0
-                ? 'No recovery codes are left. If you lose the phone, the only way back in is '
-                    . self::setupCommand() . ' on the server.'
+                ? I18n::t('No recovery codes are left. If you lose the phone, the only way back in is {command} on the server.', [
+                    'command' => self::setupCommand(),
+                ])
                 : ($left === 1
-                    ? 'One recovery code is left.'
-                    : $left . ' recovery codes are left.'))
+                    ? I18n::t('One recovery code is left.')
+                    : I18n::t('{n} recovery codes are left.', ['n' => $left])))
             . '</p>';
 
-        echo '<h3>New recovery codes</h3>';
+        echo '<h3>' . I18n::html('New recovery codes') . '</h3>';
         echo '<form method="post" action="?v=settings" class="setup-form">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="totp_regenerate">';
-        echo '<label for="totp-regen">Current code, or a recovery code</label>';
+        echo '<label for="totp-regen">' . I18n::html('Current code, or a recovery code') . '</label>';
         echo '<input type="text" id="totp-regen" name="code" size="24" inputmode="numeric" '
             . 'autocomplete="one-time-code" spellcheck="false" required>';
-        echo '<button type="submit" class="ghost">Show a new set of recovery codes</button>';
+        echo '<button type="submit" class="ghost">' . I18n::html('Show a new set of recovery codes') . '</button>';
         echo '</form>';
-        echo '<p class="muted">A new set replaces the old one, so every code you have written down stops '
-            . 'working the moment you press this. It costs a code for the same reason turning two-factor '
-            . 'off does: ten fresh recovery codes are a standing way past the phone, so a stolen session '
-            . 'must not be able to mint them.</p>';
+        echo '<p class="muted">'
+            . I18n::html('A new set replaces the old one, so every code you have written down stops working the '
+                . 'moment you press this. It costs a code for the same reason turning two-factor off does: '
+                . 'ten fresh recovery codes are a standing way past the phone, so a stolen session must not '
+                . 'be able to mint them.')
+            . '</p>';
 
-        echo '<h3>Turn two-factor off</h3>';
+        echo '<h3>' . I18n::html('Turn two-factor off') . '</h3>';
         echo '<form method="post" action="?v=settings" class="setup-form">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="totp_disable">';
-        echo '<label for="totp-off">Current code, or a recovery code</label>';
+        echo '<label for="totp-off">' . I18n::html('Current code, or a recovery code') . '</label>';
         echo '<input type="text" id="totp-off" name="code" size="24" inputmode="numeric" '
             . 'autocomplete="one-time-code" spellcheck="false" required>';
-        echo '<button type="submit" class="ghost">Turn two-factor off</button>';
+        echo '<button type="submit" class="ghost">' . I18n::html('Turn two-factor off') . '</button>';
         echo '</form>';
-        echo '<p class="muted">A code is required, not just being signed in. If a stolen session were '
-            . 'enough to remove the second factor, the second factor would be protecting nothing. Turning '
-            . 'it off also signs out every browser that chose to stay signed in.</p>';
+        echo '<p class="muted">'
+            . I18n::html('A code is required, not just being signed in. If a stolen session were enough to remove '
+                . 'the second factor, the second factor would be protecting nothing. Turning it off also '
+                . 'signs out every browser that chose to stay signed in.')
+            . '</p>';
     }
 
     /**
@@ -2916,7 +2947,7 @@ final class Settings extends Controller implements JobHost, Sections
         if ($codes === []) {
             http_response_code(400);
             header('Content-Type: text/plain; charset=utf-8');
-            exit("There were no recovery codes in that request.\n");
+            exit(I18n::t('There were no recovery codes in that request.') . "\n");
         }
 
         $body = TwoFactor::recoveryFile((string) $this->cfg->get('site_name', 'Loghound'), $codes);
@@ -3012,7 +3043,14 @@ final class Settings extends Controller implements JobHost, Sections
         if (!in_array($tz, \DateTimeZone::listIdentifiers(), true)) {
             return '?v=settings&err=bad_timezone&s=display';
         }
+        $lang = is_string($_POST['language'] ?? null)
+            ? $_POST['language']
+            : (string) $this->cfg->get('ui.language', I18n::SOURCE);
+        if (!array_key_exists($lang, I18n::available(self::root()))) {
+            return '?v=settings&err=bad_language&s=display';
+        }
         $this->cfg->set('ui.timezone', $tz);
+        $this->cfg->set('ui.language', $lang);
         $err = $this->persist();
         return $err !== null
             ? '?v=settings&err=' . $err . '&s=display'
@@ -3043,126 +3081,128 @@ final class Settings extends Controller implements JobHost, Sections
     private static function flash(): void
     {
         $ok = [
-            'source_confirmed' => 'Log source confirmed. The tailer will pick it up on its next poll.',
-            'source_removed'   => 'Log source removed. The tailer stops reading it on its next poll; '
-                . 'documents already indexed from it are untouched.',
-            'source_paused'    => 'That log is no longer being ingested. It stays configured and stays '
+            'source_confirmed' => I18n::t('Log source confirmed. The tailer will pick it up on its next poll.'),
+            'source_removed'   => I18n::t('Log source removed. The tailer stops reading it on its next poll; '
+                . 'documents already indexed from it are untouched.'),
+            'source_paused'    => I18n::t('That log is no longer being ingested. It stays configured and stays '
                 . 'on this card, and the tailer stops reading it on its next poll; documents already '
-                . 'indexed from it are untouched.',
-            'source_ingesting' => 'That log is being ingested again. The tailer picks it up on its next '
-                . 'poll and carries on from where it had got to.',
-            'cache_saved'      => 'Caching settings saved. They take effect on the next page you open.',
-            'sources_rescanned' => 'The scan finished and the review below has been rebuilt. Nothing is '
-                . 'ingested from a newly found file until you confirm it.',
-            'privacy_saved'    => 'Privacy settings saved.',
-            'scoring_saved'    => 'Scoring weights saved. The rule version was bumped so older verdicts stay traceable.',
-            'ui_saved'         => 'Display settings saved.',
-            'auth_saved'       => 'Sign-in method saved. It applies to the next request, so you may be asked '
-                . 'to sign in again.',
-            'solr_up'          => 'Solr answered. The connection is working.',
-            'remembered_revoked' => 'Every remembered browser was signed out. Each of them, including this '
-                . 'one if it was among them, has to sign in again on its next request.',
-            'totp_on'          => 'Two-factor is on. Save the recovery codes below now — this is the only '
-                . 'time they can be shown.',
-            'totp_off'         => 'Two-factor is off. Signing in needs only your password again, and every '
-                . 'remembered browser was signed out.',
-            'totp_codes'       => 'A new set of recovery codes was issued. The old set no longer works.',
-            'totp_cancelled'   => 'Two-factor setup was cancelled. Nothing was stored and nothing changed.',
-            'opensolr_saved'   => 'Opensolr account updated. The details are in the Solr card below.',
-            'password_saved'   => 'Your sign-in was changed. Every remembered browser was signed out, '
-                . 'so you will be asked for the new password on the next request.',
-            'pair_switched'    => 'This installation now uses a different pair of indexes. What it was '
-                . 'using before is still on your account, untouched.',
-            'pair_created'     => 'A new pair of indexes was created and this installation uses them '
-                . 'from now on. Anything it was using before is still on your account, untouched.',
-            'source_added'     => 'Log file added. The reader picks it up on its next reload, and starts '
-                . 'from the end of the file rather than replaying its history.',
-            'uninstall_armed'  => 'Confirmed. It is running below — watch it, and do not close this tab '
+                . 'indexed from it are untouched.'),
+            'source_ingesting' => I18n::t('That log is being ingested again. The tailer picks it up on its next '
+                . 'poll and carries on from where it had got to.'),
+            'cache_saved'      => I18n::t('Caching settings saved. They take effect on the next page you open.'),
+            'sources_rescanned' => I18n::t('The scan finished and the review below has been rebuilt. Nothing is '
+                . 'ingested from a newly found file until you confirm it.'),
+            'privacy_saved'    => I18n::t('Privacy settings saved.'),
+            'scoring_saved'    => I18n::t('Scoring weights saved. The rule version was bumped so older verdicts stay traceable.'),
+            'ui_saved'         => I18n::t('Display settings saved.'),
+            'auth_saved'       => I18n::t('Sign-in method saved. It applies to the next request, so you may be asked '
+                . 'to sign in again.'),
+            'solr_up'          => I18n::t('Solr answered. The connection is working.'),
+            'remembered_revoked' => I18n::t('Every remembered browser was signed out. Each of them, including this '
+                . 'one if it was among them, has to sign in again on its next request.'),
+            'totp_on'          => I18n::t('Two-factor is on. Save the recovery codes below now — this is the only '
+                . 'time they can be shown.'),
+            'totp_off'         => I18n::t('Two-factor is off. Signing in needs only your password again, and every '
+                . 'remembered browser was signed out.'),
+            'totp_codes'       => I18n::t('A new set of recovery codes was issued. The old set no longer works.'),
+            'totp_cancelled'   => I18n::t('Two-factor setup was cancelled. Nothing was stored and nothing changed.'),
+            'opensolr_saved'   => I18n::t('Opensolr account updated. The details are in the Solr card below.'),
+            'password_saved'   => I18n::t('Your sign-in was changed. Every remembered browser was signed out, '
+                . 'so you will be asked for the new password on the next request.'),
+            'pair_switched'    => I18n::t('This installation now uses a different pair of indexes. What it was '
+                . 'using before is still on your account, untouched.'),
+            'pair_created'     => I18n::t('A new pair of indexes was created and this installation uses them '
+                . 'from now on. Anything it was using before is still on your account, untouched.'),
+            'source_added'     => I18n::t('Log file added. The reader picks it up on its next reload, and starts '
+                . 'from the end of the file rather than replaying its history.'),
+            'uninstall_armed'  => I18n::t('Confirmed. It is running below — watch it, and do not close this tab '
                 . 'until it finishes. When it does, this installation no longer exists and you land on '
-                . 'the installer with nothing carried across.',
-            'incidents_cleared' => 'The recorded failures were cleared. Anything still broken is '
-                . 'reported again below, because that is measured rather than remembered.',
-            'exclusions_saved' => 'Exclusions saved. The beacon collector applies them from the very '
+                . 'the installer with nothing carried across.'),
+            'incidents_cleared' => I18n::t('The recorded failures were cleared. Anything still broken is '
+                . 'reported again below, because that is measured rather than remembered.'),
+            'exclusions_saved' => I18n::t('Exclusions saved. The beacon collector applies them from the very '
                 . 'next request; the reader picks them up when it is next reloaded, not mid-file. '
-                . 'Anything already indexed is untouched — this decides what is recorded from now on.',
-            'exclusions_imported' => 'Rules imported from the file and added to the ones already here; '
-                . 'duplicates were skipped. The reader picks them up when it is next reloaded.',
-            'patterns_imported' => 'Attack patterns imported from the file and added to yours; duplicates '
+                . 'Anything already indexed is untouched — this decides what is recorded from now on.'),
+            'exclusions_imported' => I18n::t('Rules imported from the file and added to the ones already here; '
+                . 'duplicates were skipped. The reader picks them up when it is next reloaded.'),
+            'patterns_imported' => I18n::t('Attack patterns imported from the file and added to yours; duplicates '
                 . 'were skipped, and the shipped defaults were switched on or off as the file says. The reader '
-                . 'picks them up when it is next reloaded.',
-            'patterns_saved'   => 'Attack patterns saved. The reader applies them from its next reload, and '
-                . 'the live page immediately. Requests already indexed keep the flags they were written with.',
-            'hosts_saved'      => 'Measured sites saved. The collector applies the list on its very next '
+                . 'picks them up when it is next reloaded.'),
+            'patterns_saved'   => I18n::t('Attack patterns saved. The reader applies them from its next reload, and '
+                . 'the live page immediately. Requests already indexed keep the flags they were written with.'),
+            'hosts_saved'      => I18n::t('Measured sites saved. The collector applies the list on its very next '
                 . 'request, so a site added now can create visits immediately. Beacons already staged '
-                . 'from a host that was not listed are not reprocessed.',
-            'params_saved'     => 'Search parameters saved. The collector applies them immediately; the '
+                . 'from a host that was not listed are not reprocessed.'),
+            'params_saved'     => I18n::t('Search parameters saved. The collector applies them immediately; the '
                 . 'reader picks them up when it is next reloaded. Terms are kept from the next visit '
-                . 'onwards — nothing is recovered retrospectively.',
+                . 'onwards — nothing is recovered retrospectively.'),
         ];
         $err = [
-            'host_refused'    => 'Some hostnames were not saved, because they are not hostnames. A '
+            'host_refused'    => I18n::t('Some hostnames were not saved, because they are not hostnames. A '
                 . 'hostname is letters, digits and hyphens in dot-separated labels — no scheme, no path, '
-                . 'no port. Everything valid was kept: the rows missing from the list are the refused ones.',
-            'param_refused'   => 'Some parameter names were not saved. A query-string name here may hold '
+                . 'no port. Everything valid was kept: the rows missing from the list are the refused ones.'),
+            'param_refused'   => I18n::t('Some parameter names were not saved. A query-string name here may hold '
                 . 'letters, digits, underscore, hyphen, dot and square brackets, and nothing else. '
-                . 'Everything valid was kept.',
-            'exclusion_refused' => 'Some rules were not saved, because a pattern is not a regular '
+                . 'Everything valid was kept.'),
+            'exclusion_refused' => I18n::t('Some rules were not saved, because a pattern is not a regular '
                 . 'expression PCRE will accept or a hostname is not a hostname. Everything valid was '
-                . 'kept: the rows missing from the list below are the ones that were refused.',
-            'import_empty'    => 'Nothing was imported: the file has no table with the columns this card '
-                . 'exports, or every row was empty. Import a CSV exported from this page.',
-            'import_too_large' => 'That file is larger than 500 KB, which is far more than a rule list. '
-                . 'Nothing was imported.',
-            'pattern_refused' => 'Some attack patterns were not saved: a regular expression PCRE will not '
-                . 'accept, a pattern longer than ' . AttackPatterns::MAX_PATTERN . ' characters, or a hostname '
-                . 'that is not a hostname. Everything valid was kept.',
-            'solr_down'       => 'Solr did not answer. Check the base URL, credentials and firewall.',
-            'no_such_source'  => 'That log source is not in the detection report or the configuration any '
-                . 'more. Run a scan to rebuild the list.',
-            'path_not_allowed' => 'That path is outside allowed_log_roots and was refused.',
-            'no_usable_format' => 'No usable log format was worked out for that file, so it was not '
+                . 'kept: the rows missing from the list below are the ones that were refused.'),
+            'import_empty'    => I18n::t('Nothing was imported: the file has no table with the columns this card '
+                . 'exports, or every row was empty. Import a CSV exported from this page.'),
+            'import_too_large' => I18n::t('That file is larger than 500 KB, which is far more than a rule list. '
+                . 'Nothing was imported.'),
+            'pattern_refused' => I18n::t('Some attack patterns were not saved: a regular expression PCRE will not '
+                . 'accept, a pattern longer than {max} characters, or a hostname '
+                . 'that is not a hostname. Everything valid was kept.', ['max' => AttackPatterns::MAX_PATTERN]),
+            'solr_down'       => I18n::t('Solr did not answer. Check the base URL, credentials and firewall.'),
+            'no_such_source'  => I18n::t('That log source is not in the detection report or the configuration any '
+                . 'more. Run a scan to rebuild the list.'),
+            'path_not_allowed' => I18n::t('That path is outside allowed_log_roots and was refused.'),
+            'no_usable_format' => I18n::t('No usable log format was worked out for that file, so it was not '
                 . 'stored. Add it by hand on the log sources card, or with the setup wizard, rather '
-                . 'than ingesting on a guess.',
-            'save_failed'     => 'The configuration file could not be written. Check ownership and mode 0640 on config/loghound.php.',
-            'bad_ip_mode'     => 'Unknown IP privacy mode.',
-            'bad_thresholds'  => 'Thresholds must descend: '
-                . Vocabulary::label('bot_verdict_s', 'bot') . ' above '
-                . Vocabulary::label('bot_verdict_s', 'likely_bot') . ' above '
-                . Vocabulary::label('bot_verdict_s', 'unknown') . ' above '
-                . Vocabulary::label('bot_verdict_s', 'likely_human') . '.',
-            'bad_timezone'    => 'Unknown timezone.',
-            'bad_auth_mode'   => 'That sign-in method was refused. Choose one of the two offered, and note that '
-                . 'neither can be selected before a username and password have been set.',
-            'unknown_action'  => 'Unknown action.',
-            'totp_bad_code'   => 'That code was not accepted. Check that your phone\'s clock is right, then '
-                . 'enter the code the app is showing now. Nothing was changed.',
-            'totp_expired'    => 'That two-factor setup timed out, so the key was discarded. Start again to '
-                . 'get a fresh QR code.',
-            'totp_already_on' => 'Two-factor is already on. Turn it off first if you want to enrol a '
-                . 'different phone.',
-            'totp_off_already' => 'Two-factor is not on, so there are no recovery codes to reissue.',
-            'totp_store'      => 'Loghound cannot record failed code attempts, because it cannot write to '
+                . 'than ingesting on a guess.'),
+            'save_failed'     => I18n::t('The configuration file could not be written. Check ownership and mode 0640 on config/loghound.php.'),
+            'bad_ip_mode'     => I18n::t('Unknown IP privacy mode.'),
+            'bad_thresholds'  => I18n::t('Thresholds must descend: {bot} above {likely_bot} above {unknown} above {likely_human}.', [
+                'bot'          => Vocabulary::label('bot_verdict_s', 'bot'),
+                'likely_bot'   => Vocabulary::label('bot_verdict_s', 'likely_bot'),
+                'unknown'      => Vocabulary::label('bot_verdict_s', 'unknown'),
+                'likely_human' => Vocabulary::label('bot_verdict_s', 'likely_human'),
+            ]),
+            'bad_timezone'    => I18n::t('Unknown timezone.'),
+            'bad_language'    => I18n::t('That language is not installed.'),
+            'bad_auth_mode'   => I18n::t('That sign-in method was refused. Choose one of the two offered, and note that '
+                . 'neither can be selected before a username and password have been set.'),
+            'unknown_action'  => I18n::t('Unknown action.'),
+            'totp_bad_code'   => I18n::t('That code was not accepted. Check that your phone\'s clock is right, then '
+                . 'enter the code the app is showing now. Nothing was changed.'),
+            'totp_expired'    => I18n::t('That two-factor setup timed out, so the key was discarded. Start again to '
+                . 'get a fresh QR code.'),
+            'totp_already_on' => I18n::t('Two-factor is already on. Turn it off first if you want to enrol a '
+                . 'different phone.'),
+            'totp_off_already' => I18n::t('Two-factor is not on, so there are no recovery codes to reissue.'),
+            'totp_store'      => I18n::t('Loghound cannot record failed code attempts, because it cannot write to '
                 . 'its var directory. It refuses to check a code rather than check one without counting '
-                . 'it — give that directory to the user this panel runs as.',
-            'totp_locked'     => 'Too many wrong codes from your address. Wait for the lockout window to '
-                . 'pass and try again — the same limit that protects the sign-in form protects this.',
-            'opensolr_refused' => 'The Opensolr account was NOT changed. What was already stored is still '
-                . 'stored and still working; the reason is on the Solr card below.',
-            'bad_current_password' => 'That is not the current password, so nothing was changed. It is '
+                . 'it — give that directory to the user this panel runs as.'),
+            'totp_locked'     => I18n::t('Too many wrong codes from your address. Wait for the lockout window to '
+                . 'pass and try again — the same limit that protects the sign-in form protects this.'),
+            'opensolr_refused' => I18n::t('The Opensolr account was NOT changed. What was already stored is still '
+                . 'stored and still working; the reason is on the Solr card below.'),
+            'bad_current_password' => I18n::t('That is not the current password, so nothing was changed. It is '
                 . 'asked for because a session that outlives a closed browser must not be enough on '
-                . 'its own to take the panel over.',
-            'password_refused' => 'The new sign-in was refused and nothing was changed. The reason is '
-                . 'on the sign-in card below.',
-            'pair_unknown'     => 'Nothing was changed, because no choice arrived with that request. '
-                . 'Pick a pair of indexes, or the option that makes a new one, and submit again.',
-            'pair_failed'      => 'This installation is still using the indexes it was using before, '
-                . 'and nothing was left behind at Opensolr. The reason is on the Solr card below.',
-            'source_refused'   => 'That log file was not added. The reason is on the log sources card below.',
-            'uninstall_unconfirmed' => 'Nothing was removed. Type ' . Teardown::CONFIRM_WORD . ' in the '
+                . 'its own to take the panel over.'),
+            'password_refused' => I18n::t('The new sign-in was refused and nothing was changed. The reason is '
+                . 'on the sign-in card below.'),
+            'pair_unknown'     => I18n::t('Nothing was changed, because no choice arrived with that request. '
+                . 'Pick a pair of indexes, or the option that makes a new one, and submit again.'),
+            'pair_failed'      => I18n::t('This installation is still using the indexes it was using before, '
+                . 'and nothing was left behind at Opensolr. The reason is on the Solr card below.'),
+            'source_refused'   => I18n::t('That log file was not added. The reason is on the log sources card below.'),
+            'uninstall_unconfirmed' => I18n::t('Nothing was removed. Type {word} in the '
                 . 'box to confirm — the words are asked for because the list above them is the one '
-                . 'thing worth reading twice.',
-            'uninstall_demo'   => 'Nothing was removed. The panel is showing demo data, so it will not '
-                . 'act on a real Opensolr account.',
+                . 'thing worth reading twice.', ['word' => Teardown::CONFIRM_WORD]),
+            'uninstall_demo'   => I18n::t('Nothing was removed. The panel is showing demo data, so it will not '
+                . 'act on a real Opensolr account.'),
         ];
 
         $k = is_string($_GET['ok'] ?? null) ? $_GET['ok'] : '';
@@ -3200,7 +3240,7 @@ final class Settings extends Controller implements JobHost, Sections
         if ($text === '') {
             return;
         }
-        echo '<div class="check-row"><span class="chip chip-warn">Needs attention</span></div>';
+        echo '<div class="check-row"><span class="chip chip-warn">' . I18n::html('Needs attention') . '</span></div>';
         echo '<div class="banner banner-bad" role="alert">' . Security::esc($text) . '</div>';
     }
 
@@ -3313,9 +3353,9 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-finish',
             self::sectionNum('set-finish'),
-            'Finish setting up',
-            'Setup writes the configuration. It does not start the ingest daemon and it cannot add the beacon '
-            . 'to your site; both are done here, once, by hand.'
+            I18n::t('Finish setting up'),
+            I18n::t('Setup writes the configuration. It does not start the ingest daemon and it cannot add the beacon '
+            . 'to your site; both are done here, once, by hand.')
         );
 
         echo '<div class="finish-state ' . ($healthy ? 'finish-ok' : 'finish-bad') . '" id="finish-ingest"'
@@ -3329,34 +3369,40 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '<div class="finish-state finish-unknown" id="finish-beacon" role="status">';
         echo '<span class="finish-dot" aria-hidden="true"></span>';
-        echo '<div class="finish-text"><strong id="finish-beacon-label">Beacon: checking</strong>';
-        echo '<span class="muted" id="finish-beacon-detail">Asking the sessions core whether any beacon data has '
-            . 'ever arrived. The beacon is optional; without it the execution plane is blind.</span>';
+        echo '<div class="finish-text"><strong id="finish-beacon-label">' . I18n::html('Beacon: checking') . '</strong>';
+        echo '<span class="muted" id="finish-beacon-detail">' . I18n::html('Asking the sessions core whether any beacon data has '
+            . 'ever arrived. The beacon is optional; without it the execution plane is blind.') . '</span>';
         echo '</div></div>';
 
         echo '<details class="finish-all" id="finish-all"' . ($healthy ? '' : ' open') . '>';
-        echo '<summary>The commands, and the one line of HTML</summary>';
+        echo '<summary>' . I18n::html('The commands, and the one line of HTML') . '</summary>';
 
         foreach (Steps::nextSteps($this->cfg, self::root()) as $group) {
             $key = (string) $group['key'];
             echo '<div class="finish-group" id="finish-g-' . Security::esc($key) . '">';
             echo '<h3>' . Security::esc((string) $group['title']) . '</h3>';
             if ($key === 'ingest') {
-                echo '<p class="muted">One command. <code>enable --now</code> starts the service and both '
-                    . 'timers immediately and brings them back after a reboot; this panel reports whether '
-                    . 'they are running, and cannot see whether they are enabled at boot.</p>';
+                echo '<p class="muted">'
+                    . I18n::html('One command. {code} starts the service and both timers immediately and brings them back '
+                        . 'after a reboot; this panel reports whether they are running, and cannot see whether they '
+                        . 'are enabled at boot.', ['code' => '<code>enable --now</code>'])
+                    . '</p>';
             }
             if ($key === 'beacon-identity') {
-                echo '<p class="muted">The two values come out of the user object your template already '
-                    . 'has, never out of a literal, because they change per request — a page cache that '
-                    . 'stored the rendered tag would otherwise serve the first visitor&rsquo;s identity to '
-                    . 'everybody. An identity you send is kept, with nothing to switch on first; the '
-                    . 'Beacon card below says what this installation stores right now.</p>';
+                echo '<p class="muted">'
+                    . I18n::html('The two values come out of the user object your template already has, never out of a '
+                        . 'literal, because they change per request — a page cache that stored the rendered tag '
+                        . 'would otherwise serve the first visitor’s identity to everybody. An identity you send '
+                        . 'is kept, with nothing to switch on first; the Beacon card below says what this '
+                        . 'installation stores right now.')
+                    . '</p>';
             }
             if ($key === 'beacon-csp') {
-                echo '<p class="muted">Only if the measured site sends a Content-Security-Policy. '
-                    . '<code>connect-src</code> is the one that gets forgotten, and missing it is silent: '
-                    . 'the script loads, the browser blocks the collector POST, and nothing arrives.</p>';
+                echo '<p class="muted">'
+                    . I18n::html('Only if the measured site sends a Content-Security-Policy. {code} is the one that gets '
+                        . 'forgotten, and missing it is silent: the script loads, the browser blocks the collector '
+                        . 'POST, and nothing arrives.', ['code' => '<code>connect-src</code>'])
+                    . '</p>';
             }
             self::commandBlock('finish-cmd-' . $key, $group);
             echo '</div>';
@@ -3397,8 +3443,8 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-check',
             self::sectionNum('set-check'),
-            'System check',
-            'What this installation needs from the machine, re-checked every time you open this page.'
+            I18n::t('System check'),
+            I18n::t('What this installation needs from the machine, re-checked every time you open this page.')
         );
 
         /* THE SENTENCE HAD TO CHANGE WITH THE COMMANDS. It promised every command below was
@@ -3406,14 +3452,15 @@ final class Settings extends Controller implements JobHost, Sections
            always — with no sudo at all. The blocks now carry sudo where root is genuinely
            required, so the promise is restated as what is actually true: the paths and the
            ownership are written for this user, and anything needing root says so. */
-        echo '<p class="muted">Checked as <code>' . Security::esc(Requirements::phpUser())
-            . '</code>, the user this page runs as. Every command below names that user and those '
-            . 'paths; the ones that genuinely need root carry <code class="mono">sudo</code>.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Checked as {code}, the user this page runs as. Every command below names that user and '
+                . 'those paths; the ones that genuinely need root carry {code2}.', ['code' => '<code>' . Security::esc(Requirements::phpUser()) . '</code>', 'code2' => '<code class="mono">sudo</code>'])
+            . '</p>';
 
         if ($bad === []) {
             echo '<div class="finish-state finish-ok" role="status">';
             echo '<span class="finish-dot" aria-hidden="true"></span>';
-            echo '<div class="finish-text"><strong>Everything this installation needs is in place.</strong>';
+            echo '<div class="finish-text"><strong>' . I18n::html('Everything this installation needs is in place.') . '</strong>';
             echo '<span class="muted">' . count($rows) . ' checks, all passing.</span>';
             echo '</div></div>';
         } else {
@@ -3423,7 +3470,7 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         echo '<details class="finish-all"' . ($bad === [] ? '' : ' open') . '>';
-        echo '<summary>Every check, including the ones that pass</summary>';
+        echo '<summary>' . I18n::html('Every check, including the ones that pass') . '</summary>';
         foreach ($rows as $row) {
             self::checkRow($row);
         }
@@ -3441,7 +3488,7 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $state = (string) $row['state'];
         $chip  = $state === 'pass' ? 'chip-good' : ($state === 'warn' ? 'chip-warn' : 'chip-bad');
-        $word  = $state === 'pass' ? 'OK' : ($state === 'warn' ? 'Note' : 'Fix');
+        $word  = $state === 'pass' ? I18n::html('OK') : ($state === 'warn' ? I18n::html('Note') : I18n::html('Fix'));
 
         echo '<div class="check-row">';
         echo '<p><span class="chip ' . $chip . '">' . $word . '</span> <strong>'
@@ -3477,25 +3524,27 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-ops',
             self::sectionNum('set-ops'),
-            'Running it',
-            'Everything Loghound put on this machine, and how to inspect, stop or remove it.'
+            I18n::t('Running it'),
+            I18n::t('Everything Loghound put on this machine, and how to inspect, stop or remove it.')
         );
 
-        echo '<p class="muted">Three units do the work, and nothing else runs. '
-            . '<code>loghound-tail.service</code> reads the logs continuously; '
-            . '<code>loghound-score.timer</code> scores finished sessions about once a minute; '
-            . '<code>loghound-retention.timer</code> trims old data once a day. The panel you are '
-            . 'reading is served by your web server and stores nothing itself.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Three units do the work, and nothing else runs. {code} reads the logs continuously; '
+                . '{code2} scores finished sessions about once a minute; {code3} trims old data once a day. '
+                . 'The panel you are reading is served by your web server and stores nothing itself.', ['code' => '<code>loghound-tail.service</code>', 'code2' => '<code>loghound-score.timer</code>', 'code3' => '<code>loghound-retention.timer</code>'])
+            . '</p>';
 
         foreach (Steps::operations(self::root()) as $group) {
             $key = (string) $group['key'];
             echo '<div class="finish-group" id="ops-g-' . Security::esc($key) . '">';
             echo '<h3>' . Security::esc((string) $group['title']) . '</h3>';
             if ($key === 'uninstall') {
-                echo '<p class="muted">Stops and removes the units, the timers, the service user and the '
-                    . 'files, and shreds every secret rather than unlinking it. It asks before it deletes '
-                    . 'anything, it asks separately before deleting the two Opensolr indexes, and '
-                    . '<code>--dry-run</code> prints every action without doing any of them.</p>';
+                echo '<p class="muted">'
+                    . I18n::html('Stops and removes the units, the timers, the service user and the files, and shreds every '
+                        . 'secret rather than unlinking it. It asks before it deletes anything, it asks separately '
+                        . 'before deleting the two Opensolr indexes, and {code} prints every action without doing '
+                        . 'any of them.', ['code' => '<code>--dry-run</code>'])
+                    . '</p>';
             }
             self::commandBlock('ops-cmd-' . $key, $group);
             echo '</div>';
@@ -3540,40 +3589,42 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $storesSignedIn = (bool) $this->cfg->get('beacon.store_signed_in', true);
 
-        echo '<h3>Telling Loghound who the visitor is</h3>';
+        echo '<h3>' . I18n::html('Telling Loghound who the visitor is') . '</h3>';
         echo '<p class="muted">' . Security::esc(Steps::beaconIdentityNote()) . '</p>';
 
-        echo '<h4>On this installation, right now</h4>';
+        echo '<h4>' . I18n::html('On this installation, right now') . '</h4>';
 
         /* ONE STATE, BECAUSE THERE IS ONE OUTCOME. This used to be two banners for two settings
            of a switch that no longer exists: a site that sends an identity has it kept. What is
            worth saying is what that means afterwards — it is personal data, it is searchable,
            and it lives as long as the session does. */
         echo '<div class="banner banner-good">';
-        echo '<strong><code class="mono">data-ident</code> is stored.</strong> '
-            . 'A valid email address your site sends is written to the session document, is searchable and '
+        echo '<strong>' . I18n::html('{attr} is stored.', ['attr' => '<code class="mono">data-ident</code>']) . '</strong> '
+            . I18n::html('A valid email address your site sends is written to the session document, is searchable and '
             . 'facetable in the panel, and stays in the index and in every backup of it until retention '
             . 'deletes the session. Anything that is not a valid email is discarded. A valid email is the '
-            . 'only thing that makes a visitor signed in.';
+            . 'only thing that makes a visitor signed in.');
         echo '</div>';
 
         echo '<div class="banner ' . ($storesSignedIn ? 'banner-good' : 'banner-warn') . '">';
         if ($storesSignedIn) {
             echo '<strong><code class="mono">data-signed-in</code> is stored.</strong> '
                 . '<code class="mono">beacon.store_signed_in</code> is on, so the signed-in / anonymous split '
-                . 'is available on every view as the <em>Signed in</em> dimension.';
+                . 'is available on every view as the <em>' . I18n::html('Signed in') . '</em> dimension.';
         } else {
             echo '<strong><code class="mono">data-signed-in</code> is DISCARDED.</strong> '
                 . '<code class="mono">beacon.store_signed_in</code> has been turned off, so the flag is dropped '
-                . 'before anything is written and the <em>Signed in</em> dimension will stay empty.';
+                . 'before anything is written and the <em>' . I18n::html('Signed in') . '</em> dimension will stay empty.';
         }
         echo '</div>';
 
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('storage', 'independent')) . '</p>';
 
-        echo '<h4>Three ways to supply it, for three different situations</h4>';
-        echo '<p class="muted">They are not alternatives to pick between on taste. Each one is the only one '
-            . 'that works in its situation.</p>';
+        echo '<h4>' . I18n::html('Three ways to supply it, for three different situations') . '</h4>';
+        echo '<p class="muted">'
+            . I18n::html('They are not alternatives to pick between on taste. Each one is the only one that works '
+                . 'in its situation.')
+            . '</p>';
 
         echo '<dl class="kv">';
         foreach (Doc::routes($this->baseUrl()[0]) as $route) {
@@ -3583,19 +3634,21 @@ final class Settings extends Controller implements JobHost, Sections
         }
         echo '</dl>';
 
-        echo '<h4>What has to be in the page before b.js runs</h4>';
+        echo '<h4>' . I18n::html('What has to be in the page before b.js runs') . '</h4>';
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('ordering', 'globals')) . '</p>';
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('ordering', 'late')) . '</p>';
 
-        echo '<p class="muted"><strong>An identity is capped at ' . Security::esc((string) \Loghound\Beacon::MAX_IDENT)
-            . ' bytes</strong> and anything longer is truncated to it. That holds any email address, customer '
-            . 'number or account id anybody sensibly uses as one; it is there because the collector is public, '
-            . 'so the value is whatever the page chose to send, and an unbounded one would be a way to make '
-            . 'every staging row large.</p>';
+        echo '<p class="muted">'
+            . I18n::html('{strong} and anything longer is truncated to it. That holds any email address, customer '
+                . 'number or account id anybody sensibly uses as one; it is there because the collector is '
+                . 'public, so the value is whatever the page chose to send, and an unbounded one would be a '
+                . 'way to make every staging row large.', ['strong' => '<strong>' . I18n::html('An identity is capped at {n} bytes', ['n' => Security::esc((string) \Loghound\Beacon::MAX_IDENT)]) . '</strong>'])
+            . '</p>';
 
-        echo '<p class="muted"><strong>Loghound never guesses either value.</strong> No cookie is read, no form '
-            . 'is scraped, no meta tag is looked for and no <code>window</code> variable is hunted through. If '
-            . 'your site does not say, the field does not exist.</p>';
+        echo '<p class="muted">'
+            . I18n::html('{strong} No cookie is read, no form is scraped, no meta tag is looked for and no {code} '
+                . 'variable is hunted through. If your site does not say, the field does not exist.', ['code' => '<code>window</code>', 'strong' => '<strong>' . I18n::html('Loghound never guesses either value.') . '</strong>'])
+            . '</p>';
 
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('storage', 'third_state')) . '</p>';
     }
@@ -3634,11 +3687,12 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function beaconOptionsList(): void
     {
-        echo '<h3>Every option the beacon reads</h3>';
-        echo '<p class="muted">The complete list. The state beside each name is <strong>this installation</strong>, read '
-            . 'from <code>config/loghound.php</code> as the page was rendered &mdash; so an option whose value '
-            . 'would be thrown away here says so, instead of being discovered by pasting a snippet and seeing '
-            . 'nothing appear.</p>';
+        echo '<h3>' . I18n::html('Every option the beacon reads') . '</h3>';
+        echo '<p class="muted">'
+            . I18n::html('The complete list. The state beside each name is {strong}, read from {code} as the page '
+                . 'was rendered — so an option whose value would be thrown away here says so, instead of '
+                . 'being discovered by pasting a snippet and seeing nothing appear.', ['code' => '<code>config/loghound.php</code>', 'strong' => '<strong>' . I18n::html('this installation') . '</strong>'])
+            . '</p>';
 
         echo '<div class="boptlist">';
 
@@ -3652,8 +3706,8 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<p class="bopt-what">' . Doc::inlineHtml($opt['what']) . '</p>';
             echo '<pre class="snippet mono bopt-code">' . Security::esc($opt['example']) . '</pre>';
             echo '<dl class="bopt-meta">'
-                . '<dt>Default</dt><dd>' . Doc::inlineHtml($opt['default']) . '</dd>'
-                . '<dt>Accepted</dt><dd>' . Doc::inlineHtml($opt['limits']) . '</dd>'
+                . '<dt>' . I18n::html('Default') . '</dt><dd>' . Doc::inlineHtml($opt['default']) . '</dd>'
+                . '<dt>' . I18n::html('Accepted') . '</dt><dd>' . Doc::inlineHtml($opt['limits']) . '</dd>'
                 . '</dl>';
             echo '</article>';
         }
@@ -3681,10 +3735,10 @@ final class Settings extends Controller implements JobHost, Sections
         $state = Doc::optionState($switch, $this->cfg);
 
         $chip = [
-            'always'    => '<span class="chip">always</span>',
-            'yes'       => '<span class="chip chip-good">yes</span>',
-            'partly'    => '<span class="chip chip-accent">partly discarded</span>',
-            'discarded' => '<span class="chip chip-accent">discarded</span>',
+            'always'    => '<span class="chip">' . I18n::html('always') . '</span>',
+            'yes'       => '<span class="chip chip-good">' . I18n::html('yes') . '</span>',
+            'partly'    => '<span class="chip chip-accent">' . I18n::html('partly discarded') . '</span>',
+            'discarded' => '<span class="chip chip-accent">' . I18n::html('discarded') . '</span>',
         ][$state['state']] ?? '<span class="chip">' . Security::esc($state['state']) . '</span>';
 
         return $chip . ' <span class="faint">' . Doc::inlineHtml($state['detail']) . '</span>';
@@ -3711,14 +3765,15 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function beaconHostsBlock(array $allowed, array $collected): void
     {
-        echo '<h3>Sites on other servers</h3>';
+        echo '<h3>' . I18n::html('Sites on other servers') . '</h3>';
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('standalone', 'allowlist')) . '</p>';
 
         if ($allowed === []) {
-            echo '<div class="banner banner-warn"><strong>No hostnames are listed.</strong> '
-                . 'A beacon from a host with no log source here stages a row and nothing more: no '
-                . 'session is created and no search term is kept. Add the hostnames you own on the '
-                . '<a href="?v=settings&amp;s=sites">Measured sites</a> page.</div>';
+            echo '<div class="banner banner-warn">'
+                . I18n::html('{strong} A beacon from a host with no log source here stages a row and nothing more: no '
+                    . 'session is created and no search term is kept. Add the hostnames you own on the {link} '
+                    . 'page.', ['strong' => '<strong>' . I18n::html('No hostnames are listed.') . '</strong>', 'link' => '<a href="?v=settings&amp;s=sites">' . I18n::html('Measured sites') . '</a>'])
+                . '</div>';
         } else {
             echo '<p class="muted">Listed now: ';
             $parts = [];
@@ -3730,27 +3785,30 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('standalone', 'limits')) . '</p>';
 
-        echo '<h3>Search terms</h3>';
+        echo '<h3>' . I18n::html('Search terms') . '</h3>';
 
         if ($collected === []) {
-            echo '<p class="muted">Off on this installation. No URL parameter is collected from anywhere '
-                . '— not by the beacon and not by the log parser. Naming the parameters your search box '
-                . 'uses, on the <a href="?v=settings&amp;s=sites">Measured sites</a> page, turns them '
-                . 'into a facet you can count and filter on.</p>';
+            echo '<p class="muted">'
+                . I18n::html('Off on this installation. No URL parameter is collected from anywhere — not by the '
+                    . 'beacon and not by the log parser. Naming the parameters your search box uses, on the '
+                    . '{link} page, turns them into a facet you can count and filter on.', ['link' => '<a href="?v=settings&amp;s=sites">' . I18n::html('Measured sites') . '</a>'])
+                . '</p>';
         } else {
             $parts = [];
             foreach ($collected as $name) {
                 $parts[] = '<code class="mono">' . Security::esc($name) . '</code>';
             }
-            echo '<p class="muted">Collecting ' . implode(', ', $parts) . ' as search terms, from the log '
-                . 'parser and from the beacon alike. The snippets above carry the same list, so a page on '
-                . 'another server sends those parameters and nothing else out of its URL.</p>';
+            echo '<p class="muted">'
+                . I18n::html('Collecting {parts} as search terms, from the log parser and from the beacon alike. The '
+                    . 'snippets above carry the same list, so a page on another server sends those parameters '
+                    . 'and nothing else out of its URL.', ['parts' => implode(', ', $parts)])
+                . '</p>';
         }
 
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('params', 'names')) . '</p>';
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('params', 'server_half')) . '</p>';
 
-        echo '<h3>Content-Security-Policy</h3>';
+        echo '<h3>' . I18n::html('Content-Security-Policy') . '</h3>';
         echo '<p class="muted">' . Doc::inlineHtml(Doc::para('csp', 'directives')) . '</p>';
         echo '<pre class="snippet mono">' . Security::esc(
             Doc::cspDirectives(self::cspOrigin($this->cfg))
@@ -3791,7 +3849,7 @@ final class Settings extends Controller implements JobHost, Sections
     private static function filePath(string $path): void
     {
         echo '<div class="filepath">';
-        echo '<span class="filepath-label" aria-hidden="true">File:</span>';
+        echo '<span class="filepath-label" aria-hidden="true">' . I18n::html('File:') . '</span>';
         echo '<span class="filepath-value"><span class="sr-only">File: </span>'
             . Security::esc($path) . '</span>';
         echo '</div>';
@@ -3852,7 +3910,7 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private static function setupGroup(): array
     {
-        return ['key' => 'setup', 'title' => 'Re-run setup', 'lines' => [self::setupCommand()], 'problem' => ''];
+        return ['key' => 'setup', 'title' => I18n::t('Re-run setup'), 'lines' => [self::setupCommand()], 'problem' => ''];
     }
 
     /**
@@ -3863,11 +3921,11 @@ final class Settings extends Controller implements JobHost, Sections
     private static function ingestLabel(array $ingest): string
     {
         return match ((string) $ingest['state']) {
-            'live'  => 'Ingestion: running',
-            'stale' => 'Ingestion: stopped',
-            'refused' => 'Ingestion: refused to start',
-            'unreadable' => 'Ingestion: cannot tell',
-            default => 'Ingestion: never started',
+            'live'  => I18n::t('Ingestion: running'),
+            'stale' => I18n::t('Ingestion: stopped'),
+            'refused' => I18n::t('Ingestion: refused to start'),
+            'unreadable' => I18n::t('Ingestion: cannot tell'),
+            default => I18n::t('Ingestion: never started'),
         };
     }
 
@@ -3888,43 +3946,41 @@ final class Settings extends Controller implements JobHost, Sections
     private static function ingestDetail(array $ingest, bool $haveCommand = true): string
     {
         if ((string) $ingest['state'] === 'unreadable') {
-            return $ingest['file'] . ' exists but is not a status document. Check that the user '
-                . 'bin/loghound-tail runs as can write it.';
+            return I18n::t('{file} exists but is not a status document. Check that the user '
+                . 'bin/loghound-tail runs as can write it.', ['file' => $ingest['file']]);
         }
         if ((string) $ingest['state'] === 'refused') {
             $why = implode(' · ', array_slice((array) ($ingest['errors'] ?? []), 0, 3));
 
-            return 'The daemon started, refused the configuration and stopped'
-                . ($why === '' ? '' : ': ' . $why)
-                . '. Fix that, then start it again — systemd does not retry this by itself, '
-                . 'deliberately, because it is not a condition that resolves on its own.';
+            return I18n::t('The daemon started, refused the configuration and stopped{why}. Fix that, then start it again — systemd does not retry this by itself, '
+                . 'deliberately, because it is not a condition that resolves on its own.', ['why' => $why === '' ? '' : ': ' . $why]);
         }
         if ((string) $ingest['state'] === 'absent') {
-            return 'Nothing has ever written ' . $ingest['file'] . ', so no log line has been read on this '
-                . 'machine. ' . ($haveCommand
-                    ? 'Run the first command below.'
-                    : 'Finish the outstanding setup steps first — until the configuration is '
-                        . 'complete the daemon refuses to start, so there is no command to run yet.');
+            return I18n::t('Nothing has ever written {file}, so no log line has been read on this machine.', ['file' => $ingest['file']])
+                . ' ' . ($haveCommand
+                    ? I18n::t('Run the first command below.')
+                    : I18n::t('Finish the outstanding setup steps first — until the configuration is '
+                        . 'complete the daemon refuses to start, so there is no command to run yet.'));
         }
 
         $age = (int) $ingest['age_sec'];
-        $parts = ['Last read ' . $age . ' second' . ($age === 1 ? '' : 's') . ' ago'];
+        $parts = [I18n::tn('Last read {n} second ago', 'Last read {n} seconds ago', $age)];
         if ($ingest['sources'] !== null) {
-            $parts[] = (int) $ingest['sources'] . ' log file' . ((int) $ingest['sources'] === 1 ? '' : 's');
+            $parts[] = I18n::tn('{n} log file', '{n} log files', (int) $ingest['sources']);
         }
         if ($ingest['lines'] !== null) {
-            $parts[] = number_format((int) $ingest['lines']) . ' lines read';
+            $parts[] = I18n::t('{n} lines read', ['n' => number_format((int) $ingest['lines'])]);
         }
         if ($ingest['lag_bytes'] !== null) {
-            $parts[] = number_format((int) $ingest['lag_bytes']) . ' bytes behind';
+            $parts[] = I18n::t('{n} bytes behind', ['n' => number_format((int) $ingest['lag_bytes'])]);
         }
 
         $line = implode(' · ', $parts) . '.';
 
         return (string) $ingest['state'] === 'live'
             ? $line
-            : $line . ' The daemon stops updating that record within a second of dying, so this one is '
-                . 'leftovers. Start it again with the first command below.';
+            : $line . ' ' . I18n::t('The daemon stops updating that record within a second of dying, so this one is '
+                . 'leftovers. Start it again with the first command below.');
     }
 
     /**
@@ -3951,7 +4007,7 @@ final class Settings extends Controller implements JobHost, Sections
         echo Security::esc(implode("\n", $group['lines']));
         echo '</pre>';
         echo '<button type="button" class="copy-btn" data-copy="' . Security::esc($id) . '"'
-            . ' aria-live="polite">Copy</button>';
+            . ' aria-live="polite">' . I18n::html('Copy') . '</button>';
         echo '</div>';
     }
 
@@ -3982,16 +4038,16 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-sources',
             self::sectionNum('set-sources'),
-            'Log sources',
-            'Detected by reading your webserver configuration where possible, and by scoring sample lines against '
-            . 'the known-format library where it is not. Nothing is ingested until you confirm the mapping below.'
+            I18n::t('Log sources'),
+            I18n::t('Detected by reading your webserver configuration where possible, and by scoring sample lines against '
+            . 'the known-format library where it is not. Nothing is ingested until you confirm the mapping below.')
         );
 
         $this->rescanControl();
 
         if ($sources === []) {
             echo '<div class="empty show">';
-            echo '<h3>No log sources detected yet</h3>';
+            echo '<h3>' . I18n::html('No log sources detected yet') . '</h3>';
             /* THE COMMAND HERE COULD NOT BE RUN. It was `… /bin/loghound-setup detect`, and
                `detect` is not an argument loghound-setup accepts: it falls through every
                branch of the parser and exits 2 with "unknown option". The flag is
@@ -4003,18 +4059,19 @@ final class Settings extends Controller implements JobHost, Sections
                page with no Copy button. */
             $user = Requirements::phpUser();
 
-            echo '<p>Use <strong>Scan this server again</strong> above, or run the setup command. Either one reads '
-                . 'your Apache or nginx configuration, finds the <code>CustomLog</code> / <code>access_log</code> '
-                . 'directives, works out the exact format for each one, and writes what it found to '
-                . '<code class="mono">' . Security::esc(self::root() . '/var/detect.json') . '</code> — '
-                . 'which is the file this card reads. It changes no configuration:</p>';
+            echo '<p>'
+                . I18n::html('Use {strong} above, or run the setup command. Either one reads your Apache or nginx '
+                    . 'configuration, finds the {code} / {code2} directives, works out the exact format for each '
+                    . 'one, and writes what it found to {code3} — which is the file this card reads. It '
+                    . 'changes no configuration:', ['code' => '<code>CustomLog</code>', 'code2' => '<code>access_log</code>', 'code3' => '<code class="mono">' . Security::esc(self::root() . '/var/detect.json') . '</code>', 'strong' => '<strong>' . I18n::html('Scan this server again') . '</strong>'])
+                . '</p>';
             self::commandBlock('set-sources-detect', [
                 'key'     => 'detect',
-                'title'   => 'Scan from a shell instead',
+                'title'   => I18n::t('Scan from a shell instead'),
                 'lines'   => ['sudo -u ' . $user . ' ' . self::setupCommand() . ' --detect-only'],
                 'problem' => '',
             ]);
-            echo '<p>Then reload this page to review what it found.</p>';
+            echo '<p>' . I18n::html('Then reload this page to review what it found.') . '</p>';
             echo '</div>';
             $this->orphanSources($sources);
             self::cardEnd();
@@ -4035,45 +4092,45 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<div class="source-head">';
             self::filePath($path);
             echo '<span class="chip ' . ($confirmed ? 'chip-good' : 'chip-warn') . '">'
-                . ($confirmed ? 'Confirmed' : 'Awaiting review') . '</span>';
+                . ($confirmed ? I18n::html('Confirmed') : I18n::html('Awaiting review')) . '</span>';
             if (!$ingested) {
-                echo '<span class="chip chip-off">Not ingested</span>';
+                echo '<span class="chip chip-off">' . I18n::html('Not ingested') . '</span>';
             }
             echo '</div>';
 
             echo '<dl class="kv">';
-            echo '<dt>Server</dt><dd class="mono">' . Security::esc((string) ($src['server'] ?? 'unknown')) . '</dd>';
+            echo '<dt>' . I18n::html('Server') . '</dt><dd class="mono">' . Security::esc((string) ($src['server'] ?? 'unknown')) . '</dd>';
             if (!empty($src['vhost'])) {
-                echo '<dt>Website</dt><dd class="mono">' . Security::esc((string) $src['vhost']) . '</dd>';
+                echo '<dt>' . I18n::html('Website') . '</dt><dd class="mono">' . Security::esc((string) $src['vhost']) . '</dd>';
             }
-            echo '<dt>Format</dt><dd class="mono">' . Security::esc((string) ($src['format_name'] ?? 'custom')) . '</dd>';
-            echo '<dt>Confidence</dt><dd><span class="mono">' . Security::esc(number_format($confidence, 1)) . '%</span> '
+            echo '<dt>' . I18n::html('Format') . '</dt><dd class="mono">' . Security::esc(I18n::t((string) ($src['format_name'] ?? 'custom'))) . '</dd>';
+            echo '<dt>' . I18n::html('Confidence') . '</dt><dd><span class="mono">' . Security::esc(number_format($confidence, 1)) . '%</span> '
                 . '<span class="meter" role="img" aria-label="'
                 . Security::esc(number_format($confidence, 1)) . ' percent of sample lines parsed cleanly">'
                 . '<span class="meter-fill" style="width:' . Security::esc((string) max(0, min(100, $confidence))) . '%"></span></span> '
                 . '<span class="muted">' . Security::esc((string) ($src['lines_parsed'] ?? 0)) . ' of '
                 . Security::esc((string) ($src['lines_tested'] ?? 0)) . ' sample lines parsed cleanly</span></dd>';
             if (!empty($src['source'])) {
-                echo '<dt>Detected from</dt><dd>' . Security::esc((string) $src['source']) . '</dd>';
+                echo '<dt>' . I18n::html('Detected from') . '</dt><dd>' . Security::esc((string) $src['source']) . '</dd>';
             }
             if (!empty($src['format_string'])) {
-                echo '<dt>Format string</dt><dd><code class="mono wrap">'
+                echo '<dt>' . I18n::html('Format string') . '</dt><dd><code class="mono wrap">'
                     . Security::esc((string) $src['format_string']) . '</code></dd>';
             }
             echo '</dl>';
 
             $mapping = (array) ($src['mapping'] ?? []);
             if ($mapping !== []) {
-                self::foldOpen('src-mapping', 'Field mapping', count($mapping) . ' tokens');
+                self::foldOpen('src-mapping', I18n::t('Field mapping'), I18n::t('{n} tokens', ['n' => count($mapping)]));
                 echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
                     . '<col style="width:22%"><col style="width:30%"><col style="width:48%">'
                     . '</colgroup><thead><tr>'
-                    . '<th scope="col">Log token</th><th scope="col">Loghound field</th><th scope="col">Example</th>'
+                    . '<th scope="col">' . I18n::html('Log token') . '</th><th scope="col">' . I18n::html('Loghound field') . '</th><th scope="col">' . I18n::html('Example') . '</th>'
                     . '</tr></thead><tbody>';
                 foreach ($mapping as $m) {
                     echo '<tr>';
                     echo '<td class="mono">' . Security::esc((string) ($m['token'] ?? '')) . '</td>';
-                    echo '<td class="mono">' . Security::esc((string) ($m['field'] ?? '')) . '</td>';
+                    echo '<td class="mono">' . Security::esc(I18n::t((string) ($m['field'] ?? ''))) . '</td>';
                     /* THE TITLE IS THE ONLY WAY BACK TO THE WHOLE VALUE. `td.clip` truncates at
                        46ch, and 22ch on a phone; core.js's tbody() adds a title for every clip
                        cell it builds, and these server-rendered ones had none — so a referrer
@@ -4089,26 +4146,30 @@ final class Settings extends Controller implements JobHost, Sections
 
             $missing = (array) ($src['missing'] ?? []);
             if ($missing !== []) {
-                self::foldOpen('src-missing', 'Not logged — and what that costs you',
-                    count($missing) . ' fields');
+                self::foldOpen('src-missing', I18n::t('Not logged — and what that costs you'),
+                    I18n::t('{n} fields', ['n' => count($missing)]));
                 echo '<ul class="missing">';
                 foreach ($missing as $m) {
                     echo '<li><code class="mono">' . Security::esc((string) ($m['token'] ?? '')) . '</code> → '
                         . '<code class="mono">' . Security::esc((string) ($m['field'] ?? '')) . '</code>: '
-                        . Security::esc((string) ($m['why'] ?? '')) . '</li>';
+                        . Security::esc(I18n::t((string) ($m['why'] ?? ''))) . '</li>';
                 }
                 echo '</ul>';
-                echo '<p class="muted">The recommended <code>LogFormat</code> in <code>docs/INSTALL.md</code> adds all '
-                    . 'of these. Plain <code>combined</code> still works — it just detects less.</p>';
+                echo '<p class="muted">'
+                    . I18n::html('The recommended {code} in {code2} adds all of these. Plain {code3} still works — it '
+                        . 'just detects less.', ['code' => '<code>LogFormat</code>', 'code2' => '<code>docs/INSTALL.md</code>', 'code3' => '<code>combined</code>'])
+                    . '</p>';
                 self::foldClose();
             }
 
             $samples = array_slice((array) ($src['samples'] ?? []), 0, 5);
             if ($samples !== []) {
-                self::foldOpen('src-samples', 'Five lines from this file, parsed',
-                    count($samples) . ' lines');
-                echo '<p class="muted">Read these. If a value is in the wrong column, the format is wrong, and '
-                    . 'confirming it would fill your index with nonsense.</p>';
+                self::foldOpen('src-samples', I18n::t('Five lines from this file, parsed'),
+                    I18n::t('{n} lines', ['n' => count($samples)]));
+                echo '<p class="muted">'
+                    . I18n::html('Read these. If a value is in the wrong column, the format is wrong, and confirming it '
+                        . 'would fill your index with nonsense.')
+                    . '</p>';
                 foreach ($samples as $s) {
                     echo '<div class="sample">';
                     echo '<pre class="sample-raw mono">' . Security::esc((string) ($s['raw'] ?? '')) . '</pre>';
@@ -4133,11 +4194,11 @@ final class Settings extends Controller implements JobHost, Sections
                 self::csrfField();
                 echo '<input type="hidden" name="action" value="confirm_source">';
                 echo '<input type="hidden" name="path" value="' . Security::esc($path) . '">';
-                echo '<button type="submit" class="primary">Looks right — start ingesting this file</button>';
+                echo '<button type="submit" class="primary">' . I18n::html('Looks right — start ingesting this file') . '</button>';
                 echo '</form>';
             } elseif (isset($configured[$path])) {
                 $this->ingestForm($path, $ingested, (string) ($src['vhost'] ?? ''));
-                self::removeForm($path, 'Stop ingesting this file');
+                self::removeForm($path, I18n::t('Stop ingesting this file'));
             }
             echo '</article>';
         }
@@ -4161,18 +4222,23 @@ final class Settings extends Controller implements JobHost, Sections
     private function rescanControl(): void
     {
         if ($this->gw->isDemo()) {
-            echo '<p class="muted">Scanning is switched off while the panel is showing demo data.</p>';
+            echo '<p class="muted">' . I18n::html('Scanning is switched off while the panel is showing demo data.') . '</p>';
             return;
         }
 
         echo '<div class="job-actions">';
-        echo '<button type="button" data-job="' . Security::esc(self::KIND_RESCAN) . '" data-mount="job-rescan">'
-            . 'Scan this server again</button>';
+        echo '<button type="button" data-job="'
+            . Security::esc(self::KIND_RESCAN)
+            . '" data-mount="job-rescan">'
+            . I18n::html('Scan this server again')
+            . '</button>';
         echo '</div>';
         echo '<div id="job-rescan"></div>';
-        echo '<p class="muted">Reads your webserver configuration and the usual log locations, then grades a '
-            . 'sample of every file it finds. It changes nothing on its own: a newly found file is added to the '
-            . 'review below and is ingested only once you confirm it.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Reads your webserver configuration and the usual log locations, then grades a sample of '
+                . 'every file it finds. It changes nothing on its own: a newly found file is added to the '
+                . 'review below and is ingested only once you confirm it.')
+            . '</p>';
     }
 
     /**
@@ -4208,23 +4274,24 @@ final class Settings extends Controller implements JobHost, Sections
             return;
         }
 
-        echo '<h3>Configured, but not found by the last scan</h3>';
-        echo '<p class="muted">These are being read by the tailer and were not in the last detection run — they '
-            . 'were added by <code class="mono">' . Security::esc(self::setupCommand())
-            . '</code>, or the file has moved since.</p>';
+        echo '<h3>' . I18n::html('Configured, but not found by the last scan') . '</h3>';
+        echo '<p class="muted">'
+            . I18n::html('These are being read by the tailer and were not in the last detection run — they were '
+                . 'added by {code}, or the file has moved since.', ['code' => '<code class="mono">' . Security::esc(self::setupCommand()) . '</code>'])
+            . '</p>';
         foreach ($orphans as $path => $orphan) {
             echo '<article class="source' . ($orphan['ingest'] ? '' : ' source-off') . '">';
             echo '<div class="source-head">';
             self::filePath($path);
-            echo '<span class="chip chip-warn">Not in the last scan</span>';
+            echo '<span class="chip chip-warn">' . I18n::html('Not in the last scan') . '</span>';
             if (!$orphan['ingest']) {
-                echo '<span class="chip chip-off">Not ingested</span>';
+                echo '<span class="chip chip-off">' . I18n::html('Not ingested') . '</span>';
             }
             echo '</div>';
-            echo '<dl class="kv"><dt>Format</dt><dd><code class="mono wrap">'
+            echo '<dl class="kv"><dt>' . I18n::html('Format') . '</dt><dd><code class="mono wrap">'
                 . Security::esc($orphan['format']) . '</code></dd></dl>';
             $this->ingestForm((string) $path, $orphan['ingest'], $orphan['host']);
-            self::removeForm((string) $path, 'Stop ingesting this file');
+            self::removeForm((string) $path, I18n::t('Stop ingesting this file'));
             echo '</article>';
         }
     }
@@ -4264,12 +4331,14 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<input type="hidden" name="action" value="source_ingest">';
         echo '<input type="hidden" name="source" value="' . Security::esc(self::sourceId($path)) . '">';
         echo '<label class="check"><input type="checkbox" name="source_enabled"'
-            . ($enabled ? ' checked' : '') . '> Ingest this log</label>';
+            . ($enabled ? ' checked' : '') . '> ' . I18n::html('Ingest this log') . '</label>';
         if ($isOwn) {
-            echo '<p class="muted">This is Loghound&rsquo;s own site. Leave it on to measure the panel '
-                . 'like any other site; turn it off to keep your own visits out of the data.</p>';
+            echo '<p class="muted">'
+                . I18n::html('This is Loghound’s own site. Leave it on to measure the panel like any other site; turn '
+                    . 'it off to keep your own visits out of the data.')
+                . '</p>';
         }
-        echo '<button type="submit">Save</button>';
+        echo '<button type="submit">' . I18n::html('Save') . '</button>';
         echo '</form>';
     }
 
@@ -4310,34 +4379,32 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $mode = (string) $this->cfg->get('solr.mode', Config::SOLR_MODE);
 
-        self::cardOpen('set-solr', self::sectionNum('set-solr'), 'Solr connection');
+        self::cardOpen('set-solr', self::sectionNum('set-solr'), I18n::t('Solr connection'));
 
         $this->pendingIndexesNotice();
 
         if ($mode !== Config::SOLR_MODE) {
-            echo '<p class="pop">This configuration is not usable.</p>';
-            echo '<p>It sets <code>solr.mode</code> to <code class="mono">' . Security::esc($mode)
-                . '</code>. Loghound provisions and manages its own two indexes on your Opensolr '
-                . 'account — creating them, uploading their configsets and reloading them — and it '
-                . 'cannot do that on a Solr it does not administer, so pointing it at one is no '
-                . 'longer supported. Set <code>solr.mode</code> to <code class="mono">'
-                . Security::esc(Config::SOLR_MODE) . '</code> in <code>config/loghound.php</code> and '
-                . 'run <code class="mono">' . Security::esc(self::setupCommand())
-                . '</code> to provision the two indexes. The ingest, '
-                . 'scoring and retention daemons refuse to start until you do.</p>';
+            echo '<p class="pop">' . I18n::html('This configuration is not usable.') . '</p>';
+            echo '<p>'
+                . I18n::html('It sets {code} to {code2}. Loghound provisions and manages its own two indexes on your '
+                    . 'Opensolr account — creating them, uploading their configsets and reloading them — and '
+                    . 'it cannot do that on a Solr it does not administer, so pointing it at one is no longer '
+                    . 'supported. Set {code3} to {code4} in {code5} and run {code6} to provision the two '
+                    . 'indexes. The ingest, scoring and retention daemons refuse to start until you do.', ['code' => '<code>solr.mode</code>', 'code2' => '<code class="mono">' . Security::esc($mode) . '</code>', 'code3' => '<code>solr.mode</code>', 'code4' => '<code class="mono">' . Security::esc(Config::SOLR_MODE) . '</code>', 'code5' => '<code>config/loghound.php</code>', 'code6' => '<code class="mono">' . Security::esc(self::setupCommand()) . '</code>'])
+                . '</p>';
         }
 
         echo '<dl class="kv">';
-        echo '<dt>Account</dt><dd class="mono">'
+        echo '<dt>' . I18n::html('Account') . '</dt><dd class="mono">'
             . Security::esc((string) $this->cfg->get('opensolr.email', '—')) . '</dd>';
-        echo '<dt>Region</dt><dd class="mono">'
+        echo '<dt>' . I18n::html('Region') . '</dt><dd class="mono">'
             . Security::esc((string) $this->cfg->get('opensolr.region', '—')) . '</dd>';
-        echo '<dt>API key</dt><dd>' . ($this->cfg->get('opensolr.api_key')
-            ? '<span class="state">Set</span>'
-            : '<span class="state state-bad">Missing</span>') . '</dd>';
-        echo '<dt>Hits core</dt><dd class="mono">' . Security::esc($this->gw->hitsCore()) . '</dd>';
-        echo '<dt>Sessions core</dt><dd class="mono">' . Security::esc($this->gw->sessionsCore()) . '</dd>';
-        echo '<dt>Query timeout</dt><dd class="mono">'
+        echo '<dt>' . I18n::html('API key') . '</dt><dd>' . ($this->cfg->get('opensolr.api_key')
+            ? '<span class="state">' . I18n::html('Set') . '</span>'
+            : '<span class="state state-bad">' . I18n::html('Missing') . '</span>') . '</dd>';
+        echo '<dt>' . I18n::html('Hits core') . '</dt><dd class="mono">' . Security::esc($this->gw->hitsCore()) . '</dd>';
+        echo '<dt>' . I18n::html('Sessions core') . '</dt><dd class="mono">' . Security::esc($this->gw->sessionsCore()) . '</dd>';
+        echo '<dt>' . I18n::html('Query timeout') . '</dt><dd class="mono">'
             . Security::esc((string) Gateway::queryTimeout($this->cfg)) . 's</dd>';
         echo '</dl>';
 
@@ -4345,26 +4412,33 @@ final class Settings extends Controller implements JobHost, Sections
         $this->opensolrAccountForm();
         $this->indexChoicePart();
 
-        echo '<h4>Or change it from a shell</h4>';
-        echo '<p class="muted">A headless install with no browser access still needs this, and it does exactly '
-            . 'what the form above does — same validation, same outcome, same wording. Every prompt is '
-            . 'defaulted to what is stored now, so pressing Enter through the rest changes nothing.</p>';
+        echo '<h4>' . I18n::html('Or change it from a shell') . '</h4>';
+        echo '<p class="muted">'
+            . I18n::html('A headless install with no browser access still needs this, and it does exactly what the '
+                . 'form above does — same validation, same outcome, same wording. Every prompt is '
+                . 'defaulted to what is stored now, so pressing Enter through the rest changes nothing.')
+            . '</p>';
         self::commandBlock('set-solr-setup', self::setupGroup());
-        echo '<p class="muted">Or set <code>opensolr.api_key</code> in <code>config/loghound.php</code> by hand, '
-            . 'in the directory the command above names — the file is outside the '
-            . 'document root and holds the beacon secret too. Whichever route you take, the change applies on '
-            . 'the next request; nothing needs restarting for the panel, and the three daemons pick it up when '
-            . 'they are next started.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Or set {code} in {code2} by hand, in the directory the command above names — the file '
+                . 'is outside the document root and holds the beacon secret too. Whichever route you take, '
+                . 'the change applies on the next request; nothing needs restarting for the panel, and the '
+                . 'three daemons pick it up when they are next started.', ['code' => '<code>opensolr.api_key</code>', 'code2' => '<code>config/loghound.php</code>'])
+            . '</p>';
 
         echo '<div class="job-actions">';
         echo '<button type="button" class="primary" data-job="solr_connection" data-mount="job-solr">'
-            . 'Run connection check</button>';
+            . I18n::html('Run connection check')
+            . '</button>';
         echo '<button type="button" data-job="opensolr_check" data-mount="job-solr">'
-            . 'Validate Opensolr credentials</button>';
+            . I18n::html('Validate Opensolr credentials')
+            . '</button>';
         echo '</div>';
         echo '<div id="job-solr"></div>';
-        echo '<p class="muted">Each check runs as a sequence of steps with its own progress, so it cannot time '
-            . 'out however slow the backend is. You can close this page and come back to it.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Each check runs as a sequence of steps with its own progress, so it cannot time out '
+                . 'however slow the backend is. You can close this page and come back to it.')
+            . '</p>';
         self::cardEnd();
     }
 
@@ -4397,7 +4471,7 @@ final class Settings extends Controller implements JobHost, Sections
             return;
         }
 
-        echo '<h4>Index schema</h4>';
+        echo '<h4>' . I18n::html('Index schema') . '</h4>';
 
         /* THE BADGE SAYS WHAT IT IS THE STATUS OF. On screen the heading above it supplies that;
            to a screen reader running the page as a list of controls and states it was a bare
@@ -4406,8 +4480,8 @@ final class Settings extends Controller implements JobHost, Sections
            it, so it cannot be folded away — and is kept exactly. */
         if ($notice['severity'] !== 'good') {
             echo '<div class="check-row"><span class="chip chip-warn">'
-                . '<span class="sr-only">Index schema: </span>'
-                . ($notice['severity'] === 'bad' ? 'Needs attention' : 'Not verified')
+                . '<span class="sr-only">' . I18n::html('Index schema:') . ' </span>'
+                . ($notice['severity'] === 'bad' ? I18n::html('Needs attention') : I18n::html('Not verified'))
                 . '</span></div>';
         }
 
@@ -4416,10 +4490,10 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<p class="muted">' . Security::esc((string) $notice['detail']) . '</p>';
 
         echo '<p class="muted">' . ($notice['checked_at'] === null
-            ? 'No check has been saved on this installation yet.'
-            : 'Last checked <span class="mono">'
-                . Security::esc(gmdate('m/d/Y H:i:s', (int) $notice['checked_at'])) . ' UTC</span>'
-                . ', against the schemas your indexes were running at that moment.') . '</p>';
+            ? I18n::html('No check has been saved on this installation yet.')
+            : I18n::html('Last checked {at}, against the schemas your indexes were running at that moment.', [
+                'at' => '<span class="mono">' . Security::esc(gmdate('m/d/Y H:i:s', (int) $notice['checked_at'])) . ' UTC</span>',
+            ])) . '</p>';
 
         $this->schemaRows((array) $notice['indexes']);
 
@@ -4445,41 +4519,44 @@ final class Settings extends Controller implements JobHost, Sections
         self::commandBlock('set-solr-schema', [
             'key'     => 'schema',
             'title'   => $state === Schema::MANAGED
-                ? 'Check it, then migrate the index off the managed schema factory'
+                ? I18n::t('Check it, then migrate the index off the managed schema factory')
                 : ($fixable
-                    ? 'Check it, then push this release\'s configsets'
-                    : 'Check it, or re-upload this release\'s configsets'),
+                    ? I18n::t('Check it, then push this release\'s configsets')
+                    : I18n::t('Check it, or re-upload this release\'s configsets')),
             'lines'   => $lines,
             'problem' => '',
         ]);
-        echo '<p class="muted">The check changes nothing and exits 0 when both indexes are up to date, '
-            . '3 when one is behind, 4 when one still has Solr owning its schema file, and 2 when a '
-            . 'schema could not be read at all, so a deployment script can gate on it and can tell '
-            . '&ldquo;I could not check&rdquo; from &ldquo;this needs migrating&rdquo;. '
-            . '<code class="mono">--apply</code> is additive: it uploads the configsets and '
-            . 'reloads the cores, and it does not touch a document already in the index. Run it after '
-            . 'every upgrade.</p>';
-        echo '<p class="muted"><strong>Up to date here means the FIELDS match.</strong> It is not a '
-            . 'statement about <code class="mono">solrconfig.xml</code>: an update chain, a request '
-            . 'handler or an updateLog can change with no field changing at all, and both indexes will '
-            . 'still report up to date while the new configset never reaches them. '
-            . '<code class="mono">--force</code> uploads this release\'s <code class="mono">schema.xml</code>, '
-            . '<code class="mono">solrconfig.xml</code> and the mapping file to both indexes whatever the '
-            . 'field comparison says, and the platform reloads each core behind it. It is the command to '
-            . 'run when a release changes Solr configuration rather than Solr fields.</p>';
+        echo '<p class="muted">'
+            . I18n::html('The check changes nothing and exits 0 when both indexes are up to date, 3 when one is '
+                . 'behind, 4 when one still has Solr owning its schema file, and 2 when a schema could not '
+                . 'be read at all, so a deployment script can gate on it and can tell “I could not '
+                . 'check” from “this needs migrating”. {code} is additive: it uploads the configsets '
+                . 'and reloads the cores, and it does not touch a document already in the index. Run it '
+                . 'after every upgrade.', ['code' => '<code class="mono">--apply</code>'])
+            . '</p>';
+        echo '<p class="muted">'
+            . I18n::html('{strong} It is not a statement about {code}: an update chain, a request handler or an '
+                . 'updateLog can change with no field changing at all, and both indexes will still report up '
+                . 'to date while the new configset never reaches them. {code2} uploads this release\'s '
+                . '{code3}, {code4} and the mapping file to both indexes whatever the field comparison says, '
+                . 'and the platform reloads each core behind it. It is the command to run when a release '
+                . 'changes Solr configuration rather than Solr fields.', ['code' => '<code class="mono">solrconfig.xml</code>', 'code2' => '<code class="mono">--force</code>', 'code3' => '<code class="mono">schema.xml</code>', 'code4' => '<code class="mono">solrconfig.xml</code>', 'strong' => '<strong>' . I18n::html('Up to date here means the FIELDS match.') . '</strong>'])
+            . '</p>';
 
         if ($this->gw->isDemo()) {
-            echo '<p class="muted">Checking is switched off while the panel is showing demo data.</p>';
+            echo '<p class="muted">' . I18n::html('Checking is switched off while the panel is showing demo data.') . '</p>';
             return;
         }
 
         echo '<div class="job-actions">';
         echo '<button type="button" data-job="' . Security::esc(self::KIND_SCHEMA) . '" '
-            . 'data-mount="job-schema">Check the live schemas now</button>';
+            . 'data-mount="job-schema">' . I18n::html('Check the live schemas now') . '</button>';
         echo '</div>';
         echo '<div id="job-schema"></div>';
-        echo '<p class="muted">One read per index against your Opensolr account. It writes nothing to '
-            . 'either index; it only saves the answer, so this card stops asking.</p>';
+        echo '<p class="muted">'
+            . I18n::html('One read per index against your Opensolr account. It writes nothing to either index; it '
+                . 'only saves the answer, so this card stops asking.')
+            . '</p>';
     }
 
     /**
@@ -4506,26 +4583,29 @@ final class Settings extends Controller implements JobHost, Sections
             $missing = array_map('strval', (array) ($row['missing'] ?? []));
             $state = (string) ($row['state'] ?? '');
 
-            echo '<dt>' . Security::esc((string) ($row['role'] ?? '')) . '</dt><dd>';
+            echo '<dt>' . Security::esc(I18n::t((string) ($row['role'] ?? ''))) . '</dt><dd>';
             echo '<span class="mono">' . Security::esc((string) ($row['core'] ?? '')) . '</span> — ';
 
             /* THE FACTORY BEFORE THE FIELD COUNT. On a managed index the missing fields are real
                but the count is the wrong headline: it reads as "push and they appear", and a push
                is exactly what does nothing here until the factory is switched. */
             if ($state === Schema::CURRENT) {
-                echo 'all ' . (int) ($row['expected'] ?? 0) . ' fields this release writes are declared';
+                echo I18n::html('all {n} fields this release writes are declared', ['n' => (string) (int) ($row['expected'] ?? 0)]);
             } elseif ($state === Schema::MANAGED) {
-                echo '<strong>Solr owns the schema file here</strong>, so uploads of it do nothing'
-                    . ($missing === []
-                        ? '. The schema in force happens to declare every field this release writes.'
-                        : ', and the schema in force is missing ' . count($missing) . ': '
-                            . '<span class="mono wrap">'
-                            . Security::esc(Schema::namedList($missing, 12)) . '</span>');
+                echo ($missing === []
+                        ? I18n::html('{owns}, so uploads of it do nothing. The schema in force happens to declare every field this release writes.', [
+                            'owns' => '<strong>' . I18n::html('Solr owns the schema file here') . '</strong>',
+                        ])
+                        : I18n::html('{owns}, so uploads of it do nothing, and the schema in force is missing {n}: {fields}', [
+                            'owns'   => '<strong>' . I18n::html('Solr owns the schema file here') . '</strong>',
+                            'n'      => (string) count($missing),
+                            'fields' => '<span class="mono wrap">' . Security::esc(Schema::namedList($missing, 12)) . '</span>',
+                        ]));
             } elseif ($missing !== []) {
-                echo '<strong>missing ' . count($missing) . '</strong>: <span class="mono wrap">'
+                echo '<strong>' . I18n::html('missing {n}', ['n' => (string) count($missing)]) . '</strong>: <span class="mono wrap">'
                     . Security::esc(Schema::namedList($missing, 12)) . '</span>';
             } else {
-                echo Security::esc((string) ($row['message'] ?? 'could not be read'));
+                echo Security::esc(I18n::t((string) ($row['message'] ?? 'could not be read')));
             }
 
             echo '</dd>';
@@ -4557,7 +4637,7 @@ final class Settings extends Controller implements JobHost, Sections
 
         self::problemBanner(
             Pairs::pendingHeadline() . ' ' . Pairs::pendingDetail($this->cfg)
-            . ' The list is under "' . Pairs::choiceHeading() . '" further down this card.'
+            . ' ' . I18n::t('The list is under "{heading}" further down this card.', ['heading' => Pairs::choiceHeading()])
         );
     }
 
@@ -4609,26 +4689,31 @@ final class Settings extends Controller implements JobHost, Sections
         $haveKey = (string) $this->cfg->get('opensolr.api_key', '') !== '';
         $twoFactor = TwoFactor::isEnabled((array) $this->cfg->get('auth', []));
 
-        echo '<h4>Which Opensolr account this installation uses</h4>';
-        echo '<p class="muted">The key is checked against Opensolr before anything is written, so a typo '
-            . 'leaves the working credentials as they were.</p>';
+        echo '<h4>' . I18n::html('Which Opensolr account this installation uses') . '</h4>';
+        echo '<p class="muted">'
+            . I18n::html('The key is checked against Opensolr before anything is written, so a typo leaves the '
+                . 'working credentials as they were.')
+            . '</p>';
 
         echo '<form method="post" action="?v=settings" class="setup-form" autocomplete="off">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="opensolr_credentials">';
 
-        echo '<label for="opensolr_email">Account email</label>';
+        echo '<label for="opensolr_email">' . I18n::html('Account email') . '</label>';
         echo '<input type="email" id="opensolr_email" name="opensolr_email" size="34" autocomplete="off" '
             . 'value="' . Security::esc((string) $this->cfg->get('opensolr.email', '')) . '">';
 
-        echo '<label for="opensolr_api_key">API key'
-            . ($haveKey ? ' <span class="state">configured</span>' : '') . '</label>';
+        echo '<label for="opensolr_api_key">'
+            . I18n::html('API key{html}', ['html' => ($haveKey ? ' <span class="state">' . I18n::html('configured') . '</span>' : '')])
+            . '</label>';
         echo '<input type="password" id="opensolr_api_key" name="opensolr_api_key" size="34" '
             . 'autocomplete="new-password" spellcheck="false">';
         echo '<p class="muted">' . ($haveKey
-            ? 'The stored key is never shown here, in a log, or in anything sent to your browser — only the '
-                . 'fact that one is set — and leaving the field blank keeps the key you already have.'
-            : 'No key is stored. It is under <strong>Account</strong> in your Opensolr control panel.') . '</p>';
+            ? I18n::html('The stored key is never shown here, in a log, or in anything sent to your browser — only the '
+                . 'fact that one is set — and leaving the field blank keeps the key you already have.')
+            : I18n::html('No key is stored. It is under {account} in your Opensolr control panel.', [
+                'account' => '<strong>' . I18n::html('Account') . '</strong>',
+            ])) . '</p>';
 
         /* A SELECT OF WHAT THIS ACCOUNT MAY ACTUALLY USE, filled over fetch(). It renders as the
            stored value and nothing else, and assets/js/views/settings.js adds the account's
@@ -4638,27 +4723,31 @@ final class Settings extends Controller implements JobHost, Sections
            in it. `data-free` is what tells the smart select that a typed value it does not know
            is legitimate here; every other select in the panel is a closed list. */
         $region = (string) $this->cfg->get('opensolr.region', '');
-        echo '<label for="opensolr_region">Region</label>';
-        echo '<select id="opensolr_region" name="opensolr_region" data-smart="Region" data-free="1">';
-        echo '<option value=""' . ($region === '' ? ' selected' : '') . '>Not set</option>';
+        echo '<label for="opensolr_region">' . I18n::html('Region') . '</label>';
+        echo '<select id="opensolr_region" name="opensolr_region" data-smart="' . I18n::html('Region') . '" data-free="1">';
+        echo '<option value=""' . ($region === '' ? ' selected' : '') . '>' . I18n::html('Not set') . '</option>';
         if ($region !== '') {
             echo '<option value="' . Security::esc($region) . '" selected>' . Security::esc($region) . '</option>';
         }
         echo '</select>';
-        echo '<p class="muted" id="opensolr_region_note">Where indexes created from here are placed. Changing it '
-            . 'does not move the two you already have — they stay where they were made. A region this account '
-            . 'cannot use is refused on save, and the refusal lists the ones it can.</p>';
+        echo '<p class="muted" id="opensolr_region_note">'
+            . I18n::html('Where indexes created from here are placed. Changing it does not move the two you already '
+                . 'have — they stay where they were made. A region this account cannot use is refused on '
+                . 'save, and the refusal lists the ones it can.')
+            . '</p>';
 
         if ($twoFactor) {
-            echo '<label for="opensolr_code">Code from your authenticator</label>';
+            echo '<label for="opensolr_code">' . I18n::html('Code from your authenticator') . '</label>';
             echo '<input type="text" id="opensolr_code" name="code" inputmode="numeric" autocomplete="one-time-code" '
                 . 'size="12" spellcheck="false" required>';
-            echo '<p class="muted">Changing this credential costs a current second factor, like turning '
-                . 'two-factor off does. The key can create, reconfigure and delete every index on the account '
-                . 'it belongs to, so a stolen session must not be enough to swap it for somebody else\'s.</p>';
+            echo '<p class="muted">'
+                . I18n::html('Changing this credential costs a current second factor, like turning two-factor off does. '
+                    . 'The key can create, reconfigure and delete every index on the account it belongs to, so a '
+                    . 'stolen session must not be enough to swap it for somebody else\'s.')
+                . '</p>';
         }
 
-        echo '<button type="submit" class="primary">Check and save</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Check and save') . '</button>';
         echo '</form>';
     }
 
@@ -4724,14 +4813,14 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         echo '<button type="submit" form="lh-cache-clear" name="clear_cache" value="1"'
-            . ' class="ghost small">Clear cache</button>';
+            . ' class="ghost small">' . I18n::html('Clear cache') . '</button>';
 
         $cleared = $_GET['cleared'] ?? null;
         if (is_string($cleared) && ($cleared === 'no' || preg_match('/^\d{1,9}$/D', $cleared) === 1)) {
             $n = $cleared === 'no' ? -1 : (int) $cleared;
             $said = $n < 0
-                ? 'Nothing was cleared — the cache did not answer.'
-                : ($n === 1 ? '1 cached answer discarded.' : number_format($n) . ' cached answers discarded.');
+                ? I18n::t('Nothing was cleared — the cache did not answer.')
+                : I18n::tn('{n} cached answer discarded.', '{n} cached answers discarded.', $n, ['n' => number_format($n)]);
             echo '<span class="job-meta" role="status">' . Security::esc($said) . '</span>';
         }
     }
@@ -4859,19 +4948,22 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-exclusions',
             self::sectionNum('set-exclusions'),
-            'Exclusions',
-            'Requests this installation will not record at all, per hostname.'
+            I18n::t('Exclusions'),
+            I18n::t('Requests this installation will not record at all, per hostname.')
         );
 
-        echo '<div class="note"><p><strong>This is not a filter, it is a refusal.</strong> A request '
-            . 'matched here is never stored: not as a request, not folded into a visit, not counted in '
-            . 'any total and not present in any dimension. It cannot be recovered afterwards, because '
-            . 'nothing was written down. To merely tidy what you are watching, the live page has a '
-            . 'filter of its own that stores everything.</p></div>';
+        echo '<div class="note"><p>'
+            . I18n::html('{strong} A request matched here is never stored: not as a request, not folded into a '
+                . 'visit, not counted in any total and not present in any dimension. It cannot be recovered '
+                . 'afterwards, because nothing was written down. To merely tidy what you are watching, the '
+                . 'live page has a filter of its own that stores everything.', ['strong' => '<strong>' . I18n::html('This is not a filter, it is a refusal.') . '</strong>'])
+            . '</p></div>';
 
-        echo '<p>Both planes are covered. The reader applies these to every log line, and the beacon '
-            . 'collector applies the same rules to every payload before it is staged &mdash; so a path '
-            . 'you exclude cannot come back through the other door.</p>';
+        echo '<p>'
+            . I18n::html('Both planes are covered. The reader applies these to every log line, and the beacon '
+                . 'collector applies the same rules to every payload before it is staged — so a path you '
+                . 'exclude cannot come back through the other door.')
+            . '</p>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
@@ -4880,11 +4972,11 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
             . '<col style="width:24%"><col style="width:18%"><col style="width:36%">'
             . '<col style="width:11%"><col style="width:11%"></colgroup><thead><tr>'
-            . '<th scope="col">Hostname</th>'
-            . '<th scope="col">Field</th>'
-            . '<th scope="col">Pattern</th>'
-            . '<th scope="col">On</th>'
-            . '<th scope="col">Remove</th>'
+            . '<th scope="col">' . I18n::html('Hostname') . '</th>'
+            . '<th scope="col">' . I18n::html('Field') . '</th>'
+            . '<th scope="col">' . I18n::html('Pattern') . '</th>'
+            . '<th scope="col">' . I18n::html('On') . '</th>'
+            . '<th scope="col">' . I18n::html('Remove') . '</th>'
             . '</tr></thead><tbody>';
 
         $i = 0;
@@ -4896,35 +4988,40 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '</tbody></table></div>';
 
-        echo '<p class="muted">Leave the hostname empty to apply a rule to <strong>every</strong> host. '
-            . 'The pattern is a regular expression &mdash; no slashes, no flags, and matching ignores '
-            . 'case. The single pattern <code class="mono">*</code> on <em>Request path</em> excludes '
-            . 'that hostname entirely, and it is the only place a bare star means anything.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Leave the hostname empty to apply a rule to {strong} host. The pattern is a regular '
+                . 'expression — no slashes, no flags, and matching ignores case. The single pattern {code} '
+                . 'on {em} excludes that hostname entirely, and it is the only place a bare star means '
+                . 'anything.', ['code' => '<code class="mono">*</code>', 'strong' => '<strong>' . I18n::html('every') . '</strong>', 'em' => '<em>' . I18n::html('Request path') . '</em>'])
+            . '</p>';
 
         $logOnly = [];
         foreach (Exclusions::LOG_ONLY_FIELDS as $slug) {
-            $logOnly[] = Exclusions::FIELDS[$slug] ?? $slug;
+            $logOnly[] = isset(Exclusions::FIELDS[$slug]) ? I18n::t(Exclusions::FIELDS[$slug]) : $slug;
         }
-        echo '<p class="muted"><strong>' . Security::esc(implode(' and ', $logOnly)) . '</strong> apply to '
-            . 'traffic read from your access logs only. A beacon payload is always a POST to the collector '
-            . 'and carries no status of its own, so a rule on either cannot match a host measured by the '
-            . 'beacon alone &mdash; it is not ignored quietly, it simply has nothing to test.</p>';
+        echo '<p class="muted">'
+            . I18n::html('{strong} apply to traffic read from your access logs only. A beacon payload is always a '
+                . 'POST to the collector and carries no status of its own, so a rule on either cannot match '
+                . 'a host measured by the beacon alone — it is not ignored quietly, it simply has nothing '
+                . 'to test.', ['strong' => '<strong>' . Security::esc(implode(' ' . I18n::t('and') . ' ', $logOnly)) . '</strong>'])
+            . '</p>';
 
-        echo '<p class="muted"><strong>' . Security::esc(Exclusions::FIELDS['email']) . '</strong> takes one exact '
-            . 'address, not a pattern, and matching ignores case. It works through the beacon: when a '
-            . 'payload arrives carrying that address in <code class="mono">data-ident</code>, the whole '
-            . 'visit it belongs to is excluded on both planes. Nothing more of it is written, and what the '
-            . 'reader had already written for it is deleted within a minute. Without the beacon running '
-            . 'on the page, or without <code class="mono">data-ident</code>, it has nothing to match.</p>';
+        echo '<p class="muted">'
+            . I18n::html('{strong} takes one exact address, not a pattern, and matching ignores case. It works '
+                . 'through the beacon: when a payload arrives carrying that address in {code}, the whole '
+                . 'visit it belongs to is excluded on both planes. Nothing more of it is written, and what '
+                . 'the reader had already written for it is deleted within a minute. Without the beacon '
+                . 'running on the page, or without {code2}, it has nothing to match.', ['code' => '<code class="mono">data-ident</code>', 'code2' => '<code class="mono">data-ident</code>', 'strong' => '<strong>' . Security::esc(I18n::t(Exclusions::FIELDS['email'])) . '</strong>'])
+            . '</p>';
 
-        echo '<p class="muted"><strong>The reader picks these up when it is next reloaded</strong>, not '
-            . 'mid-file, so a rule added now applies from the next restart or reload of the ingest '
-            . 'daemon. The beacon collector applies them immediately, because it reads the '
-            . 'configuration on every request.</p>';
+        echo '<p class="muted">'
+            . I18n::html('{strong}, not mid-file, so a rule added now applies from the next restart or reload of '
+                . 'the ingest daemon. The beacon collector applies them immediately, because it reads the '
+                . 'configuration on every request.', ['strong' => '<strong>' . I18n::html('The reader picks these up when it is next reloaded') . '</strong>'])
+            . '</p>';
 
-        echo '<p><button type="submit" class="small">Save exclusions</button> '
-            . '<span class="muted">' . Security::esc((string) $rules->activeCount())
-            . ' in force now.</span></p>';
+        echo '<p><button type="submit" class="small">' . I18n::html('Save exclusions') . '</button> '
+            . '<span class="muted">' . I18n::html('{n} in force now.', ['n' => Security::esc((string) $rules->activeCount())]) . '</span></p>';
         echo '</form>';
 
         /* OUTSIDE THE FORM, DELIBERATELY. It is a link and not a submit: inside the form a
@@ -4933,14 +5030,14 @@ final class Settings extends Controller implements JobHost, Sections
            card whose whole subject is what gets thrown away. */
         echo '<p><a class="export" href="?v=settings&amp;export=exclusions"'
             . ' data-export="exclusions" data-export-carry=""'
-            . ' title="The exclusion rules as stored, as a CSV file"'
-            . ' aria-label="The exclusion rules as stored, as a CSV file">CSV</a>'
-            . ' <span class="muted">The rules as stored, for a backup or a second install.</span></p>';
+            . ' title="' . I18n::html('The exclusion rules as stored, as a CSV file') . '"'
+            . ' aria-label="' . I18n::html('The exclusion rules as stored, as a CSV file') . '">CSV</a>'
+            . ' <span class="muted">' . I18n::html('The rules as stored, for a backup or a second install.') . '</span></p>';
 
         self::csvImportForm(
             'exclusions_import',
-            'Adds the rules in a CSV exported from this card to the ones above. Duplicates are '
-            . 'skipped, and a pattern that does not compile is refused.'
+            I18n::t('Adds the rules in a CSV exported from this card to the ones above. Duplicates are '
+            . 'skipped, and a pattern that does not compile is refused.')
         );
 
         self::cardEnd();
@@ -4968,9 +5065,9 @@ final class Settings extends Controller implements JobHost, Sections
            wait on a Solr facet to render — and `data-free` keeps it typeable, because a host you
            are about to add is one this installation has never recorded. */
         echo '<tr>';
-        echo '<td><select name="' . $name . '[host]" data-smart="Hostname" data-free="1"'
+        echo '<td><select name="' . $name . '[host]" data-smart="' . I18n::html('Hostname') . '" data-free="1"'
             . ' data-lh-hosts="1">';
-        echo '<option value=""' . ($rule['host'] === '' ? ' selected' : '') . '>every host</option>';
+        echo '<option value=""' . ($rule['host'] === '' ? ' selected' : '') . '>' . I18n::html('every host') . '</option>';
         if ($rule['host'] !== '') {
             echo '<option value="' . Security::esc($rule['host']) . '" selected>'
                 . Security::esc($rule['host']) . '</option>';
@@ -4981,7 +5078,7 @@ final class Settings extends Controller implements JobHost, Sections
         foreach (Exclusions::FIELDS as $slug => $label) {
             echo '<option value="' . Security::esc($slug) . '"'
                 . ($rule['field'] === $slug ? ' selected' : '') . '>'
-                . Security::esc($label) . '</option>';
+                . Security::esc(I18n::t($label)) . '</option>';
         }
         echo '</select></td>';
 
@@ -5060,29 +5157,29 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-attack-patterns',
             self::sectionNum('set-attack-patterns'),
-            'Attack patterns',
-            'Requests that are an attack on your sites, on top of the built-in detector.'
+            I18n::t('Attack patterns'),
+            I18n::t('Requests that are an attack on your sites, on top of the built-in detector.')
         );
 
-        echo '<div class="note"><p><strong>A match is a verdict.</strong> A request matching a pattern '
-            . 'here is flagged as <em>Your attack pattern</em> on the Attacks page, and the visit that made '
-            . 'it is scored a bot on that alone. Add only what no real visitor of that host could ever '
-            . 'request &mdash; for example <code class="mono">/wp-json/</code> on a site that runs no '
-            . 'WordPress.</p></div>';
+        echo '<div class="note"><p>'
+            . I18n::html('{strong} A request matching a pattern here is flagged as {em} on the Attacks page, and '
+                . 'the visit that made it is scored a bot on that alone. Add only what no real visitor of '
+                . 'that host could ever request — for example {code} on a site that runs no WordPress.', ['code' => '<code class="mono">/wp-json/</code>', 'strong' => '<strong>' . I18n::html('A match is a verdict.') . '</strong>', 'em' => '<em>' . I18n::html('Your attack pattern') . '</em>'])
+            . '</p></div>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="attack_patterns">';
 
-        echo '<h3>Your patterns</h3>';
+        echo '<h3>' . I18n::html('Your patterns') . '</h3>';
         echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
             . '<col style="width:24%"><col style="width:18%"><col style="width:36%">'
             . '<col style="width:11%"><col style="width:11%"></colgroup><thead><tr>'
-            . '<th scope="col">Hostname</th>'
-            . '<th scope="col">Kind</th>'
-            . '<th scope="col">Pattern</th>'
-            . '<th scope="col">On</th>'
-            . '<th scope="col">Remove</th>'
+            . '<th scope="col">' . I18n::html('Hostname') . '</th>'
+            . '<th scope="col">' . I18n::html('Kind') . '</th>'
+            . '<th scope="col">' . I18n::html('Pattern') . '</th>'
+            . '<th scope="col">' . I18n::html('On') . '</th>'
+            . '<th scope="col">' . I18n::html('Remove') . '</th>'
             . '</tr></thead><tbody>';
 
         $i = 0;
@@ -5094,50 +5191,54 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '</tbody></table></div>';
 
-        echo '<p class="muted">Leave the hostname empty to apply a pattern to <strong>every</strong> host. '
-            . '<em>Text</em> matches anywhere in the request path and query string, decoded and ignoring '
-            . 'case. <em>Regular expression</em> is a pattern body &mdash; no slashes, no flags, matching '
-            . 'ignores case &mdash; and is refused on save if it does not compile.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Leave the hostname empty to apply a pattern to {strong} host. {em} matches anywhere in '
+                . 'the request path and query string, decoded and ignoring case. {em2} is a pattern body — '
+                . 'no slashes, no flags, matching ignores case — and is refused on save if it does not '
+                . 'compile.', ['strong' => '<strong>' . I18n::html('every') . '</strong>', 'em' => '<em>' . I18n::html('Text') . '</em>', 'em2' => '<em>' . I18n::html('Regular expression') . '</em>'])
+            . '</p>';
 
-        echo '<h3>Shipped with Loghound</h3>';
-        echo '<p class="muted">Requests that are an attack on any website. They apply to every host; '
-            . 'untick one to switch it off. A default you switch off stays off after an update.</p>';
+        echo '<h3>' . I18n::html('Shipped with Loghound') . '</h3>';
+        echo '<p class="muted">'
+            . I18n::html('Requests that are an attack on any website. They apply to every host; untick one to '
+                . 'switch it off. A default you switch off stays off after an update.')
+            . '</p>';
 
         echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
             . '<col style="width:36%"><col style="width:48%"><col style="width:16%"></colgroup><thead><tr>'
-            . '<th scope="col">Pattern</th>'
-            . '<th scope="col">What it is</th>'
-            . '<th scope="col">On</th>'
+            . '<th scope="col">' . I18n::html('Pattern') . '</th>'
+            . '<th scope="col">' . I18n::html('What it is') . '</th>'
+            . '<th scope="col">' . I18n::html('On') . '</th>'
             . '</tr></thead><tbody>';
         foreach (AttackPatterns::DEFAULTS as $id => $default) {
             echo '<tr><td class="mono">' . Security::esc($default['pattern']) . '</td>'
-                . '<td>' . Security::esc($default['what']) . '</td>'
+                . '<td>' . Security::esc(I18n::t($default['what'])) . '</td>'
                 . '<td><input type="hidden" name="defaults[' . Security::esc($id) . ']" value="0">'
                 . '<input type="checkbox" name="defaults[' . Security::esc($id) . ']" value="1"'
                 . ($patterns->isOff($id) ? '' : ' checked') . '></td></tr>';
         }
         echo '</tbody></table></div>';
 
-        echo '<p class="muted"><strong>The reader picks these up when it is next reloaded</strong>, not '
-            . 'mid-file. Flags are written when a request is read, so a change applies from then on and '
-            . 'never rewrites what is already indexed.</p>';
+        echo '<p class="muted">'
+            . I18n::html('{strong}, not mid-file. Flags are written when a request is read, so a change applies '
+                . 'from then on and never rewrites what is already indexed.', ['strong' => '<strong>' . I18n::html('The reader picks these up when it is next reloaded') . '</strong>'])
+            . '</p>';
 
-        echo '<p><button type="submit" class="small">Save attack patterns</button> '
-            . '<span class="muted">' . Security::esc((string) $patterns->activeCount())
-            . ' in force now.</span></p>';
+        echo '<p><button type="submit" class="small">' . I18n::html('Save attack patterns') . '</button> '
+            . '<span class="muted">' . I18n::html('{n} in force now.', ['n' => Security::esc((string) $patterns->activeCount())]) . '</span></p>';
         echo '</form>';
 
         echo '<p><a class="export" href="?v=settings&amp;export=attack_patterns"'
             . ' data-export="attack_patterns" data-export-carry=""'
-            . ' title="The attack patterns as stored, shipped and yours, as a CSV file"'
-            . ' aria-label="The attack patterns as stored, shipped and yours, as a CSV file">CSV</a>'
-            . ' <span class="muted">Shipped and yours, with what is on, for a backup or a second install.</span></p>';
+            . ' title="' . I18n::html('The attack patterns as stored, shipped and yours, as a CSV file') . '"'
+            . ' aria-label="' . I18n::html('The attack patterns as stored, shipped and yours, as a CSV file') . '">CSV</a>'
+            . ' <span class="muted">' . I18n::html('Shipped and yours, with what is on, for a backup or a second install.') . '</span></p>';
 
         self::csvImportForm(
             'attack_patterns_import',
-            'Adds the patterns in a CSV exported from this card to yours, and switches the shipped '
+            I18n::t('Adds the patterns in a CSV exported from this card to yours, and switches the shipped '
             . 'defaults on or off as the file says. Duplicates are skipped, and a regular expression '
-            . 'that does not compile is refused.'
+            . 'that does not compile is refused.')
         );
 
         self::cardEnd();
@@ -5156,7 +5257,7 @@ final class Settings extends Controller implements JobHost, Sections
         self::csrfField();
         echo '<input type="hidden" name="action" value="' . Security::esc($action) . '">';
         echo '<textarea name="csv" hidden></textarea>';
-        echo '<p><label class="small">Import from CSV '
+        echo '<p><label class="small">' . I18n::html('Import from CSV') . ' '
             . '<input type="file" accept=".csv,text/csv" data-lh-import="1"></label> '
             . '<span class="muted" data-lh-import-note="1">' . Security::esc($note) . '</span></p>';
         echo '</form>';
@@ -5270,8 +5371,8 @@ final class Settings extends Controller implements JobHost, Sections
         $name = 'patterns[' . $i . ']';
 
         echo '<tr>';
-        echo '<td><select name="' . $name . '[host]" data-smart="Hostname" data-free="1" data-lh-hosts="1">';
-        echo '<option value=""' . ($rule['host'] === '' ? ' selected' : '') . '>every host</option>';
+        echo '<td><select name="' . $name . '[host]" data-smart="' . I18n::html('Hostname') . '" data-free="1" data-lh-hosts="1">';
+        echo '<option value=""' . ($rule['host'] === '' ? ' selected' : '') . '>' . I18n::html('every host') . '</option>';
         if ($rule['host'] !== '') {
             echo '<option value="' . Security::esc($rule['host']) . '" selected>'
                 . Security::esc($rule['host']) . '</option>';
@@ -5282,7 +5383,7 @@ final class Settings extends Controller implements JobHost, Sections
         foreach (AttackPatterns::KINDS as $slug => $label) {
             echo '<option value="' . Security::esc($slug) . '"'
                 . ($rule['kind'] === $slug ? ' selected' : '') . '>'
-                . Security::esc($label) . '</option>';
+                . Security::esc(I18n::t($label)) . '</option>';
         }
         echo '</select></td>';
 
@@ -5380,24 +5481,27 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-sites',
             self::sectionNum('set-sites'),
-            'Measured sites',
-            'Which hostnames the beacon may create visits for, and which URL parameters are kept as search terms.'
+            I18n::t('Measured sites'),
+            I18n::t('Which hostnames the beacon may create visits for, and which URL parameters are kept as search terms.')
         );
 
         /* SAID PLAINLY, BECAUSE THE INTERFACE MUST NOT MAKE THE CLAIM THE PRODUCT ARGUES AGAINST.
            The allowlist is a permission, not authentication: Origin binds browsers only, so
            anything that can reach the collector can fabricate a visit attributed to a listed
            hostname. That is why such a session is published marked single-plane. */
-        echo '<div class="note"><p><strong>This list is a permission, not a proof of identity.</strong> '
-            . 'A listed hostname may create visits from the beacon alone, with no log line behind them — '
-            . 'and anything that can reach the collector can claim to be that hostname. Sessions with no '
-            . 'log behind them are marked single-plane wherever they are counted. List the sites you own; '
-            . 'do not list a site as a way of trusting it.</p></div>';
+        echo '<div class="note"><p>'
+            . I18n::html('{strong} A listed hostname may create visits from the beacon alone, with no log line '
+                . 'behind them — and anything that can reach the collector can claim to be that hostname. '
+                . 'Sessions with no log behind them are marked single-plane wherever they are counted. List '
+                . 'the sites you own; do not list a site as a way of trusting it.', ['strong' => '<strong>' . I18n::html('This list is a permission, not a proof of identity.') . '</strong>'])
+            . '</p></div>';
 
-        echo '<h3>Hostnames that may create visits</h3>';
-        echo '<p class="muted">A site whose access log this installation already reads needs no entry here '
-            . '&mdash; it is measured from the log. This list is for sites on OTHER servers, where the '
-            . 'beacon is the only thing that reaches us.</p>';
+        echo '<h3>' . I18n::html('Hostnames that may create visits') . '</h3>';
+        echo '<p class="muted">'
+            . I18n::html('A site whose access log this installation already reads needs no entry here — it is '
+                . 'measured from the log. This list is for sites on OTHER servers, where the beacon is the '
+                . 'only thing that reaches us.')
+            . '</p>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
@@ -5405,8 +5509,8 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
             . '<col style="width:80%"><col style="width:20%"></colgroup><thead><tr>'
-            . '<th scope="col">Hostname</th>'
-            . '<th scope="col">Remove</th>'
+            . '<th scope="col">' . I18n::html('Hostname') . '</th>'
+            . '<th scope="col">' . I18n::html('Remove') . '</th>'
             . '</tr></thead><tbody>';
 
         $i = 0;
@@ -5420,37 +5524,42 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '</tbody></table></div>';
 
-        echo '<p class="muted">Hostname only: no scheme, no path, no port. <code class="mono">'
-            . 'shop.example.com</code>, not <code class="mono">https://shop.example.com/</code>. '
-            . 'Subdomains are not implied &mdash; list each one you measure.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Hostname only: no scheme, no path, no port. {code}, not {code2}. Subdomains are not '
+                . 'implied — list each one you measure.', ['code' => '<code class="mono">shop.example.com</code>', 'code2' => '<code class="mono">https://shop.example.com/</code>'])
+            . '</p>';
 
-        echo '<p><button type="submit" class="small">Save measured sites</button> '
+        echo '<p><button type="submit" class="small">' . I18n::html('Save measured sites') . '</button> '
             . '<span class="muted">' . Security::esc((string) count($allowed))
             . ' listed now.</span></p>';
         echo '</form>';
 
-        echo '<h3>Search terms</h3>';
+        echo '<h3>' . I18n::html('Search terms') . '</h3>';
 
         /* THE ONE SETTING THAT MAKES THIS PRODUCT STORE SOMETHING A PERSON TYPED, and the form
            says so. Everything else in the index is a measurement or a hashed identifier. A URL
            carries reset codes, invite tokens and email addresses in its parameters, which is why
            this is a whitelist of NAMES and never "keep the query string". */
-        echo '<p class="muted">Name the query-string parameters your own search box uses. Their values are '
-            . 'kept as search terms, from the access log and from the beacon alike. <strong>This is the one '
-            . 'setting that stores something a visitor typed</strong>, so it is a list of names and never '
-            . '&ldquo;keep the whole query string&rdquo;: a URL also carries reset codes and invite tokens.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Name the query-string parameters your own search box uses. Their values are kept as '
+                . 'search terms, from the access log and from the beacon alike. {strong}, so it is a list of '
+                . 'names and never “keep the whole query string”: a URL also carries reset codes and '
+                . 'invite tokens.', ['strong' => '<strong>' . I18n::html('This is the one setting that stores something a visitor typed') . '</strong>'])
+            . '</p>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="beacon_params">';
-        echo '<label for="set-params">Parameter names</label> ';
+        echo '<label for="set-params">' . I18n::html('Parameter names') . '</label> ';
         echo '<input type="text" id="set-params" class="mono" name="params" value="'
-            . Security::esc(implode(', ', $collected)) . '" placeholder="q, s, search" '
+            . Security::esc(implode(', ', $collected)) . '" placeholder="' . I18n::html('q, s, search') . '" '
             . 'autocomplete="off" spellcheck="false" size="40"> ';
-        echo '<button type="submit" class="small">Save search parameters</button>';
-        echo '<p class="muted">Separate them with commas or spaces. Leave it empty to collect nothing, which '
-            . 'is what a new installation does. Terms are kept from the next visit onwards &mdash; naming a '
-            . 'parameter does not recover anything already seen.</p>';
+        echo '<button type="submit" class="small">' . I18n::html('Save search parameters') . '</button>';
+        echo '<p class="muted">'
+            . I18n::html('Separate them with commas or spaces. Leave it empty to collect nothing, which is what a '
+                . 'new installation does. Terms are kept from the next visit onwards — naming a parameter '
+                . 'does not recover anything already seen.')
+            . '</p>';
         echo '</form>';
 
         self::cardEnd();
@@ -5470,7 +5579,7 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '<tr>';
         echo '<td><input type="text" class="mono" name="' . Security::esc($name) . '[name]" value="'
-            . Security::esc($host) . '" placeholder="shop.example.com" autocomplete="off" '
+            . Security::esc($host) . '" placeholder="' . I18n::html('shop.example.com') . '" autocomplete="off" '
             . 'spellcheck="false"></td>';
         echo '<td><label class="check"><input type="checkbox" name="' . Security::esc($name)
             . '[remove]" value="1"> <span class="sr-only">Remove '
@@ -5568,8 +5677,8 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-cache',
             self::sectionNum('set-cache'),
-            'Cached queries',
-            'Whether the panel may keep a Solr answer and re-serve it, and for how long.'
+            I18n::t('Cached queries'),
+            I18n::t('Whether the panel may keep a Solr answer and re-serve it, and for how long.')
         );
 
         self::cacheState($status);
@@ -5578,8 +5687,10 @@ final class Settings extends Controller implements JobHost, Sections
            OUTGOING traffic, so the metered bandwidth on a Loghound installation is almost
            entirely this panel's own reads — which is why the cache is the only real lever on the
            bill, and is not obvious from anywhere else in the product. */
-        echo '<p>Opensolr meters the responses Solr sends back, so the plan bandwidth on a Loghound '
-            . 'installation is almost entirely this panel&rsquo;s own reads. The cache is the lever on it.</p>';
+        echo '<p>'
+            . I18n::html('Opensolr meters the responses Solr sends back, so the plan bandwidth on a Loghound '
+                . 'installation is almost entirely this panel’s own reads. The cache is the lever on it.')
+            . '</p>';
 
         self::cacheSavingsLine($this->gw->cacheSavings());
 
@@ -5589,26 +5700,28 @@ final class Settings extends Controller implements JobHost, Sections
         self::csrfField();
         echo '<input type="hidden" name="action" value="cache">';
 
-        echo '<fieldset><legend>Caching</legend>';
+        echo '<fieldset><legend>' . I18n::html('Caching') . '</legend>';
         echo '<label class="check"><input type="checkbox" name="cache_enabled"'
             . ($status['configured'] ? ' checked' : '') . '> '
-            . 'Keep Solr answers and re-serve them <span class="muted">(a new installation ships with '
-            . 'this off)</span></label>';
+            . I18n::html('Keep Solr answers and re-serve them') . ' <span class="muted">'
+            . I18n::html('(a new installation ships with this off)') . '</span></label>';
 
-        echo '<label for="cache-ttl">An answer is kept for</label> ';
+        echo '<label for="cache-ttl">' . I18n::html('An answer is kept for') . '</label> ';
         echo '<input type="number" id="cache-ttl" name="cache_ttl_seconds"'
             . ' min="' . Security::esc((string) Cache::TTL_MIN) . '"'
             . ' max="' . Security::esc((string) Cache::TTL_MAX) . '"'
             . ' value="' . Security::esc((string) $ttl) . '" inputmode="numeric">'
-            . ' <span class="muted">seconds &mdash; ' . Security::esc((string) Cache::TTL_MIN) . ' to '
-            . Security::esc((string) Cache::TTL_MAX) . ', and the default is '
-            . Security::esc((string) Cache::TTL_DEFAULT) . '. A number outside that range is brought '
+            . ' <span class="muted">' . I18n::html('seconds — {min} to {max}, and the default is {default}. A number outside that range is brought '
             . 'back inside it rather than refused, by the same function the cache itself uses, so the '
-            . 'field and the object can never disagree about what was saved.</span>';
+            . 'field and the object can never disagree about what was saved.', [
+                'min'     => Security::esc((string) Cache::TTL_MIN),
+                'max'     => Security::esc((string) Cache::TTL_MAX),
+                'default' => Security::esc((string) Cache::TTL_DEFAULT),
+            ]) . '</span>';
         echo '</fieldset>';
 
         echo '<div class="btn-row">';
-        echo '<button type="submit" class="primary">Save caching</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Save caching') . '</button>';
         $this->clearCacheButton($status);
         echo '</div>';
         echo '</form>';
@@ -5625,19 +5738,21 @@ final class Settings extends Controller implements JobHost, Sections
     private static function cacheState(array $status): void
     {
         if (!$status['configured']) {
-            echo '<div class="check-row"><p><span class="chip chip-good">Off</span> '
-                . '<strong>Every page is computed from Solr as you open it.</strong></p>';
-            echo '<p class="muted">This is the shipped default and the panel is entirely correct '
-                . 'running this way. Tick the box below to turn caching on.</p></div>';
+            echo '<div class="check-row"><p><span class="chip chip-good">' . I18n::html('Off') . '</span> '
+                . '<strong>' . I18n::html('Every page is computed from Solr as you open it.') . '</strong></p>';
+            echo '<p class="muted">'
+                . I18n::html('This is the shipped default and the panel is entirely correct running this way. Tick the '
+                    . 'box below to turn caching on.')
+                . '</p></div>';
             return;
         }
 
         if ($status['working']) {
-            echo '<div class="check-row"><p><span class="chip chip-good">On</span> '
-                . '<strong>Answers are being kept and re-served.</strong></p>';
-            echo '<p class="muted">Held by <code class="mono">' . Security::esc($status['driver'])
-                . '</code> at <code class="mono">' . Security::esc($status['server'])
-                . '</code>, for ' . Security::esc((string) $status['ttl']) . ' seconds each.</p></div>';
+            echo '<div class="check-row"><p><span class="chip chip-good">' . I18n::html('On') . '</span> '
+                . '<strong>' . I18n::html('Answers are being kept and re-served.') . '</strong></p>';
+            echo '<p class="muted">'
+                . I18n::html('Held by {code} at {code2}, for {status} seconds each.', ['code' => '<code class="mono">' . Security::esc($status['driver']) . '</code>', 'code2' => '<code class="mono">' . Security::esc($status['server']) . '</code>', 'status' => Security::esc((string) $status['ttl'])])
+                . '</p></div>';
             return;
         }
 
@@ -5645,13 +5760,14 @@ final class Settings extends Controller implements JobHost, Sections
            per request and then gets out of the way, so the panel is slow rather than broken —
            but it is slow while the operator believes it is fast, which is the state worth
            shouting about. `chip-warn` is also what responsive.js force-opens the card on. */
-        echo '<div class="check-row"><p><span class="chip chip-warn">On, and not answering</span> '
-            . '<strong>Caching is switched on and nothing is being cached.</strong></p>';
-        echo '<p class="muted">The panel is working and every page is being computed from Solr, '
-            . 'which is what an installation with caching off does &mdash; so this costs bandwidth '
-            . 'that was meant to be saved. Reason: ' . Security::esc($status['reason'])
-            . '. Check that memcached is running and that <code class="mono">'
-            . Security::esc($status['server']) . '</code> is the address it is listening on.</p></div>';
+        echo '<div class="check-row"><p><span class="chip chip-warn">' . I18n::html('On, and not answering') . '</span> '
+            . '<strong>' . I18n::html('Caching is switched on and nothing is being cached.') . '</strong></p>';
+        echo '<p class="muted">'
+            . I18n::html('The panel is working and every page is being computed from Solr, which is what an '
+                . 'installation with caching off does — so this costs bandwidth that was meant to be '
+                . 'saved. Reason: {status}. Check that memcached is running and that {code} is the address '
+                . 'it is listening on.', ['code' => '<code class="mono">' . Security::esc($status['server']) . '</code>', 'status' => Security::esc($status['reason'])])
+            . '</p></div>';
     }
 
     /**
@@ -5666,12 +5782,11 @@ final class Settings extends Controller implements JobHost, Sections
             return;
         }
 
-        echo '<p class="muted">Since the cache was last cleared it has answered approximately '
-            . Security::esc(number_format($savings['requests'])) . ' '
-            . ($savings['requests'] === 1 ? 'read' : 'reads')
-            . ' without going to Solr, which is approximately '
-            . Security::esc(Quota::mb($savings['bytes'] / 1048576)) . ' of metered response '
-            . 'traffic not fetched.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Since the cache was last cleared it has answered approximately {savings} {savings2} '
+                . 'without going to Solr, which is approximately {savings3} of metered response traffic not '
+                . 'fetched.', ['savings' => Security::esc(number_format($savings['requests'])), 'savings2' => ($savings['requests'] === 1 ? 'read' : 'reads'), 'savings3' => Security::esc(Quota::mb($savings['bytes'] / 1048576))])
+            . '</p>';
     }
 
     /**
@@ -5710,18 +5825,20 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function uninstallSection(): void
     {
-        self::cardOpen('set-uninstall', self::sectionNum('set-uninstall'), 'Start the installation over');
+        self::cardOpen('set-uninstall', self::sectionNum('set-uninstall'), I18n::t('Start the installation over'));
 
-        echo '<p class="pop">This starts from zero. Both Opensolr indexes and every document in '
-            . 'them are deleted from your account, this installation\'s configuration goes with '
-            . 'the Opensolr email, API key and region in it, everything under '
-            . '<code class="mono">var/</code> is emptied, and you land on the installer and set '
-            . 'Loghound up again from nothing. There is no version of this that keeps your '
-            . 'data.</p>';
+        echo '<p class="pop">'
+            . I18n::html('This starts from zero. Both Opensolr indexes and every document in them are deleted from '
+                . 'your account, this installation\'s configuration goes with the Opensolr email, API key and '
+                . 'region in it, everything under {code} is emptied, and you land on the installer and set '
+                . 'Loghound up again from nothing. There is no version of this that keeps your data.', ['code' => '<code class="mono">var/</code>'])
+            . '</p>';
 
         if ($this->gw->isDemo()) {
-            echo '<p class="muted">The panel is showing demo data, so this is switched off. It will '
-                . 'not act on a real Opensolr account from a fabricated one.</p>';
+            echo '<p class="muted">'
+                . I18n::html('The panel is showing demo data, so this is switched off. It will not act on a real '
+                    . 'Opensolr account from a fabricated one.')
+                . '</p>';
             self::cardEnd();
             return;
         }
@@ -5733,33 +5850,38 @@ final class Settings extends Controller implements JobHost, Sections
         }
         echo '</dl>';
 
-        echo '<p class="muted">You stay signed in to this browser for setup itself: confirming '
-            . 'below proves who you are, and that proof is carried into the installer so you are '
-            . 'not asked for the token file from the server. It lasts half an hour, it is used '
-            . 'once, and it belongs to this browser alone — anyone else reaching the installer '
-            . 'still has to read <code class="mono">var/install-token</code> over a shell.</p>';
+        echo '<p class="muted">'
+            . I18n::html('You stay signed in to this browser for setup itself: confirming below proves who you are, '
+                . 'and that proof is carried into the installer so you are not asked for the token file from '
+                . 'the server. It lasts half an hour, it is used once, and it belongs to this browser alone '
+                . '— anyone else reaching the installer still has to read {code} over a shell.', ['code' => '<code class="mono">var/install-token</code>'])
+            . '</p>';
 
-        echo '<h4>Stop ingestion first</h4>';
-        echo '<p class="muted">Recommended, not required. The reader holds the configuration it '
-            . 'started with, so while this runs it carries on trying to write to indexes that are '
-            . 'being deleted. Nothing is corrupted by that; it simply fills your log with errors. '
-            . 'Start it again when setup is finished.</p>';
+        echo '<h4>' . I18n::html('Stop ingestion first') . '</h4>';
+        echo '<p class="muted">'
+            . I18n::html('Recommended, not required. The reader holds the configuration it started with, so while '
+                . 'this runs it carries on trying to write to indexes that are being deleted. Nothing is '
+                . 'corrupted by that; it simply fills your log with errors. Start it again when setup is '
+                . 'finished.')
+            . '</p>';
         self::commandBlock('set-uninstall-stop', [
             'key'     => 'stop',
-            'title'   => 'Stop ingestion',
+            'title'   => I18n::t('Stop ingestion'),
             'lines'   => [Teardown::stopCommand()],
             'problem' => '',
         ]);
 
-        echo '<h4>If you meant remove Loghound from this machine</h4>';
-        echo '<p class="muted">That is a different ending, and it has its own tool. It deletes the '
-            . 'indexes through the same code this card uses, and then takes away the units, the '
-            . 'timers, the vhost, the PHP-FPM pool, the command links, the service user and this '
-            . 'install tree — which need root, and which this card leaves standing because setup '
-            . 'is about to run on them. It proves it wrote a file before it deletes one.</p>';
+        echo '<h4>' . I18n::html('If you meant remove Loghound from this machine') . '</h4>';
+        echo '<p class="muted">'
+            . I18n::html('That is a different ending, and it has its own tool. It deletes the indexes through the '
+                . 'same code this card uses, and then takes away the units, the timers, the vhost, the '
+                . 'PHP-FPM pool, the command links, the service user and this install tree — which need '
+                . 'root, and which this card leaves standing because setup is about to run on them. It '
+                . 'proves it wrote a file before it deletes one.')
+            . '</p>';
         self::commandBlock('set-uninstall-shell', [
             'key'     => 'uninstall',
-            'title'   => 'Remove Loghound from this machine',
+            'title'   => I18n::t('Remove Loghound from this machine'),
             'lines'   => [Teardown::shellCommand(self::root())],
             'problem' => '',
         ]);
@@ -5776,23 +5898,24 @@ final class Settings extends Controller implements JobHost, Sections
             return;
         }
 
-        echo '<h4>' . ($running ? 'If it stopped, confirm again' : 'Confirm') . '</h4>';
+        echo '<h4>' . ($running ? I18n::html('If it stopped, confirm again') : I18n::html('Confirm')) . '</h4>';
         echo '<form method="post" action="?v=settings" class="setup-form confirm-form">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="uninstall">';
 
         if (TwoFactor::isEnabled((array) $this->cfg->get('auth', []))) {
-            echo '<label for="uninstall_code">Code from your authenticator</label>';
+            echo '<label for="uninstall_code">' . I18n::html('Code from your authenticator') . '</label>';
             echo '<input type="text" id="uninstall_code" name="code" inputmode="numeric" '
                 . 'autocomplete="one-time-code" size="12" spellcheck="false" required>';
         }
 
-        echo '<label for="uninstall_confirm">Type <span class="mono">'
-            . Security::esc(Teardown::CONFIRM_WORD) . '</span> to confirm</label>';
+        echo '<label for="uninstall_confirm">'
+            . I18n::html('Type {span} to confirm', ['span' => '<span class="mono">' . Security::esc(Teardown::CONFIRM_WORD) . '</span>'])
+            . '</label>';
         echo '<input type="text" id="uninstall_confirm" name="confirm" size="24" autocomplete="off" '
             . 'spellcheck="false" required>';
 
-        echo '<button type="submit" class="danger">Delete everything and start setup</button>';
+        echo '<button type="submit" class="danger">' . I18n::html('Delete everything and start setup') . '</button>';
         echo '</form>';
 
         self::cardEnd();
@@ -5813,22 +5936,22 @@ final class Settings extends Controller implements JobHost, Sections
      */
     private function uninstallRun(bool $armed): void
     {
-        echo '<h4>Deleting everything</h4>';
+        echo '<h4>' . I18n::html('Deleting everything') . '</h4>';
         echo '<p class="pop">' . ($armed
-            ? 'This is running now. Leave the tab open until it finishes; when it does, this '
-                . 'installation no longer exists and you land on the installer.'
-            : 'A run was started from this browser. Its progress is below. If it stopped, read '
+            ? I18n::html('This is running now. Leave the tab open until it finishes; when it does, this '
+                . 'installation no longer exists and you land on the installer.')
+            : I18n::html('A run was started from this browser. Its progress is below. If it stopped, read '
                 . 'the block it left, then confirm again to run it from the beginning — nothing '
-                . 'local is removed until every index is proven gone, so starting again is safe.')
+                . 'local is removed until every index is proven gone, so starting again is safe.'))
             . '</p>';
 
         echo '<ol class="teardown-plan">';
         foreach (Teardown::STEPS as $id => $label) {
             echo '<li' . (Teardown::isPanelStep($id) ? '' : ' class="teardown-shell"') . '>'
-                . Security::esc($label)
+                . Security::esc(I18n::t($label))
                 . (Teardown::isPanelStep($id)
                     ? ''
-                    : ' <span class="chip">left in place</span>')
+                    : ' <span class="chip">' . I18n::html('left in place') . '</span>')
                 . '</li>';
         }
         echo '</ol>';
@@ -5865,10 +5988,10 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-errors',
             self::sectionNum('set-errors'),
-            'Critical errors',
-            'Conditions that stop Loghound working: what is failing on this machine right now, '
-            . 'plus the last ' . Incidents::KEEP . ' recorded failures. Nothing is read from the '
-            . 'indexes to build it.'
+            I18n::t('Critical errors'),
+            I18n::t('Conditions that stop Loghound working: what is failing on this machine right now, '
+            . 'plus the last {n} recorded failures. Nothing is read from the '
+            . 'indexes to build it.', ['n' => Incidents::KEEP])
         );
 
         if ($all === []) {
@@ -5877,16 +6000,15 @@ final class Settings extends Controller implements JobHost, Sections
                Incidents::read() answers [] for when it is unreadable or damaged — so a machine
                whose var/ had gone read-only reported perfect health in four words. What is
                true is what was checked and what it said. */
-            echo '<p class="muted">Nothing failing was found. This card checks the reader\'s own '
-                . 'status file, the saved schema verdict and this installation\'s writable '
-                . 'directories, and re-reads the recorded failures in '
-                . '<code class="mono">' . Security::esc($this->cfg->varDir() . '/incidents.json')
-                . '</code>. It lists only the things that stop '
-                . 'Loghound working — the reader stopped or unable to read a log, a configset '
-                . 'rejected, a schema push that failed, the control plane unreachable, Solr '
-                . 'refusing writes, a job that died, nowhere to write. Warnings, one slow query and '
-                . 'a request that was retried and then worked do not appear here, and an empty card '
-                . 'is what a working installation looks like.</p>';
+            echo '<p class="muted">'
+                . I18n::html('Nothing failing was found. This card checks the reader\'s own status file, the saved '
+                    . 'schema verdict and this installation\'s writable directories, and re-reads the recorded '
+                    . 'failures in {code}. It lists only the things that stop Loghound working — the reader '
+                    . 'stopped or unable to read a log, a configset rejected, a schema push that failed, the '
+                    . 'control plane unreachable, Solr refusing writes, a job that died, nowhere to write. '
+                    . 'Warnings, one slow query and a request that was retried and then worked do not appear '
+                    . 'here, and an empty card is what a working installation looks like.', ['code' => '<code class="mono">' . Security::esc($this->cfg->varDir() . '/incidents.json') . '</code>'])
+                . '</p>';
             self::cardEnd();
             return;
         }
@@ -5902,12 +6024,12 @@ final class Settings extends Controller implements JobHost, Sections
         }
 
         /* "POST IT" NAMED NOWHERE TO POST IT. */
-        echo '<p class="muted">Each entry carries the whole failure. Copy the block and open an '
-            . 'issue at <a href="https://github.com/phpcip/loghound/issues" rel="noreferrer noopener" '
-            . 'target="_blank">github.com/phpcip/loghound/issues</a> — '
-            . 'it names what was being attempted, where it died, what the platform or the system '
-            . 'actually returned, and the release, PHP, operating system and web server it happened '
-            . 'on. Every secret this installation holds is removed from it before it is shown.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Each entry carries the whole failure. Copy the block and open an issue at {link} — it '
+                . 'names what was being attempted, where it died, what the platform or the system actually '
+                . 'returned, and the release, PHP, operating system and web server it happened on. Every '
+                . 'secret this installation holds is removed from it before it is shown.', ['link' => '<a href="https://github.com/phpcip/loghound/issues" rel="noreferrer noopener" target="_blank">' . I18n::html('github.com/phpcip/loghound/issues') . '</a>'])
+            . '</p>';
 
         $seq = 0;
         foreach ($all as $entry) {
@@ -5919,12 +6041,12 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<form method="post" action="?v=settings" class="setup-form">';
             self::csrfField();
             echo '<input type="hidden" name="action" value="incidents_clear">';
-            echo '<button type="submit" class="ghost small">Clear the recorded failures</button>';
+            echo '<button type="submit" class="ghost small">' . I18n::html('Clear the recorded failures') . '</button>';
             echo '</form>';
-            echo '<p class="muted">That empties '
-                . '<span class="filepath-value">' . Security::esc(Incidents::path($this->cfg->varDir()))
-                . '</span>, which is mode 0600 and outside the document root. Anything still broken '
-                . 'is reported again immediately, because it is measured rather than remembered.</p>';
+            echo '<p class="muted">'
+                . I18n::html('That empties {span}, which is mode 0600 and outside the document root. Anything still '
+                    . 'broken is reported again immediately, because it is measured rather than remembered.', ['span' => '<span class="filepath-value">' . Security::esc(Incidents::path($this->cfg->varDir())) . '</span>'])
+                . '</p>';
         }
 
         self::cardEnd();
@@ -5945,20 +6067,20 @@ final class Settings extends Controller implements JobHost, Sections
         $seen = max(1, (int) ($entry['seen'] ?? 1));
 
         echo '<div class="incident">';
-        echo '<h4>' . Security::esc((string) ($entry['step'] ?? 'Something failed')) . '</h4>';
+        echo '<h4>' . Security::esc(I18n::t((string) ($entry['step'] ?? 'Something failed'))) . '</h4>';
         echo '<p class="incident-meta">';
         echo '<span class="mono">' . Security::esc(gmdate('m/d/Y H:i:s', $at)) . ' UTC</span>';
-        echo ' · ' . Security::esc((string) ($entry['doing'] ?? ''));
+        echo ' · ' . Security::esc(I18n::t((string) ($entry['doing'] ?? '')));
         if ($seen > 1) {
-            echo ' · seen ' . $seen . ' times';
+            echo ' · ' . I18n::html('seen {n} times', ['n' => (string) $seen]);
         }
-        echo ' · ' . ($recorded ? 'recorded' : 'happening now');
+        echo ' · ' . ($recorded ? I18n::html('recorded') : I18n::html('happening now'));
         echo '</p>';
-        echo '<p class="incident-error">' . Security::esc((string) ($entry['error'] ?? '')) . '</p>';
+        echo '<p class="incident-error">' . Security::esc(I18n::t((string) ($entry['error'] ?? ''))) . '</p>';
 
         self::commandBlock($id, [
             'key'     => 'incident',
-            'title'   => 'Everything about this failure',
+            'title'   => I18n::t('Everything about this failure'),
             'lines'   => explode("\n", Diagnostics::block($entry)),
             'problem' => '',
         ]);
@@ -5982,58 +6104,62 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-retention',
             self::sectionNum('set-retention'),
-            'How much data you keep'
+            I18n::t('How much data you keep')
         );
 
         echo '<p class="pop">' . Security::esc(self::keepHeadline($days, $rolling)) . '</p>';
 
-        echo '<p>Two independent rules decide what survives, and whichever bites first wins.</p>';
+        echo '<p>' . I18n::html('Two independent rules decide what survives, and whichever bites first wins.') . '</p>';
 
         echo '<dl class="kv">';
 
-        echo '<dt>By size — how much disk your plan gives this index</dt>';
+        echo '<dt>' . I18n::html('By size — how much disk your plan gives this index') . '</dt>';
         echo '<dd>' . ($rolling
-            ? Security::esc(sprintf(
-                'ON. When an index reaches %d%% of its Opensolr disk quota, the oldest data is '
-                . 'deleted until it is back down to %d%%. The ingest daemon does this BEFORE it '
-                . 'writes, and %s runs the same pass daily, so in practice the index stays '
+            ? Security::esc(I18n::t(
+                'ON. When an index reaches {high}% of its Opensolr disk quota, the oldest data is '
+                . 'deleted until it is back down to {target}%. The ingest daemon does this BEFORE it '
+                . 'writes, and {command} runs the same pass daily, so in practice the index stays '
                 . 'below the quota rather than hitting it. It is a guard, not a guarantee: the '
                 . 'daemon works from a usage figure the platform refreshes every few minutes, so '
                 . 'a sudden burst can cross the line before the next pass brings it back. What '
                 . 'this decides is how much history you have on a busy site — more disk on the '
                 . 'plan buys more history — and the oldest data is what gives way.',
-                (int) round($quota->highWater() * 100),
-                (int) round($quota->target() * 100),
-                self::root() . '/bin/loghound-retention'
+                [
+                    'high'    => (int) round($quota->highWater() * 100),
+                    'target'  => (int) round($quota->target() * 100),
+                    'command' => self::root() . '/bin/loghound-retention',
+                ]
             ))
-            : 'OFF. Nothing is deleted for being large, so an index can reach its Opensolr disk '
+            : I18n::html('OFF. Nothing is deleted for being large, so an index can reach its Opensolr disk '
                 . 'quota — and an index at its quota is BLOCKED by the platform: every request is '
-                . 'answered 403, reads included.') . '</dd>';
+                . 'answered 403, reads included.')) . '</dd>';
 
-        echo '<dt>By age — how old you let data get</dt>';
+        echo '<dt>' . I18n::html('By age — how old you let data get') . '</dt>';
         echo '<dd>' . ($days > 0
-            ? Security::esc('ON. Hits older than ' . $days . ' days are deleted, however small the '
-                . 'index is.')
-            : 'OFF, which is a supported setting and not a mistake. Nothing is deleted for being '
-                . 'old; how much you keep is then decided by the size rule alone.') . '</dd>';
+            ? Security::esc(I18n::tn('ON. Hits older than {n} day are deleted, however small the index is.',
+                'ON. Hits older than {n} days are deleted, however small the index is.', $days))
+            : I18n::html('OFF, which is a supported setting and not a mistake. Nothing is deleted for being '
+                . 'old; how much you keep is then decided by the size rule alone.')) . '</dd>';
 
-        echo '<dt>Daily rollups</dt>';
+        echo '<dt>' . I18n::html('Daily rollups') . '</dt>';
         echo '<dd>' . ((bool) $this->cfg->get('privacy.rollup_forever', true)
-            ? 'Kept by both rules. They are tiny — one document per day — and they are what lets the '
-                . 'panel show last year after the hits behind it have gone.'
-            : 'Deleted along with everything else, so the panel cannot show a period once its hits '
-                . 'have gone.') . '</dd>';
+            ? I18n::html('Kept by both rules. They are tiny — one document per day — and they are what lets the '
+                . 'panel show last year after the hits behind it have gone.')
+            : I18n::html('Deleted along with everything else, so the panel cannot show a period once its hits '
+                . 'have gone.')) . '</dd>';
 
         echo '</dl>';
 
         $this->diskFigures($quota);
 
-        echo '<p class="muted">Both previews below COUNT; neither deletes. Deletion is done by '
-            . '<code>bin/loghound-retention</code>, which is deliberately the only thing in the product '
-            . 'allowed to issue a delete-by-query.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Both previews below COUNT; neither deletes. Deletion is done by {code}, which is '
+                . 'deliberately the only thing in the product allowed to issue a delete-by-query.', ['code' => '<code>bin/loghound-retention</code>'])
+            . '</p>';
         echo '<div class="job-actions">';
         echo '<button type="button" data-job="retention_preview" data-mount="job-retention">'
-            . 'Preview what would be deleted</button>';
+            . I18n::html('Preview what would be deleted')
+            . '</button>';
         echo '</div>';
         echo '<div id="job-retention"></div>';
         self::cardEnd();
@@ -6055,20 +6181,22 @@ final class Settings extends Controller implements JobHost, Sections
     private static function keepHeadline(int $days, bool $rolling): string
     {
         if ($rolling && $days > 0) {
-            return 'Data is deleted by two rules: when an index runs out of its plan\'s disk, and '
-                . 'when a hit is older than ' . $days . ' days.';
+            return I18n::tn('Data is deleted by two rules: when an index runs out of its plan\'s disk, and '
+                . 'when a hit is older than {n} day.', 'Data is deleted by two rules: when an index runs out of its plan\'s disk, and '
+                . 'when a hit is older than {n} days.', $days);
         }
         if ($rolling) {
-            return 'Data is deleted when an index runs out of the disk its Opensolr plan gives it — '
-                . 'oldest first. There is no age limit on top of that.';
+            return I18n::t('Data is deleted when an index runs out of the disk its Opensolr plan gives it — '
+                . 'oldest first. There is no age limit on top of that.');
         }
         if ($days > 0) {
-            return 'Data is deleted when a hit is older than ' . $days . ' days. Nothing is deleted '
-                . 'for size, so an index can reach its plan quota and be blocked.';
+            return I18n::tn('Data is deleted when a hit is older than {n} day. Nothing is deleted '
+                . 'for size, so an index can reach its plan quota and be blocked.', 'Data is deleted when a hit is older than {n} days. Nothing is deleted '
+                . 'for size, so an index can reach its plan quota and be blocked.', $days);
         }
-        return 'Nothing is deleted at all: neither rule is on. An index that reaches its Opensolr '
+        return I18n::t('Nothing is deleted at all: neither rule is on. An index that reaches its Opensolr '
             . 'disk quota is blocked by the platform, reads included, so this is not a safe place '
-            . 'to leave it.';
+            . 'to leave it.');
     }
 
     /**
@@ -6087,20 +6215,20 @@ final class Settings extends Controller implements JobHost, Sections
     private function diskFigures(Quota $quota): void
     {
         $cores = array_filter([
-            'Hits'     => $this->gw->hitsCore(),
-            'Sessions' => $this->gw->sessionsCore(),
+            I18n::t('Hits')     => $this->gw->hitsCore(),
+            I18n::t('Sessions') => $this->gw->sessionsCore(),
         ]);
 
         if ($cores === []) {
             return;
         }
 
-        echo '<h4>Where this installation actually stands</h4>';
+        echo '<h4>' . I18n::html('Where this installation actually stands') . '</h4>';
         echo '<div class="table-wrap"><table class="grid table-fixed"><colgroup>'
             . '<col style="width:26%"><col style="width:14%"><col style="width:16%">'
             . '<col style="width:16%"><col style="width:28%">'
             . '</colgroup><thead><tr>';
-        foreach (['Index', 'Used', 'Plan quota', 'Of quota', 'History it buys'] as $th) {
+        foreach ([I18n::t('Index'), I18n::t('Used'), I18n::t('Plan quota'), I18n::t('Of quota'), I18n::t('History it buys')] as $th) {
             echo '<th scope="col">' . Security::esc($th) . '</th>';
         }
         echo '</tr></thead><tbody>';
@@ -6114,7 +6242,7 @@ final class Settings extends Controller implements JobHost, Sections
 
             if ($w['state'] !== 'ok') {
                 echo '<td colspan="4">' . Security::esc(
-                    'The plan could not be read for this index, so there are no figures to show.'
+                    I18n::t('The plan could not be read for this index, so there are no figures to show.')
                 ) . '</td></tr>';
                 continue;
             }
@@ -6136,10 +6264,12 @@ final class Settings extends Controller implements JobHost, Sections
 
         echo '</tbody></table></div>';
 
-        echo '<p class="muted">"History it buys" is the size rule only: how long the oldest data '
-            . 'would survive at the rate this installation is currently writing, before the rolling '
-            . 'window starts removing it. A quiet site may never reach the high-water mark at all, '
-            . 'in which case the size rule never deletes anything.</p>';
+        echo '<p class="muted">'
+            . I18n::html('"History it buys" is the size rule only: how long the oldest data would survive at the '
+                . 'rate this installation is currently writing, before the rolling window starts removing '
+                . 'it. A quiet site may never reach the high-water mark at all, in which case the size rule '
+                . 'never deletes anything.')
+            . '</p>';
     }
 
     /** A byte figure a person can read, from the platform's megabytes. */
@@ -6256,91 +6386,103 @@ final class Settings extends Controller implements JobHost, Sections
         $src = Doc::src($base);
         $enabled = (bool) $this->cfg->get('beacon.enabled');
 
-        self::cardOpen('set-beacon', self::sectionNum('set-beacon'), 'Beacon / JavaScript tracking');
-        echo '<p class="pop">One line of JavaScript, optional. Loghound works without it. This section explains '
-            . 'exactly what changes if you add it.</p>';
+        self::cardOpen('set-beacon', self::sectionNum('set-beacon'), I18n::t('Beacon / JavaScript tracking'));
+        echo '<p class="pop">'
+            . I18n::html('One line of JavaScript, optional. Loghound works without it. This section explains '
+                . 'exactly what changes if you add it.')
+            . '</p>';
 
         echo '<div class="beacon-status beacon-none" id="beacon-status" role="status">'
             . '<span class="beacon-dot" aria-hidden="true"></span>'
             . '<div class="beacon-status-text">'
-            . '<strong id="beacon-status-label">Beacon: checking</strong>'
-            . '<span class="muted" id="beacon-status-detail">Asking the sessions core whether any beacon data has '
-            . 'arrived. This runs after the page renders, so it never holds the page up.</span>'
+            . '<strong id="beacon-status-label">' . I18n::html('Beacon: checking') . '</strong>'
+            . '<span class="muted" id="beacon-status-detail">' . I18n::html('Asking the sessions core whether any beacon data has '
+            . 'arrived. This runs after the page renders, so it never holds the page up.') . '</span>'
             . '</div></div>';
 
         if (!$enabled) {
-            echo '<div class="banner banner-warn"><strong>The collector is switched off.</strong> '
-                . '<code>beacon.enabled</code> is false in <code>config/loghound.php</code>, so '
-                . '<code>public/collect.php</code> will discard everything the snippet sends.</div>';
+            echo '<div class="banner banner-warn">'
+                . I18n::html('{strong} {code} is false in {code2}, so {code3} will discard everything the snippet sends.', ['code' => '<code>beacon.enabled</code>', 'code2' => '<code>config/loghound.php</code>', 'code3' => '<code>public/collect.php</code>', 'strong' => '<strong>' . I18n::html('The collector is switched off.') . '</strong>'])
+                . '</div>';
         }
         if (!$configured) {
-            echo '<div class="banner banner-warn"><code>base_url</code> is not set in the configuration, so the '
-                . 'snippets below were built from the address you happen to be using right now. Set it before '
-                . 'handing any of this to a colleague.</div>';
+            echo '<div class="banner banner-warn">'
+                . I18n::html('{code} is not set in the configuration, so the snippets below were built from the address '
+                    . 'you happen to be using right now. Set it before handing any of this to a colleague.', ['code' => '<code>base_url</code>'])
+                . '</div>';
         }
 
         echo '<div class="planes">';
 
         echo '<div class="plane plane-without">';
-        echo '<h3>Without the beacon</h3>';
-        echo '<p class="plane-sub">Planes 1 and 2 — the access log, and what correlating log lines reveals. '
-            . 'This is a complete, working product on its own.</p>';
+        echo '<h3>' . I18n::html('Without the beacon') . '</h3>';
+        echo '<p class="plane-sub">'
+            . I18n::html('Planes 1 and 2 — the access log, and what correlating log lines reveals. This is a '
+                . 'complete, working product on its own.')
+            . '</p>';
         echo '<ul class="plane-list">';
         foreach ([
-            'Full traffic analysis: sessions, pages, entry and exit paths, status codes, bytes, latency percentiles.',
-            'Header-fingerprint clustering — the cross-IP proxy-fleet detection this tool exists for. It reads request headers, not JavaScript.',
-            'ASN, RIR netname and network-type classification, so a datacentre range does not read as a household.',
-            'Forward-confirmed reverse DNS, which is what separates the real Googlebot from something wearing its User-Agent.',
-            'Behavioural signals: asset ratio, conditional-request behaviour, inter-request timing regularity, session shape.',
-            'Log span — first request to last request — for every single session.',
+            I18n::t('Full traffic analysis: sessions, pages, entry and exit paths, status codes, bytes, latency percentiles.'),
+            I18n::t('Header-fingerprint clustering — the cross-IP proxy-fleet detection this tool exists for. It reads request headers, not JavaScript.'),
+            I18n::t('ASN, RIR netname and network-type classification, so a datacentre range does not read as a household.'),
+            I18n::t('Forward-confirmed reverse DNS, which is what separates the real Googlebot from something wearing its User-Agent.'),
+            I18n::t('Behavioural signals: asset ratio, conditional-request behaviour, inter-request timing regularity, session shape.'),
+            I18n::t('Log span — first request to last request — for every single session.'),
         ] as $item) {
             echo '<li>' . Security::esc($item) . '</li>';
         }
         echo '</ul>';
-        echo '<p class="plane-note">Scoring rules that work with no JavaScript at all: '
-            . '<code>no_js_on_html</code>, <code>fp_cluster_proxy_fleet</code>, <code>ua_secch_mismatch</code>, '
-            . '<code>platform_mismatch</code>, <code>rdns_claim_failed</code>, <code>hosting_asn_browser_ua</code>, '
-            . '<code>no_304_on_repeat</code>, <code>periodic_timing</code>, <code>single_page_10s</code>, '
-            . '<code>no_assets</code>, <code>ua_declared_bot</code>.</p>';
+        echo '<p class="plane-note">'
+            . I18n::html('Scoring rules that work with no JavaScript at all: {code}, {code2}, {code3}, {code4}, '
+                . '{code5}, {code6}, {code7}, {code8}, {code9}, {code10}, {code11}.', ['code' => '<code>no_js_on_html</code>', 'code2' => '<code>fp_cluster_proxy_fleet</code>', 'code3' => '<code>ua_secch_mismatch</code>', 'code4' => '<code>platform_mismatch</code>', 'code5' => '<code>rdns_claim_failed</code>', 'code6' => '<code>hosting_asn_browser_ua</code>', 'code7' => '<code>no_304_on_repeat</code>', 'code8' => '<code>periodic_timing</code>', 'code9' => '<code>single_page_10s</code>', 'code10' => '<code>no_assets</code>', 'code11' => '<code>ua_declared_bot</code>'])
+            . '</p>';
         echo '</div>';
 
         echo '<div class="plane plane-with">';
-        echo '<h3>With the beacon</h3>';
-        echo '<p class="plane-sub">Plane 3 — what actually happened inside the browser. Everything above still '
-            . 'applies; this is added on top and cross-checked against it.</p>';
+        echo '<h3>' . I18n::html('With the beacon') . '</h3>';
+        echo '<p class="plane-sub">'
+            . I18n::html('Plane 3 — what actually happened inside the browser. Everything above still applies; '
+                . 'this is added on top and cross-checked against it.')
+            . '</p>';
         echo '<ul class="plane-list">';
         foreach ([
-            'Real time on site: visible time (tab in front, window focused) and engaged time (within 30 seconds of a genuine interaction) — not "the tab was open for 41 minutes".',
-            'The last page of the session, which log-based tools structurally cannot measure: once the visitor stops requesting things, the log goes silent.',
-            'Headless-browser detection: driver artefacts, software rasterisers, missing plugin and language tables, the classic permission contradictions.',
-            'UA-claim verification: the User-Agent claims a Chrome version, and the engine is tested for features that shipped in it. A spoofed string cannot retrofit V8.',
-            'Timezone cross-check between the browser and the IP geolocation.',
-            'Forged-timing detection: a client claiming four hours of engagement thirty seconds after its token was issued is recorded as evidence, not discarded.',
+            I18n::t('Real time on site: visible time (tab in front, window focused) and engaged time (within 30 seconds of a genuine interaction) — not "the tab was open for 41 minutes".'),
+            I18n::t('The last page of the session, which log-based tools structurally cannot measure: once the visitor stops requesting things, the log goes silent.'),
+            I18n::t('Headless-browser detection: driver artefacts, software rasterisers, missing plugin and language tables, the classic permission contradictions.'),
+            I18n::t('UA-claim verification: the User-Agent claims a Chrome version, and the engine is tested for features that shipped in it. A spoofed string cannot retrofit V8.'),
+            I18n::t('Timezone cross-check between the browser and the IP geolocation.'),
+            I18n::t('Forged-timing detection: a client claiming four hours of engagement thirty seconds after its token was issued is recorded as evidence, not discarded.'),
         ] as $item) {
             echo '<li>' . Security::esc($item) . '</li>';
         }
         echo '</ul>';
-        echo '<p class="plane-note">Scoring rules that become available <strong>only</strong> with the beacon: '
-            . '<code>automation_marker</code>, <code>headless_renderer</code>, <code>ua_claim_failed</code>, '
-            . '<code>no_interaction</code>, <code>tz_mismatch</code>, <code>beacon_forged</code>.</p>';
+        echo '<p class="plane-note">'
+            . I18n::html('Scoring rules that become available {strong} with the beacon: {code}, {code2}, {code3}, '
+                . '{code4}, {code5}, {code6}.', ['code' => '<code>automation_marker</code>', 'code2' => '<code>headless_renderer</code>', 'code3' => '<code>ua_claim_failed</code>', 'code4' => '<code>no_interaction</code>', 'code5' => '<code>tz_mismatch</code>', 'code6' => '<code>beacon_forged</code>', 'strong' => '<strong>' . I18n::html('only') . '</strong>'])
+            . '</p>';
         echo '</div>';
 
         echo '</div>';
 
-        echo '<p class="muted">The short version: <strong>without it you keep the bot detection, and lose the '
-            . 'honest time measurement</strong>. Three of the four timing numbers on the Overview page — wall '
-            . 'clock, visible and engaged — come from here. The fourth, log span, does not and never will.</p>';
+        echo '<p class="muted">'
+            . I18n::html('The short version: {strong}. Three of the four timing numbers on the Overview page — '
+                . 'wall clock, visible and engaged — come from here. The fourth, log span, does not and '
+                . 'never will.', ['strong' => '<strong>' . I18n::html('without it you keep the bot detection, and lose the honest time measurement') . '</strong>'])
+            . '</p>';
 
-        echo '<h3>Install it</h3>';
-        echo '<p class="muted">Every snippet points at <code class="mono">' . Security::esc($src) . '</code>. '
-            . 'The <code>?v=</code> query is the beacon file&rsquo;s own modification time: the file is served with '
-            . 'long cache headers, and this is what makes an update reach returning visitors. Each tab shows the '
-            . 'snippet <strong>with an identity attached</strong>, because that is the part nobody can guess from '
-            . 'the one-line version; the attributes are optional and the snippet works without them.</p>';
+        echo '<h3>' . I18n::html('Install it') . '</h3>';
+        echo '<p class="muted">'
+            . I18n::html('Every snippet points at {code}. The {code2} query is the beacon file’s own modification '
+                . 'time: the file is served with long cache headers, and this is what makes an update reach '
+                . 'returning visitors. Each tab shows the snippet {strong}, because that is the part nobody '
+                . 'can guess from the one-line version; the attributes are optional and the snippet works '
+                . 'without them.', ['code' => '<code class="mono">' . Security::esc($src) . '</code>', 'code2' => '<code>?v=</code>', 'strong' => '<strong>' . I18n::html('with an identity attached') . '</strong>'])
+            . '</p>';
 
-        echo '<p class="muted">The same reference is printed by <code class="mono">bin/loghound-setup '
-            . '--beacon-doc</code> on the machine itself, and by the installer when it finishes, so an '
-            . 'operator working from a terminal reads exactly what is on this card.</p>';
+        echo '<p class="muted">'
+            . I18n::html('The same reference is printed by {code} on the machine itself, and by the installer when '
+                . 'it finishes, so an operator working from a terminal reads exactly what is on this card.', ['code' => '<code class="mono">bin/loghound-setup --beacon-doc</code>'])
+            . '</p>';
 
         /*
          * The snippet the panel prints must be the snippet that works, first time, on the site
@@ -6425,18 +6567,60 @@ final class Settings extends Controller implements JobHost, Sections
         GTMCODE;
 
         $snippets = [
-            ['id' => 'sn-html', 'label' => 'Plain HTML', 'code' => $htmlIdentSnippet,
-                'note' => 'Put it in <code>&lt;head&gt;</code>. <code>defer</code> never blocks rendering wherever it sits, so placement only changes when the browser starts fetching it: in <code>&lt;head&gt;</code> that is immediately, before <code>&lt;/body&gt;</code> not until the parser has walked the whole document. Both work; one starts sooner. Drop both <code>data-</code> attributes if you do not want to attach an identity — the snippet works without them and Loghound stores nothing for a value you do not send. This is also the whole of the install on a site that runs on a different server; see <em>Sites on other servers</em> below.'],
+            ['id' => 'sn-html', 'label' => I18n::t('Plain HTML'), 'code' => $htmlIdentSnippet,
+                'note' => I18n::html('Put it in {head}. {defer} never blocks rendering wherever it sits, so placement only changes when the '
+                    . 'browser starts fetching it: in {head} that is immediately, before {body} not until the parser has walked the '
+                    . 'whole document. Both work; one starts sooner. Drop both {data} attributes if you do not want to attach an '
+                    . 'identity — the snippet works without them and Loghound stores nothing for a value you do not send. This is '
+                    . 'also the whole of the install on a site that runs on a different server; see {others} below.', [
+                    'head'   => '<code>&lt;head&gt;</code>',
+                    'defer'  => '<code>defer</code>',
+                    'body'   => '<code>&lt;/body&gt;</code>',
+                    'data'   => '<code>data-</code>',
+                    'others' => '<em>' . I18n::html('Sites on other servers') . '</em>',
+                ])],
             ['id' => 'sn-wp', 'label' => 'WordPress', 'code' => $wpSnippet,
-                'note' => 'A must-use plugin rather than <code>functions.php</code>, so it survives a theme change. Priority 99 keeps it late in <code>wp_head</code>. <code>is_user_logged_in()</code> and <code>wp_get_current_user()</code> are both available at that hook, and <code>esc_attr()</code> is what keeps an address with a quote in it from breaking the tag. <strong>If you run a page cache</strong> (WP Rocket, W3TC, LiteSpeed, Cloudflare APO) the rendered tag is cached with it, so the first visitor&rsquo;s identity is served to everyone — exclude logged-in users from the cache, which every one of those plugins does by default, or use <code>window.loghound.identify()</code> from an uncached request instead.'],
+                'note' => I18n::html('A must-use plugin rather than {functions}, so it survives a theme change. Priority 99 keeps it late in '
+                    . '{wp_head}. {logged_in} and {current_user} are both available at that hook, and {esc_attr} is what keeps an '
+                    . 'address with a quote in it from breaking the tag. {cache} (WP Rocket, W3TC, LiteSpeed, Cloudflare APO) the '
+                    . 'rendered tag is cached with it, so the first visitor’s identity is served to everyone — exclude logged-in '
+                    . 'users from the cache, which every one of those plugins does by default, or use {identify} from an uncached '
+                    . 'request instead.', [
+                    'functions'    => '<code>functions.php</code>',
+                    'wp_head'      => '<code>wp_head</code>',
+                    'logged_in'    => '<code>is_user_logged_in()</code>',
+                    'current_user' => '<code>wp_get_current_user()</code>',
+                    'esc_attr'     => '<code>esc_attr()</code>',
+                    'cache'        => '<strong>' . I18n::html('If you run a page cache') . '</strong>',
+                    'identify'     => '<code>window.loghound.identify()</code>',
+                ])],
             ['id' => 'sn-drupal', 'label' => 'Drupal', 'code' => $drupalSnippet,
-                'note' => '<code>html_head</code> rather than a library, because a library is declared once in YAML and cannot carry a value that changes per request. <strong>The <code>user</code> cache context is not optional:</strong> without it Drupal&rsquo;s render cache serves the first authenticated visitor&rsquo;s address to every other one. Run <code>drush cr</code> afterwards. Use <code>getAccountName()</code> in place of <code>getEmail()</code> if a username is the identifier you want.'],
+                'note' => I18n::html('{html_head} rather than a library, because a library is declared once in YAML and cannot carry a value '
+                    . 'that changes per request. {context} without it Drupal’s render cache serves the first authenticated '
+                    . 'visitor’s address to every other one. Run {drush} afterwards. Use {account_name} in place of {email} if a '
+                    . 'username is the identifier you want.', [
+                    'html_head'    => '<code>html_head</code>',
+                    'context'      => '<strong>' . I18n::html('The {user} cache context is not optional:', ['user' => '<code>user</code>']) . '</strong>',
+                    'drush'        => '<code>drush cr</code>',
+                    'account_name' => '<code>getAccountName()</code>',
+                    'email'        => '<code>getEmail()</code>',
+                ])],
             ['id' => 'sn-gtm', 'label' => 'Google Tag Manager', 'code' => $gtmSnippet,
-                'note' => 'New tag → Custom HTML → paste → trigger <em>All Pages</em>. Leave <em>Support document.write</em> unchecked. <code>{{Loghound Ident}}</code> and <code>{{Loghound Signed In}}</code> are Data Layer variables you define in GTM and your site pushes — a tag manager runs in the browser and cannot know who is signed in, so the value has to reach it from your own page. Drop the first <code>&lt;script&gt;</code> block entirely if you are not attaching an identity. Note that a tag manager loads asynchronously, so the first fraction of a second of each pageview is not measured.'],
+                'note' => I18n::html('New tag → Custom HTML → paste → trigger {all_pages}. Leave {document_write} unchecked. {ident} and '
+                    . '{signed_in} are Data Layer variables you define in GTM and your site pushes — a tag manager runs in the browser '
+                    . 'and cannot know who is signed in, so the value has to reach it from your own page. Drop the first {script} '
+                    . 'block entirely if you are not attaching an identity. Note that a tag manager loads asynchronously, so the '
+                    . 'first fraction of a second of each pageview is not measured.', [
+                    'all_pages'      => '<em>' . I18n::html('All Pages') . '</em>',
+                    'document_write' => '<em>' . I18n::html('Support document.write') . '</em>',
+                    'ident'          => '<code>{{Loghound Ident}}</code>',
+                    'signed_in'      => '<code>{{Loghound Signed In}}</code>',
+                    'script'         => '<code>&lt;script&gt;</code>',
+                ])],
         ];
 
         echo '<div class="snippets">';
-        echo '<div class="tabs" role="tablist" aria-label="Installation method">';
+        echo '<div class="tabs" role="tablist" aria-label="' . I18n::html('Installation method') . '">';
         foreach ($snippets as $i => $s) {
             echo '<button type="button" role="tab" class="tab' . ($i === 0 ? ' on' : '') . '"'
                 . ' id="tab-' . Security::esc($s['id']) . '"'
@@ -6454,7 +6638,7 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<pre class="snippet mono" id="' . Security::esc($s['id']) . '">'
                 . Security::esc($s['code']) . '</pre>';
             echo '<div class="snippet-actions">';
-            echo '<button type="button" class="ghost" data-copy="' . Security::esc($s['id']) . '">Copy</button>';
+            echo '<button type="button" class="ghost" data-copy="' . Security::esc($s['id']) . '">' . I18n::html('Copy') . '</button>';
             echo '<span class="muted">' . $s['note'] . '</span>';
             echo '</div>';
             echo '</div>';
@@ -6472,49 +6656,49 @@ final class Settings extends Controller implements JobHost, Sections
         $this->beaconOptionsList();
         $this->beaconHostsBlock($allowed, $collected);
 
-        echo '<h3>What it collects, exactly</h3>';
-        echo '<p class="muted"><strong>No cookies are set by default</strong>, and no identifier is written to the '
-            . 'visitor&rsquo;s device. Visitor identity is a hash derived server-side from the network prefix and '
-            . 'request headers. A cookie mode exists but is opt-in and off. Someone&rsquo;s legal team will ask for '
-            . 'this list, so here it is in full — the authoritative version ships in the repository as '
-            . '<code class="mono">docs/PRIVACY.md</code>.</p>';
+        echo '<h3>' . I18n::html('What it collects, exactly') . '</h3>';
+        echo '<p class="muted">'
+            . I18n::html('{strong}, and no identifier is written to the visitor’s device. Visitor identity is a '
+                . 'hash derived server-side from the network prefix and request headers. A cookie mode '
+                . 'exists but is opt-in and off. Someone’s legal team will ask for this list, so here it '
+                . 'is in full — the authoritative version ships in the repository as {code}.', ['code' => '<code class="mono">docs/PRIVACY.md</code>', 'strong' => '<strong>' . I18n::html('No cookies are set by default') . '</strong>'])
+            . '</p>';
 
         echo '<div class="collects">';
-        echo '<div><h4>It sends</h4><ul>';
+        echo '<div><h4>' . I18n::html('It sends') . '</h4><ul>';
         foreach ([
-            'Three durations in milliseconds — wall clock, visible, engaged — measured with performance.now() deltas, plus the pageview count.',
-            'Counts only: how many interactions of each type, and the furthest scroll depth as a percentage.',
-            'Automation markers present on the page object: navigator.webdriver, driver globals, the WebGL unmasked renderer string.',
-            'Environment facts used for cross-checks: the browser timezone, navigator.languages and platform, screen and window dimensions, device pixel ratio, hardware concurrency.',
-            'The session identifier the server issued, and the HMAC token that proves the server issued it.',
-            'The hostname of the page it is running on — not the URL, just the host — so a site on another server can be told apart from the rest.',
-            'The values of any URL query parameters you named in beacon.query_params, and no other part of the query string. Nothing is collected when you have named none.',
+            I18n::t('Three durations in milliseconds — wall clock, visible, engaged — measured with performance.now() deltas, plus the pageview count.'),
+            I18n::t('Counts only: how many interactions of each type, and the furthest scroll depth as a percentage.'),
+            I18n::t('Automation markers present on the page object: navigator.webdriver, driver globals, the WebGL unmasked renderer string.'),
+            I18n::t('Environment facts used for cross-checks: the browser timezone, navigator.languages and platform, screen and window dimensions, device pixel ratio, hardware concurrency.'),
+            I18n::t('The session identifier the server issued, and the HMAC token that proves the server issued it.'),
+            I18n::t('The hostname of the page it is running on — not the URL, just the host — so a site on another server can be told apart from the rest.'),
+            I18n::t('The values of any URL query parameters you named in beacon.query_params, and no other part of the query string. Nothing is collected when you have named none.'),
         ] as $item) {
             echo '<li>' . Security::esc($item) . '</li>';
         }
         echo '</ul></div>';
 
-        echo '<div><h4>It never sends</h4><ul>';
+        echo '<div><h4>' . I18n::html('It never sends') . '</h4><ul>';
         foreach ([
-            'Keystrokes, or the content of anything typed. Key events are counted, never read.',
-            'Mouse coordinates or a movement recording. Only whether movement looked mechanical.',
-            'Form values, page text, DOM contents, or a screenshot of any kind.',
-            'Anything from another origin, and nothing from local or session storage.',
-            'Its own idea of your IP address, User-Agent or referer — the collector reads those from the connection and ignores whatever the client claims (SPEC §6.3). The hostname is the one value it cannot read from the connection, because the page is on another machine, so it is cross-checked against the Origin the browser set and against your allowlist instead.',
-            'The query string. Only the parameters you named are read; the rest of the URL is never looked at.',
+            I18n::t('Keystrokes, or the content of anything typed. Key events are counted, never read.'),
+            I18n::t('Mouse coordinates or a movement recording. Only whether movement looked mechanical.'),
+            I18n::t('Form values, page text, DOM contents, or a screenshot of any kind.'),
+            I18n::t('Anything from another origin, and nothing from local or session storage.'),
+            I18n::t('Its own idea of your IP address, User-Agent or referer — the collector reads those from the connection and ignores whatever the client claims (SPEC §6.3). The hostname is the one value it cannot read from the connection, because the page is on another machine, so it is cross-checked against the Origin the browser set and against your allowlist instead.'),
+            I18n::t('The query string. Only the parameters you named are read; the rest of the URL is never looked at.'),
         ] as $item) {
             echo '<li>' . Security::esc($item) . '</li>';
         }
         echo '</ul></div>';
         echo '</div>';
 
-        echo '<p class="muted">Payloads are capped at '
-            . Security::esc(number_format((int) $this->cfg->get('beacon.max_payload', 8192)))
-            . ' bytes, rate-limited to '
-            . Security::esc(number_format((int) $this->cfg->get('beacon.rate_per_min', 120)))
-            . ' requests per minute per address, and the collector answers <code>204</code> to everything so it '
-            . 'never reveals whether a token was valid. It writes to a local SQLite staging table and does not '
-            . 'talk to Solr at all, which keeps Solr credentials out of the public request path.</p>';
+        echo '<p class="muted">'
+            . I18n::html('Payloads are capped at {v} bytes, rate-limited to {v2} requests per minute per address, '
+                . 'and the collector answers {code} to everything so it never reveals whether a token was '
+                . 'valid. It writes to a local SQLite staging table and does not talk to Solr at all, which '
+                . 'keeps Solr credentials out of the public request path.', ['code' => '<code>204</code>', 'v' => Security::esc(number_format((int) $this->cfg->get('beacon.max_payload', 8192))), 'v2' => Security::esc(number_format((int) $this->cfg->get('beacon.rate_per_min', 120)))])
+            . '</p>';
 
         self::cardEnd();
     }
@@ -6531,43 +6715,43 @@ final class Settings extends Controller implements JobHost, Sections
         $mode = (string) $this->cfg->get('privacy.ip_mode', 'full');
         $days = (int) $this->cfg->get('privacy.retention_days', 90);
 
-        self::cardOpen('set-privacy', self::sectionNum('set-privacy'), 'Privacy');
+        self::cardOpen('set-privacy', self::sectionNum('set-privacy'), I18n::t('Privacy'));
 
-        echo '<p class="muted">A new installation keeps the full address and deletes hits after 90 days.</p>';
+        echo '<p class="muted">' . I18n::html('A new installation keeps the full address and deletes hits after 90 days.') . '</p>';
 
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="privacy">';
 
-        echo '<fieldset><legend>How IP addresses are stored</legend>';
+        echo '<fieldset><legend>' . I18n::html('How IP addresses are stored') . '</legend>';
         echo '<div class="optlist">';
         foreach ([
-            ['full', 'Full address', 'Stored as received. Best detection quality.'],
-            ['truncate', 'Truncated (/24 and /48)', 'The host part is zeroed. Clustering still works; per-IP drill-down becomes per-netblock.'],
-            ['hash', 'Hashed with a daily-rotating salt', 'Nobody can be followed across days. Sessionisation still works within one; rotating-proxy detection is weakened.'],
+            ['full', I18n::t('Full address'), I18n::t('Stored as received. Best detection quality.')],
+            ['truncate', I18n::t('Truncated (/24 and /48)'), I18n::t('The host part is zeroed. Clustering still works; per-IP drill-down becomes per-netblock.')],
+            ['hash', I18n::t('Hashed with a daily-rotating salt'), I18n::t('Nobody can be followed across days. Sessionisation still works within one; rotating-proxy detection is weakened.')],
         ] as [$val, $label, $desc]) {
             self::option('ip_mode', (string) $val, (string) $label, [(string) $desc], $mode === $val, '', false);
         }
         echo '</div></fieldset>';
 
-        echo '<fieldset><legend>Retention</legend>';
-        echo '<label for="retention">Delete hits and sessions older than</label> ';
+        echo '<fieldset><legend>' . I18n::html('Retention') . '</legend>';
+        echo '<label for="retention">' . I18n::html('Delete hits and sessions older than') . '</label> ';
         echo '<input type="number" id="retention" name="retention_days" min="0" max="3650" value="'
-            . Security::esc((string) $days) . '" inputmode="numeric"> <span class="muted">days'
+            . Security::esc((string) $days) . '" inputmode="numeric"> <span class="muted">' . I18n::html('days')
             /* NAMED, NOT POINTED AT. The disk rule lives on the "How much data you keep"
                card, which SECTIONS orders AFTER this one — so "above" pointed the reader
                backwards past it. A card name survives a reordering; a direction does not. */
-            . ' (0 means no age limit — it does not switch retention off; the disk rule, on the'
-            . ' &ldquo;How much data you keep&rdquo; card, is separate)</span>';
+            . ' ' . I18n::html('(0 means no age limit — it does not switch retention off; the disk rule, on the “How much data you keep” card, is separate)') . '</span>';
         echo '<label class="check"><input type="checkbox" name="rollup_forever"'
             . ($this->cfg->get('privacy.rollup_forever') ? ' checked' : '') . '> '
-            . 'Keep the daily rollup documents indefinitely <span class="muted">(they are tiny and hold no addresses)</span></label>';
-        echo '<p class="muted">Deletion is performed by <code>bin/loghound-retention</code> on a timer. If that unit '
-            . 'is not enabled, this setting does nothing — a retention policy that is only written down is not a '
-            . 'retention policy.</p>';
+            . I18n::html('Keep the daily rollup documents indefinitely') . ' <span class="muted">' . I18n::html('(they are tiny and hold no addresses)') . '</span></label>';
+        echo '<p class="muted">'
+            . I18n::html('Deletion is performed by {code} on a timer. If that unit is not enabled, this setting '
+                . 'does nothing — a retention policy that is only written down is not a retention policy.', ['code' => '<code>bin/loghound-retention</code>'])
+            . '</p>';
         echo '</fieldset>';
 
-        echo '<button type="submit" class="primary">Save privacy settings</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Save privacy settings') . '</button>';
         echo '</form>';
         self::cardEnd();
     }
@@ -6590,14 +6774,14 @@ final class Settings extends Controller implements JobHost, Sections
         self::cardOpen(
             'set-scoring',
             self::sectionNum('set-scoring'),
-            'Scoring weights',
+            I18n::t('Scoring weights'),
             /* A CARD CAPTION IS PROSE, so the two Solr field names came out as bare words in the
                middle of a sentence — and cardOpen() escapes its population text, so they cannot
                be marked up as code here even if they belonged. They are not what the reader
                needs: the fact is that the score goes up and that old scores stay identifiable. */
-            'Points added to a session\'s bot score when a rule fires. Saving records a new scoring '
+            I18n::t('Points added to a session\'s bot score when a rule fires. Saving records a new scoring '
             . 'version, so sessions scored under the old weights stay identifiable. Existing documents '
-            . 'are not rescored.'
+            . 'are not rescored.')
         );
 
         echo '<form method="post" action="?v=settings">';
@@ -6607,7 +6791,7 @@ final class Settings extends Controller implements JobHost, Sections
         echo '<div class="table-wrap"><table class="tight table-fixed"><colgroup>'
             . '<col style="width:28%"><col style="width:56%"><col style="width:16%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Rule</th><th scope="col">Fires when</th><th scope="col" class="num">Weight</th>'
+            . '<th scope="col">' . I18n::html('Rule') . '</th><th scope="col">' . I18n::html('Fires when') . '</th><th scope="col" class="num">' . I18n::html('Weight') . '</th>'
             . '</tr></thead><tbody>';
         foreach ($catalogue as $code => $meta) {
             $value = isset($weights[$code]) ? (int) $weights[$code] : ($defaults[$code] ?? 0);
@@ -6626,13 +6810,13 @@ final class Settings extends Controller implements JobHost, Sections
             echo '<td class="num"><input type="number" min="0" max="100" id="' . Security::esc($weightId) . '"'
                 . ' name="weight[' . Security::esc($code) . ']"'
                 . ' value="' . Security::esc((string) $value) . '" inputmode="numeric"'
-                . ' aria-label="' . Security::esc('Weight for ' . $meta['label']) . '"></td>';
+                . ' aria-label="' . Security::esc(I18n::t('Weight for {rule}', ['rule' => $meta['label']])) . '"></td>';
             echo '</tr>';
         }
         echo '</tbody></table></div>';
 
-        echo '<fieldset><legend>Verdict thresholds</legend>';
-        echo '<p class="muted">A score at or above each threshold gets that verdict. They must descend.</p>';
+        echo '<fieldset><legend>' . I18n::html('Verdict thresholds') . '</legend>';
+        echo '<p class="muted">' . I18n::html('A score at or above each threshold gets that verdict. They must descend.') . '</p>';
         /* THE VERDICTS READ IN WORDS. The labels were the stored slugs — the operator was shown
            `likely_bot ≥ [60]` — while Panel\Vocabulary held "Likely bot" two files away and
            every other surface in the panel used it. */
@@ -6647,7 +6831,7 @@ final class Settings extends Controller implements JobHost, Sections
         }
         echo '</div></fieldset>';
 
-        echo '<button type="submit" class="primary">Save scoring</button>';
+        echo '<button type="submit" class="primary">' . I18n::html('Save scoring') . '</button>';
         echo '</form>';
         self::cardEnd();
     }
@@ -6657,20 +6841,30 @@ final class Settings extends Controller implements JobHost, Sections
     {
         $tz = (string) $this->cfg->get('ui.timezone', 'UTC');
 
-        self::cardOpen('set-display', self::sectionNum('set-display'), 'Display');
+        self::cardOpen('set-display', self::sectionNum('set-display'), I18n::t('Display'));
         echo '<form method="post" action="?v=settings">';
         self::csrfField();
         echo '<input type="hidden" name="action" value="ui">';
-        echo '<label for="tz">Render timestamps in</label> ';
+        $lang = I18n::language();
+        echo '<p><label for="lang">' . I18n::html('Language') . '</label> ';
+        echo '<select id="lang" name="language">';
+        foreach (I18n::available(self::root()) as $code => $name) {
+            echo '<option value="' . Security::esc($code) . '"' . ($code === $lang ? ' selected' : '') . '>'
+                . Security::esc($name) . '</option>';
+        }
+        echo '</select></p>';
+        echo '<label for="tz">' . I18n::html('Render timestamps in') . '</label> ';
         echo '<select id="tz" name="timezone">';
         foreach (\DateTimeZone::listIdentifiers() as $zone) {
             echo '<option value="' . Security::esc($zone) . '"' . ($zone === $tz ? ' selected' : '') . '>'
                 . Security::esc($zone) . '</option>';
         }
         echo '</select> ';
-        echo '<button type="submit" class="primary">Save</button>';
-        echo '<p class="muted">Timestamps are always shown as <code>mm/dd/yyyy hh:mm:ss</code>. '
-            . 'Solr stores everything in UTC; this setting only changes how it is displayed.</p>';
+        echo '<button type="submit" class="primary">' . I18n::html('Save') . '</button>';
+        echo '<p class="muted">'
+            . I18n::html('Timestamps are always shown as {code}. Solr stores everything in UTC; this setting only '
+                . 'changes how it is displayed.', ['code' => '<code>mm/dd/yyyy hh:mm:ss</code>'])
+            . '</p>';
         echo '</form>';
         self::cardEnd();
     }

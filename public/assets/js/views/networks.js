@@ -21,6 +21,7 @@ import { openSubject } from '../dialog.js';
 import { countryName, locate } from '../geo.js';
 import { countryNode, dimRow, dimValue, valueText } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /**
  * The colour for a network type.
@@ -145,7 +146,7 @@ function renderTotals(data) {
  */
 function renderAsns(data) {
     if (!data.asns.length) {
-        noDataYet('net-asns-empty', 'networks');
+        noDataYet('net-asns-empty', T('networks'));
         return;
     }
     hideEmpty('net-asns-empty');
@@ -211,7 +212,7 @@ function renderTypeLegend(t) {
  */
 function renderTypes(data) {
     if (!data.astypes.length) {
-        noDataYet('net-types-empty', 'network types');
+        noDataYet('net-types-empty', T('network types'));
         return;
     }
     hideEmpty('net-types-empty');
@@ -221,7 +222,7 @@ function renderTypes(data) {
         label: valueText('as_type_s', row.as_type || 'unknown'),
         value: row.sessions,
         color: typeColour(t, row.as_type)
-    })), 'sessions', num(data.total));
+    })), T('sessions'), num(data.total));
 }
 
 /**
@@ -258,7 +259,7 @@ async function renderMap(data) {
     }
 
     if (!points.length) {
-        noDataYet('net-map-empty', 'geolocated sessions');
+        noDataYet('net-map-empty', T('geolocated sessions'));
         return;
     }
     hideEmpty('net-map-empty');
@@ -278,11 +279,11 @@ async function renderMap(data) {
         openSubject('dim', { field: 'country_s', value: country });
     });
 
-    setPop('net-map', 'All sessions in range, placed at their country. Bubble area is sessions, and a bubble is ' +
+    setPop('net-map', T('All sessions in range, placed at their country. Bubble area is sessions, and a bubble is ' +
         'drawn in the accent when more than half of its sessions were scored as evasive automation. Press a ' +
         'bubble for everyone who came from that country — who they were, what they searched for, and every ' +
-        'visit behind the number. Country resolution only: a session is placed at its country, never at a street.' +
-        (unplaced ? ' ' + num(unplaced) + ' sessions had a country value this build cannot place.' : ''));
+        'visit behind the number. Country resolution only: a session is placed at its country, never at a street.') +
+        (unplaced ? ' ' + T('{n} sessions had a country value this build cannot place.', { n: num(unplaced) }) : ''));
 }
 
 /**
@@ -292,7 +293,7 @@ function renderNetnames(data) {
     if (!data.netnames.length) {
         tbody(byId('net-netnames-table'), []);
         clearTableChart('net-netnames');
-        noDataYet('net-netnames-empty', 'netblocks');
+        noDataYet('net-netnames-empty', T('netblocks'));
         return;
     }
     hideEmpty('net-netnames-empty');
@@ -313,15 +314,15 @@ function renderNetnames(data) {
                 text: num(row.uniq_fps),
                 num: true,
                 sort: row.uniq_fps,
-                title: 'Distinct header fingerprints from this netblock. Many addresses sharing very few ' +
-                    'fingerprints is the rotating-proxy pattern.'
+                title: T('Distinct header fingerprints from this netblock. Many addresses sharing very few ' +
+                    'fingerprints is the rotating-proxy pattern.')
             },
             { node: mixCell(row), sort: row.sessions ? row.evasive / row.sessions : 0 }
         ]
     })));
 
     splitChart('net-netnames', data.netnames.map((row) => populationParts(row.netname, row)),
-        { label: 'Sessions per netblock, by population' });
+        { label: T('Sessions per netblock, by population') });
 }
 
 /**
@@ -331,7 +332,7 @@ function renderCountries(data) {
     if (!data.countries.length) {
         tbody(byId('net-countries-table'), []);
         clearTableChart('net-countries');
-        noDataYet('net-countries-empty', 'geolocated sessions');
+        noDataYet('net-countries-empty', T('geolocated sessions'));
         return;
     }
     hideEmpty('net-countries-empty');
@@ -358,7 +359,7 @@ function renderCountries(data) {
     })));
 
     splitChart('net-countries', data.countries.map((row) => populationParts(countryName(row.country) || row.country, row)),
-        { label: 'Sessions per country, by population' });
+        { label: T('Sessions per country, by population') });
 }
 
 /**
@@ -375,9 +376,9 @@ function populationParts(label, row) {
     return {
         label: label,
         parts: [
-            { name: 'Human', value: human, color: t.pop.human },
-            { name: 'Evasive', value: evasive, color: t.pop.evasive },
-            { name: 'Other', value: Math.max(0, (Number(row.sessions) || 0) - human - evasive), color: t.pop.unknown }
+            { name: T('Human'), value: human, color: t.pop.human },
+            { name: T('Evasive'), value: evasive, color: t.pop.evasive },
+            { name: T('Other'), value: Math.max(0, (Number(row.sessions) || 0) - human - evasive), color: t.pop.unknown }
         ]
     };
 }
@@ -393,24 +394,24 @@ export default function init() {
        so the pivot costs no extra round trip — but it is its own card, so it keeps its own
        progress line and its own failure state. Both await the same promise. */
     const totals = api('networks', 'totals');
-    loadCard('net-stats', 'Counting distinct addresses and networks', async () => {
+    loadCard('net-stats', T('Counting distinct addresses and networks'), async () => {
         renderTotals(await totals);
     });
     if (byId('net-pivot-table')) {
-        loadCard('net-pivot', 'Cross-tabulating the filtered population', async () => {
+        loadCard('net-pivot', T('Cross-tabulating the filtered population'), async () => {
             const data = await totals;
             if (!renderPivot('net-pivot', data.pivot)) {
-                noPivotYet('net-pivot-empty', 'both a network type and a verdict');
+                noPivotYet('net-pivot-empty', T('both a network type and a verdict'));
             }
         });
     }
-    loadCard('net-asns', 'Faceting autonomous systems', async () => {
+    loadCard('net-asns', T('Faceting autonomous systems'), async () => {
         renderAsns(await api('networks', 'asns'));
     });
-    loadCard('net-types', 'Faceting network types', async () => {
+    loadCard('net-types', T('Faceting network types'), async () => {
         renderTypes(await api('networks', 'types'));
     });
-    loadCard('net-netnames', 'Faceting netblocks', async () => {
+    loadCard('net-netnames', T('Faceting netblocks'), async () => {
         renderNetnames(await api('networks', 'netnames'));
     });
 
@@ -421,10 +422,10 @@ export default function init() {
         }
         return geoPromise;
     };
-    loadCard('net-map', 'Geolocating sessions', async () => {
+    loadCard('net-map', T('Geolocating sessions'), async () => {
         renderMap(await geo());
     });
-    loadCard('net-countries', 'Faceting countries', async () => {
+    loadCard('net-countries', T('Faceting countries'), async () => {
         renderCountries(await geo());
     });
 }

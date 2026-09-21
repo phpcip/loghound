@@ -40,6 +40,7 @@ namespace Loghound\Panel;
 
 use Loghound\Assets;
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Security;
 use Loghound\Setup\Pairs;
 use Loghound\Setup\Steps;
@@ -109,41 +110,41 @@ final class Layout
     public static function nav(): array
     {
         $views = [
-            ['slug' => 'overview',     'label' => 'Overview',     'hint' => 'Who came, and how long they really stayed'],
-            ['slug' => 'live',         'label' => 'Live',         'hint' => 'The access log as it is written'],
+            ['slug' => 'overview',     'label' => I18n::t('Overview'),     'hint' => I18n::t('Who came, and how long they really stayed')],
+            ['slug' => 'live',         'label' => I18n::t('Live'),         'hint' => I18n::t('The access log as it is written')],
             /* SIX VIEWS ABOUT THE SAME SUBJECT, UNDER ONE HEADING. Each of these answers a
                question about the people who came — who they were, what sent them, where they
                went, what they searched for, whether they engaged, and when they arrived — and
                as six siblings among seventeen they read as unrelated pages. Grouped, the rail
                says what it holds; each view keeps its own sections underneath. */
-            ['slug' => 'sessions',     'label' => 'Sessions',     'group' => 'visitors', 'hint' => 'Search and drill into one visit'],
+            ['slug' => 'sessions',     'label' => I18n::t('Sessions'),     'group' => 'visitors', 'hint' => I18n::t('Search and drill into one visit')],
             /* WHERE THEY CAME FROM, ON A MAP. A link to one card of Networks, which keeps its own
                entry further down — the map answers a question about people rather than about
                netblocks, so it sits with the people. pinnedSections() drops the card from
                Networks' own section list so the same page is never offered twice. */
-            ['slug' => 'networks',     'label' => 'Map', 'group' => 'visitors', 'section' => 'net-map',
-             'hint' => 'Every session placed at the country it came from'],
+            ['slug' => 'networks',     'label' => I18n::t('Map'), 'group' => 'visitors', 'section' => 'net-map',
+             'hint' => I18n::t('Every session placed at the country it came from')],
             /* THE PEOPLE THE SITE NAMED, NEXT TO THE SESSIONS THEY MADE. This is a link to one
                card of Engagement rather than a view of its own: `section` names the card, and an
                entry that carries it renders as a leaf with no sub-list, because it already IS a
                section. Buried three levels down under Engagement it was the one answer nobody
                found — a signed-in visitor is the strongest thing this panel knows about anyone. */
-            ['slug' => 'engagement',   'label' => 'Signed-in visitors', 'group' => 'visitors',
-             'section' => 'an-people', 'hint' => 'Everyone your own site named through the beacon'],
-            ['slug' => 'sources',      'label' => 'Where they came from', 'group' => 'visitors', 'hint' => 'What kind of thing sent each visit, and which site actually did'],
-            ['slug' => 'pages',        'label' => 'Pages',        'group' => 'visitors', 'hint' => 'Where people arrive, where the log last saw them, and what is moving'],
-            ['slug' => 'searches',     'label' => 'Site search',   'group' => 'visitors', 'hint' => 'What visitors typed into your own search box'],
-            ['slug' => 'engagement',   'label' => 'Engagement',    'group' => 'visitors', 'hint' => 'Bounce measured on what people did, not on how many pages loaded'],
-            ['slug' => 'rhythm',       'label' => 'When they come','group' => 'visitors', 'hint' => 'Hour of day against day of week'],
-            ['slug' => 'seo',          'label' => 'SEO Tools',    'hint' => 'This period against another: channels, search and AI, landing pages, crawlers'],
-            ['slug' => 'bots',         'label' => 'Bot forensics','hint' => 'Why each verdict was reached'],
-            ['slug' => 'attacks',      'label' => 'Attacks',      'hint' => 'What was attempted, and what the server answered'],
-            ['slug' => 'fingerprints', 'label' => 'Fingerprints', 'hint' => 'One header signature, many IPs'],
-            ['slug' => 'networks',     'label' => 'Networks',     'hint' => 'ASN, netname and geography'],
-            ['slug' => 'performance',  'label' => 'Performance',  'hint' => 'Latency percentiles and status codes'],
-            ['slug' => 'hosts',        'label' => 'Websites',    'hint' => 'Every site on this machine, side by side'],
-            ['slug' => 'usage',        'label' => 'Storage & bandwidth', 'hint' => 'How much history your plan holds, and what is left'],
-            ['slug' => 'settings',     'label' => 'Settings',     'hint' => 'Log sources, privacy, scoring, beacon'],
+            ['slug' => 'engagement',   'label' => I18n::t('Signed-in visitors'), 'group' => 'visitors',
+             'section' => 'an-people', 'hint' => I18n::t('Everyone your own site named through the beacon')],
+            ['slug' => 'sources',      'label' => I18n::t('Where they came from'), 'group' => 'visitors', 'hint' => I18n::t('What kind of thing sent each visit, and which site actually did')],
+            ['slug' => 'pages',        'label' => I18n::t('Pages'),        'group' => 'visitors', 'hint' => I18n::t('Where people arrive, where the log last saw them, and what is moving')],
+            ['slug' => 'searches',     'label' => I18n::t('Site search'),   'group' => 'visitors', 'hint' => I18n::t('What visitors typed into your own search box')],
+            ['slug' => 'engagement',   'label' => I18n::t('Engagement'),    'group' => 'visitors', 'hint' => I18n::t('Bounce measured on what people did, not on how many pages loaded')],
+            ['slug' => 'rhythm',       'label' => I18n::t('When they come'),'group' => 'visitors', 'hint' => I18n::t('Hour of day against day of week')],
+            ['slug' => 'seo',          'label' => I18n::t('SEO Tools'),    'hint' => I18n::t('This period against another: channels, search and AI, landing pages, crawlers')],
+            ['slug' => 'bots',         'label' => I18n::t('Bot forensics'),'hint' => I18n::t('Why each verdict was reached')],
+            ['slug' => 'attacks',      'label' => I18n::t('Attacks'),      'hint' => I18n::t('What was attempted, and what the server answered')],
+            ['slug' => 'fingerprints', 'label' => I18n::t('Fingerprints'), 'hint' => I18n::t('One header signature, many IPs')],
+            ['slug' => 'networks',     'label' => I18n::t('Networks'),     'hint' => I18n::t('ASN, netname and geography')],
+            ['slug' => 'performance',  'label' => I18n::t('Performance'),  'hint' => I18n::t('Latency percentiles and status codes')],
+            ['slug' => 'hosts',        'label' => I18n::t('Websites'),    'hint' => I18n::t('Every site on this machine, side by side')],
+            ['slug' => 'usage',        'label' => I18n::t('Storage & bandwidth'), 'hint' => I18n::t('How much history your plan holds, and what is left')],
+            ['slug' => 'settings',     'label' => I18n::t('Settings'),     'hint' => I18n::t('Log sources, privacy, scoring, beacon')],
         ];
 
         $routes = self::routes();
@@ -266,7 +267,7 @@ final class Layout
         $v = static fn (string $rel): string => Assets::url($rel);
 
         echo "<!doctype html>\n";
-        echo '<html lang="en" data-theme="auto">' . "\n";
+        echo '<html ' . I18n::htmlAttrs() . ' data-theme="auto">' . "\n";
         echo '<head>' . "\n";
         echo '<meta charset="utf-8">' . "\n";
         echo '<meta name="viewport" content="width=device-width, initial-scale=1">' . "\n";
@@ -405,7 +406,7 @@ final class Layout
     /** Keyboard users land here first; the nav is long and skipping it matters. */
     private static function skipLink(): void
     {
-        echo '<a class="skip" href="#main">Skip to content</a>' . "\n";
+        echo '<a class="skip" href="#main">' . I18n::html('Skip to content') . '</a>' . "\n";
     }
 
     /**
@@ -430,7 +431,7 @@ final class Layout
      */
     private static function sidebar(string $siteName, string $active, string $section, bool $sessionAuth = false): void
     {
-        echo '<nav class="side" aria-label="Views">' . "\n";
+        echo '<nav class="side" aria-label="' . I18n::html('Views') . '">' . "\n";
         echo '<div class="brand"><span class="brand-mark" aria-hidden="true"></span>'
             . '<span class="brand-name">' . Security::esc($siteName) . '</span></div>' . "\n";
         echo '<ul>';
@@ -459,6 +460,7 @@ final class Layout
 
                 if ($group !== '') {
                     $meta = self::NAV_GROUPS[$group] ?? ['label' => ucfirst($group), 'hint' => ''];
+                    $meta = ['label' => I18n::t((string) $meta['label']), 'hint' => I18n::t((string) $meta['hint'])];
                     $on = !empty($groupCurrent[$group]);
                     $groupId = 'lh-navgroup-' . $group;
 
@@ -476,7 +478,7 @@ final class Layout
                         . '<span class="navlabel">' . Security::esc((string) $meta['label']) . '</span></button>';
                     echo '<button type="button" class="navtwist" aria-expanded="' . ($on ? 'true' : 'false') . '"'
                         . ' aria-controls="' . Security::esc($groupId) . '"'
-                        . ' aria-label="Views about ' . Security::esc((string) $meta['label']) . '">'
+                        . ' aria-label="' . Security::esc(I18n::t('Views about {group}', ['group' => (string) $meta['label']])) . '">'
                         . '<span class="navtwist-mark" aria-hidden="true"></span></button>';
                     echo '</span>';
                     echo '<ul class="navsub navsub-views" id="' . Security::esc($groupId) . '"'
@@ -530,7 +532,7 @@ final class Layout
             if ($sections !== []) {
                 echo '<button type="button" class="navtwist" aria-expanded="' . ($current ? 'true' : 'false') . '"'
                     . ' aria-controls="' . Security::esc($listId) . '"'
-                    . ' aria-label="Sections of ' . Security::esc($item['label']) . '">'
+                    . ' aria-label="' . Security::esc(I18n::t('Sections of {view}', ['view' => $item['label']])) . '">'
                     . '<span class="navtwist-mark" aria-hidden="true"></span></button>';
             }
             echo '</span>';
@@ -556,13 +558,13 @@ final class Layout
         }
 
         echo "</ul>\n";
-        echo '<button type="button" id="theme-toggle" class="theme-toggle" aria-live="polite">Theme: auto</button>' . "\n";
+        echo '<button type="button" id="theme-toggle" class="theme-toggle" aria-live="polite">' . Security::esc(I18n::t('Theme: {mode}', ['mode' => I18n::t('auto')])) . '</button>' . "\n";
 
         if ($sessionAuth) {
             $user = Security::sessionUser();
             echo '<form method="post" action="?logout=1" class="signout">';
             echo '<input type="hidden" name="csrf" value="' . Security::esc(Security::csrfToken()) . '">';
-            echo '<button type="submit" class="ghost small">Sign out'
+            echo '<button type="submit" class="ghost small">' . I18n::html('Sign out')
                 . ($user === '' ? '' : ' <span class="signout-who">' . Security::esc($user) . '</span>')
                 . '</button>';
             echo "</form>\n";
@@ -641,7 +643,7 @@ final class Layout
            wires that one on every view and its dialog covers the `lf[…]` request-log plane too. */
         if ($view->honours(Controller::SCOPE_FACETS)) {
             echo '<button type="button" class="tb-field-btn" id="lh-facets-toggle"'
-                . ' aria-controls="lh-facets-groups" aria-expanded="false">Show filters</button>';
+                . ' aria-controls="lh-facets-groups" aria-expanded="false">' . I18n::html('Show filters') . '</button>';
         }
 
         if ($filters) {
@@ -656,8 +658,8 @@ final class Layout
                    the duration and the resources mark on one line, and "Applied filters" eats
                    the room the other two need. The stylesheet shows one and hides the other;
                    both are in the markup so no script is needed and neither can drift. */
-                . '<span class="tb-filters-label">Applied filters</span>'
-                . '<span class="tb-filters-short">Filters</span>'
+                . '<span class="tb-filters-label">' . I18n::html('Applied filters') . '</span>'
+                . '<span class="tb-filters-short">' . I18n::html('Filters') . '</span>'
                 . '<span class="tb-badge" id="lh-tb-badge">' . Security::esc((string) $applied) . '</span>'
                 . '</button>';
         }
@@ -673,8 +675,8 @@ final class Layout
                    options already say what it is — 6H, 24H — so it was a word spending bar room
                    to repeat the thing beside it. `.sr-only` keeps the select's accessible name
                    for a screen reader, which deleting the element would have taken away. */
-                echo '<label class="sr-only" for="lh-range">Duration</label>';
-                echo '<select id="lh-range" name="range" data-smart="Duration">';
+                echo '<label class="sr-only" for="lh-range">' . I18n::html('Duration') . '</label>';
+                echo '<select id="lh-range" name="range" data-smart="' . I18n::html('Duration') . '">';
                 foreach (Query::ranges() as $key => $def) {
                     echo '<option value="' . Security::esc($key) . '"'
                         . ($key === $current['key'] ? ' selected' : '') . '>'
@@ -697,9 +699,9 @@ final class Layout
                    answers, and the selected value is rendered now so the form round-trips. */
                 $chosen = self::chosenHost();
                 echo '<span class="tb-field" id="lh-hostfield">';
-                echo '<label for="lh-host">Hostname</label>';
-                echo '<select id="lh-host" name="f[host_s][]" data-smart="Hostname">';
-                echo '<option value=""' . ($chosen === '' ? ' selected' : '') . '>All hosts</option>';
+                echo '<label for="lh-host">' . I18n::html('Hostname') . '</label>';
+                echo '<select id="lh-host" name="f[host_s][]" data-smart="' . I18n::html('Hostname') . '">';
+                echo '<option value=""' . ($chosen === '' ? ' selected' : '') . '>' . I18n::html('All hosts') . '</option>';
                 if ($chosen !== '') {
                     echo '<option value="' . Security::esc($chosen) . '" selected>'
                         . Security::esc($chosen) . '</option>';
@@ -717,13 +719,13 @@ final class Layout
                submits the form and this is never needed, so the stylesheet takes it off screen
                the moment `lh-js` lands on the root element. With script off it is the whole
                mechanism. */
-            echo '<button type="submit" class="tb-go">Apply</button>';
+            echo '<button type="submit" class="tb-go">' . I18n::html('Apply') . '</button>';
             echo '</form>';
         }
 
         echo '<button type="button" class="tb-res" id="lh-tb-resources" aria-haspopup="dialog"'
-            . ' title="Opensolr resources: what this account is using against what the plan allows"'
-            . ' aria-label="Opensolr resources">'
+            . ' title="' . I18n::html('Opensolr resources: what this account is using against what the plan allows') . '"'
+            . ' aria-label="' . I18n::html('Opensolr resources') . '">'
             . self::resourceMark()
             . '</button>';
 
@@ -923,9 +925,14 @@ final class Layout
     {
         if ($gw->isDemo()) {
             echo '<div class="banner banner-demo" role="status">'
-                . '<strong>Demo data.</strong> These numbers are generated locally and have nothing to do with your traffic. '
-                . 'Turn it off by removing <code>LOGHOUND_DEMO=1</code> from the environment '
-                . 'or <code>\'demo\' =&gt; true</code> from the <code>ui</code> section of <code>config/loghound.php</code>.'
+                . '<strong>' . I18n::html('Demo data.') . '</strong> '
+                . I18n::html('These numbers are generated locally and have nothing to do with your traffic. '
+                    . 'Turn it off by removing {env} from the environment or {key} from the {section} section of {file}.', [
+                    'env'     => '<code>LOGHOUND_DEMO=1</code>',
+                    'key'     => '<code>\'demo\' =&gt; true</code>',
+                    'section' => '<code>ui</code>',
+                    'file'    => '<code>config/loghound.php</code>',
+                ])
                 . '</div>' . "\n";
         }
 
@@ -935,10 +942,12 @@ final class Layout
            sent an operator to check the wrong one half the time. assets/js/core.js's
            raiseConnectionBanner() decides which, from the diagnosis it was given. */
         echo '<div class="banner banner-bad" id="lh-conn" role="alert" hidden>'
-            . '<strong>A service this panel depends on is not answering.</strong> '
+            . '<strong>' . I18n::html('A service this panel depends on is not answering.') . '</strong> '
             . '<span id="lh-conn-detail"></span> '
-            . 'Run the connection check under <a href="' . Security::esc(self::settingsUrl('check')) . '">Settings</a>, or set '
-            . '<code>LOGHOUND_DEMO=1</code> to explore the panel with sample data.'
+            . I18n::html('Run the connection check under {settings}, or set {env} to explore the panel with sample data.', [
+                'settings' => '<a href="' . Security::esc(self::settingsUrl('check')) . '">' . I18n::html('Settings') . '</a>',
+                'env'      => '<code>LOGHOUND_DEMO=1</code>',
+            ])
             . '</div>' . "\n";
 
         /* AN ACCOUNT IS SET AND ITS INDEXES HAVE NOT BEEN CHOSEN YET. Without this the panel
@@ -956,36 +965,36 @@ final class Layout
                 . Security::esc(Pairs::pendingHeadline()) . '</strong> '
                 . Security::esc(Pairs::pendingDetail($cfg))
                 . ' <a href="' . Security::esc(self::settingsUrl('solr')) . '">'
-                . 'Choose them</a></div>' . "\n";
+                . I18n::html('Choose them') . '</a></div>' . "\n";
         }
 
         if (!$gw->isDemo()) {
             $ingest = Steps::ingestStatus(dirname(__DIR__, 2));
             if ($ingest['state'] !== 'live') {
                 $headline = match ((string) $ingest['state']) {
-                    'refused' => 'The log reader refused to start.',
-                    'absent'  => 'Nothing is reading your logs.',
-                    default   => 'The log reader has stopped.',
+                    'refused' => I18n::t('The log reader refused to start.'),
+                    'absent'  => I18n::t('Nothing is reading your logs.'),
+                    default   => I18n::t('The log reader has stopped.'),
                 };
                 $detail = match ((string) $ingest['state']) {
-                    'refused' => 'It started, found the configuration unusable and stopped, and systemd will '
-                        . 'not retry that on its own.',
-                    'absent'  => 'The ingest daemon has never reported in on this machine, so every number in '
-                        . 'this panel will stay empty until it is started.',
-                    default   => 'The ingest daemon is not reporting any more, so nothing new is arriving.',
+                    'refused' => I18n::t('It started, found the configuration unusable and stopped, and systemd will '
+                        . 'not retry that on its own.'),
+                    'absent'  => I18n::t('The ingest daemon has never reported in on this machine, so every number in '
+                        . 'this panel will stay empty until it is started.'),
+                    default   => I18n::t('The ingest daemon is not reporting any more, so nothing new is arriving.'),
                 };
 
                 echo '<div class="banner banner-warn" role="alert"><strong>'
                     . Security::esc($headline) . '</strong> ' . Security::esc($detail)
-                    . ' <a href="' . Security::esc(self::settingsUrl('finish')) . '">What to do</a></div>' . "\n";
+                    . ' <a href="' . Security::esc(self::settingsUrl('finish')) . '">' . I18n::html('What to do') . '</a></div>' . "\n";
             }
         }
 
         $errors = $cfg->validate();
         if ($errors !== []) {
-            echo '<div class="banner banner-warn" role="alert"><strong>Configuration needs attention:</strong> '
-                . Security::esc(implode(' · ', array_slice($errors, 0, 3)))
-                . ' <a href="' . Security::esc(self::settingsUrl('')) . '">Open settings</a></div>' . "\n";
+            echo '<div class="banner banner-warn" role="alert"><strong>' . I18n::html('Configuration needs attention:') . '</strong> '
+                . Security::esc(implode(' · ', array_map([I18n::class, 't'], array_slice($errors, 0, 3))))
+                . ' <a href="' . Security::esc(self::settingsUrl('')) . '">' . I18n::html('Open settings') . '</a></div>' . "\n";
         }
     }
 
@@ -1139,14 +1148,13 @@ final class Layout
     {
         $log = $gw->queryLog();
         echo '<footer class="foot">';
-        echo '<span>Loghound panel</span>';
+        echo '<span>' . I18n::html('Loghound panel') . '</span>';
         if ($log !== []) {
             $total = 0.0;
             foreach ($log as $q) {
                 $total += (float) $q['ms'];
             }
-            echo '<span class="mono">' . count($log) . ' Solr '
-                . (count($log) === 1 ? 'query' : 'queries') . ' · '
+            echo '<span class="mono">' . Security::esc(I18n::tn('{n} Solr query', '{n} Solr queries', count($log))) . ' · '
                 . Security::esc(number_format($total, 1)) . ' ms</span>';
         }
         echo '<span class="mono">' . Security::esc(gmdate('m/d/Y H:i:s')) . ' UTC</span>';

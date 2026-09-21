@@ -40,6 +40,7 @@ declare(strict_types=1);
 namespace Loghound\Setup;
 
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Opensolr;
 use Loghound\Security;
 
@@ -207,26 +208,38 @@ final class Pairs
      */
     private static function sentence(int $counted, ?int $limit, int $needed, ?int $room, bool $blocked): string
     {
-        $indexes = static fn(int $n): string => $n . ' ' . ($n === 1 ? 'index' : 'indexes');
+        $indexes = static fn(int $n): string => I18n::tn('{n} index', '{n} indexes', $n);
 
         if ($limit === null) {
-            return 'This Opensolr account holds ' . $indexes($counted) . '. How many your plan allows '
-                . 'could not be read' . ($counted === 0
-                    ? ' — that figure is reported against an index, and this account has none yet'
-                    : ' from this account just now')
-                . ', so Loghound will not claim it has checked. If the plan turns out to be full, the '
-                . 'platform says so on the first index and nothing is left behind.';
+            return $counted === 0
+                ? I18n::t('This Opensolr account holds {indexes}. How many your plan allows could not be read — that figure is '
+                    . 'reported against an index, and this account has none yet, so Loghound will not claim it has checked. '
+                    . 'If the plan turns out to be full, the platform says so on the first index and nothing is left behind.', [
+                    'indexes' => $indexes($counted),
+                ])
+                : I18n::t('This Opensolr account holds {indexes}. How many your plan allows could not be read from this account '
+                    . 'just now, so Loghound will not claim it has checked. If the plan turns out to be full, the platform says '
+                    . 'so on the first index and nothing is left behind.', [
+                    'indexes' => $indexes($counted),
+                ]);
         }
 
         if ($blocked) {
-            return 'Your Opensolr plan allows ' . $indexes($limit) . ' and ' . $counted . ' '
-                . ($counted === 1 ? 'is' : 'are') . ' already in use, so there is room for '
-                . ($room === 0 ? 'none' : $room) . ' more and Loghound needs ' . $needed . '.';
+            return I18n::tn('Your Opensolr plan allows {limit} and {n} is already in use, so there is room for {room} more and Loghound needs {needed}.',
+                'Your Opensolr plan allows {limit} and {n} are already in use, so there is room for {room} more and Loghound needs {needed}.',
+                $counted, [
+                    'limit'  => $indexes($limit),
+                    'room'   => $room === 0 ? I18n::t('none') : (string) $room,
+                    'needed' => $needed,
+                ]);
         }
 
-        return 'Your Opensolr plan allows ' . $indexes($limit) . ' and ' . $counted . ' '
-            . ($counted === 1 ? 'is' : 'are') . ' in use, so there is room for the ' . $needed
-            . ' Loghound needs.';
+        return I18n::tn('Your Opensolr plan allows {limit} and {n} is in use, so there is room for the {needed} Loghound needs.',
+            'Your Opensolr plan allows {limit} and {n} are in use, so there is room for the {needed} Loghound needs.',
+            $counted, [
+                'limit'  => $indexes($limit),
+                'needed' => $needed,
+            ]);
     }
 
     /**
@@ -247,21 +260,21 @@ final class Pairs
         if ($haveReusable) {
             $out[] = [
                 'key'  => 'reuse',
-                'text' => 'Reuse a pair of Loghound indexes this account already has. Nothing new is '
+                'text' => I18n::t('Reuse a pair of Loghound indexes this account already has. Nothing new is '
                     . 'created, so the plan limit does not apply, and this site is told apart from the '
-                    . 'others reporting into them by its hostname.',
+                    . 'others reporting into them by its hostname.'),
                 'url'  => '',
             ];
         }
 
         $out[] = [
             'key'  => 'free',
-            'text' => 'Delete an index you no longer need, which frees a slot immediately.',
+            'text' => I18n::t('Delete an index you no longer need, which frees a slot immediately.'),
             'url'  => Storage::URL_INDEXES,
         ];
         $out[] = [
             'key'  => 'upgrade',
-            'text' => 'Move to a plan that allows more indexes.',
+            'text' => I18n::t('Move to a plan that allows more indexes.'),
             'url'  => Storage::URL_PLANS,
         ];
 
@@ -317,13 +330,13 @@ final class Pairs
      */
     public static function reuseConsequence(array $pair, string $host): string
     {
-        $where = $host !== '' ? $host : 'this site';
+        $where = $host !== '' ? $host : I18n::t('this site');
 
-        return 'Nothing in ' . $pair['hits'] . ' or ' . $pair['sessions'] . ' is cleared, reshaped '
+        return I18n::t('Nothing in {hits} or {sessions} is cleared, reshaped '
             . 'or overwritten. What this installation records joins what is already in there, and '
-            . 'the two are told apart by the hostname on every document — so ' . $where . ' shows up '
+            . 'the two are told apart by the hostname on every document — so {where} shows up '
             . 'as its own value under Website in the panel, alongside whatever else reports '
-            . 'into this pair.';
+            . 'into this pair.', ['hits' => $pair['hits'], 'sessions' => $pair['sessions'], 'where' => $where]);
     }
 
     /**
@@ -404,7 +417,7 @@ final class Pairs
     /** The interim state in one line, for a banner that has room for one. */
     public static function pendingHeadline(): string
     {
-        return 'An Opensolr account is set and its indexes have not been chosen yet.';
+        return I18n::t('An Opensolr account is set and its indexes have not been chosen yet.');
     }
 
     /**
@@ -419,20 +432,21 @@ final class Pairs
         $hits     = (string) $cfg->get('solr.hits_core', '');
         $sessions = (string) $cfg->get('solr.sessions_core', '');
 
-        $named = $hits !== '' && $sessions !== ''
-            ? ' — ' . $hits . ' and ' . $sessions . ' — '
-            : ' ';
-
-        return 'The two indexes this configuration names' . $named . 'belong to the account that '
-            . 'was set before this one, so this account can neither read them nor write to them '
-            . 'and every number in the panel stays empty until you say which indexes to use. '
-            . 'Pick a pair this account already holds, or have Loghound make a new one.';
+        return $hits !== '' && $sessions !== ''
+            ? I18n::t('The two indexes this configuration names — {hits} and {sessions} — belong to the account that '
+                . 'was set before this one, so this account can neither read them nor write to them '
+                . 'and every number in the panel stays empty until you say which indexes to use. '
+                . 'Pick a pair this account already holds, or have Loghound make a new one.', ['hits' => $hits, 'sessions' => $sessions])
+            : I18n::t('The two indexes this configuration names belong to the account that '
+                . 'was set before this one, so this account can neither read them nor write to them '
+                . 'and every number in the panel stays empty until you say which indexes to use. '
+                . 'Pick a pair this account already holds, or have Loghound make a new one.');
     }
 
     /** The heading step two carries, identically, wherever it is rendered. */
     public static function choiceHeading(): string
     {
-        return 'Which indexes this installation uses';
+        return I18n::t('Which indexes this installation uses');
     }
 
     /**
@@ -450,13 +464,13 @@ final class Pairs
         }
 
         if ($pairCount === 1) {
-            return 'This account holds one pair of Loghound indexes. Pick it and this site records '
+            return I18n::t('This account holds one pair of Loghound indexes. Pick it and this site records '
                 . 'into it alongside whatever is already there, or have Loghound make a pair of its '
-                . 'own for this site.';
+                . 'own for this site.');
         }
 
-        return 'This account holds ' . $pairCount . ' pairs of Loghound indexes. Pick the one this '
-            . 'site records into, or have Loghound make a pair of its own for it.';
+        return I18n::t('This account holds {n} pairs of Loghound indexes. Pick the one this '
+            . 'site records into, or have Loghound make a pair of its own for it.', ['n' => $pairCount]);
     }
 
     /**
@@ -467,14 +481,14 @@ final class Pairs
      */
     public static function noPairsReason(): string
     {
-        return 'This account holds no Loghound indexes yet, so there is nothing on the list to pick '
-            . 'from. Have Loghound make the first pair and it appears here from then on.';
+        return I18n::t('This account holds no Loghound indexes yet, so there is nothing on the list to pick '
+            . 'from. Have Loghound make the first pair and it appears here from then on.');
     }
 
     /** The label on the option that provisions, in the same words on every surface. */
     public static function provisionLabel(): string
     {
-        return 'Make a new pair for this site';
+        return I18n::t('Make a new pair for this site');
     }
 
     /**
@@ -486,10 +500,13 @@ final class Pairs
      */
     public static function provisionDetail(string $region): string
     {
-        return 'Two indexes are created' . ($region !== '' ? ' in ' . $region : '')
-            . ' under names generated for you, because an Opensolr index name has to be unique '
-            . 'across the whole platform. They count against your plan, and nothing already on '
-            . 'the account is touched.';
+        return $region !== ''
+            ? I18n::t('Two indexes are created in {region} under names generated for you, because an Opensolr index name has to be unique '
+                . 'across the whole platform. They count against your plan, and nothing already on '
+                . 'the account is touched.', ['region' => $region])
+            : I18n::t('Two indexes are created under names generated for you, because an Opensolr index name has to be unique '
+                . 'across the whole platform. They count against your plan, and nothing already on '
+                . 'the account is touched.');
     }
 
     /**
@@ -502,7 +519,7 @@ final class Pairs
      */
     public static function noRoomNote(array $capacity): string
     {
-        return 'Making a new pair is not offered here because there is no room for one. '
+        return I18n::t('Making a new pair is not offered here because there is no room for one.') . ' '
             . (string) ($capacity['sentence'] ?? '');
     }
 
@@ -517,12 +534,12 @@ final class Pairs
      */
     public static function halfNotice(array $half): string
     {
-        return (string) $half['name'] . ' is on this account without its matching '
-            . (string) $half['missing'] . ', which is what a setup run that stopped half way leaves '
+        return I18n::t('{name} is on this account without its matching '
+            . '{missing}, which is what a setup run that stopped half way leaves '
             . 'behind. It cannot be picked here, because half a pair is not somewhere Loghound can '
             . 'work; it holds nothing useful on its own, and it still counts against your plan. '
             . 'Delete it in your Opensolr account when you want the slot back — Loghound will not '
-            . 'touch it either way.';
+            . 'touch it either way.', ['name' => (string) $half['name'], 'missing' => (string) $half['missing']]);
     }
 
     /**
@@ -535,8 +552,8 @@ final class Pairs
      */
     public static function deadEnd(array $capacity): string
     {
-        return 'There is nothing to pick here yet: this account holds no pair of Loghound indexes, '
-            . 'and there is no room to create one. ' . (string) ($capacity['sentence'] ?? '');
+        return I18n::t('There is nothing to pick here yet: this account holds no pair of Loghound indexes, '
+            . 'and there is no room to create one.') . ' ' . (string) ($capacity['sentence'] ?? '');
     }
 
     /**
@@ -551,9 +568,11 @@ final class Pairs
     public static function waysHeading(array $ways): string
     {
         $count = count($ways);
-        $word  = [1 => 'One way', 2 => 'Two ways', 3 => 'Three ways'][$count] ?? ($count . ' ways');
-
-        return $word . ' on from here:';
+        return [
+            1 => I18n::t('One way on from here:'),
+            2 => I18n::t('Two ways on from here:'),
+            3 => I18n::t('Three ways on from here:'),
+        ][$count] ?? I18n::t('{n} ways on from here:', ['n' => $count]);
     }
 
     /**

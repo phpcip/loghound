@@ -25,6 +25,7 @@
 
 import { initCopyButtons } from './copy.js';
 import { initSmartSelects } from './smartselect.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /**
  * Read the server's boot payload.
@@ -153,8 +154,8 @@ function paint(panel, status) {
     const meta = panel.querySelector('.job-meta');
     if (meta) {
         const where = running
-            ? 'step ' + Math.min((status.complete || 0) + 1, status.total || 0) + ' of ' + (status.total || 0)
-            : String(status.state || '');
+            ? T('step {n} of {total}', { n: Math.min((status.complete || 0) + 1, status.total || 0), total: status.total || 0 })
+            : ({ done: T('done'), error: T('error'), pending: T('pending') })[status.state] || String(status.state || '');
         meta.textContent = where + ' \u00b7 ' + (status.elapsed || 0) + 's';
     }
 
@@ -254,9 +255,9 @@ async function drive(panel) {
                An installer that does that is worse than one that fails, because a failure can
                be acted on. */
             window.clearInterval(polling);
-            stall(panel, 'The server stopped answering while this step was running. It may still be '
+            stall(panel, T('The server stopped answering while this step was running. It may still be '
                 + 'going, or it may have stopped. Reload this page to find out — the installer picks '
-                + 'up where it left off and will not start anything twice.');
+                + 'up where it left off and will not start anything twice.'));
             return;
         }
         paint(panel, status);
@@ -269,8 +270,8 @@ async function drive(panel) {
 
     /* Out of advances rather than out of work: the same dead end by a different route. */
     window.clearInterval(polling);
-    stall(panel, 'This step is taking more turns than the installer is willing to drive in one go. '
-        + 'Reload this page to carry on from where it is.');
+    stall(panel, T('This step is taking more turns than the installer is willing to drive in one go. '
+        + 'Reload this page to carry on from where it is.'));
 }
 
 /**
@@ -283,7 +284,7 @@ function stall(panel, message) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'primary';
-    button.textContent = 'Reload and carry on';
+    button.textContent = T('Reload and carry on');
     button.addEventListener('click', function () {
         window.location.reload();
     });

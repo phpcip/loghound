@@ -28,6 +28,7 @@ namespace Loghound\Panel;
 use Loghound\Config;
 use Loghound\Csv;
 use Loghound\Geo\Countries;
+use Loghound\I18n;
 use Loghound\Security;
 
 abstract class Controller
@@ -178,7 +179,12 @@ abstract class Controller
      */
     public static function sectionList(): array
     {
-        return static::SECTIONS;
+        return array_map(static function (array $entry): array {
+            if (isset($entry[1]) && is_string($entry[1])) {
+                $entry[1] = I18n::t($entry[1]);
+            }
+            return $entry;
+        }, static::SECTIONS);
     }
 
     /**
@@ -582,13 +588,13 @@ abstract class Controller
         $outer = $labels[$pivot[0]] ?? $pivot[0];
         $inner = $labels[$pivot[1]] ?? $pivot[1];
 
-        self::cardOpen($id, $num, $outer . ' by ' . $inner, $pivot[2], $this->exportTool('pivot'));
-        self::skeleton($id, 'rows', 0, 'Cross-tabulating ' . mb_strtolower($outer) . ' by ' . mb_strtolower($inner));
+        self::cardOpen($id, $num, I18n::t('{outer} by {inner}', ['outer' => $outer, 'inner' => $inner]), $pivot[2], $this->exportTool('pivot'));
+        self::skeleton($id, 'rows', 0, I18n::t('Cross-tabulating {outer} by {inner}', ['outer' => mb_strtolower($outer), 'inner' => mb_strtolower($inner)]));
         echo '<div class="table-wrap"><table id="' . Security::esc($id) . '-table" class="table-fixed pivot">'
             . '<colgroup><col style="width:32%"><col style="width:12%"><col style="width:56%"></colgroup>'
             . '<thead><tr>'
             . '<th scope="col">' . Security::esc($outer) . '</th>'
-            . '<th scope="col" class="num">Sessions</th>'
+            . '<th scope="col" class="num">' . I18n::html('Sessions') . '</th>'
             . '<th scope="col">' . Security::esc($inner) . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         self::cardClose($id);
@@ -627,6 +633,7 @@ abstract class Controller
             'range_label' => $this->range['label'],
             'demo'       => $this->gw->isDemo(),
             'error'      => $this->gw->error(),
+            'error_transport' => $this->gw->error() !== null,
             'filters'    => $this->facets->payload(),
         ], $extra);
     }
@@ -853,8 +860,9 @@ abstract class Controller
         string $id,
         string $kind = 'rows',
         int $height = 300,
-        string $label = 'Querying Solr'
+        string $label = ''
     ): void {
+        $label = $label === '' ? I18n::t('Querying Solr') : $label;
         $e = Security::esc($id);
 
         echo '<div class="card-status" id="' . $e . '-status" data-label="' . Security::esc($label) . '">'
@@ -997,6 +1005,8 @@ abstract class Controller
      */
     public function export(string $key): void
     {
+        // CSV files are data and stay in English, so they read back through every importer.
+        I18n::boot(self::root(), I18n::SOURCE);
         $declared = $this->exports();
         if (!isset($declared[$key]) || !is_array($declared[$key])) {
             if (!headers_sent()) {
@@ -1004,7 +1014,7 @@ abstract class Controller
                 header('Content-Type: text/plain; charset=utf-8');
                 header('Cache-Control: no-store, private');
             }
-            echo "This view has no such export.\n";
+            echo I18n::t('This view has no such export.') . "\n";
             return;
         }
 
@@ -1446,8 +1456,11 @@ abstract class Controller
         $cap = Security::clampInt($set['cap'], 1, Csv::MAX_ROWS, 100);
         $href = Layout::urlWith(self::exportQuery($this->slug(), $key, (array) $set['carry']));
 
-        $hint = 'Download ' . $set['label'] . ' as CSV: up to ' . number_format($cap) . ' '
-            . $set['unit'] . ', carrying the time range, virtual host, filters and ordering in force.';
+        $hint = I18n::t('Download {label} as CSV: up to {cap} {unit}, carrying the time range, virtual host, filters and ordering in force.', [
+            'label' => I18n::t((string) $set['label']),
+            'cap'   => number_format($cap),
+            'unit'  => I18n::t((string) $set['unit']),
+        ]);
 
         $carry = [];
         foreach ((array) $set['carry'] as $name) {
@@ -1461,7 +1474,7 @@ abstract class Controller
             . ' data-export-carry="' . Security::esc(implode(',', $carry)) . '"'
             . ' title="' . Security::esc($hint) . '"'
             . ' aria-label="' . Security::esc($hint) . '">'
-            . Security::esc((string) $set['control']) . '</a>';
+            . Security::esc(I18n::t((string) $set['control'])) . '</a>';
     }
 
     /**
@@ -1501,7 +1514,7 @@ abstract class Controller
         string $heading,
         string $population,
         int $height = 300,
-        string $label = 'Querying Solr'
+        string $label = ''
     ): void {
         self::cardOpen($id, $num, $heading, $population);
         self::skeleton($id, 'chart', $height, $label);

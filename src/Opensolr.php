@@ -667,17 +667,17 @@ final class Opensolr
             if (stripos($msg, 'NOT_OWNER') !== false || stripos($msg, 'INVALID_CORE_NAME') !== false) {
                 return $fail(
                     'not_owner',
-                    'This Opensolr account does not own that index, so the platform will not report its '
+                    I18n::t('This Opensolr account does not own that index, so the platform will not report its '
                     . 'plan usage. Check solr.hits_core / solr.sessions_core and the credentials in '
-                    . 'config/loghound.php.'
+                    . 'config/loghound.php.')
                 );
             }
-            return $fail('refused', 'Opensolr refused the request for this index.');
+            return $fail('refused', I18n::t('Opensolr refused the request for this index.'));
         }
 
         $data = (array) ($res['msg']['core_data'] ?? []);
         if ($data === []) {
-            return $fail('refused', 'Opensolr answered without any plan usage for this index.');
+            return $fail('refused', I18n::t('Opensolr answered without any plan usage for this index.'));
         }
 
         $all = (array) ($res['msg']['all_cores'] ?? []);

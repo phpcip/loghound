@@ -8,6 +8,9 @@ config/loghound.php
 config/*.php
 !config/loghound.example.php
 
+# Operator translation overrides (docs/TRANSLATING.md): local to one installation.
+config/lang/
+
 # The installer's proof-of-filesystem-access token. Anyone holding this during
 # the window before setup completes can point a fresh install at their own
 # backend.

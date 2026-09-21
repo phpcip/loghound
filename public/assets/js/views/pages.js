@@ -17,6 +17,7 @@ import { dimRow } from '../identity.js';
 import { pathCell } from '../url.js';
 import { tokens } from '../charts.js';
 import { clearTableChart, rankChart, splitChart } from '../tablecharts.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** The three cards' loaders, so a toggle can restart one from its first page. */
 const loaders = {};
@@ -39,8 +40,8 @@ function renderEntry(data) {
     }
     hideEmpty('an-entry-empty');
 
-    setPop('an-entry', data.scope_label + ' · ' + num(data.total) + ' visits in range, counted on the first '
-        + 'request of each. A single-request visit has the same entry and exit page.');
+    setPop('an-entry', data.scope_label + ' · ' + T('{n} visits in range, counted on the first '
+        + 'request of each. A single-request visit has the same entry and exit page.', { n: num(data.total) }));
 
     tbody(byId('an-entry-table'), data.rows.map((row) => ({
         attrs: dimRow('entry_path_s', row.path),
@@ -56,9 +57,9 @@ function renderEntry(data) {
                 text: num(row.single) + ' · ' + pct(row.single, row.sessions, 0),
                 num: true,
                 sort: row.sessions ? row.single / row.sessions : 0,
-                title: num(row.single) + ' of ' + num(row.sessions) + ' made no further request.'
+                title: T('{n} of {total} made no further request.', { n: num(row.single), total: num(row.sessions) })
             },
-            { node: shareBar(row.sessions, data.total, 'visits in range'), sort: row.sessions }
+            { node: shareBar(row.sessions, data.total, T('visits in range')), sort: row.sessions }
         ]
     })));
 
@@ -66,10 +67,10 @@ function renderEntry(data) {
     splitChart('an-entry', data.rows.map((row) => ({
         label: row.path,
         parts: [
-            { name: 'Went further', value: Math.max(0, row.sessions - row.single), color: t.pop.ai },
-            { name: 'Left after one request', value: row.single, color: t.pop.unknown }
+            { name: T('Went further'), value: Math.max(0, row.sessions - row.single), color: t.pop.ai },
+            { name: T('Left after one request'), value: row.single, color: t.pop.unknown }
         ]
-    })), { label: 'Visits per entry page, split by whether they went further' });
+    })), { label: T('Visits per entry page, split by whether they went further') });
 
     return true;
 }
@@ -83,9 +84,8 @@ function renderExit(data) {
     }
     hideEmpty('an-exit-empty');
 
-    setPop('an-exit', data.scope_label + ' · ' + num(data.total) + ' finished visits in range. '
-        + num(data.beacon) + ' (' + pct(data.beacon, data.total, 0) + ') had a beacon; for the rest the last '
-        + 'log line is all there is.');
+    setPop('an-exit', data.scope_label + ' · ' + T('{n} finished visits in range. {beacon} ({pct}) had a beacon; for the rest the last '
+        + 'log line is all there is.', { n: num(data.total), beacon: num(data.beacon), pct: pct(data.beacon, data.total, 0) }));
 
     tbody(byId('an-exit-table'), data.rows.map((row) => ({
         attrs: dimRow('exit_path_s', row.path),
@@ -97,12 +97,12 @@ function renderExit(data) {
                 sort: row.path
             },
             { text: num(row.sessions), num: true, sort: row.sessions },
-            { node: shareBar(row.sessions, data.total, 'finished visits'), sort: row.sessions }
+            { node: shareBar(row.sessions, data.total, T('finished visits')), sort: row.sessions }
         ]
     })));
 
     rankChart('an-exit', data.rows.map((row) => ({ label: row.path, value: row.sessions })),
-        { label: 'Finished visits per exit page' });
+        { label: T('Finished visits per exit page') });
 
     return true;
 }
@@ -123,9 +123,9 @@ function renderTrend(data) {
     }
     hideEmpty('an-trend-empty');
 
-    setPop('an-trend', 'Against ' + data.baseline + '. Ranked from the ' + num(data.considered) + ' busiest '
+    setPop('an-trend', T('Against {baseline}. Ranked from the {n} busiest '
         + 'paths across both windows, so a path with little traffic in either is absent however much it grew. '
-        + 'This window is still filling and the baseline is complete.');
+        + 'This window is still filling and the baseline is complete.', { baseline: data.baseline, n: num(data.considered) }));
 
     const top = data.rows.reduce((m, r) => Math.max(m, Math.abs(r.delta)), 0) || 1;
     tbody(byId('an-trend-table'), data.rows.map((row) => ({
@@ -141,8 +141,8 @@ function renderTrend(data) {
             { text: num(row.prev), num: true, sort: row.prev },
             { node: changeCell(row.now, row.prev), class: 'num', sort: row.delta },
             {
-                node: magnitudeBar(Math.abs(row.delta), top, 'the largest change on this page',
-                    num(row.prev) + ' before, ' + num(row.now) + ' now'),
+                node: magnitudeBar(Math.abs(row.delta), top, T('the largest change on this page'),
+                    T('{prev} before, {now} now', { prev: num(row.prev), now: num(row.now) })),
                 sort: row.delta
             }
         ]
@@ -151,11 +151,11 @@ function renderTrend(data) {
     rankChart('an-trend', data.rows.map((row) => ({
         label: row.path,
         value: row.delta,
-        extra: num(row.prev) + ' before, ' + num(row.now) + ' now'
+        extra: T('{prev} before, {now} now', { prev: num(row.prev), now: num(row.now) })
     })), {
         signed: true,
         format: (v) => (v > 0 ? '+' : '') + num(v),
-        label: 'Change in requests per path against the previous period'
+        label: T('Change in requests per path against the previous period')
     });
 
     return true;
@@ -190,24 +190,24 @@ function wireToggle(id) {
 export default function init() {
     loaders['an-entry'] = pagedCard({
         id: 'an-entry',
-        label: 'Faceting entry pages',
-        empty: 'entry pages',
+        label: T('Faceting entry pages'),
+        empty: T('entry pages'),
         fetch: (start, rows) => api('pages', 'entry', { start: start, rows: rows, scope: scope['an-entry'] }),
         render: renderEntry
     });
 
     loaders['an-exit'] = pagedCard({
         id: 'an-exit',
-        label: 'Faceting exit pages',
-        empty: 'exit pages',
+        label: T('Faceting exit pages'),
+        empty: T('exit pages'),
         fetch: (start, rows) => api('pages', 'exit', { start: start, rows: rows, scope: scope['an-exit'] }),
         render: renderExit
     });
 
     loaders['an-trend'] = pagedCard({
         id: 'an-trend',
-        label: 'Comparing this period against the one before',
-        empty: 'paths with any movement',
+        label: T('Comparing this period against the one before'),
+        empty: T('paths with any movement'),
         fetch: (start, rows) => api('pages', 'trending', { start: start, rows: rows }),
         render: renderTrend
     });

@@ -63,6 +63,7 @@ import {
     urlFor
 } from './facetfilter.js';
 import { bindPath, claimPath, isPathField, pathLabel, urlMark } from './url.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
 
 /** Has the panel-wide dimension list been fetched? One request per page load. */
 let loaded = false;
@@ -134,7 +135,7 @@ function rememberPanel(shown) {
  */
 function labelToggle(toggle, shown) {
     toggle.setAttribute('aria-expanded', shown ? 'true' : 'false');
-    toggle.textContent = shown ? 'Hide filters' : 'Filter by…';
+    toggle.textContent = shown ? T('Hide filters') : T('Filter by…');
 
 }
 
@@ -246,9 +247,9 @@ function option(group, bucket, largest) {
         ]);
     }
 
-    const verb = state === 'on'
-        ? ' — selected, activate to remove'
-        : (state === 'excluded' ? ' — excluded, activate to stop excluding it' : ' — activate to filter to it');
+    const verb = ' — ' + (state === 'on'
+        ? T('selected, activate to remove')
+        : (state === 'excluded' ? T('excluded, activate to stop excluding it') : T('activate to filter to it')));
 
     /* THE ACCESSIBLE NAME KEEPS THE WHOLE PATH. What the column shows may be shortened; what a
        screen reader announces must not be, because there is no tooltip to fall back on. */
@@ -256,7 +257,7 @@ function option(group, bucket, largest) {
         class: 'facet-opt' + (state === 'on' ? ' is-on' : '') + (state === 'excluded' ? ' is-excluded' : ''),
         href: toggleUrl(group.field, bucket.value, group.ns),
         title: bucket.why || '',
-        'aria-label': label + ' ' + shown + ', ' + (count === null ? 'not counted' : num(count) + ' sessions') + verb
+        'aria-label': label + ' ' + shown + ', ' + (count === null ? T('not counted') : T('{n} sessions', { n: num(count) })) + verb
     }, [
         el('span', { class: 'facet-fill', style: 'width:' + share + '%', 'aria-hidden': 'true' }),
         el('span', {
@@ -388,8 +389,8 @@ export function renderFacetGroup(group, active, max, common) {
     }, [
         el('h3', { class: 'facet-head' }, [
             el('span', { class: 'facet-name', text: group.label }),
-            chosen ? el('span', { class: 'facet-chosen', text: num(chosen) + ' selected' }) : null,
-            chosen ? el('a', { class: 'facet-clear', href: clearFieldUrl(group.field, group.ns), text: 'Clear' }) : null
+            chosen ? el('span', { class: 'facet-chosen', text: T('{n} selected', { n: num(chosen) }) }) : null,
+            chosen ? el('a', { class: 'facet-clear', href: clearFieldUrl(group.field, group.ns), text: T('Clear') }) : null
         ]),
         operatorControl(group),
         filterInput(group, head.length),
@@ -419,7 +420,7 @@ export function renderFacetPanel(holder, groups, note, max) {
     const common = commonBasisNote(list);
     const rendered = list.map((group) => renderFacetGroup(group, keys, max, common));
     if (!rendered.length) {
-        fill(holder, [el('p', { class: 'muted', text: 'No dimension has a value in this range and filter set.' })]);
+        fill(holder, [el('p', { class: 'muted', text: T('No dimension has a value in this range and filter set.') })]);
         return;
     }
     void note;
@@ -437,7 +438,7 @@ export function renderFacetPanel(holder, groups, note, max) {
         unfilterable
             ? el('p', {
                 class: 'facet-note facet-note-all',
-                text: 'Dimensions with unpressable values are not filterable yet.'
+                text: T('Dimensions with unpressable values are not filterable yet.')
             })
             : null
     ]);
@@ -516,7 +517,7 @@ function mount() {
  */
 function load(panel) {
     loaded = true;
-    fill(panel, [el('p', { class: 'muted', text: 'Counting values for every dimension…' })]);
+    fill(panel, [el('p', { class: 'muted', text: T('Counting values for every dimension…') })]);
     /* THE VIEW TRAVELS WITH THE REQUEST. The rail is one shared action, so the server cannot
        otherwise know which page it is being drawn beside — and it was counting all traffic next
        to pages that count a subset, which put 55 Romanian sessions beside an attacks table with
@@ -530,13 +531,13 @@ function load(panel) {
            closing the panel and opening it again, which is not a thing any reader would guess.
            The message is still a muted line rather than a banner, because the bar is a control
            and a Solr hiccup populating it must not put an error across a page whose cards work. */
-        const again = el('button', { type: 'button', class: 'small', text: 'Try again' });
+        const again = el('button', { type: 'button', class: 'small', text: T('Try again') });
         again.addEventListener('click', () => {
             again.disabled = true;
             load(panel);
         });
         fill(panel, [
-            el('p', { class: 'muted', text: 'The dimension list could not be loaded: ' + err.message }),
+            el('p', { class: 'muted', text: T('The dimension list could not be loaded: {error}', { error: err.message }) }),
             el('div', { class: 'card-error-actions' }, [again])
         ]);
     });

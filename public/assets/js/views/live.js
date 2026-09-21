@@ -49,6 +49,7 @@ import { dialogFail, isCurrent, openDialog, registerOpener } from '../dialog.js'
 import { visitCaption, visitTable } from '../visits.js';
 import { renderPager } from '../pager.js';
 import { exportLink } from '../export.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** Rows kept in the table. Beyond this the oldest are dropped, which the caption says. */
 const MAX_ROWS = 300;
@@ -128,15 +129,15 @@ function onHello(event) {
 
     if (data.open === 0) {
         setState('off', data.sources === 0
-            ? 'No log source is configured.'
-            : 'No configured log file could be opened.');
+            ? T('No log source is configured.')
+            : T('No configured log file could be opened.'));
         stop('nosource');
         return;
     }
 
     setState('live', data.hosts && data.hosts.length
-        ? 'Streaming ' + data.hosts.join(', ')
-        : 'Streaming ' + data.open + (data.open === 1 ? ' log file' : ' log files'));
+        ? T('Streaming {hosts}', { hosts: data.hosts.join(', ') })
+        : Tn('Streaming {n} log file', 'Streaming {n} log files', data.open));
     counts();
 }
 
@@ -154,7 +155,7 @@ function onLines(event) {
 
     arrived();
     addRows(Array.isArray(data.rows) ? data.rows : []);
-    setState('live', 'Streaming');
+    setState('live', T('Streaming'));
     counts();
 }
 
@@ -167,7 +168,7 @@ function onQuiet(event) {
         unparsedWhy = String(data.why || '');
     }
     arrived();
-    setState('live', 'Streaming');
+    setState('live', T('Streaming'));
     counts();
 }
 
@@ -255,7 +256,7 @@ function reconnecting(state) {
     }
     reconnectTimer = window.setTimeout(() => {
         reconnectTimer = 0;
-        setState(state, 'Reconnecting');
+        setState(state, T('Reconnecting'));
     }, RECONNECT_QUIET_MS);
 }
 
@@ -315,14 +316,14 @@ function stop(reason, cursor) {
     }
 
     const words = {
-        lost: 'The connection dropped and could not be re-established.',
-        asked: 'Paused.',
-        nosource: 'There is nothing to read. Settings is where log sources are configured.'
+        lost: T('The connection dropped and could not be re-established.'),
+        asked: T('Paused.'),
+        nosource: T('There is nothing to read. Settings is where log sources are configured.')
     };
 
     resumeFrom = cursor || resumeFrom;
-    setState('off', words[reason] || 'Stopped.');
-    toggleLabel('Resume');
+    setState('off', words[reason] || T('Stopped.'));
+    toggleLabel(T('Resume'));
     counts();
 }
 
@@ -331,8 +332,8 @@ function begin() {
     if (source) {
         return;
     }
-    setState('wait', 'Connecting');
-    toggleLabel('Pause');
+    setState('wait', T('Connecting'));
+    toggleLabel(T('Pause'));
     connect(resumeFrom);
     resumeFrom = '';
 
@@ -380,20 +381,20 @@ function counts() {
         return;
     }
 
-    const parts = [num(seen) + (seen === 1 ? ' request' : ' requests')];
+    const parts = [Tn('{n} request', '{n} requests', seen, { n: num(seen) })];
     if (lag > 0) {
-        parts.push(bytes(lag) + ' not read yet');
+        parts.push(T('{size} not read yet', { size: bytes(lag) }));
     }
     if (unparsed > 0) {
-        parts.push(num(unparsed) + ' unparsed' + (unparsedWhy ? ' (' + unparsedWhy + ')' : ''));
+        parts.push(T('{n} unparsed', { n: num(unparsed) }) + (unparsedWhy ? ' (' + unparsedWhy + ')' : ''));
     }
     /* SAID OUT LOUD, because a stream that is quieter than the site is busy looks broken. The
        server counts what its rules refused and this is the only place that number surfaces. */
     if (excluded > 0) {
-        parts.push(num(excluded) + ' hidden by your rules');
+        parts.push(T('{n} hidden by your rules', { n: num(excluded) }));
     }
     if (held.size >= MAX_ROWS) {
-        parts.push('showing the last ' + num(MAX_ROWS));
+        parts.push(T('showing the last {n}', { n: num(MAX_ROWS) }));
     }
 
     mount.textContent = parts.join(' · ');
@@ -459,7 +460,7 @@ function buildRow(row) {
        click instead, navigating away with `f[ip_s][]=…` in the URL and reloading the page the
        operator was watching. A live tail cannot survive a page load, so the dimension links
        are rendered as plain values and the row keeps its own gesture. */
-    tr.appendChild(el('td', { class: 'clip', title: row.host || 'The line names no host' }, [
+    tr.appendChild(el('td', { class: 'clip', title: row.host || T('The line names no host') }, [
         hostCell(row.host, { mono: true, link: false })
     ]));
 
@@ -488,9 +489,9 @@ function buildRow(row) {
     /* THE CLIENT AND THE WAY IN, ON ONE LINE. The reading this row got — what "This line"
        used to print — is the title here, so nothing it said is lost; it was the same fact as
        the client name in every row anybody looked at. */
-    tr.appendChild(el('td', { class: 'clip live-client', title: row.read.why || row.ua || 'No User-Agent was logged' }, [
+    tr.appendChild(el('td', { class: 'clip live-client', title: row.read.why || row.ua || T('No User-Agent was logged') }, [
         el('span', { class: 'live-client-name' }, [clientWords(row)]),
-        openButton('liveline', { id: row.id }, 'Open this request')
+        openButton('liveline', { id: row.id }, T('Open this request'))
     ]));
 
     return tr;
@@ -523,7 +524,7 @@ function clientWords(row) {
         });
     }
     if (row.ua_logged && !row.ua) {
-        return el('span', { class: 'muted', text: 'no User-Agent' });
+        return el('span', { class: 'muted', text: T('no User-Agent') });
     }
     return el('span', { class: 'muted', text: '—' });
 }
@@ -531,10 +532,10 @@ function clientWords(row) {
 /** Where the address is, or the honest alternative. */
 function placeWords(row) {
     if (!row.geo_known) {
-        return 'This address has not been located yet. Ingest looks it up; this page only reads '
-            + 'what has already been looked up.';
+        return T('This address has not been located yet. Ingest looks it up; this page only reads '
+            + 'what has already been looked up.');
     }
-    return [row.city, row.region, row.country].filter(Boolean).join(', ') || 'Located, but unnamed';
+    return [row.city, row.region, row.country].filter(Boolean).join(', ') || T('Located, but unnamed');
 }
 
 /** What the status class means, in the vocabulary's own words. */
@@ -574,11 +575,11 @@ function kv(pairs) {
 async function openLine(id) {
     const row = held.get(id);
     if (!row) {
-        const handle = openDialog('That request is no longer held', '');
+        const handle = openDialog(T('That request is no longer held'), '');
         fill(handle.body, [el('p', {
             class: 'muted',
-            text: 'The table keeps the last ' + num(MAX_ROWS) + ' requests and this one has scrolled '
-                + 'out of it. It is in the index once its visit has been scored.'
+            text: T('The table keeps the last {n} requests and this one has scrolled '
+                + 'out of it. It is in the index once its visit has been scored.', { n: num(MAX_ROWS) })
         })]);
         return;
     }
@@ -589,70 +590,70 @@ async function openLine(id) {
     );
 
     fill(handle.body, [
-        el('h3', { text: 'The request' }),
+        el('h3', { text: T('The request') }),
         kv([
-            ['When', stamp(row.ts)],
-            ['Virtual host', row.host ? hostCell(row.host) : null],
-            ['Method', row.method, true],
+            [T('When'), stamp(row.ts)],
+            [T('Virtual host'), row.host ? hostCell(row.host) : null],
+            [T('Method'), row.method, true],
             /* SHOWN WITH ITS QUERY STRING. The link always carried it — siteUrl() composes path
                and query — but the cell printed the bare path, so the row looked like it would
                open something other than the request it describes. The query cannot be folded
                into the path argument: `?` is not a path character and would be encoded. */
-            ['Path', pathCell(row.path, {
+            [T('Path'), pathCell(row.path, {
                 host: row.host,
                 query: row.query,
                 text: row.path + (row.query ? '?' + row.query : '')
             })],
-            ['Query string', row.query || null, true],
-            ['Protocol', row.proto, true],
-            ['Answered with', statusNode(row)],
-            ['Bytes sent', row.bytes === null ? null : bytes(row.bytes)],
-            ['Time the server took', row.dur_us === null ? null : durUs(row.dur_us)],
-            ['Kind of request', row.kind],
-            ['Read from', row.file, true],
-            ['Search terms in the query', (row.search_terms || []).join(', ') || null]
+            [T('Query string'), row.query || null, true],
+            [T('Protocol'), row.proto, true],
+            [T('Answered with'), statusNode(row)],
+            [T('Bytes sent'), row.bytes === null ? null : bytes(row.bytes)],
+            [T('Time the server took'), row.dur_us === null ? null : durUs(row.dur_us)],
+            [T('Kind of request'), row.kind],
+            [T('Read from'), row.file, true],
+            [T('Search terms in the query'), (row.search_terms || []).join(', ') || null]
         ]),
 
-        el('h3', { text: 'The client' }),
+        el('h3', { text: T('The client') }),
         kv([
-            ['Address', row.ip ? dimValue('ip_s', row.ip, { mono: true }) : null],
-            ['Address family', row.ip_ver ? 'IPv' + row.ip_ver : null],
-            ['Browser', row.browser
+            [T('Address'), row.ip ? dimValue('ip_s', row.ip, { mono: true }) : null],
+            [T('Address family'), row.ip_ver ? 'IPv' + row.ip_ver : null],
+            [T('Browser'), row.browser
                 ? dimValue('browser_s', row.browser, {
                     text: [row.browser, row.browser_ver].filter(Boolean).join(' ')
                 })
                 : null],
-            ['Operating system', row.os ? dimValue('os_s', row.os) : null],
-            ['Kind of device', row.device ? dimValue('device_s', row.device) : null],
-            ['Says it is a crawler', botNode(row)],
-            ['Languages it asked for', row.accept_lang, true],
-            ['TLS', [row.tls_proto, row.tls_cipher].filter(Boolean).join(' · ') || null, true],
-            ['Forwarded-for header', row.xff || null, true]
+            [T('Operating system'), row.os ? dimValue('os_s', row.os) : null],
+            [T('Kind of device'), row.device ? dimValue('device_s', row.device) : null],
+            [T('Says it is a crawler'), botNode(row)],
+            [T('Languages it asked for'), row.accept_lang, true],
+            [T('TLS'), [row.tls_proto, row.tls_cipher].filter(Boolean).join(' · ') || null, true],
+            [T('Forwarded-for header'), row.xff || null, true]
         ]),
         uaBlock(row),
 
-        el('h3', { text: 'Where it came from' }),
+        el('h3', { text: T('Where it came from') }),
         geoBlock(row),
         kv([
-            ['Referrer', row.referer
+            [T('Referrer'), row.referer
                 ? el('span', { class: 'refurl' }, [
                     el('span', { class: 'mono wrap', text: row.referer }),
                     hrefLink(row.referer_href)
                 ])
-                : 'none was sent'],
-            ['Which counts as', row.referer_type ? dimValue('referer_type_s', row.referer_type) : null]
+                : T('none was sent')],
+            [T('Which counts as'), row.referer_type ? dimValue('referer_type_s', row.referer_type) : null]
         ]),
 
-        el('h3', { text: 'What this line shows' }),
+        el('h3', { text: T('What this line shows') }),
         el('p', {
             class: 'faint',
-            text: 'Read from this request alone. A verdict is scored over a whole visit once it '
-                + 'settles, so there is none here.'
+            text: T('Read from this request alone. A verdict is scored over a whole visit once it '
+                + 'settles, so there is none here.')
         }),
         readingBlock(row),
 
-        el('h3', { text: 'What the index already knows about this address' }),
-        el('div', { id: 'lv-known' }, [el('p', { class: 'muted', text: 'Asking…' })])
+        el('h3', { text: T('What the index already knows about this address') }),
+        el('div', { id: 'lv-known' }, [el('p', { class: 'muted', text: T('Asking…') })])
     ]);
 
     if (row.ip) {
@@ -660,7 +661,7 @@ async function openLine(id) {
     } else {
         fill(byId('lv-known'), [el('p', {
             class: 'muted',
-            text: 'The line carries no client address, so there is nothing to look up.'
+            text: T('The line carries no client address, so there is nothing to look up.')
         })]);
     }
 }
@@ -683,10 +684,10 @@ function botNode(row) {
         return null;
     }
     return el('span', {}, [
-        el('span', { text: row.ua_bot_name || 'yes' }),
+        el('span', { text: row.ua_bot_name || T('yes') }),
         row.ua_bot_cat ? el('span', { text: ' — ' }) : null,
         row.ua_bot_cat ? dimValue('ua_bot_cat_s', row.ua_bot_cat) : null,
-        row.ai_crawler ? el('span', { class: 'chip chip-accent', text: 'collects for AI' }) : null
+        row.ai_crawler ? el('span', { class: 'chip chip-accent', text: T('collects for AI') }) : null
     ]);
 }
 
@@ -694,11 +695,11 @@ function botNode(row) {
 function uaBlock(row) {
     if (!row.ua) {
         return row.ua_logged
-            ? el('p', { class: 'muted', text: 'The client sent no User-Agent at all. Browsers always send one.' })
-            : el('p', { class: 'muted', text: 'This log format does not record the User-Agent.' });
+            ? el('p', { class: 'muted', text: T('The client sent no User-Agent at all. Browsers always send one.') })
+            : el('p', { class: 'muted', text: T('This log format does not record the User-Agent.') });
     }
     return el('details', { class: 'raw-ua' }, [
-        el('summary', { text: 'The User-Agent as it was sent' }),
+        el('summary', { text: T('The User-Agent as it was sent') }),
         el('p', { class: 'mono wrap', text: row.ua })
     ]);
 }
@@ -715,16 +716,16 @@ function geoBlock(row) {
     const pairs = [];
 
     if (row.geo_known) {
-        pairs.push(['Country', row.country ? dimValue('country_s', row.country) : null]);
-        pairs.push(['Region', row.region]);
-        pairs.push(['City', row.city ? dimValue('city_s', row.city) : null]);
-        pairs.push(['Timezone of the address', row.tz, true]);
+        pairs.push([T('Country'), row.country ? dimValue('country_s', row.country) : null]);
+        pairs.push([T('Region'), row.region]);
+        pairs.push([T('City'), row.city ? dimValue('city_s', row.city) : null]);
+        pairs.push([T('Timezone of the address'), row.tz, true]);
     }
     if (row.net_known) {
-        pairs.push(['Network operator', row.as_org ? dimValue('as_org_s', row.as_org) : null]);
-        pairs.push(['AS number', row.asn ? 'AS' + row.asn : null, true]);
-        pairs.push(['Kind of network', row.as_type ? dimValue('as_type_s', row.as_type) : null]);
-        pairs.push(['Netblock name', row.netname, true]);
+        pairs.push([T('Network operator'), row.as_org ? dimValue('as_org_s', row.as_org) : null]);
+        pairs.push([T('AS number'), row.asn ? 'AS' + row.asn : null, true]);
+        pairs.push([T('Kind of network'), row.as_type ? dimValue('as_type_s', row.as_type) : null]);
+        pairs.push([T('Netblock name'), row.netname, true]);
     }
 
     const list = kv(pairs);
@@ -732,21 +733,18 @@ function geoBlock(row) {
         return list;
     }
 
-    const missing = [];
-    if (!row.geo_known) {
-        missing.push('located');
-    }
-    if (!row.net_known) {
-        missing.push('traced to a network');
-    }
+    const text = !row.geo_known && !row.net_known
+        ? T('This address has not been located or traced to a network yet. Ingest does that once '
+            + 'and caches it; this page reads the cache and never makes the lookup itself.')
+        : (!row.geo_known
+            ? T('This address has not been located yet. Ingest does that once '
+                + 'and caches it; this page reads the cache and never makes the lookup itself.')
+            : T('This address has not been traced to a network yet. Ingest does that once '
+                + 'and caches it; this page reads the cache and never makes the lookup itself.'));
 
     return el('div', {}, [
         list,
-        el('p', {
-            class: 'muted',
-            text: 'This address has not been ' + missing.join(' or ') + ' yet. Ingest does that once '
-                + 'and caches it; this page reads the cache and never makes the lookup itself.'
-        })
+        el('p', { class: 'muted', text: text })
     ]);
 }
 
@@ -761,7 +759,7 @@ function readingBlock(row) {
 
     const flags = row.flags || [];
     if (!flags.length) {
-        parts.push(el('p', { class: 'muted', text: 'No attack pattern matched the path or the query.' }));
+        parts.push(el('p', { class: 'muted', text: T('No attack pattern matched the path or the query.') }));
         return el('div', {}, parts);
     }
 
@@ -814,18 +812,20 @@ function renderKnown(mount, ip, data, generation) {
     if (!data.sessions) {
         fill(mount, [el('p', {
             class: 'muted',
-            text: 'No scored visit carries this address' + (data.scope ? ' on ' + data.scope : '')
-                + '. That is a fact about what has been ingested, not about this client.'
+            text: data.scope
+                ? T('No scored visit carries this address on {scope}. That is a fact about what has been ingested, not about this client.', { scope: data.scope })
+                : T('No scored visit carries this address. That is a fact about what has been ingested, not about this client.')
         })]);
         return;
     }
 
     const summary = el('p', {}, [
         el('span', {
-            text: num(data.sessions) + (data.sessions === 1 ? ' visit' : ' visits')
-                + (data.scope ? ' on ' + data.scope : '') + ', '
-                + num(data.settled) + ' of them settled'
-                + (data.first ? ', first seen ' + when(data.first) : '') + '.'
+            text: (data.scope
+                ? Tn('{n} visit on {scope}', '{n} visits on {scope}', data.sessions, { n: num(data.sessions), scope: data.scope })
+                : Tn('{n} visit', '{n} visits', data.sessions, { n: num(data.sessions) }))
+                + ', ' + T('{n} of them settled', { n: num(data.settled) })
+                + (data.first ? ', ' + T('first seen {when}', { when: when(data.first) }) : '') + '.'
         })
     ]);
 
@@ -1028,7 +1028,7 @@ function renderChart() {
             axisPointer: shadowPointer(theme),
             formatter: (params) => {
                 const p = params[0];
-                return tip`${p.name}<br><strong>${num(p.value)}</strong> requests`;
+                return tip`${p.name}<br><strong>${num(p.value)}</strong> ${T('requests')}`;
             }
         },
         xAxis: {
@@ -1066,8 +1066,8 @@ function noteRules() {
        different page from the one on screen. */
     const on = rules.filter((rule) => rule.enabled).length + builtinOn.length;
     note.textContent = on === 0
-        ? 'Nothing is being excluded.'
-        : (on === 1 ? '1 rule is hiding requests.' : on + ' rules are hiding requests.');
+        ? T('Nothing is being excluded.')
+        : Tn('{n} rule is hiding requests.', '{n} rules are hiding requests.', on);
 }
 
 /** Read the stored rules once, so the button can say what is in force before it is pressed. */
@@ -1095,8 +1095,8 @@ async function loadRules() {
  */
 function openExclusions() {
     const { body, generation } = openDialog(
-        'Exclusions for this page',
-        'Hide requests from the live stream. Nothing here changes what is stored.'
+        T('Exclusions for this page'),
+        T('Hide requests from the live stream. Nothing here changes what is stored.')
     );
 
     const draftRules = rules.map((rule) => ({ ...rule }));
@@ -1130,9 +1130,9 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
             el('col', { style: 'width:14%' })
         ]),
         el('thead', {}, [el('tr', {}, [
-            el('th', { scope: 'col', text: 'Field' }),
-            el('th', { scope: 'col', text: 'Pattern' }),
-            el('th', { scope: 'col', text: 'On' }),
+            el('th', { scope: 'col', text: T('Field') }),
+            el('th', { scope: 'col', text: T('Pattern') }),
+            el('th', { scope: 'col', text: T('On') }),
             el('th', { scope: 'col', text: '' })
         ])]),
         el('tbody', {}, draft.length
@@ -1140,7 +1140,7 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
             : [el('tr', {}, [el('td', {
                 colspan: '4',
                 class: 'muted',
-                text: 'No rules yet. Everything the tail reads is shown.'
+                text: T('No rules yet. Everything the tail reads is shown.')
             })])])
     ]);
 
@@ -1151,12 +1151,12 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
         type: 'text',
         id: 'lv-new-pattern',
         class: 'live-find',
-        placeholder: 'Regular expression, e.g. ^/wp-login',
+        placeholder: T('Regular expression, e.g. ^/wp-login'),
         autocomplete: 'off',
         spellcheck: 'false'
     });
 
-    const addButton = el('button', { type: 'button', class: 'small', text: 'Add rule' });
+    const addButton = el('button', { type: 'button', class: 'small', text: T('Add rule') });
     addButton.addEventListener('click', () => {
         const pattern = String(patternInput.value || '').trim();
         if (pattern === '') {
@@ -1170,12 +1170,12 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
         renderExclusions(mount, generation, draft, '', draftBuiltin);
     });
 
-    const saveButton = el('button', { type: 'button', class: 'small', text: 'Save rules' });
+    const saveButton = el('button', { type: 'button', class: 'small', text: T('Save rules') });
     const status = el('span', { class: 'muted', text: note || '' });
 
     saveButton.addEventListener('click', async () => {
         saveButton.disabled = true;
-        status.textContent = 'Saving…';
+        status.textContent = T('Saving…');
         try {
             const data = await post({
                 action: 'live_exclusions',
@@ -1203,15 +1203,17 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
                 mount,
                 generation,
                 rules.map((rule) => ({ ...rule })),
-                (refused > 0
-                    ? refused + (refused === 1 ? ' rule was refused' : ' rules were refused')
-                        + ' — a pattern PCRE will not accept. The rest were saved'
-                    : 'Saved')
-                + (wasRunning ? ' and applied to the stream now.' : '.'),
+                refused > 0
+                    ? (wasRunning
+                        ? Tn('{n} rule was refused — a pattern PCRE will not accept. The rest were saved and applied to the stream now.',
+                            '{n} rules were refused — a pattern PCRE will not accept. The rest were saved and applied to the stream now.', refused)
+                        : Tn('{n} rule was refused — a pattern PCRE will not accept. The rest were saved.',
+                            '{n} rules were refused — a pattern PCRE will not accept. The rest were saved.', refused))
+                    : (wasRunning ? T('Saved and applied to the stream now.') : T('Saved.')),
                 builtinOn.slice()
             );
         } catch (err) {
-            status.textContent = err && err.message ? err.message : 'The rules could not be saved.';
+            status.textContent = err && err.message ? err.message : T('The rules could not be saved.');
         }
         saveButton.disabled = false;
     });
@@ -1254,7 +1256,7 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
 
     const importFile = el('input', { type: 'file', accept: '.csv,text/csv' });
     importFile.hidden = true;
-    const importButton = el('button', { type: 'button', class: 'small', text: 'Import CSV' });
+    const importButton = el('button', { type: 'button', class: 'small', text: T('Import CSV') });
     importButton.addEventListener('click', () => importFile.click());
     importFile.addEventListener('change', async () => {
         const file = importFile.files && importFile.files[0];
@@ -1262,12 +1264,12 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
             return;
         }
         if (file.size > 512000) {
-            status.textContent = 'That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.';
+            status.textContent = T('That file is larger than 500 KB, which is far more than a rule list. Nothing was imported.');
             importFile.value = '';
             return;
         }
         importButton.disabled = true;
-        status.textContent = 'Importing…';
+        status.textContent = T('Importing…');
         try {
             const data = await post({ action: 'live_exclusions_import', csv: await file.text() });
             builtinOn = Array.isArray(data.builtin_on) ? data.builtin_on : builtinOn;
@@ -1286,41 +1288,39 @@ function renderExclusions(mount, generation, draft, note, draftBuiltin) {
                 mount,
                 generation,
                 rules.map((rule) => ({ ...rule })),
-                'Imported and saved; duplicates were skipped'
-                + (refused > 0 ? ', and ' + refused + (refused === 1 ? ' rule was' : ' rules were') + ' refused' : '')
-                + '. Unsaved edits in this dialog were replaced by the stored list'
-                + (wasRunning ? ', and the stream was reconnected.' : '.'),
+                T('Imported and saved; duplicates were skipped') + (refused > 0
+                    ? Tn(', and {n} rule was refused', ', and {n} rules were refused', refused)
+                    : '')
+                + '. ' + (wasRunning
+                    ? T('Unsaved edits in this dialog were replaced by the stored list, and the stream was reconnected.')
+                    : T('Unsaved edits in this dialog were replaced by the stored list.')),
                 builtinOn.slice()
             );
         } catch (err) {
-            status.textContent = err && err.message ? err.message : 'The file could not be imported.';
+            status.textContent = err && err.message ? err.message : T('The file could not be imported.');
             importButton.disabled = false;
             importFile.value = '';
         }
     });
 
     fill(mount, [
-        el('p', { class: 'muted' }, [
-            'Ready-made groups first, then your own rules underneath. Nothing here changes what is ',
-            'stored — every request hidden from this page was recorded in full and is in every ',
-            'other view.'
-        ]),
+        el('p', { class: 'muted', text: T('Ready-made groups first, then your own rules underneath. Nothing here changes what is '
+            + 'stored — every request hidden from this page was recorded in full and is in every '
+            + 'other view.') }),
         el('div', { class: 'table-wrap' }, [builtinTable]),
 
-        el('p', { class: 'muted' }, [
-            'Your own rules. A rule is a field and a regular expression. Matching is ',
-            'case-insensitive, and the pattern is the expression itself — no slashes and no flags. ',
-            el('code', { class: 'mono', text: '^/wp-login' }),
-            ' hides every request whose path starts that way; ',
-            el('code', { class: 'mono', text: '^4' }),
-            ' on Status hides every 4xx.'
-        ]),
+        el('p', { class: 'muted' }, Tf('Your own rules. A rule is a field and a regular expression. Matching is '
+            + 'case-insensitive, and the pattern is the expression itself — no slashes and no flags. '
+            + '{login} hides every request whose path starts that way; {four} on Status hides every 4xx.', {
+            login: el('code', { class: 'mono', text: '^/wp-login' }),
+            four: el('code', { class: 'mono', text: '^4' })
+        })),
         el('div', { class: 'table-wrap' }, [table]),
         el('div', { class: 'live-tools' }, [fieldSelect, patternInput, addButton]),
         el('div', { class: 'live-tools' }, [
             saveButton,
             status,
-            exportLink('live', 'exclusions', 'Every rule in force, built-in and your own, as a CSV file', {}),
+            exportLink('live', 'exclusions', T('Every rule in force, built-in and your own, as a CSV file'), {}),
             importButton,
             importFile
         ])
@@ -1335,7 +1335,7 @@ function ruleRow(rule, index, mount, generation, draft, draftBuiltin) {
         draft[index].enabled = toggle.checked;
     });
 
-    const remove = el('button', { type: 'button', class: 'small', text: 'Remove' });
+    const remove = el('button', { type: 'button', class: 'small', text: T('Remove') });
     remove.addEventListener('click', () => {
         draft.splice(index, 1);
         renderExclusions(mount, generation, draft, '', draftBuiltin);
@@ -1358,7 +1358,7 @@ function ruleRow(rule, index, mount, generation, draft, draftBuiltin) {
         value: rule.pattern,
         autocomplete: 'off',
         spellcheck: 'false',
-        'aria-label': 'Pattern'
+        'aria-label': T('Pattern')
     });
     pattern.addEventListener('input', () => {
         draft[index].pattern = pattern.value;
@@ -1412,14 +1412,14 @@ export default function init() {
     }
 
     if (typeof window.EventSource !== 'function') {
-        setState('off', 'This browser cannot hold a stream open, so there is nothing to show here.');
-        toggleLabel('Resume');
+        setState('off', T('This browser cannot hold a stream open, so there is nothing to show here.'));
+        toggleLabel(T('Resume'));
         return;
     }
 
     if (boot.demo) {
-        setState('off', 'Demo mode answers from fixtures, and there is no log file behind them.');
-        toggleLabel('Resume');
+        setState('off', T('Demo mode answers from fixtures, and there is no log file behind them.'));
+        toggleLabel(T('Resume'));
         return;
     }
 

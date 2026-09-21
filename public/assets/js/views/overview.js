@@ -19,6 +19,7 @@ import { pagedCard } from '../cardtable.js';
 import { dimRow } from '../identity.js';
 import { renderPivot } from '../facetfilter.js';
 import { pathCell } from '../url.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** Stacking order, bottom to top: most human at the bottom. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -43,12 +44,12 @@ function renderTotals(data) {
         const hint = scope ? scope.querySelector('[data-stat="' + key + '"] .stat-hint') : null;
         if (hint && data.total_sessions) {
             hint.textContent = hint.textContent.replace(/ · .*$/, '') +
-                ' · ' + pct(data.totals[key], data.total_sessions) + ' of sessions';
+                ' · ' + T('{pct} of sessions', { pct: pct(data.totals[key], data.total_sessions) });
         }
     }
-    setPop('ov-stats', num(data.total_sessions) + ' scored sessions in the selected range, split into five ' +
-        'mutually exclusive populations. Distinct human visitors: ' + num(data.human_detail.visitors) +
-        ' (approximate above ~100).' + (data.pending ? ' ' + data.pending : ''));
+    setPop('ov-stats', T('{n} scored sessions in the selected range, split into five ' +
+        'mutually exclusive populations. Distinct human visitors: {visitors} (approximate above ~100).',
+        { n: num(data.total_sessions), visitors: num(data.human_detail.visitors) }) + (data.pending ? ' ' + data.pending : ''));
 }
 
 /**
@@ -80,27 +81,32 @@ function renderTiming(data) {
     const lines = [];
 
     if (t.spanned) {
-        lines.push('Log span covers the ' + num(t.spanned) + ' completed human session' +
-            (t.spanned === 1 ? '' : 's') + ' that made more than one request.');
+        lines.push(Tn('Log span covers the {n} completed human session that made more than one request.',
+            'Log span covers the {n} completed human sessions that made more than one request.', t.spanned, { n: num(t.spanned) }));
         if (t.single_request) {
-            lines.push('A further ' + num(t.single_request) + ' made exactly one, so they have no span to ' +
-                'measure and are excluded rather than averaged in as zero.');
+            lines.push(T('A further {n} made exactly one, so they have no span to ' +
+                'measure and are excluded rather than averaged in as zero.', { n: num(t.single_request) }));
         }
         if (t.span_floored) {
-            lines.push(num(t.span_floored) + ' of them (' + pct(t.span_floored, t.spanned) +
-                ') came out shorter than this log\'s clock can measure.');
+            lines.push(T('{n} of them ({pct}) came out shorter than this log\'s clock can measure.',
+                { n: num(t.span_floored), pct: pct(t.span_floored, t.spanned) }));
         }
     } else {
-        lines.push('No completed human session in this range made more than one request, so there is no ' +
-            'span to measure.');
+        lines.push(T('No completed human session in this range made more than one request, so there is no ' +
+            'span to measure.'));
     }
 
     lines.push(t.population
-        ? 'Wall, visible and engaged time cover the ' + num(t.population) + ' of those human sessions that ' +
-          'produced beacon data (' + pct(t.population, t.humans) + ' of ' + num(t.humans) + '); the other ' +
-          num(t.without_beacon) + ' had no beacon and are excluded entirely, not counted as zero.'
-        : 'No human session in this range produced beacon data, so wall, visible and engaged time are ' +
-          'unknown. They are shown as em-dashes rather than zeroes.');
+        ? T('Wall, visible and engaged time cover the {n} of those human sessions that ' +
+          'produced beacon data ({pct} of {humans}); the other ' +
+          '{without} had no beacon and are excluded entirely, not counted as zero.', {
+            n: num(t.population),
+            pct: pct(t.population, t.humans),
+            humans: num(t.humans),
+            without: num(t.without_beacon)
+        })
+        : T('No human session in this range produced beacon data, so wall, visible and engaged time are ' +
+          'unknown. They are shown as em-dashes rather than zeroes.'));
 
     setPop('ov-timing', lines.join(' '));
 
@@ -135,15 +141,19 @@ function renderTimingComparison(t) {
         return;
     }
     const ratio = t.engaged_p50 > 0 ? (t.wall_p50 / t.engaged_p50) : null;
+    const figures = {
+        log: el('span', { class: 'mono', text: dur(t.all_log_span_p50) }),
+        wall: el('span', { class: 'mono', text: dur(t.wall_p50) }),
+        engaged: el('span', { class: 'mono', text: dur(t.engaged_p50) }),
+        ratio: ratio ? ratio.toFixed(1) : ''
+    };
     note.insertBefore(el('p', { id: 'ov-timing-compare' }, [
-        el('strong', { text: 'On this traffic: ' }),
-        'a log-only tool would report a median of ',
-        el('span', { class: 'mono', text: dur(t.all_log_span_p50) }),
-        ' on site. A JavaScript analytics product would report ',
-        el('span', { class: 'mono', text: dur(t.wall_p50) }),
-        '. The median visitor was actually engaged for ',
-        el('span', { class: 'mono', text: dur(t.engaged_p50) }),
-        ratio && ratio >= 1.2 ? ' — ' + ratio.toFixed(1) + '× less than the wall-clock figure.' : '.'
+        el('strong', { text: T('On this traffic: ') }),
+        ...(ratio && ratio >= 1.2
+            ? Tf('a log-only tool would report a median of {log} on site. A JavaScript analytics product would report '
+                + '{wall}. The median visitor was actually engaged for {engaged} — {ratio}× less than the wall-clock figure.', figures)
+            : Tf('a log-only tool would report a median of {log} on site. A JavaScript analytics product would report '
+                + '{wall}. The median visitor was actually engaged for {engaged}.', figures))
     ]), note.firstChild);
 }
 
@@ -160,10 +170,10 @@ function renderTimingComparison(t) {
 function renderTimingBars(t) {
     const th = tokens();
     const rows = [
-        { label: 'Log span', value: t.log_span_p50, key: 'log_span' },
-        { label: 'Wall clock', value: t.wall_p50, key: 'wall' },
-        { label: 'Visible', value: t.visible_p50, key: 'visible' },
-        { label: 'Engaged', value: t.engaged_p50, key: 'engaged' }
+        { label: T('Log span'), value: t.log_span_p50, key: 'log_span' },
+        { label: T('Wall clock'), value: t.wall_p50, key: 'wall' },
+        { label: T('Visible'), value: t.visible_p50, key: 'visible' },
+        { label: T('Engaged'), value: t.engaged_p50, key: 'engaged' }
     ].filter((row) => row.value !== null && row.value !== undefined);
 
     const node = byId('ov-timing-chart');
@@ -172,7 +182,7 @@ function renderTimingBars(t) {
         if (node) {
             node.hidden = true;
         }
-        noDataYet('ov-timing-empty', 'measured durations');
+        noDataYet('ov-timing-empty', T('measured durations'));
         return;
     }
     if (node) {
@@ -184,7 +194,7 @@ function renderTimingBars(t) {
         label: row.label,
         value: row.value,
         color: row.key === 'engaged' ? th.accent : th.pop.declared,
-        extra: 'median'
+        extra: T('median')
     })), { format: dur });
 }
 
@@ -194,7 +204,7 @@ function renderTimingBars(t) {
 function renderSeries(data) {
     const any = ORDER.some((key) => (data.series[key] || []).some((value) => value > 0));
     if (!any) {
-        noDataYet('ov-series-empty', 'sessions');
+        noDataYet('ov-series-empty', T('sessions'));
         return;
     }
     hideEmpty('ov-series-empty');
@@ -217,12 +227,12 @@ function renderSeries(data) {
  */
 function renderPages(data) {
     const ignored = (data.ignored || []).length
-        ? ' These filters name session-level conclusions the request plane does not carry and do not ' +
-          'narrow this table: ' + data.ignored.join(', ') + '.'
+        ? ' ' + T('These filters name session-level conclusions the request plane does not carry and do not ' +
+          'narrow this table: {filters}.', { filters: data.ignored.join(', ') })
         : '';
 
-    setPop('ov-pages', data.population_label + ' \u00b7 ' + num(data.total) + ' requests in range, ranked by ' +
-        'how many times each path was fetched.' + (data.note ? ' ' + data.note : '') + ignored);
+    setPop('ov-pages', data.population_label + ' \u00b7 ' + T('{n} requests in range, ranked by ' +
+        'how many times each path was fetched.', { n: num(data.total) }) + (data.note ? ' ' + data.note : '') + ignored);
 
     if (!data.rows.length) {
         tbody(byId('ov-pages-table'), []);
@@ -247,7 +257,7 @@ function renderPages(data) {
     })));
 
     rankChart('ov-pages', data.rows.map((row) => ({ label: row.path, value: row.requests })),
-        { label: 'Requests per path' });
+        { label: T('Requests per path') });
 
     return true;
 }
@@ -269,7 +279,7 @@ function shareCell(value, total) {
     const share = total > 0 ? (value / total) * 100 : 0;
 
     return {
-        node: el('span', { class: 'bar', title: pct(value, total) + ' of all of them' }, [
+        node: el('span', { class: 'bar', title: T('{pct} of all of them', { pct: pct(value, total) }) }, [
             el('span', { style: 'width:' + Math.max(share > 0 ? 1 : 0, Math.round(share)) + '%' })
         ]),
         sort: value
@@ -286,30 +296,26 @@ function shareCell(value, total) {
  */
 function renderSearches(data) {
     if (!data.configured.length) {
-        setPop('ov-searches', 'Not collecting any search terms.');
+        setPop('ov-searches', T('Not collecting any search terms.'));
         tbody(byId('ov-searches-table'), []);
         clearTableChart('ov-searches');
-        showEmpty('ov-searches-empty', 'Search terms are not being collected', [
-            'Loghound reads a search term out of the URL, and only from the query parameters you '
+        showEmpty('ov-searches-empty', T('Search terms are not being collected'), [
+            T('Loghound reads a search term out of the URL, and only from the query parameters you '
                 + 'have named. None are named on this installation, so nothing is collected and '
-                + 'nothing can appear here.',
-            el('p', {}, [
-                'Name the parameter your search box uses \u2014 ',
-                el('code', { text: 'q' }),
-                ', ',
-                el('code', { text: 's' }),
-                ' or whatever your site puts in the address \u2014 under ',
-                el('a', { href: '?v=settings&s=beacon', text: 'Settings, in the beacon section' }),
-                '. Terms start appearing here from the next visit onwards; nothing is recovered '
-                + 'retrospectively.'
-            ])
+                + 'nothing can appear here.'),
+            el('p', {}, Tf('Name the parameter your search box uses — {q}, {s} or whatever your site puts in the address — under {settings}. '
+                + 'Terms start appearing here from the next visit onwards; nothing is recovered retrospectively.', {
+                q: el('code', { text: 'q' }),
+                s: el('code', { text: 's' }),
+                settings: el('a', { href: '?v=settings&s=beacon', text: T('Settings, in the beacon section') })
+            }))
         ]);
         return 'own';
     }
 
-    setPop('ov-searches', num(data.searched) + ' of ' + num(data.total) + ' sessions in range ran a ' +
+    setPop('ov-searches', T('{n} of {total} sessions in range ran a ' +
         'search. Counted as sessions that searched for a term at least once, not as the number of ' +
-        'searches: a visitor who ran the same search six times counts once.');
+        'searches: a visitor who ran the same search six times counts once.', { n: num(data.searched), total: num(data.total) }));
 
     if (!data.rows.length) {
         tbody(byId('ov-searches-table'), []);
@@ -333,7 +339,7 @@ function renderSearches(data) {
     })));
 
     rankChart('ov-searches', data.rows.map((row) => ({ label: row.term, value: row.sessions })),
-        { label: 'Sessions per search term' });
+        { label: T('Sessions per search term') });
 
     return true;
 }
@@ -381,35 +387,35 @@ export default function init() {
        so the pivot costs no extra round trip — but it is its own card, so it keeps its own
        progress line and its own failure state. Both await the same promise. */
     const totals = api('overview', 'totals');
-    loadCard('ov-stats', 'Counting sessions by verdict', async () => {
+    loadCard('ov-stats', T('Counting sessions by verdict'), async () => {
         renderTotals(await totals);
     });
     if (byId('ov-pivot-table')) {
-        loadCard('ov-pivot', 'Cross-tabulating the filtered population', async () => {
+        loadCard('ov-pivot', T('Cross-tabulating the filtered population'), async () => {
             const data = await totals;
             if (!renderPivot('ov-pivot', data.pivot)) {
-                noPivotYet('ov-pivot-empty', 'both of its dimensions set');
+                noPivotYet('ov-pivot-empty', T('both of its dimensions set'));
             }
         });
     }
-    loadCard('ov-timing', 'Measuring dwell time across four clocks', async () => {
+    loadCard('ov-timing', T('Measuring dwell time across four clocks'), async () => {
         renderTiming(await api('overview', 'timing'));
     });
-    loadCard('ov-series', 'Bucketing sessions by hour', async () => {
+    loadCard('ov-series', T('Bucketing sessions by hour'), async () => {
         renderSeries(await api('overview', 'series'));
     });
     loadPages = pagedCard({
         id: 'ov-pages',
-        label: 'Counting requests by path',
-        empty: 'page requests',
+        label: T('Counting requests by path'),
+        empty: T('page requests'),
         fetch: (start, rows) => api('overview', 'toppages', { pop: scope, start: start, rows: rows }),
         render: renderPages
     });
 
     pagedCard({
         id: 'ov-searches',
-        label: 'Faceting search terms',
-        empty: 'search terms',
+        label: T('Faceting search terms'),
+        empty: T('search terms'),
         fetch: (start, rows) => api('overview', 'searches', { start: start, rows: rows }),
         render: renderSearches
     });

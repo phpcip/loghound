@@ -30,6 +30,8 @@
 
 'use strict';
 
+import { t as T } from './i18n.js';
+
 /** Sub-rows that belong to the row above them and must travel with it. */
 const ATTACHED = 'members';
 
@@ -81,7 +83,7 @@ function mark(root) {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'sort-btn';
-            button.title = 'Sort by ' + label;
+            button.title = T('Sort by {column}', { column: label });
             while (th.firstChild) {
                 button.appendChild(th.firstChild);
             }

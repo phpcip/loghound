@@ -851,5 +851,7 @@ return [
     'ui' => [
         'timezone'    => 'UTC',
         'date_format' => 'm/d/Y H:i:s',
+        // Interface language: 'en', or a catalog in lang/ or config/lang/ (docs/TRANSLATING.md).
+        'language'    => 'en',
     ],
 ];

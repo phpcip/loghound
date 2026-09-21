@@ -23,6 +23,7 @@ import { barsH, tokens } from '../charts.js';
 import { dimRow, dimValue } from '../identity.js';
 import { noteHosts, outLink } from '../url.js';
 import { fillHosts, hostsUnavailable } from '../topbar.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** Population keys in the order the table and the bar use them. */
 const ORDER = ['human', 'unknown', 'declared', 'ai', 'evasive'];
@@ -109,7 +110,7 @@ function renderTable(data) {
             none.hidden = false;
             hideEmpty('hosts-table-empty');
         } else {
-            noDataYet('hosts-table-empty', 'sessions with a virtual host');
+            noDataYet('hosts-table-empty', T('sessions with a virtual host'));
         }
         return;
     }
@@ -153,18 +154,17 @@ function renderTable(data) {
     const active = (boot.filters || {}).active;
     const hostFilter = !!(active && !Array.isArray(active) && active.host_s);
 
-    setPop('hosts-table', num(data.rows.length) + ' virtual hosts, ' + num(data.total) +
-        ' sessions in the selected range. The five population columns are mutually exclusive, ' +
+    setPop('hosts-table', T('{hosts} virtual hosts, {n} sessions in the selected range. The five population columns are mutually exclusive, ' +
         'so they add up to the session count on each row. Automation is the share of the row ' +
-        'that is not human, which is the last three columns together.' +
+        'that is not human, which is the last three columns together.', { hosts: num(data.rows.length), n: num(data.total) }) +
         (hostFilter
-            ? ' Every host is listed whatever the virtual-host filter says, so you can compare them ' +
-              'and switch between them; every other active filter is applied.'
+            ? ' ' + T('Every host is listed whatever the virtual-host filter says, so you can compare them ' +
+              'and switch between them; every other active filter is applied.')
             : '') +
         (singlePlane
-            ? ' ' + num(singlePlane) + ' of these hosts carry sessions measured by the beacon alone, with no ' +
+            ? ' ' + T('{n} of these hosts carry sessions measured by the beacon alone, with no ' +
               'access log behind them: their verdicts rest on one plane, and one plane is the plane a ' +
-              'determined client controls. They are marked in the first column.'
+              'determined client controls. They are marked in the first column.', { n: num(singlePlane) })
             : ''));
 }
 
@@ -195,12 +195,12 @@ function planeName(row) {
         name,
         el('span', {
             class: 'chip chip-accent',
-            text: single ? 'beacon only' : 'part beacon only',
+            text: single ? T('beacon only') : T('part beacon only'),
             title: single
-                ? 'No access log in this installation covers this host, so every session here was measured ' +
-                  'by the beacon alone. The five signals that read the request log were not evaluated.'
-                : num(row.beacon_only) + ' of ' + num(row.sessions) + ' sessions on this host were measured ' +
-                  'by the beacon alone, with no access log behind them. The rest have all three planes.'
+                ? T('No access log in this installation covers this host, so every session here was measured ' +
+                  'by the beacon alone. The five signals that read the request log were not evaluated.')
+                : T('{n} of {total} sessions on this host were measured ' +
+                  'by the beacon alone, with no access log behind them. The rest have all three planes.', { n: num(row.beacon_only), total: num(row.sessions) })
         })
     ]);
 }
@@ -231,7 +231,7 @@ function splitBar(row) {
  */
 function renderChart(data) {
     if (!data.rows.length) {
-        noDataYet('hosts-share-empty', 'hosts');
+        noDataYet('hosts-share-empty', T('hosts'));
         return;
     }
     hideEmpty('hosts-share-empty');
@@ -241,12 +241,12 @@ function renderChart(data) {
         label: row.host,
         value: row.evasive_share === null ? 0 : row.evasive_share,
         color: th.accent,
-        extra: num(row.counts.evasive) + ' of ' + num(row.sessions) + ' sessions'
+        extra: T('{n} of {total} sessions', { n: num(row.counts.evasive), total: num(row.sessions) })
     })), { labelWidth: 190, format: (v) => dec(v, 1) + '%' });
 
-    setPop('hosts-share', 'Share of each host\'s scored sessions that were evasive automation — ' +
+    setPop('hosts-share', T('Share of each host\'s scored sessions that were evasive automation — ' +
         'clients that did not declare themselves. Declared crawlers and AI crawlers are excluded ' +
-        'here; they are in the table above.');
+        'here; they are in the table above.'));
 }
 
 /**
@@ -255,10 +255,10 @@ function renderChart(data) {
 export default function init() {
     const compare = api('hosts', 'compare');
 
-    loadCard('hosts-table', 'Grouping sessions by virtual host', async () => {
+    loadCard('hosts-table', T('Grouping sessions by virtual host'), async () => {
         renderTable(await compare);
     });
-    loadCard('hosts-share', 'Comparing hosts', async () => {
+    loadCard('hosts-share', T('Comparing hosts'), async () => {
         renderChart(await compare);
     });
 }

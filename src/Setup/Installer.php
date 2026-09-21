@@ -45,6 +45,7 @@ declare(strict_types=1);
 namespace Loghound\Setup;
 
 use Loghound\Config;
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Installer
@@ -88,7 +89,7 @@ final class Installer
     /** The name of a step, or the raw value when it is not one. */
     public static function stepLabel(string $step): string
     {
-        return self::LABELS[$step] ?? $step;
+        return isset(self::LABELS[$step]) ? I18n::t(self::LABELS[$step]) : $step;
     }
 
     private Config $cfg;
@@ -177,6 +178,8 @@ final class Installer
 
         Job::sweep($this->root . '/var/setup');
 
+        $this->bootLanguage();
+
         $route = $this->requestedRoute();
 
         if ($route === 'job') {
@@ -198,6 +201,22 @@ final class Installer
      * unknown value here is a stale bookmark or a prober, and neither deserves a page
      * that enumerates what the valid values are.
      */
+    /** The installer speaks the language picked here, else the browser's; the choice is saved with the config. */
+    private function bootLanguage(): void
+    {
+        Security::startSession();
+        $asked = $_GET['lang'] ?? null;
+        if (is_string($asked) && I18n::isAvailable($this->root, $asked)) {
+            $_SESSION['lh_setup_lang'] = $asked;
+        }
+        $lang = $_SESSION['lh_setup_lang'] ?? null;
+        if (!is_string($lang) || !I18n::isAvailable($this->root, $lang)) {
+            $lang = I18n::negotiate($this->root, (string) ($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? ''));
+        }
+        I18n::boot($this->root, $lang);
+        $this->cfg->set('ui.language', $lang);
+    }
+
     private function requestedRoute(): string
     {
         $raw = $_POST['step'] ?? ($_GET['setup'] ?? '');
@@ -268,7 +287,7 @@ final class Installer
         if ($this->unlocked()) {
             return;
         }
-        $this->flash('error', 'Enter the setup token before changing anything.');
+        $this->flash('error', I18n::t('Enter the setup token before changing anything.'));
         $this->redirect(self::STEP_STATUS);
     }
 
@@ -333,7 +352,7 @@ final class Installer
                 break;
         }
 
-        $this->flash('error', 'That action is not available here.');
+        $this->flash('error', I18n::t('That action is not available here.'));
         $this->redirect($step);
     }
 
@@ -360,7 +379,7 @@ final class Installer
         session_regenerate_id(true);
         $_SESSION['lh_setup_unlocked'] = time();
 
-        $this->flash('ok', 'Unlocked. Let\'s set Loghound up.');
+        $this->flash('ok', I18n::t('Unlocked. Let\'s set Loghound up.'));
         $this->redirect(Steps::firstIncomplete($this->cfg));
     }
 
@@ -386,7 +405,7 @@ final class Installer
         try {
             $job = Job::create($dir, $kind, $params);
         } catch (\Throwable $e) {
-            $this->flash('error', 'Could not start: ' . $e->getMessage());
+            $this->flash('error', I18n::t('Could not start: {error}', ['error' => $e->getMessage()]));
             $this->redirect($this->stepForKind($kind));
         }
 
@@ -430,7 +449,7 @@ final class Installer
         }
 
         if ($chosen === []) {
-            $this->flash('error', 'Tick at least one log file, or add one by hand below.');
+            $this->flash('error', I18n::t('Tick at least one log file, or add one by hand below.'));
             $this->redirect(self::STEP_SOURCES);
         }
 
@@ -470,8 +489,8 @@ final class Installer
     {
         $kept = count($result['stored']);
         $text = $kept === 0
-            ? 'Nothing was stored.'
-            : $kept . ' log file' . ($kept === 1 ? '' : 's') . ' confirmed.';
+            ? I18n::t('Nothing was stored.')
+            : I18n::tn('{n} log file confirmed.', '{n} log files confirmed.', $kept);
 
         $problems = $result['widening'];
         foreach ($result['refused'] as $one) {
@@ -483,7 +502,7 @@ final class Installer
 
         $count = count($result['refused']);
         if ($count > 0) {
-            $text .= ' ' . $count . ($count === 1 ? ' was' : ' were') . ' not stored:';
+            $text .= ' ' . I18n::tn('{n} was not stored:', '{n} were not stored:', $count);
         }
         return $text . ' ' . implode(' ', $problems);
     }
@@ -514,7 +533,7 @@ final class Installer
         $sources[] = $result['source'];
         Detector::writeReport($this->cfg, Detector::report($sources, $this->cfg));
 
-        $this->flash('ok', 'Added. Check the parsed lines below, then confirm it.');
+        $this->flash('ok', I18n::t('Added. Check the parsed lines below, then confirm it.'));
         $this->redirect(self::STEP_SOURCES);
     }
 
@@ -571,7 +590,7 @@ final class Installer
 
         $this->flash(
             $ownership === 'missing' ? 'error' : 'ok',
-            'Opensolr accepted your credentials. ' . ($ownership === 'missing'
+            I18n::t('Opensolr accepted your credentials.') . ' ' . ($ownership === 'missing'
                 ? Pairs::pendingDetail($this->cfg)
                 : Pairs::choiceIntro(count((array) $account['pairs'])))
         );
@@ -641,7 +660,7 @@ final class Installer
                 $this->redirect(self::STEP_STORAGE);
             }
             if (!preg_match('/^[A-Z0-9_]{2,32}$/D', $region)) {
-                $this->flash('error', 'Pick a region for the new indexes, then submit again.');
+                $this->flash('error', I18n::t('Pick a region for the new indexes, then submit again.'));
                 $this->redirect(self::STEP_STORAGE);
             }
 
@@ -649,7 +668,7 @@ final class Installer
         }
 
         if (!preg_match('/^[a-f0-9]{4,32}$/D', $choice)) {
-            $this->flash('error', 'Pick which indexes this installation should use, then submit again.');
+            $this->flash('error', I18n::t('Pick which indexes this installation should use, then submit again.'));
             $this->redirect(self::STEP_STORAGE);
         }
 
@@ -657,8 +676,8 @@ final class Installer
         if (Pairs::find($account['pairs'], $choice) === null) {
             $this->flash(
                 'error',
-                'That pair is not in the list this account returned. Check the account again and choose '
-                . 'from the list as it stands now.'
+                I18n::t('That pair is not in the list this account returned. Check the account again and choose '
+                . 'from the list as it stands now.')
             );
             $this->redirect(self::STEP_STORAGE);
         }
@@ -706,7 +725,9 @@ final class Installer
         if ($problems !== []) {
             $this->cfg->set('auth.password_hash', '');
             $this->cfg->set('auth.mode', 'none');
-            $this->flash('error', 'Almost — something earlier is still incomplete: ' . implode(' ', $problems));
+            $this->flash('error', I18n::t('Almost — something earlier is still incomplete: {problems}', [
+                'problems' => implode(' ', array_map([I18n::class, 't'], $problems)),
+            ]));
             $this->redirect(Steps::firstIncomplete($this->cfg));
         }
 
@@ -743,8 +764,9 @@ final class Installer
         } catch (\Throwable $e) {
             $this->flash(
                 'error',
-                'The configuration could not be saved: ' . $e->getMessage()
-                . ' Check the System check page for the exact command that fixes it.'
+                I18n::t('The configuration could not be saved: {error} Check the System check page for the exact command that fixes it.', [
+                    'error' => $e->getMessage(),
+                ])
             );
             $this->redirect($step);
         }
@@ -762,17 +784,17 @@ final class Installer
     private function handleJob(): void
     {
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
-            $this->json(['error' => 'Not found'], 404);
+            $this->json(['error' => I18n::t('Not found')], 404);
         }
         Security::requireCsrf();
         if (!$this->unlocked()) {
-            $this->json(['error' => 'Locked'], 403);
+            $this->json(['error' => I18n::t('Locked')], 403);
         }
 
         $id = is_string($_POST['id'] ?? null) ? $_POST['id'] : '';
         $job = Job::load($this->root . '/var/setup', $id);
         if ($job === null) {
-            $this->json(['error' => 'That job no longer exists. Reload the page.'], 404);
+            $this->json(['error' => I18n::t('That job no longer exists. Reload the page.')], 404);
         }
 
         $action = is_string($_POST['action'] ?? null) ? $_POST['action'] : 'status';
@@ -860,15 +882,15 @@ final class Installer
         $wantedAt = array_search($step, self::ORDER, true);
 
         if ($wantedAt === false) {
-            return [self::STEP_STATUS, 'There is no setup step called "' . $step . '".'];
+            return [self::STEP_STATUS, I18n::t('There is no setup step called "{step}".', ['step' => $step])];
         }
 
         if (!$this->unlocked()) {
             return [
                 self::STEP_STATUS,
-                'Setup is locked, so ' . self::stepLabel($step) . ' cannot be opened yet. Paste '
+                I18n::t('Setup is locked, so {step} cannot be opened yet. Paste '
                 . 'the setup token below to unlock it — this page is on the internet and nothing '
-                . 'can be saved until this browser has proved it can read a file on the server.',
+                . 'can be saved until this browser has proved it can read a file on the server.', ['step' => self::stepLabel($step)]),
             ];
         }
 
@@ -882,9 +904,11 @@ final class Installer
 
         return [
             $blocker,
-            self::stepLabel($step) . ' reads answers that ' . self::stepLabel($blocker)
-            . ' has not given yet' . ($why === '' ? '' : ': ' . $why)
-            . ' This is that step; finishing it leads back to ' . self::stepLabel($step) . '.',
+            I18n::t('{step} reads answers that {blocker} has not given yet{why} This is that step; finishing it leads back to {step}.', [
+                'step'    => self::stepLabel($step),
+                'blocker' => self::stepLabel($blocker),
+                'why'     => $why === '' ? '' : ': ' . $why,
+            ]),
         ];
     }
 

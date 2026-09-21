@@ -34,6 +34,7 @@ declare(strict_types=1);
 
 namespace Loghound\Panel;
 
+use Loghound\I18n;
 use Loghound\Security;
 
 final class Seo extends Controller
@@ -205,7 +206,7 @@ final class Seo extends Controller
 
         $p = $this->period();
         $this->range['key'] = $p['preset'] . '-vs-' . $p['vs'];
-        $this->range['label'] = $p['a_label'] . ' compared with ' . $p['b_label'];
+        $this->range['label'] = I18n::t('{a} compared with {b}', ['a' => $p['a_label'], 'b' => $p['b_label']]);
     }
 
     /**
@@ -228,7 +229,7 @@ final class Seo extends Controller
     /** Title. */
     public function title(): string
     {
-        return 'SEO Tools';
+        return I18n::t('SEO Tools');
     }
 
     /**
@@ -390,7 +391,7 @@ final class Seo extends Controller
             'quality'        => $this->quality(),
             'crawlers'       => $this->crawlers(),
             'crawlgap'       => $this->crawlGap(),
-            default          => ['error' => 'Unknown action'],
+            default          => ['error' => I18n::t('Unknown action')],
         };
     }
 
@@ -556,9 +557,9 @@ final class Seo extends Controller
         foreach (self::METRICS as $key => [$label, $kind, $hint]) {
             $metrics[] = [
                 'key'   => $key,
-                'label' => $label,
+                'label' => I18n::t($label),
                 'kind'  => $kind,
-                'hint'  => $hint,
+                'hint'  => I18n::t($hint),
                 'a'     => $a[$key],
                 'b'     => $b[$key],
             ];
@@ -830,11 +831,11 @@ final class Seo extends Controller
         return $this->payload([
             'panel'      => $panel,
             'dim'        => $dim,
-            'dim_label'  => self::DIMENSIONS[$dim][0],
+            'dim_label'  => I18n::t(self::DIMENSIONS[$dim][0]),
             'chan'       => $chan,
-            'chan_label' => self::CHANNELS[$chan][0],
+            'chan_label' => I18n::t(self::CHANNELS[$chan][0]),
             'sort'       => $sort,
-            'sort_label' => self::SORTS[$sort],
+            'sort_label' => I18n::t(self::SORTS[$sort]),
             'total_a'    => self::qcount($f, 'pa'),
             'total_b'    => self::qcount($f, 'pb'),
             'considered' => $considered,
@@ -842,7 +843,7 @@ final class Seo extends Controller
             'distinct'   => $distinct,
             'capped'     => $distinct !== null && $distinct > self::CANDIDATES,
             'rows'       => array_values($page),
-            'page'       => Paging::block($start, $size, count($ranked), self::DIMENSIONS[$dim][1], count($page)),
+            'page'       => Paging::block($start, $size, count($ranked), I18n::t(self::DIMENSIONS[$dim][1]), count($page)),
         ]);
     }
 
@@ -922,7 +923,7 @@ final class Seo extends Controller
         return $this->payload([
             'overall' => [
                 'value' => '',
-                'label' => 'Every channel',
+                'label' => I18n::t('Every channel'),
                 'a'     => self::behaviour(self::node($f, 'pa')),
                 'b'     => self::behaviour(self::node($f, 'pb')),
             ],
@@ -1014,7 +1015,7 @@ final class Seo extends Controller
 
         return $this->payload([
             'cat'            => $cat,
-            'category_label' => self::CRAWLER_CATEGORIES[$cat],
+            'category_label' => I18n::t(self::CRAWLER_CATEGORIES[$cat]),
             'total_a'        => self::qcount($f, 'pa'),
             'total_b'        => self::qcount($f, 'pb'),
             'distinct'       => $distinct,
@@ -1124,9 +1125,9 @@ final class Seo extends Controller
 
         return $this->payload([
             'engine'       => $engine,
-            'engine_label' => self::GAP_ENGINES[$engine],
+            'engine_label' => I18n::t(self::GAP_ENGINES[$engine]),
             'sort'         => $sort,
-            'sort_label'   => self::GAP_SORTS[$sort],
+            'sort_label'   => I18n::t(self::GAP_SORTS[$sort]),
             'examined'     => $examined,
             'unchecked'    => $unchecked,
             'ignored'      => $this->ignoredHitFilters(),
@@ -1143,139 +1144,139 @@ final class Seo extends Controller
 
         $this->card(
             'seo-scorecard',
-            'Period against period',
-            'Visits that loaded at least one page, counted in the period they arrived in, under every filter in force.',
+            I18n::t('Period against period'),
+            I18n::t('Visits that loaded at least one page, counted in the period they arrived in, under every filter in force.'),
             '',
             '',
-            '<div class="seo-subhead"><h3>Over time</h3>'
-            . self::toggle('seo-metric', 'metric', 'What the chart draws', [
-                'visits'    => 'Visits',
-                'pageviews' => 'Pageviews',
-                'search'    => 'From search',
-                'ai'        => 'From AI',
+            '<div class="seo-subhead"><h3>' . I18n::html('Over time') . '</h3>'
+            . self::toggle('seo-metric', 'metric', I18n::t('What the chart draws'), [
+                'visits'    => I18n::t('Visits'),
+                'pageviews' => I18n::t('Pageviews'),
+                'search'    => I18n::t('From search'),
+                'ai'        => I18n::t('From AI'),
             ], 'visits')
             . '</div>'
             . '<div class="chart" id="seo-timeline" style="height:320px"></div>'
             . '<p class="seo-note" id="seo-timeline-note"></p>'
             . '<div class="seo-tiles" id="seo-scorecard-tiles"></div>',
-            'Comparing the two periods'
+            I18n::t('Comparing the two periods')
         );
 
         $this->card(
             'seo-channels',
-            'Channels',
-            'What sent each visit, in this period and in the one it is compared with.',
+            I18n::t('Channels'),
+            I18n::t('What sent each visit, in this period and in the one it is compared with.'),
             $this->exportTool('channels'),
             '',
             '<div class="chart" id="seo-channels-bars" style="height:360px"></div>'
             . '<div class="table-wrap"><table id="seo-channels-table" class="seo-table"><thead><tr>'
-            . '<th scope="col">Channel</th>'
-            . '<th scope="col" class="num">This period</th>'
-            . '<th scope="col" class="num">Compared with</th>'
-            . '<th scope="col" class="num">Change</th>'
-            . '<th scope="col" class="num">% change</th>'
-            . '<th scope="col" class="num">Share now</th>'
-            . '<th scope="col" class="num">Share before</th>'
+            . '<th scope="col">' . I18n::html('Channel') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('This period') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Compared with') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Change') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('% change') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Share now') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Share before') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>'
-            . '<div class="seo-subhead"><h3>Every channel across this period</h3></div>'
+            . '<div class="seo-subhead"><h3>' . I18n::html('Every channel across this period') . '</h3></div>'
             . '<div class="chart" id="seo-channels-lines" style="height:320px"></div>'
             . '<p class="seo-note" id="seo-channels-lines-note" hidden></p>',
-            'Comparing channels'
+            I18n::t('Comparing channels')
         );
 
         $this->moversCard(
             'seo-engines',
             'engines',
-            'Search engines and AI assistants',
-            'Visits referred by a search engine or an AI assistant, by the site that sent them.',
-            'Referring site',
+            I18n::t('Search engines and AI assistants'),
+            I18n::t('Visits referred by a search engine or an AI assistant, by the site that sent them.'),
+            I18n::t('Referring site'),
             true
         );
         $this->moversCard(
             'seo-landing',
             'landing',
-            'Landing pages',
-            'The page each visit arrived on, within the channel chosen below.',
-            'Landing page',
+            I18n::t('Landing pages'),
+            I18n::t('The page each visit arrived on, within the channel chosen below.'),
+            I18n::t('Landing page'),
             false
         );
         $this->moversCard(
             'seo-referrers',
             'referrers',
-            'Referring sites',
-            'The site that sent each visit, within the channel chosen below.',
-            'Referring site',
+            I18n::t('Referring sites'),
+            I18n::t('The site that sent each visit, within the channel chosen below.'),
+            I18n::t('Referring site'),
             true
         );
         $this->moversCard(
             'seo-audience',
             'audience',
-            'Countries and devices',
-            'Where visits came from and what they used, within the channel chosen below.',
-            'Country',
+            I18n::t('Countries and devices'),
+            I18n::t('Where visits came from and what they used, within the channel chosen below.'),
+            I18n::t('Country'),
             false
         );
 
         $this->card(
             'seo-quality',
-            'Engagement by channel',
-            'How visits from each channel behaved. Median engaged time is over finished visits the beacon measured.',
+            I18n::t('Engagement by channel'),
+            I18n::t('How visits from each channel behaved. Median engaged time is over finished visits the beacon measured.'),
             $this->exportTool('quality'),
             '',
-            '<div class="seo-subhead"><h3>Channel against channel</h3>'
-            . self::toggle('seo-quality-metric', 'metric', 'What the chart compares', [
-                'visits'          => 'Visits',
-                'pages_per_visit' => 'Pages per visit',
-                'one_page_share'  => 'One-page visits',
-                'engaged_p50'     => 'Engaged time',
+            '<div class="seo-subhead"><h3>' . I18n::html('Channel against channel') . '</h3>'
+            . self::toggle('seo-quality-metric', 'metric', I18n::t('What the chart compares'), [
+                'visits'          => I18n::t('Visits'),
+                'pages_per_visit' => I18n::t('Pages per visit'),
+                'one_page_share'  => I18n::t('One-page visits'),
+                'engaged_p50'     => I18n::t('Engaged time'),
             ], 'visits')
             . '</div>'
             . '<div class="table-wrap"><table id="seo-quality-table" class="seo-table"><thead><tr>'
-            . '<th scope="col">Channel</th>'
-            . '<th scope="col" class="num">Visits</th>'
-            . '<th scope="col" class="num">Pages per visit</th>'
-            . '<th scope="col" class="num">One-page visits</th>'
-            . '<th scope="col" class="num">Median engaged time</th>'
+            . '<th scope="col">' . I18n::html('Channel') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Visits') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Pages per visit') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('One-page visits') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Median engaged time') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>',
-            'Measuring each channel'
+            I18n::t('Measuring each channel')
         );
 
         $this->card(
             'seo-crawlers',
-            'Crawlers',
-            'Requests from clients that declared themselves crawlers, from the access log.',
+            I18n::t('Crawlers'),
+            I18n::t('Requests from clients that declared themselves crawlers, from the access log.'),
             $this->exportTool('crawlers'),
-            self::select('seo-crawlers-cat', 'Crawlers', self::CRAWLER_CATEGORIES, 'all'),
+            self::select('seo-crawlers-cat', I18n::t('Crawlers'), array_map([I18n::class, 't'], self::CRAWLER_CATEGORIES), 'all'),
             '<p class="seo-note" id="seo-crawlers-ignored" hidden></p>'
             . '<div class="table-wrap"><table id="seo-crawlers-table" class="seo-table"><thead><tr>'
-            . '<th scope="col">Crawler</th>'
-            . '<th scope="col">Category</th>'
-            . '<th scope="col" class="num">Requests</th>'
-            . '<th scope="col" class="num">Pages crawled</th>'
-            . '<th scope="col" class="num">4xx answers</th>'
-            . '<th scope="col" class="num">5xx answers</th>'
-            . '<th scope="col" class="num">Reverse DNS confirmed</th>'
+            . '<th scope="col">' . I18n::html('Crawler') . '</th>'
+            . '<th scope="col">' . I18n::html('Category') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Requests') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Pages crawled') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('4xx answers') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('5xx answers') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Reverse DNS confirmed') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>',
-            'Counting crawler requests'
+            I18n::t('Counting crawler requests')
         );
 
         $this->card(
             'seo-crawlgap',
-            'Crawled, not visited',
-            'The pages crawlers fetched most in this period, against the visits the matching channel sent to them.',
+            I18n::t('Crawled, not visited'),
+            I18n::t('The pages crawlers fetched most in this period, against the visits the matching channel sent to them.'),
             $this->exportTool('crawlgap'),
-            self::select('seo-crawlgap-engine', 'Matching', self::GAP_ENGINES, 'search')
-            . self::toggle('seo-crawlgap-sort', 'sort', 'Which pages', self::GAP_SORTS, 'crawled'),
+            self::select('seo-crawlgap-engine', I18n::t('Matching'), array_map([I18n::class, 't'], self::GAP_ENGINES), 'search')
+            . self::toggle('seo-crawlgap-sort', 'sort', I18n::t('Which pages'), array_map([I18n::class, 't'], self::GAP_SORTS), 'crawled'),
             '<p class="seo-note" id="seo-crawlgap-ignored" hidden></p>'
             . '<div class="table-wrap"><table id="seo-crawlgap-table" class="table-fixed"><colgroup>'
             . '<col style="width:52%"><col style="width:16%"><col style="width:14%"><col style="width:18%">'
             . '</colgroup><thead><tr>'
-            . '<th scope="col">Page</th>'
-            . '<th scope="col" class="num">Crawler requests</th>'
-            . '<th scope="col" class="num">Crawlers</th>'
-            . '<th scope="col" class="num">Visits from the channel</th>'
+            . '<th scope="col">' . I18n::html('Page') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Crawler requests') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Crawlers') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Visits from the channel') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>',
-            'Matching crawled pages against visits'
+            I18n::t('Matching crawled pages against visits')
         );
     }
 
@@ -1293,21 +1294,21 @@ final class Seo extends Controller
         echo '<form class="seo-periods" id="seo-periods" method="get" action="">';
         echo Layout::hiddenFields(['v' => 'seo', 's' => $section], Period::KEYS);
         echo '<div class="seo-period-row">';
-        echo self::select('seo-cmp', 'Period', Period::presets(), (string) $p['preset'], 'cmp');
+        echo self::select('seo-cmp', I18n::t('Period'), Period::presets(), (string) $p['preset'], 'cmp');
         echo '<span class="seo-dates" id="seo-dates-a"' . $shown($p['preset'] === 'custom') . '>'
-            . self::dateField('seo-from', 'from', 'From', (string) $p['from'], (string) $p['today'])
-            . self::dateField('seo-to', 'to', 'To', (string) $p['to'], (string) $p['today'])
+            . self::dateField('seo-from', 'from', I18n::t('From'), (string) $p['from'], (string) $p['today'])
+            . self::dateField('seo-to', 'to', I18n::t('To'), (string) $p['to'], (string) $p['today'])
             . '</span>';
-        echo self::select('seo-vs', 'Compared with', Period::comparisons(), (string) $p['vs'], 'vs');
+        echo self::select('seo-vs', I18n::t('Compared with'), Period::comparisons(), (string) $p['vs'], 'vs');
         echo '<span class="seo-dates" id="seo-dates-b"' . $shown($p['vs'] === 'custom') . '>'
-            . self::dateField('seo-vs-from', 'vs_from', 'From', (string) $p['vs_from'], (string) $p['today'])
-            . self::dateField('seo-vs-to', 'vs_to', 'To', (string) $p['vs_to'], (string) $p['today'])
+            . self::dateField('seo-vs-from', 'vs_from', I18n::t('From'), (string) $p['vs_from'], (string) $p['today'])
+            . self::dateField('seo-vs-to', 'vs_to', I18n::t('To'), (string) $p['vs_to'], (string) $p['today'])
             . '</span>';
-        echo '<button type="submit" class="seo-apply">Apply</button>';
+        echo '<button type="submit" class="seo-apply">' . I18n::html('Apply') . '</button>';
         echo '</div>';
         echo '<p class="seo-period-line">'
-            . '<span><strong>This period</strong>' . Security::esc((string) $p['a_label']) . '</span>'
-            . '<span><strong>Compared with</strong>' . Security::esc((string) $p['b_label']) . '</span>'
+            . '<span><strong>' . I18n::html('This period') . '</strong>' . Security::esc((string) $p['a_label']) . '</span>'
+            . '<span><strong>' . I18n::html('Compared with') . '</strong>' . Security::esc((string) $p['b_label']) . '</span>'
             . '<span class="seo-history" id="seo-history" hidden></span>'
             . '</p>';
         echo '</form>';
@@ -1351,16 +1352,16 @@ final class Seo extends Controller
         if (count($spec['dims']) > 1) {
             $dims = [];
             foreach ($spec['dims'] as $dim) {
-                $dims[$dim] = self::DIMENSIONS[$dim][0];
+                $dims[$dim] = I18n::t(self::DIMENSIONS[$dim][0]);
             }
-            $controls .= self::select($id . '-dim', 'Dimension', $dims, $spec['dims'][0]);
+            $controls .= self::select($id . '-dim', I18n::t('Dimension'), $dims, $spec['dims'][0]);
         }
         $chans = [];
         foreach ($spec['chans'] as $chan) {
-            $chans[$chan] = self::CHANNELS[$chan][0];
+            $chans[$chan] = I18n::t(self::CHANNELS[$chan][0]);
         }
-        $controls .= self::select($id . '-chan', 'Channel', $chans, $spec['chans'][0]);
-        $controls .= self::toggle($id . '-sort', 'sort', 'Which rows', self::SORTS, 'gain');
+        $controls .= self::select($id . '-chan', I18n::t('Channel'), $chans, $spec['chans'][0]);
+        $controls .= self::toggle($id . '-sort', 'sort', I18n::t('Which rows'), array_map([I18n::class, 't'], self::SORTS), 'gain');
 
         $e = Security::esc($id);
         $cols = $channel
@@ -1372,15 +1373,15 @@ final class Seo extends Controller
         $table = '<div class="table-wrap"><table id="' . $e . '-table" class="table-fixed"><colgroup>' . $cols
             . '</colgroup><thead><tr>'
             . '<th scope="col" id="' . $e . '-head">' . Security::esc($head) . '</th>'
-            . ($channel ? '<th scope="col">Channel</th>' : '')
-            . '<th scope="col" class="num">This period</th>'
-            . '<th scope="col" class="num">Compared with</th>'
-            . '<th scope="col" class="num">Change</th>'
-            . '<th scope="col" class="num">% change</th>'
+            . ($channel ? '<th scope="col">' . I18n::html('Channel') . '</th>' : '')
+            . '<th scope="col" class="num">' . I18n::html('This period') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Compared with') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('Change') . '</th>'
+            . '<th scope="col" class="num">' . I18n::html('% change') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>'
             . '<div id="' . $e . '-pager"></div>';
 
-        $this->card($id, $heading, $caption, $this->exportTool('movers'), $controls, $table, 'Ranking what moved');
+        $this->card($id, $heading, $caption, $this->exportTool('movers'), $controls, $table, I18n::t('Ranking what moved'));
     }
 
     /**

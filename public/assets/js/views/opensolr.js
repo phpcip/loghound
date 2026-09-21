@@ -28,6 +28,7 @@
 import { api, byId, dec, el, hideEmpty, num, pct, setPop, showEmpty } from '../core.js';
 import { dispose, lines, tokens } from '../charts.js';
 import { basisNote, blockBasisNote, commonBasisNote, operatorControl, toggleUrl } from '../facetfilter.js';
+import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from '../i18n.js';
 
 /** The in-flight or resolved index list, shared by every card on a page. */
 let listPromise = null;
@@ -73,7 +74,7 @@ export async function resolveCore(view, selectId, onChange) {
 
     if (!data.indexes || !data.indexes.length) {
         if (select) {
-            select.replaceChildren(el('option', { value: '', text: 'No indexes' }));
+            select.replaceChildren(el('option', { value: '', text: T('No indexes') }));
             select.disabled = true;
         }
         selected = null;
@@ -127,14 +128,14 @@ export function stateMessage(data) {
         return String(data.note);
     }
     const known = {
-        no_index: 'No index selected yet.',
-        demo: 'Demo mode fabricates web traffic only; Opensolr analytics are read live.',
-        not_configured: 'No Opensolr account is configured.',
-        not_owner: 'This Opensolr account does not own that index.',
-        unreachable: 'The Opensolr API could not be reached.',
-        refused: 'Opensolr refused the request.'
+        no_index: T('No index selected yet.'),
+        demo: T('Demo mode fabricates web traffic only; Opensolr analytics are read live.'),
+        not_configured: T('No Opensolr account is configured.'),
+        not_owner: T('This Opensolr account does not own that index.'),
+        unreachable: T('The Opensolr API could not be reached.'),
+        refused: T('Opensolr refused the request.')
     };
-    return known[data.state] || 'The request log could not be read.';
+    return known[data.state] || T('The request log could not be read.');
 }
 
 /**
@@ -157,14 +158,14 @@ export function handleState(emptyId, data, what) {
            the reassurance, because there it is true. */
         const pageWide = data.state === 'unreachable' || data.state === 'refused'
             || data.state === 'not_configured';
-        showEmpty(emptyId, 'No ' + what + ' to show', [
+        showEmpty(emptyId, T('No {what} to show', { what: what }), [
             message,
             data.state === 'no_index'
-                ? 'Pick an index above once the list has loaded.'
+                ? T('Pick an index above once the list has loaded.')
                 : pageWide
-                    ? 'Every card on this page reads the same source, so they are all in this state. '
-                      + 'Web-traffic views are unaffected.'
-                    : 'Everything else on this page is unaffected.'
+                    ? T('Every card on this page reads the same source, so they are all in this state. '
+                      + 'Web-traffic views are unaffected.')
+                    : T('Everything else on this page is unaffected.')
         ]);
         return true;
     }
@@ -191,19 +192,19 @@ export function handleState(emptyId, data, what) {
                logged requests for it — and sent to adjust filters rather than to accept that
                the index is simply idle, which the unfiltered branch below states correctly.
                Same defect, same shape, as core.js's noDataYet(). */
-            showEmpty(emptyId, 'No ' + what + ' match your filters', [
-                'Nothing in the selected range matched the ' + filters + ' filter value'
-                    + (filters === 1 ? '' : 's') + ' set above.',
-                'Remove a value from the chips above the card, or widen the time range. If it is '
+            showEmpty(emptyId, T('No {what} match your filters', { what: what }), [
+                Tn('Nothing in the selected range matched the {n} filter value set above.',
+                    'Nothing in the selected range matched the {n} filter values set above.', filters),
+                T('Remove a value from the chips above the card, or widen the time range. If it is '
                     + 'still empty with none set, Opensolr logged no requests for this index in '
-                    + 'that range at all, which is not a fault.'
+                    + 'that range at all, which is not a fault.')
             ]);
             return true;
         }
-        showEmpty(emptyId, 'No ' + what + ' in this time range', [
-            'Opensolr logged no requests for this index in the selected range. Try a wider range.',
-            'The request log covers queries that reached the search index. An index nothing queries '
-                + 'produces no rows here, which is not a fault.'
+        showEmpty(emptyId, T('No {what} in this time range', { what: what }), [
+            T('Opensolr logged no requests for this index in the selected range. Try a wider range.'),
+            T('The request log covers queries that reached the search index. An index nothing queries '
+                + 'produces no rows here, which is not a fault.')
         ]);
         return true;
     }
@@ -236,17 +237,17 @@ const LF = 'lf';
 
 /** Field labels, matching OpensolrView::logFilterFields(). */
 const FILTER_LABELS = {
-    path: 'Handler',
-    http_status: 'Status',
-    param_hostname: 'Node',
-    ip: 'Caller'
+    path: T('Handler'),
+    http_status: T('Status'),
+    param_hostname: T('Node'),
+    ip: T('Caller')
 };
 
 /** The outcome slices, matching OpensolrView::OUTCOMES. */
 const OUTCOME_LABELS = {
-    zero: 'Matched nothing',
-    found: 'Matched something',
-    slow: 'Slow answers'
+    zero: T('Matched nothing'),
+    found: T('Matched something'),
+    slow: T('Slow answers')
 };
 
 /**
@@ -317,24 +318,24 @@ function renderActive(id, data) {
             chips.push(el('a', {
                 class: excluded ? 'excluded' : '',
                 href: toggleUrl(dim.field, value, LF),
-                title: excluded ? 'Stop excluding this value' : 'Remove this filter'
+                title: excluded ? T('Stop excluding this value') : T('Remove this filter')
             }, [
                 el('span', {
-                    text: (FILTER_LABELS[dim.field] || dim.field) + ': ' + (excluded ? 'not ' : '') + value
+                    text: (FILTER_LABELS[dim.field] || dim.field) + ': ' + (excluded ? T('not {value}', { value: value }) : value)
                 }),
                 el('span', { text: '\u00d7' })
             ]));
         }
     }
     if (data.outcome && OUTCOME_LABELS[data.outcome]) {
-        chips.push(el('a', { href: lfWith('outcome', null), title: 'Remove this slice' }, [
+        chips.push(el('a', { href: lfWith('outcome', null), title: T('Remove this slice') }, [
             el('span', { text: OUTCOME_LABELS[data.outcome] }),
             el('span', { text: '×' })
         ]));
     }
     if (chips.length > 1) {
-        chips.push(el('a', { class: 'lf-clear', href: lfClear(), title: 'Remove every filter' }, [
-            el('span', { text: 'Clear all' })
+        chips.push(el('a', { class: 'lf-clear', href: lfClear(), title: T('Remove every filter') }, [
+            el('span', { text: T('Clear all') })
         ]));
     }
 
@@ -357,13 +358,13 @@ function renderOutcomes(id, data) {
     const entries = [el('a', {
         class: data.outcome ? '' : 'on',
         href: lfWith('outcome', null),
-        text: 'Everything'
+        text: T('Everything')
     })];
 
     for (const key of Object.keys(OUTCOME_LABELS)) {
         const count = counts[key];
         const label = key === 'slow'
-            ? 'Slow answers (' + num(data.slow_ms) + ' ms or worse)'
+            ? T('Slow answers ({ms} ms or worse)', { ms: num(data.slow_ms) })
             : OUTCOME_LABELS[key];
         entries.push(el('a', {
             class: data.outcome === key ? 'on' : '',
@@ -398,12 +399,12 @@ function renderRail(id, data) {
         operatorControl(group),
         el('ul', {}, group.buckets.map((bucket) => {
             const state = bucket.state || (isActive(data.active, group.field, bucket.value) ? 'on' : 'off');
-            const verb = state === 'on' ? 'Remove ' : (state === 'excluded' ? 'Stop excluding ' : 'Filter to ');
+            const verb = state === 'on' ? T('Remove {filter}') : (state === 'excluded' ? T('Stop excluding {filter}') : T('Filter to {filter}'));
             return el('li', {}, [
                 el('a', {
                     class: state === 'on' ? 'on' : (state === 'excluded' ? 'excluded' : ''),
                     href: toggleUrl(group.field, bucket.value, LF),
-                    title: verb + group.label + ': ' + bucket.value
+                    title: verb.split('{filter}').join(group.label + ': ' + bucket.value)
                 }, [
                     el('span', {
                         class: 'fm',
@@ -434,7 +435,7 @@ function renderRail(id, data) {
 export function renderFilters(id, data) {
     renderActive(id, data);
 
-    if (handleState(id + '-empty', data, 'requests')) {
+    if (handleState(id + '-empty', data, T('requests'))) {
         return;
     }
     hideEmpty(id + '-empty');
@@ -450,21 +451,22 @@ export function renderFilters(id, data) {
                somewhere that still exists, or the card explains a sentence the reader cannot
                find. A column counted differently still carries its own note, and that is the
                case this clause is actually about. */
-            'Each column lists the ' + num(data.limit) + ' most common values. Picking a value narrows ' +
+            T('Each column lists the {n} most common values. Picking a value narrows ' +
                 'every OTHER column and leaves its own complete, so a second value can always be added ' +
                 'to the same column — a filtered column is counted again with its own filter lifted, ' +
-                'and says so under itself when it is.'
+                'and says so under itself when it is.', { n: num(data.limit) })
         ];
         if ((data.ignored || []).length) {
-            parts.push('Not applied here: ' + data.ignored.join(', ') + '. Those filters describe web ' +
+            parts.push(T('Not applied here: {filters}. Those filters describe web ' +
                 'sessions Loghound scored itself; the platform\'s request log has no such fields, and ' +
-                'applying them would match nothing rather than narrow anything.');
+                'applying them would match nothing rather than narrow anything.', { filters: data.ignored.join(', ') }));
         }
         note.textContent = parts.join(' ');
     }
 
-    setPop(id, num(data.requests) + ' requests match the current filters out of everything Opensolr ' +
-        'logged for this index in this range. Every other card on this page counts the same population.');
+    setPop(id, Tn('{n} request matches the current filters out of everything Opensolr ' +
+        'logged for this index in this range. Every other card on this page counts the same population.', '{n} requests match the current filters out of everything Opensolr ' +
+        'logged for this index in this range. Every other card on this page counts the same population.', data.requests, { n: num(data.requests) }));
 }
 
 /* -------------------------------------------------------------------------
@@ -485,7 +487,7 @@ export function renderFilters(id, data) {
 export function renderVolume(id, data) {
     const set = fieldSetter(id);
 
-    if (handleState(id + '-empty', data, 'requests')) {
+    if (handleState(id + '-empty', data, T('requests'))) {
         for (const key of ['total', 'mean', 'peak', 'points']) {
             set(key, '—');
         }
@@ -496,9 +498,9 @@ export function renderVolume(id, data) {
     const counts = data.all || [];
     if (!counts.length) {
         dispose(id + '-chart');
-        showEmpty(id + '-empty', 'No requests to plot', [
-            'Opensolr logged requests for this index in this range, but the platform returned no time ' +
-                'buckets for them. Try a wider range.'
+        showEmpty(id + '-empty', T('No requests to plot'), [
+            T('Opensolr logged requests for this index in this range, but the platform returned no time ' +
+                'buckets for them. Try a wider range.')
         ]);
         return;
     }
@@ -517,19 +519,19 @@ export function renderVolume(id, data) {
     set('points', num(counts.length));
 
     const t = tokens();
-    const series = [{ name: 'All requests', color: t.accent, data: counts }];
+    const series = [{ name: T('All requests'), color: t.accent, data: counts }];
     if (data.zero_known) {
-        series.push({ name: 'Matched nothing', color: t.pop.declared, data: data.zero || [] });
+        series.push({ name: T('Matched nothing'), color: t.pop.declared, data: data.zero || [] });
     }
     lines(id + '-chart', data.times, series);
 
-    setPop(id, num(data.requests) + ' requests under the current filters, in ' + num(counts.length) +
-        ' buckets across this range. ' +
+    setPop(id, T('{n} requests under the current filters, in {buckets} buckets across this range.',
+        { n: num(data.requests), buckets: num(counts.length) }) + ' ' +
         (data.zero_known
-            ? num(data.zero_total) + ' of them (' + pct(data.zero_total, data.requests) +
-              ') matched no documents, drawn as the second series.'
-            : 'An outcome slice is selected, so the zero-result series is not drawn — it would be the ' +
-              'whole of one slice and none of the other.'));
+            ? T('{n} of them ({pct}) matched no documents, drawn as the second series.',
+                { n: num(data.zero_total), pct: pct(data.zero_total, data.requests) })
+            : T('An outcome slice is selected, so the zero-result series is not drawn — it would be the ' +
+              'whole of one slice and none of the other.')));
 }
 
 /* -------------------------------------------------------------------------
@@ -749,16 +751,16 @@ export function cardFailure(id, err, retry) {
         existing.remove();
     }
 
-    const button = el('button', { type: 'button', class: 'small', text: 'Retry' });
+    const button = el('button', { type: 'button', class: 'small', text: T('Retry') });
     button.addEventListener('click', () => {
         button.disabled = true;
         retry();
     });
 
     card.insertBefore(el('div', { class: 'card-error', role: 'alert' }, [
-        el('h4', { text: 'This section could not load' }),
+        el('h4', { text: T('This section could not load') }),
         el('p', { text: String(err && err.message ? err.message : err) }),
-        el('p', { class: 'faint', text: 'Everything else on this page is unaffected.' }),
+        el('p', { class: 'faint', text: T('Everything else on this page is unaffected.') }),
         el('div', { class: 'card-error-actions' }, [button])
     ]), card.firstChild);
 }

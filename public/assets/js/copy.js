@@ -21,6 +21,8 @@
 
 'use strict';
 
+import { t as T } from './i18n.js';
+
 /** How long the button shows what happened before going back to its label. */
 const CONFIRM_MS = 1600;
 
@@ -101,7 +103,7 @@ function selectContents(source) {
  */
 function confirmOn(button, message) {
     if (!button.dataset.label) {
-        button.dataset.label = button.textContent || 'Copy';
+        button.dataset.label = button.textContent || T('Copy');
     }
     const original = button.dataset.label;
 
@@ -142,10 +144,10 @@ export function initCopyButtons() {
         button.dataset.copyWired = '1';
         button.addEventListener('click', async function () {
             if (clipboard && await writeClipboard(source.textContent || '')) {
-                confirmOn(button, 'Copied');
+                confirmOn(button, T('Copied'));
                 return;
             }
-            confirmOn(button, selectContents(source) ? 'Selected — press copy' : 'Select it by hand');
+            confirmOn(button, selectContents(source) ? T('Selected — press copy') : T('Select it by hand'));
         });
     }
 }
@@ -173,7 +175,7 @@ export function copyValue(value, opts) {
     node.textContent = text;
     node.setAttribute('role', 'button');
     node.setAttribute('tabindex', '0');
-    node.setAttribute('aria-label', (options.label ? options.label + ' ' : '') + text + ', activate to copy');
+    node.setAttribute('aria-label', (options.label ? options.label + ' ' : '') + text + ', ' + T('activate to copy'));
     if (options.end) {
         node.setAttribute('data-lh-end', '1');
     }
@@ -287,7 +289,7 @@ export function initCopyFields() {
             if (!ok) {
                 selectContents(field);
             }
-            noteOn(field, ok ? 'Copied' : 'Selected, copy manually');
+            noteOn(field, ok ? T('Copied') : T('Selected, copy manually'));
         });
     };
 
