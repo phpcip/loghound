@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.10.1] — 2026-09-24
+
+### Changed
+
+- **Recent visitors shows the last page of each visit.** The page column, its sorting, the phone
+  layout and the CSV export now name the page the visitor is on or left from, instead of the one
+  they arrived on. A visit that never asked for a page still shows what it touched. The landing
+  page stays in the visit's details and in the landing-page reports.
+
+---
+
 ## [1.10.0] — 2026-09-22
 
 ### Added

@@ -142,10 +142,10 @@ export function visitRow(v) {
 
     tr.appendChild(el('td', {
         class: 'clip urlcell',
-        'data-sort': v.entry || ''
+        'data-sort': v.last || ''
     }, [
-        v.entry
-            ? pathCell(v.entry, { host: v.host })
+        v.last
+            ? pathCell(v.last, { host: v.host })
             : noPageMark()
     ]));
 
@@ -493,8 +493,8 @@ function visitBox(v, seen, shown, unmeasured) {
         ])
     ]);
 
-    const page = el('div', { class: 'vbox-line vbox-page' }, v.entry
-        ? [urlMark(v.entry, { host: v.host }), copyValue(v.entry, { cls: 'mono', end: true, url: true, label: T('Page') })]
+    const page = el('div', { class: 'vbox-line vbox-page' }, v.last
+        ? [urlMark(v.last, { host: v.host }), copyValue(v.last, { cls: 'mono', end: true, url: true, label: T('Last page') })]
         : [glyph('page'), noPageMark()]);
 
     const mail = v.ident

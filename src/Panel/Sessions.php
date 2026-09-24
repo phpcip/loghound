@@ -222,7 +222,7 @@ final class Sessions extends Controller
     private const ORDER = [
         'date'  => 'ts_end',
         'ip'    => 'ip_s',
-        'page'  => 'entry_path_s',
+        'page'  => 'exit_path_s',
         'email' => 'ident_s',
         'span'  => 'if(gt(engaged_ms_l,0),engaged_ms_l,log_span_ms_l)',
     ];
@@ -235,7 +235,7 @@ final class Sessions extends Controller
     private const ORDER_LABELS = [
         'date'  => 'Last seen',
         'ip'    => 'IP',
-        'page'  => 'Page',
+        'page'  => 'Last page',
         'email' => 'Email',
         'span'  => 'Session time',
     ];
@@ -319,7 +319,7 @@ final class Sessions extends Controller
                     ['Date', static fn (array $v) => $v['ts_end'] ?? $v['ts_start'] ?? null, 'date'],
                     ['IP', 'ip', 'text', 'not recorded'],
                     ['Country', 'country', 'country'],
-                    ['Page', 'entry', 'text', 'no page'],
+                    ['Last page', 'last', 'text', 'no page'],
                     ['Email', 'ident', 'text', 'N/A'],
                     ['Sess time', static fn (array $v) => self::exportSpan($v), 'clock', 'not measured'],
                     ['Bounce', 'bounced', 'bool'],
@@ -1280,6 +1280,8 @@ final class Sessions extends Controller
                costs nothing, being already in the field list; between the two, every session
                that touched anything at all now names something. */
             'entry'    => $str('entry_path_s') ?? $str('exit_path_s'),
+            // Where the visitor is now, or left from: the table's page column.
+            'last'     => $str('exit_path_s') ?? $str('entry_path_s'),
             'verdict'  => $str('bot_verdict_s'),
             'ident'    => $str('ident_s'),
             'device'   => $str('device_s'),
@@ -1759,7 +1761,7 @@ final class Sessions extends Controller
                out of the sort control rather than offering an order by something invisible. */
             . '<th scope="col"' . Sorting::th('date', 'desc') . '>' . I18n::html('Date') . '</th>'
             . '<th scope="col" data-lh-nosort="1"' . Sorting::th('ip') . '>IP</th>'
-            . '<th scope="col"' . Sorting::th('page') . '>' . I18n::html('Page') . '</th>'
+            . '<th scope="col"' . Sorting::th('page') . '>' . I18n::html('Last page') . '</th>'
             . '<th scope="col"' . Sorting::th('email') . '>' . I18n::html('Email') . '</th>'
             . '<th scope="col"' . Sorting::th('span', 'desc') . '>' . I18n::html('Sess time') . '</th>'
             . '<th scope="col" class="visit-verdict" data-lh-nosort="1">' . I18n::html('Bounce') . '</th>'
