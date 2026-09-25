@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.11.0] — 2026-09-25
+
+### Added
+
+- **Every visit table shows the last status the visitor was answered with.** A new Status column,
+  coloured by class like the request timeline and sortable, says what the visit's final request
+  got: a probe that stopped on a 301 it never followed, a scraper that ended on 403, a reader on
+  200. The phone layout shows it in each visit's box, and the sessions CSV gains a Last status
+  column. Visits indexed before this release, and visits seen only through the beacon, say
+  "not recorded".
+
+- **Deploying this release needs a schema push** for the new `last_status_i` field:
+  `php bin/loghound-schema --force`, before the reader restarts.
+
+---
+
 ## [1.10.1] — 2026-09-24
 
 ### Changed
