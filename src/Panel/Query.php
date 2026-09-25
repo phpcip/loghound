@@ -1036,7 +1036,7 @@ final class Query
     {
         return implode(',', [
             'id', 'ts_start', 'ts_end', 'host_s', 'hits_i', 'pages_i', 'assets_i', 'uniq_paths_i',
-            'bytes_l', 'entry_path_s', 'exit_path_s',
+            'bytes_l', 'entry_path_s', 'exit_path_s', 'last_status_i',
             'status_2xx_i', 'status_3xx_i', 'status_4xx_i', 'status_5xx_i', 'got_304_b',
             'log_span_ms_l', 'wall_ms_l', 'visible_ms_l', 'engaged_ms_l', 'beacon_b',
             'interactions_i', 'max_scroll_pct_i', 'pageviews_i', 'asset_ratio_f',

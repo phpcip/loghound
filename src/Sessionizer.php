@@ -593,6 +593,8 @@ final class Sessionizer
                    a dead link. Null until a hit carries a status at all. */
                 'soft_refusals' => 0,
                 'first_status'  => null,
+                // Status of the most recent counted request: what the visitor was last answered.
+                'last_status'   => null,
                 'nonasset_hits'    => 0,
                 'nonasset_refused' => 0,
                 'refused_attacks'  => 0,
@@ -757,6 +759,7 @@ final class Sessionizer
 
         if ($status > 0) {
             $agg['codes'][$status] = true;
+            $agg['last_status'] = $status;
         }
 
         if ($status >= 200 && $status < 300) {
@@ -1001,6 +1004,9 @@ final class Sessionizer
             'soft_refusals' => (int) ($agg['soft_refusals'] ?? 0),
             'first_status' => isset($agg['first_status']) && is_numeric($agg['first_status'])
                 ? (int) $agg['first_status']
+                : null,
+            'last_status' => isset($agg['last_status']) && is_numeric($agg['last_status'])
+                ? (int) $agg['last_status']
                 : null,
             'nonasset_hits'    => (int) ($agg['nonasset_hits'] ?? 0),
             'nonasset_refused' => (int) ($agg['nonasset_refused'] ?? 0),

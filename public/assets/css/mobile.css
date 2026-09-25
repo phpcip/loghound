@@ -1052,10 +1052,10 @@ table.visits td.visit-box { display: none; }
 
     /* SCOPED TO THE VISIT TABLES, NOT TO THE CLASS. `.visit-verdict` is worn by the Attacks
        table's Verdict column too — it borrows the visit table's styling — so hiding the class
-       outright would delete a column nobody asked to lose. `.visits` with six columns is the
-       visit shape; the five-column attack and request tables keep everything they have. */
-    table.visits td.visit-verdict:nth-child(6),
-    table.visits th.visit-verdict:nth-child(6) { display: none; }
+       outright would delete a column nobody asked to lose. `.visits` with seven columns is the
+       visit shape (seven columns since the Status column); the five-column attack and request tables keep everything they have. */
+    table.visits td.visit-verdict:nth-child(7),
+    table.visits th.visit-verdict:nth-child(7) { display: none; }
 
     table.visits .visit-day,
     table.visits .visit-clock { display: block; }

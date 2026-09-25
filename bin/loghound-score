@@ -868,6 +868,10 @@ function buildSessionDoc(array $session, bool $provisional = false): array
     if (($session['exit_path'] ?? null) !== null) {
         $doc['exit_path_s'] = (string) $session['exit_path'];
     }
+    // Absent, not zero, when no request carried a status (a beacon-only visit)
+    if (isset($session['last_status']) && is_numeric($session['last_status']) && (int) $session['last_status'] > 0) {
+        $doc['last_status_i'] = (int) $session['last_status'];
+    }
     if (!empty($session['paths'])) {
         $doc['paths_ss'] = array_values($session['paths']);
     }

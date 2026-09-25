@@ -43,7 +43,7 @@ import { t as T, tn as Tn, tf as Tf, tfn as Tfn } from './i18n.js';
  *
  * @type {Array<string>}
  */
-const COLS = ['vc-when', 'vc-who', 'vc-page', 'vc-email', 'vc-span', 'vc-bounce'];
+const COLS = ['vc-when', 'vc-who', 'vc-page', 'vc-email', 'vc-span', 'vc-status', 'vc-bounce'];
 
 /* THE VERDICT IS NO LONGER A COLUMN. It was a chip at the end of every row, spending a seventh
    of the width on one word that is already the row's colour — see `.visits tbody tr[data-verdict]`
@@ -53,7 +53,7 @@ const COLS = ['vc-when', 'vc-who', 'vc-page', 'vc-email', 'vc-span', 'vc-bounce'
    above it and the room belongs to the columns that hold real text. */
 /* "BOUNCED", NOT "BOUNCE". The cell answers yes or no for one visit; a rate is something you
    average over many, and the old heading made two legitimate values look like a broken sum. */
-const HEADINGS = [T('Last seen'), T('IP'), T('Page'), T('Email'), T('Sess time'), T('Bounced')];
+const HEADINGS = [T('Last seen'), T('IP'), T('Page'), T('Email'), T('Sess time'), T('Status'), T('Bounced')];
 
 /**
  * The `<colgroup>` and `<thead>` a visit table starts with, for a table built in the browser.
@@ -68,8 +68,8 @@ export function visitTableHead() {
                out of the sort control rather than offering an order by something invisible. */
             el('tr', {}, HEADINGS.map((text, i) => el('th', Object.assign(
                 { scope: 'col', text: text },
-                i === 5 ? { class: 'visit-verdict' } : {},
-                (i === 1 || i === 5) ? { 'data-lh-nosort': '1' } : {}
+                i === 6 ? { class: 'visit-verdict' } : {},
+                (i === 1 || i === 5 || i === 6) ? { 'data-lh-nosort': '1' } : {}
             ))))
         ])
     ];
@@ -191,6 +191,15 @@ export function visitRow(v) {
         openButton('session', { id: v.id }, T('Open this visit'))
     ]));
 
+    // What the visitor was last answered (a probe left on a 301 it never followed, a scraper on 403)
+    tr.appendChild(el('td', {
+        class: 'visit-status nowrap',
+        title: v.last_status ? T('Last status: the code the last request was answered with') : T('No request of this visit carried a status'),
+        'data-sort': v.last_status ? String(v.last_status) : ''
+    }, [
+        statusMark(v)
+    ]));
+
     /* SORTED THE WAY IT READS. The cell says Yes, No or an em dash now, so sorting on the raw
        boolean put "No" above "Yes" for reasons nothing on screen explained. */
     tr.appendChild(el('td', {
@@ -203,6 +212,20 @@ export function visitRow(v) {
     tr.appendChild(visitBox(v, seen, shown, unmeasured));
 
     return tr;
+}
+
+/**
+ * The last status code of a visit, coloured by class like the request timeline; words when there is none.
+ *
+ * @param {Object} v The visit.
+ * @returns {HTMLElement}
+ */
+function statusMark(v) {
+    const code = Number(v.last_status);
+    if (!v.last_status || !Number.isFinite(code) || code <= 0) {
+        return el('span', { class: 'muted', text: T('not recorded') });
+    }
+    return el('span', { class: 't-status-' + String(code).charAt(0) + ' mono', text: String(code) });
 }
 
 /**
@@ -489,6 +512,9 @@ function visitBox(v, seen, shown, unmeasured) {
             unmeasured ? el('span', { class: 'muted', text: T('not measured') }) : durStamp(shown)
         ]),
         el('span', { class: 'vbox-item' }, [
+            statusMark(v)
+        ]),
+        el('span', { class: 'vbox-item' }, [
             bounceMark(v)
         ])
     ]);
@@ -501,5 +527,5 @@ function visitBox(v, seen, shown, unmeasured) {
         ? el('div', { class: 'vbox-line vbox-mail' }, [identMark(v.device), copyValue(v.ident, { label: T('Email') })])
         : null;
 
-    return el('td', { class: 'visit-box', colspan: '6' }, [stamp, meta, mail, page]);
+    return el('td', { class: 'visit-box', colspan: '7' }, [stamp, meta, mail, page]);
 }

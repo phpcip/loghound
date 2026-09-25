@@ -160,6 +160,11 @@
          conditional requests; most scripted clients never do. -->
     <field name="got_304_b" type="boolean" indexed="true" stored="false" docValues="true"/>
 
+    <!-- The status of the visit's LAST request: what the visitor was answered before leaving
+         (a probe answered 301 that never followed the redirect, a scraper that ended on 403).
+         Absent when no request carried a status. -->
+    <field name="last_status_i" type="pint" indexed="true" stored="true" docValues="true"/>
+
     <field name="entry_path_s" type="string" indexed="true" stored="true" docValues="true"/>
     <field name="exit_path_s"  type="string" indexed="true" stored="true" docValues="true"/>
 

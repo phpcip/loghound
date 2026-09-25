@@ -5167,7 +5167,7 @@ table.visits td.visit-when { white-space: nowrap; overflow: visible; }
    "09/13/202605:39:42". The phone stacks them and never showed it. */
 table.visits .visit-day { margin-right: 0.5em; }
 
-/* THE WIDTHS OF THE SIX VISIT COLUMNS, shared by Panel\Sessions and visits.js's head.
+/* THE WIDTHS OF THE SEVEN VISIT COLUMNS, shared by Panel\Sessions and visits.js's head.
    The four fixed-shape values get what their longest value needs at 13px plus the cell
    padding: a date to the second, a flag and a dotted address, "not measured" with its
    chevron, and the BOUNCE heading with its sort mark. Email is capped too: an address is
@@ -5179,6 +5179,7 @@ table.visits col.vc-email  { width: 240px; }
 table.visits col.vc-when   { width: 175px; }
 table.visits col.vc-who    { width: 185px; }
 table.visits col.vc-span   { width: 150px; }
+table.visits col.vc-status { width: 80px; }
 table.visits col.vc-bounce { width: 95px; }
 
 /* A dimension value drawn as its mark alone — the flag in a visit table's country column.
@@ -5563,6 +5564,11 @@ button.stat:hover .stat-go { color: var(--accent); }
 .live-table .t-status-3, .lh-dialog-body .t-status-3 { color: var(--mid); }
 .live-table .t-status-4, .lh-dialog-body .t-status-4 { color: var(--warn); }
 .live-table .t-status-5, .lh-dialog-body .t-status-5 { color: var(--bad); font-weight: 700; }
+/* The visit tables' Status column (the last code a visit was answered with), same palette. */
+table.visits .t-status-2 { color: var(--ok); }
+table.visits .t-status-3 { color: var(--mid); }
+table.visits .t-status-4 { color: var(--warn); }
+table.visits .t-status-5 { color: var(--bad); font-weight: 700; }
 
 /* ---------------------------------------------------------------------------
    SEO TOOLS

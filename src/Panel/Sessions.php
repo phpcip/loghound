@@ -225,6 +225,7 @@ final class Sessions extends Controller
         'page'  => 'exit_path_s',
         'email' => 'ident_s',
         'span'  => 'if(gt(engaged_ms_l,0),engaged_ms_l,log_span_ms_l)',
+        'status' => 'last_status_i',
     ];
 
     /**
@@ -238,6 +239,7 @@ final class Sessions extends Controller
         'page'  => 'Last page',
         'email' => 'Email',
         'span'  => 'Session time',
+        'status' => 'Last status',
     ];
 
     /**
@@ -322,6 +324,7 @@ final class Sessions extends Controller
                     ['Last page', 'last', 'text', 'no page'],
                     ['Email', 'ident', 'text', 'N/A'],
                     ['Sess time', static fn (array $v) => self::exportSpan($v), 'clock', 'not measured'],
+                    ['Last status', static fn (array $v) => $v['last_status'] ?? null, 'text', 'not recorded'],
                     ['Bounce', 'bounced', 'bool'],
                 ],
             ],
@@ -1282,6 +1285,8 @@ final class Sessions extends Controller
             'entry'    => $str('entry_path_s') ?? $str('exit_path_s'),
             // Where the visitor is now, or left from: the table's page column.
             'last'     => $str('exit_path_s') ?? $str('entry_path_s'),
+            // What the visitor was last answered; null (not zero) when no request carried a status.
+            'last_status' => isset($d['last_status_i']) && is_numeric($d['last_status_i']) ? (int) $d['last_status_i'] : null,
             'verdict'  => $str('bot_verdict_s'),
             'ident'    => $str('ident_s'),
             'device'   => $str('device_s'),
@@ -1748,14 +1753,14 @@ final class Sessions extends Controller
                characters, and at 17% of a column already narrowed by the filter sidebar it was
                being cut mid-hour — "09/12/2026 03:1…" — which is the one value on the row a
                reader scans down. The width comes out of Country, which now draws the flag only. */
-            /* SIX COLUMNS, AND THE WIDTHS ARE THE CONTRACT. This head is rendered here while the
+            /* SEVEN COLUMNS, AND THE WIDTHS ARE THE CONTRACT. This head is rendered here while the
                rows are built by assets/js/visits.js, so the two have to agree column for column
                — they did not, which is why the cells were landing under the wrong headings. */
             /* THE WIDTHS LIVE IN panel.css, ON THESE CLASSES. Date, address, session time and
                bounce are fixed-width values and get fixed widths; Email is capped because an
                address is short; Page carries none and takes everything that is left. */
             . '<col class="vc-when"><col class="vc-who"><col class="vc-page">'
-            . '<col class="vc-email"><col class="vc-span"><col class="vc-bounce">'
+            . '<col class="vc-email"><col class="vc-span"><col class="vc-status"><col class="vc-bounce">'
             . '</colgroup><thead><tr>'
             /* `data-lh-nosort` marks a column a phone does not show, so responsive.js leaves it
                out of the sort control rather than offering an order by something invisible. */
@@ -1764,6 +1769,7 @@ final class Sessions extends Controller
             . '<th scope="col"' . Sorting::th('page') . '>' . I18n::html('Last page') . '</th>'
             . '<th scope="col"' . Sorting::th('email') . '>' . I18n::html('Email') . '</th>'
             . '<th scope="col"' . Sorting::th('span', 'desc') . '>' . I18n::html('Sess time') . '</th>'
+            . '<th scope="col" data-lh-nosort="1"' . Sorting::th('status') . ' title="' . Security::esc(I18n::t('Last status: the code the last request was answered with')) . '">' . I18n::html('Status') . '</th>'
             . '<th scope="col" class="visit-verdict" data-lh-nosort="1">' . I18n::html('Bounce') . '</th>'
             . '</tr></thead><tbody></tbody></table></div>';
         echo '<div id="se-pager"></div>';
