@@ -7,6 +7,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.11.1] — 2026-10-06
+
+### Fixed
+
+- **The reader keeps up with a flood of new visitors.** A wave of bots, each from a different
+  address, used to make the reader fall hours behind and the panel report it as stopped.
+  Geolocation, network, whois and reverse DNS lookups now run in parallel without holding up
+  the log: a line whose address is still being looked up waits on its own, every other line goes
+  straight through, and a lookup that times out is simply left out.
+
+- **The status stays current while a backlog is read.** The log is read in bounded slices, so the
+  status, the other logs and the index writes keep moving during a catch-up.
+
+- **A whois server that stops answering is skipped for ten minutes** instead of costing a timeout
+  on every address it holds.
+
+- **A failed lookup is no longer cached.** An answer that never arrived used to be remembered as
+  "nothing there" for up to thirty days.
+
+- **Finding a returning visitor's session no longer slows down as visits pile up.** It used to
+  scan every open session for each request, which made a flood quadratic.
+
+- **The real source of a visit that resumes on the site is answered locally**, instead of asking
+  Solr once per new visit.
+
+---
+
 ## [1.11.0] — 2026-09-25
 
 ### Added
