@@ -223,7 +223,7 @@ final class Asn
      * still there (the SQLite cache), so forgetting an entry costs one read and can never
      * change an answer.
      */
-    private const MEMO_MAX = 4096;
+    private const MEMO_MAX = 16384;
 
     /** @var array<string,array> In-process memo keyed by netblock / address. */
     private array $memoAsn = [];

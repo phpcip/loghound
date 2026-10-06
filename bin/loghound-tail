@@ -580,6 +580,7 @@ function buildSources(
         'start_at'       => $fromStart ? 'start' : 'end',
         'max_line_bytes' => (int) $cfg->get('ingest.max_line_bytes', 16384),
         'max_drain_ms'   => (int) $cfg->get('ingest.max_drain_ms', 1000),
+        'read_chunk'     => (int) $cfg->get('ingest.read_chunk', 1048576),
         'on_bad_line'    => static function (string $chunk, int $off, string $why) use ($badSampler, &$counters): void {
             $counters['parse_errors']++;
             if ($badSampler->record('(oversized)', $off, $why . ': ' . $chunk)) {

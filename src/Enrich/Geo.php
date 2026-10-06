@@ -153,7 +153,7 @@ final class Geo
      * limit under a scanner rotating addresses. Forgetting an entry costs one cache read and
      * can never change an answer.
      */
-    private const MEMO_MAX = 4096;
+    private const MEMO_MAX = 16384;
 
     /** In-process memo, so a burst of hits from one address makes at most one DB read. */
     private array $memo = [];
