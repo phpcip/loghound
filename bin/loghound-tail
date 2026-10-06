@@ -393,6 +393,10 @@ do {
 
                 $doc = $pipeline->process($line, $offset, $src, $meta);
 
+                if ($doc === null && $pipeline->parkedLast()) {
+                    return;
+                }
+
                 if ($doc === null) {
                     /* A REFUSAL IS NOT A PARSE ERROR. Both return null, and counting them
                        together made the operator's own exclusion rules and the loopback filter
@@ -451,6 +455,8 @@ do {
         $backlogged = $backlogged || $tail->backlogged();
     }
 
+    takeReleased($pipeline->release(0.0), $pipeline, $batch, $batchBytes, $counters, $batchMax, $args, $quota, $quotaCore, $lastFlush);
+
     $now = microtime(true);
     if (count($batch) >= $batchMax || ($batch !== [] && ($now - $lastFlush) * 1000 >= $batchMs)) {
         flushBatch($pipeline, $batch, $batchBytes, $counters, $args['verbose'], $quota, $quotaCore);
@@ -482,6 +488,7 @@ do {
     if ($RELOAD) {
         $RELOAD = false;
         logLine('info', 'reloading configuration');
+        settleParked($pipeline, $batch, $batchBytes, $counters, $batchMax, $args, $quota, $quotaCore, $lastFlush);
         flushBatch($pipeline, $batch, $batchBytes, $counters, $args['verbose'], $quota, $quotaCore);
 
         $newCfg = Config::load($args['config']);
@@ -508,16 +515,22 @@ do {
     }
 
     if ($args['once']) {
+        settleParked($pipeline, $batch, $batchBytes, $counters, $batchMax, $args, $quota, $quotaCore, $lastFlush);
         break;
     }
 
     $spent = (int) ((microtime(true) - $loopStart) * 1000000);
     if (!$backlogged && $spent < $pollUs) {
-        usleep($pollUs - $spent);
+        if ($pipeline->busy()) {
+            takeReleased($pipeline->release(($pollUs - $spent) / 1000000), $pipeline, $batch, $batchBytes, $counters, $batchMax, $args, $quota, $quotaCore, $lastFlush);
+        } else {
+            usleep($pollUs - $spent);
+        }
     }
 } while ($RUNNING);
 
 logLine('info', 'shutting down');
+settleParked($pipeline, $batch, $batchBytes, $counters, $batchMax, $args, $quota, $quotaCore, $lastFlush);
 flushBatch($pipeline, $batch, $batchBytes, $counters, $args['verbose'], $quota, $quotaCore);
 foreach ($tails as $t) {
     $t->close();
@@ -564,6 +577,62 @@ exit(0);
  * @param array<string,Tail>               $tails      out-param
  * @param array<string,array<string,mixed>> $sourceMeta out-param
  */
+/**
+ * Put the lines the Pipeline released after their lookups finished into the batch.
+ *
+ * @param list<array{doc:?array,refused:bool,bytes:int}> $released
+ */
+function takeReleased(
+    array $released,
+    Pipeline $pipeline,
+    array &$batch,
+    int &$batchBytes,
+    array &$counters,
+    int $batchMax,
+    array $args,
+    ?object $quota,
+    string $quotaCore,
+    float &$lastFlush
+): void {
+    foreach ($released as $r) {
+        if ($r['doc'] === null) {
+            if ($r['refused']) {
+                $counters['refused']++;
+            }
+            continue;
+        }
+        if (!$pipeline->indexes($r['doc'])) {
+            $counters['assets_dropped']++;
+            continue;
+        }
+        $batch[] = $r['doc'];
+        $batchBytes += $r['bytes'];
+        if (count($batch) >= $batchMax) {
+            flushBatch($pipeline, $batch, $batchBytes, $counters, $args['verbose'], $quota, $quotaCore);
+            $lastFlush = microtime(true);
+        }
+    }
+}
+
+/** Give parked lines a short grace for their lookups, then release them all with what is known. */
+function settleParked(
+    Pipeline $pipeline,
+    array &$batch,
+    int &$batchBytes,
+    array &$counters,
+    int $batchMax,
+    array $args,
+    ?object $quota,
+    string $quotaCore,
+    float &$lastFlush
+): void {
+    $until = microtime(true) + 20;
+    while ($pipeline->busy() && microtime(true) < $until) {
+        takeReleased($pipeline->release(0.5), $pipeline, $batch, $batchBytes, $counters, $batchMax, $args, $quota, $quotaCore, $lastFlush);
+    }
+    takeReleased($pipeline->releaseAll(), $pipeline, $batch, $batchBytes, $counters, $batchMax, $args, $quota, $quotaCore, $lastFlush);
+}
+
 function buildSources(
     Config $cfg,
     bool $fromStart,
@@ -1408,6 +1477,18 @@ final class Pipeline
             }
         }
         $this->haveUa = class_exists('\\Loghound\\Enrich\\Ua');
+
+        /* LOOKUPS NEVER HOLD UP INGESTION. The Resolver runs them on non-blocking sockets; the
+           enrichers answer from memo and cache only, and a line whose address is still being
+           looked up waits on its own while every other line moves on. */
+        if ($this->asn instanceof \Loghound\Enrich\Asn && class_exists('\\Loghound\\Enrich\\Resolver')) {
+            $geo = $this->geo instanceof \Loghound\Enrich\Geo ? $this->geo : null;
+            $this->resolver = new \Loghound\Enrich\Resolver($this->asn, $geo);
+            $this->asn->setOffline(true);
+            if ($geo !== null) {
+                $geo->setOffline(true);
+            }
+        }
     }
 
     /** Instantiate the sessionizer when both it and the shared State are available. */
@@ -1598,6 +1679,83 @@ final class Pipeline
     /** Set by process() when it refuses a line; read by refusedLast(). */
     private bool $refused = false;
 
+    /** Set by process() when it parks a line until its lookups finish; read by parkedLast(). */
+    private bool $parked = false;
+
+    /** The non-blocking lookup engine, when the enrichers support it. */
+    private ?\Loghound\Enrich\Resolver $resolver = null;
+
+    /** @var array<string,list<array{hit:array,bytes:int}>> Parked hits per address, in log order. */
+    private array $parkedHits = [];
+
+    /** Number of parked hits. */
+    private int $parkedCount = 0;
+
+    /** Parked hits allowed at once; past this a line goes through with whatever is already known. */
+    private const PARKED_MAX = 50000;
+
+    /** True when process() parked the line it was given. */
+    public function parkedLast(): bool
+    {
+        return $this->parked;
+    }
+
+    /** Are lookups running or lines parked? */
+    public function busy(): bool
+    {
+        return $this->parkedCount > 0 || ($this->resolver !== null && $this->resolver->busy());
+    }
+
+    /** Parked hits waiting on lookups. */
+    public function parkedCount(): int
+    {
+        return $this->parkedCount;
+    }
+
+    /**
+     * Finish every parked line now, with whatever enrichment is already known.
+     *
+     * @return list<array{doc:?array,refused:bool,bytes:int}>
+     */
+    public function releaseAll(): array
+    {
+        $out = [];
+        foreach ($this->parkedHits as $ip => $list) {
+            foreach ($list as $p) {
+                $this->refused = false;
+                $doc = $this->finish($p['hit']);
+                $out[] = ['doc' => $doc, 'refused' => $doc === null && $this->refused, 'bytes' => $p['bytes']];
+            }
+        }
+        $this->parkedHits = [];
+        $this->parkedCount = 0;
+        return $out;
+    }
+
+    /**
+     * Advance the lookups for up to $wait seconds and finish the parked lines whose address is
+     * resolved, in log order.
+     *
+     * @return list<array{doc:?array,refused:bool,bytes:int}>
+     */
+    public function release(float $wait = 0.0): array
+    {
+        if ($this->resolver === null) {
+            return [];
+        }
+        $out = [];
+        foreach ($this->resolver->pump($wait) as $ip) {
+            foreach ($this->parkedHits[$ip] ?? [] as $p) {
+                $this->parkedCount--;
+                $this->refused = false;
+                $doc = $this->finish($p['hit']);
+                $out[] = ['doc' => $doc, 'refused' => $doc === null && $this->refused, 'bytes' => $p['bytes']];
+            }
+            unset($this->parkedHits[$ip]);
+        }
+        return $out;
+    }
+
     /** Hand the status heartbeat to the enrichers, which call it while they wait on the network. */
     public function setTick(callable $tick): void
     {
@@ -1660,6 +1818,13 @@ final class Pipeline
         }
         $ips = array_keys($ips);
 
+        if ($this->resolver !== null) {
+            foreach ($ips as $ip) {
+                $this->resolver->submit((string) $ip);
+            }
+            return;
+        }
+
         try {
             if ($this->asn !== null && method_exists($this->asn, 'prefetch')) {
                 $this->asn->prefetch($ips);
@@ -1681,6 +1846,7 @@ final class Pipeline
     public function process(string $line, int $offset, string $src, array $meta): ?array
     {
         $this->refused = false;
+        $this->parked = false;
 
         $fmt = $this->format((string) ($meta['format'] ?? 'apache_combined'));
         if ($fmt === null) {
@@ -1724,6 +1890,29 @@ final class Pipeline
             return null;
         }
 
+        $ip = (string) ($hit['ip_s'] ?? '');
+        if ($ip !== '' && $this->resolver !== null) {
+            $this->resolver->submit($ip);
+            if (($this->resolver->isPending($ip) && $this->parkedCount < self::PARKED_MAX)
+                || isset($this->parkedHits[$ip])) {
+                $this->parkedHits[$ip][] = ['hit' => $hit, 'bytes' => strlen($line)];
+                $this->parkedCount++;
+                $this->parked = true;
+                return null;
+            }
+        }
+
+        return $this->finish($hit);
+    }
+
+    /**
+     * Enrich, flag, sessionise and clean one parsed hit.
+     *
+     * @param array<string,mixed> $hit
+     * @return array<string,mixed>|null
+     */
+    private function finish(array $hit): ?array
+    {
         $ip = (string) ($hit['ip_s'] ?? '');
         if ($ip !== '') {
             if ($this->geo !== null) {

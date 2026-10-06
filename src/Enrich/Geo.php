@@ -165,6 +165,15 @@ final class Geo
     /** @var callable|null  Called while waiting on the network; keeps the daemon's status fresh. */
     private $tick = null;
 
+    /** When true, lookups answer from memo and cache only; the network is the Resolver's job. */
+    private bool $offline = false;
+
+    /** Answer lookups from memo and cache only (the async Resolver does the network part). */
+    public function setOffline(bool $offline): void
+    {
+        $this->offline = $offline;
+    }
+
     /** Set the heartbeat called while lookups wait on the network. */
     public function setTick(?callable $tick): void
     {
@@ -230,7 +239,11 @@ final class Geo
             return [];
         }
         if (!isset($this->memo[$ip])) {
-            $this->prefetch([$ip]);
+            if ($this->offline) {
+                $this->wants($ip);
+            } else {
+                $this->prefetch([$ip]);
+            }
         }
         return $this->memo[$ip] ?? [];
     }
@@ -274,21 +287,8 @@ final class Geo
             if ($this->tick !== null) {
                 ($this->tick)();
             }
-            $upstream = $this->platformLookup($chunk);
-            foreach ($chunk as $ip) {
-                $up = $upstream[$ip];
-                $fields = self::compose($up['data'], $this->networkCountry($ip));
-
-                if ($this->state !== null && ($up['status'] !== 'failed' || $fields !== [])) {
-                    $this->state->cachePut(
-                        'geo',
-                        $ip,
-                        $fields === [] ? null : $fields,
-                        ((int) ($this->cfg['geo_ttl_days'] ?? 30)) * 86400
-                    );
-                }
-                $this->remember($ip, $fields);
-            }
+            $req = $this->request($chunk);
+            $this->ingest($chunk, $req === null ? null : ($this->transport)($req));
         }
     }
 
@@ -362,32 +362,24 @@ final class Geo
      * an exception and never returned, because this method returns only mapped geography.
      *
      * @param string[] $ips
-     * @return array<string,array{status:string,data:array<string,mixed>}> keyed by address
+     * @return array<string,mixed>|null The transport request, or null when the upstream is off.
      */
-    private function platformLookup(array $ips): array
+    public function request(array $ips): ?array
     {
-        $result = static function (string $status) use ($ips): array {
-            $out = [];
-            foreach ($ips as $ip) {
-                $out[$ip] = ['status' => $status, 'data' => []];
-            }
-            return $out;
-        };
-
-        if ($this->upstreamOff) {
-            return $result('off');
+        if ($this->upstreamOff || $ips === []) {
+            return null;
         }
 
         $email  = (string) ($this->opensolr['email'] ?? '');
         $apiKey = (string) ($this->opensolr['api_key'] ?? '');
         $url    = $this->endpointUrl();
         if ($email === '' || $apiKey === '' || $url === null) {
-            return $result('off');
+            return null;
         }
 
         $timeout = Security::clampInt($this->cfg['lookup_timeout'] ?? 3, 1, 30, 3);
 
-        $res = ($this->transport)([
+        return [
             'method'          => 'POST',
             'url'             => $url,
             'headers'         => [
@@ -406,8 +398,75 @@ final class Geo
             'connect_timeout' => min(2, $timeout),
             'user'            => '',
             'pass'            => '',
-        ]);
+        ];
+    }
 
+    /**
+     * Record the geolocation of $ips from an upstream response ($res null = upstream off).
+     *
+     * @param string[] $ips
+     * @param array{status?:int,body?:string}|null $res
+     */
+    public function ingest(array $ips, ?array $res): void
+    {
+        $upstream = $res === null ? self::uniform($ips, 'off') : $this->parseResponse($ips, $res);
+        foreach ($ips as $ip) {
+            $up = $upstream[$ip];
+            $fields = self::compose($up['data'], $this->networkCountry($ip));
+
+            if ($this->state !== null && ($up['status'] !== 'failed' || $fields !== [])) {
+                $this->state->cachePut(
+                    'geo',
+                    $ip,
+                    $fields === [] ? null : $fields,
+                    ((int) ($this->cfg['geo_ttl_days'] ?? 30)) * 86400
+                );
+            }
+            $this->remember($ip, $fields);
+        }
+    }
+
+    /** Does this address still need geolocating? Loads a cached answer into the memo. */
+    public function wants(string $ip): bool
+    {
+        if (empty($this->cfg['geo_enabled']) || isset($this->memo[$ip]) || !self::isPublicIp($ip)) {
+            return false;
+        }
+        if ($this->state !== null) {
+            $hit = false;
+            $cached = $this->state->cacheGet('geo', $ip, $hit);
+            if ($hit) {
+                $this->remember($ip, $cached ?? []);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** True when requests go through the stock curl transport and can be run concurrently. */
+    public function usesDefaultTransport(): bool
+    {
+        return $this->transport === [Solr::class, 'curlTransport'];
+    }
+
+    /** @return array<string,array{status:string,data:array<string,mixed>}> */
+    private static function uniform(array $ips, string $status): array
+    {
+        $out = [];
+        foreach ($ips as $ip) {
+            $out[$ip] = ['status' => $status, 'data' => []];
+        }
+        return $out;
+    }
+
+    /**
+     * Read an upstream response into the normalised shape, keyed by address.
+     *
+     * @param string[] $ips
+     * @return array<string,array{status:string,data:array<string,mixed>}>
+     */
+    private function parseResponse(array $ips, array $res): array
+    {
         $status = (int) ($res['status'] ?? 0);
         $body   = (string) ($res['body'] ?? '');
 
@@ -416,23 +475,23 @@ final class Geo
             if ($this->upstreamFailures >= self::MAX_UPSTREAM_FAILURES) {
                 $this->upstreamOff = true;
             }
-            return $result('failed');
+            return self::uniform($ips, 'failed');
         }
         $this->upstreamFailures = 0;
 
         $doc = json_decode($body, true);
         if (!is_array($doc) || ($doc['status'] ?? null) === false) {
-            return $result('answered');
+            return self::uniform($ips, 'answered');
         }
 
         $version = (int) ($doc['contract_version'] ?? self::CONTRACT_VERSION);
         if ($version !== self::CONTRACT_VERSION) {
             $this->upstreamOff = true;
-            return $result('failed');
+            return self::uniform($ips, 'failed');
         }
 
         $results = $doc['results'] ?? null;
-        $out = $result('answered');
+        $out = self::uniform($ips, 'answered');
         if (!is_array($results)) {
             return $out;
         }
@@ -477,7 +536,7 @@ final class Geo
      * Every string is control-character stripped, UTF-8 checked and length capped before it can
      * reach a document or a panel: an upstream response is remote input.
      *
-     * @param array<string,mixed> $up        Normalised upstream shape; see platformLookup().
+     * @param array<string,mixed> $up        Normalised upstream shape; see request().
      * @param string|null         $networkCc Team Cymru's country; see Asn::country().
      * @return array<string,mixed>
      */

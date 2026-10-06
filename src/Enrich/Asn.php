@@ -235,6 +235,15 @@ final class Asn
     /** @var callable|null  Called while waiting on the network; keeps the daemon's status fresh. */
     private $tick = null;
 
+    /** When true, lookups answer from memo and cache only; the network is the Resolver's job. */
+    private bool $offline = false;
+
+    /** Answer lookups from memo and cache only (the async Resolver does the network part). */
+    public function setOffline(bool $offline): void
+    {
+        $this->offline = $offline;
+    }
+
     /** Set the heartbeat called while lookups wait on the network. */
     public function setTick(?callable $tick): void
     {
@@ -297,6 +306,86 @@ final class Asn
         return $cc;
     }
 
+    /** The netblock cache key for an address, or null when ASN lookups do not apply to it. */
+    public function asnKey(string $ip): ?string
+    {
+        if (empty($this->cfg['asn_enabled']) || !Geo::isPublicIp($ip)) {
+            return null;
+        }
+        return Security::ipNetwork($ip, 24, 48);
+    }
+
+    /** Is the netblock already answered, from the memo or the cache (loaded into the memo)? */
+    public function hasAsn(string $key): bool
+    {
+        if (isset($this->memoAsn[$key])) {
+            return true;
+        }
+        if ($this->state !== null) {
+            $hit = false;
+            $cached = $this->state->cacheGet('asn', $key, $hit);
+            if ($hit) {
+                $this->remember($this->memoAsn, $key, $cached ?? []);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Does this address still need a reverse DNS lookup? Loads a cached answer into the memo. */
+    public function wantsRdns(string $ip): bool
+    {
+        if (empty($this->cfg['rdns_enabled']) || filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            return false;
+        }
+        if (isset($this->memoRdns[$ip])) {
+            return false;
+        }
+        if ($this->state !== null) {
+            $hit = false;
+            $cached = $this->state->cacheGet('rdns', $ip, $hit);
+            if ($hit) {
+                $this->remember($this->memoRdns, $ip, $cached ?? []);
+                return false;
+            }
+        }
+        return self::reverseName($ip) !== null;
+    }
+
+    /** Record a netblock answer; $cache false keeps a failed lookup out of the cache. */
+    public function storeAsn(string $key, array $fields, bool $cache): void
+    {
+        if ($cache && $this->state !== null) {
+            $this->state->cachePut(
+                'asn',
+                $key,
+                $fields === [] ? null : $fields,
+                ((int) ($this->cfg['asn_ttl_days'] ?? 30)) * 86400
+            );
+        }
+        $this->remember($this->memoAsn, $key, $fields);
+    }
+
+    /** Record a reverse DNS answer; $cache false keeps a failed lookup out of the cache. */
+    public function storeRdns(string $ip, array $fields, bool $cache): void
+    {
+        if ($cache && $this->state !== null) {
+            $this->state->cachePut(
+                'rdns',
+                $ip,
+                $fields === [] ? null : $fields,
+                ((int) ($this->cfg['rdns_ttl_days'] ?? 7)) * 86400
+            );
+        }
+        $this->remember($this->memoRdns, $ip, $fields);
+    }
+
+    /** Enrichment setting, as configured. */
+    public function setting(string $key, $default = null)
+    {
+        return $this->cfg[$key] ?? $default;
+    }
+
     /**
      * The cached Cymru/RIR payload for an address, including carried non-document keys.
      *
@@ -316,7 +405,11 @@ final class Asn
         }
         $key = Security::ipNetwork($ip, 24, 48);
         if (!isset($this->memoAsn[$key])) {
-            $this->prefetch([$ip]);
+            if ($this->offline) {
+                $this->hasAsn($key);
+            } else {
+                $this->prefetch([$ip]);
+            }
         }
         return $this->memoAsn[$key] ?? [];
     }
@@ -468,7 +561,7 @@ final class Asn
      * @param array{netname:string,org:string}|null $rir
      * @return array<string,mixed>
      */
-    private static function payload(array $cymru, ?array $rir): array
+    public static function payload(array $cymru, ?array $rir): array
     {
         $out = [];
         if ($cymru['asn'] > 0) {
@@ -506,7 +599,7 @@ final class Asn
      *
      * @return array<string,array{asn:int,prefix:string,cc:string,registry:string,as_name:string}>
      */
-    private static function parseCymru(string $body): array
+    public static function parseCymru(string $body): array
     {
         $rows = [];
         foreach (preg_split('/\r\n|\n/', $body) ?: [] as $line) {
@@ -539,7 +632,7 @@ final class Asn
      * @param string $registry Cymru's registry column ('arin', 'ripencc', ...).
      * @return array{0:string,1:int,2:string}|null [host, port, query]
      */
-    private static function rirJob(string $ip, string $registry): ?array
+    public static function rirJob(string $ip, string $registry): ?array
     {
         $server = self::RIR_SERVERS[$registry] ?? null;
         if ($server === null) {
@@ -558,7 +651,7 @@ final class Asn
      *
      * @return array{netname:string,org:string}|null
      */
-    private static function parseRir(string $body): ?array
+    public static function parseRir(string $body): ?array
     {
         $netname = '';
         $org     = '';
@@ -828,7 +921,11 @@ final class Asn
             return [];
         }
         if (!isset($this->memoRdns[$ip])) {
-            $this->prefetchRdns([$ip]);
+            if ($this->offline) {
+                $this->wantsRdns($ip);
+            } else {
+                $this->prefetchRdns([$ip]);
+            }
         }
         return $this->memoRdns[$ip] ?? [];
     }
@@ -923,7 +1020,7 @@ final class Asn
      * Anything outside the restricted hostname grammar came from a hostile PTR zone and must
      * not reach a Solr document or the panel.
      */
-    private static function validName(string $name): ?string
+    public static function validName(string $name): ?string
     {
         $name = rtrim($name, '.');
         if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9\-._]{0,252}[A-Za-z0-9])?$/D', $name)) {
@@ -933,7 +1030,7 @@ final class Asn
     }
 
     /** Is $ip among the A/AAAA answers? */
-    private static function addressIn(string $ip, array $answers): bool
+    public static function addressIn(string $ip, array $answers): bool
     {
         $target = @inet_pton($ip);
         if ($target === false) {
@@ -953,7 +1050,7 @@ final class Asn
      *
      * IPv4 reverses the octets; IPv6 reverses every nibble, dot-separated.
      */
-    private static function reverseName(string $ip): ?string
+    public static function reverseName(string $ip): ?string
     {
         $bin = @inet_pton($ip);
         if ($bin === false) {
@@ -1084,7 +1181,7 @@ final class Asn
      *
      * @return string[]
      */
-    private function resolvers(): array
+    public function resolvers(): array
     {
         if ($this->resolvers !== null) {
             return $this->resolvers;
@@ -1119,7 +1216,7 @@ final class Asn
      * Header: random id, flags 0x0100 (standard query, recursion desired), QDCOUNT 1. The
      * question is asked with QCLASS 1, IN.
      */
-    private static function buildQuery(string $qname, int $qtype): ?string
+    public static function buildQuery(string $qname, int $qtype): ?string
     {
         $qname = rtrim($qname, '.');
         if ($qname === '' || strlen($qname) > 253) {
@@ -1155,7 +1252,7 @@ final class Asn
      *
      * @return string[]
      */
-    private static function parseAnswers(string $response, string $query, int $qtype): array
+    public static function parseAnswers(string $response, string $query, int $qtype): array
     {
         if (substr($response, 0, 2) !== substr($query, 0, 2)) {
             return [];
@@ -1230,7 +1327,7 @@ final class Asn
      * not a failure, and asking a second server would only add latency. That means NOERROR
      * with zero answers, or NXDOMAIN.
      */
-    private static function responseIsAuthoritativeEmpty(string $response, string $query): bool
+    public static function responseIsAuthoritativeEmpty(string $response, string $query): bool
     {
         if (substr($response, 0, 2) !== substr($query, 0, 2)) {
             return false;
