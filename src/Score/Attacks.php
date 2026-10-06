@@ -95,7 +95,7 @@ final class Attacks
      * Bump it whenever a pattern is added, removed or changed, so a finding can be read
      * against the ruleset that produced it rather than against the one installed today.
      */
-    public const RULE_VERSION = 2;
+    public const RULE_VERSION = 3;
 
     /** The code a match against the operator's own attack patterns (Loghound\AttackPatterns) writes. */
     public const CUSTOM_CODE = 'atk_custom_pattern';
@@ -374,6 +374,21 @@ final class Attacks
                 . 'programme fills this row legitimately. So does any site whose search box gets '
                 . 'pasted-in HTML. The status code is again the separator: an XSS string answered 200 '
                 . 'means the string came back in a page, which is worth ten minutes with view-source.',
+        ],
+
+        'atk_code_in_path' => [
+            'label'    => 'Script code in the path',
+            'family'   => 'injection',
+            'severity' => 'high',
+            'what'     => 'Fragments of program code requested as if they were pages: braces, '
+                . '`function(`, `&&`, `||`, `!0)`, `this._`, or a path segment that starts with a comma '
+                . 'or a colon, in raw or percent-encoded form. A client that pulls "links" out of a '
+                . 'page\'s JavaScript without running it, or fires payloads into the path.',
+            'misses'   => 'The same fragments in the query string, where search boxes legitimately carry '
+                . 'them; only the path is read.',
+            'over'     => 'A broken link in your own templates that publishes a raw placeholder such as '
+                . '`/{slug}` can be followed by a real visitor. Check whether your site links to the '
+                . 'path before treating it as automation.',
         ],
 
         'atk_scanner_ua' => [
@@ -752,6 +767,7 @@ final class Attacks
         'atk_log4shell',
         'atk_ssrf',
         'atk_known_exploit',
+        'atk_code_in_path',
         'atk_scanner_ua',
         'atk_crawler_impersonation',
         'atk_custom_pattern',
@@ -892,6 +908,9 @@ final class Attacks
         if (self::any($surface, self::XSS)) {
             $found['atk_xss'] = true;
         }
+        if (self::codeInPath($path)) {
+            $found['atk_code_in_path'] = true;
+        }
         if (self::any($surface, self::EXPLOIT_PATHS)) {
             $found['atk_known_exploit'] = true;
         }
@@ -1003,6 +1022,18 @@ final class Attacks
         }
 
         return str_replace('\\', '/', $s);
+    }
+
+    /** Program code requested as a path: the decoded path only, never the query string. */
+    private static function codeInPath(string $path): bool
+    {
+        if ($path === '') {
+            return false;
+        }
+        return preg_match(
+            '~[{}]|\bfunction\s*[a-z_$]*\s*\(|&&|\|\||[,(]!(0|1)\)|/[,:]|\bthis\._~',
+            self::surface($path, '')
+        ) === 1;
     }
 
     /**

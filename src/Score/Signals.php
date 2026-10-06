@@ -405,6 +405,8 @@ final class Signals
             && $s['browser'] !== null
             && in_array(strtolower((string) $s['browser']), [
                 'chrome', 'firefox', 'safari', 'edge', 'opera', 'samsung internet', 'brave',
+                'internet explorer', 'chromium', 'vivaldi', 'yandex browser', 'uc browser',
+                'seamonkey', 'duckduckgo',
             ], true);
 
         $s['ua_logged']    = array_key_exists('ua_bot_b', $first);
