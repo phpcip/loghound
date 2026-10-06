@@ -611,6 +611,58 @@ foreach ($buckets as $bucketStart => $fpSet) {
     }
 }
 
+/* USER-AGENT ROTATION (ip_uas_24h_i): distinct User-Agents per address in the same windows,
+   one terms facet per hour bucket and chunk, exactly like the fingerprint counts above. */
+/** @var array<string,int|null> ip => distinct UA count, or null when unknown. */
+$ipUasCounts = [];
+$ipBuckets = [];
+foreach ($batch as $session) {
+    $ip = (string) ($session['first']['ip_s'] ?? '');
+    if ($ip === '') {
+        continue;
+    }
+    $bucket = (int) (floor(((int) $session['ts_end']) / 3600) * 3600);
+    $ipBuckets[$bucket][$ip] = true;
+}
+foreach ($ipBuckets as $bucketStart => $ipSet) {
+    foreach (array_chunk(array_keys($ipSet), 200) as $chunk) {
+        $chunk = array_map('strval', $chunk);
+        $from = gmdate('Y-m-d\TH:i:s\Z', $bucketStart - 12 * 3600);
+        $to   = gmdate('Y-m-d\TH:i:s\Z', $bucketStart + 13 * 3600);
+        try {
+            $res = $solr->jsonFacet(
+                $hitsCore,
+                [
+                    'q'  => '*:*',
+                    'fq' => [
+                        Solr::termsFilter('ip_s', $chunk),
+                        Solr::rangeFilter('ts', $from, $to),
+                    ],
+                ],
+                [
+                    'by_ip' => [
+                        'type'     => 'terms',
+                        'field'    => 'ip_s',
+                        'limit'    => count($chunk),
+                        'mincount' => 1,
+                        'facet'    => [
+                            'uas' => 'unique(ua_hash_s)',
+                        ],
+                    ],
+                ]
+            );
+            foreach (($res['facets']['by_ip']['buckets'] ?? []) as $b) {
+                $ipUasCounts[(string) $b['val']] = (int) ($b['uas'] ?? 0);
+            }
+        } catch (\Throwable $e) {
+            $log('user-agent facet failed: ' . $e->getMessage());
+            foreach ($chunk as $ip) {
+                $ipUasCounts[$ip] = null;
+            }
+        }
+    }
+}
+
 $ready = [];
 $days  = [];
 
@@ -628,7 +680,13 @@ foreach ($batch as $session) {
         $doc['fp_ips_24h_i'] = $fpIps;
     }
 
-    $signals = Signals::fromSession($session, $doc, $fpIps);
+    $ipKey = (string) ($session['first']['ip_s'] ?? '');
+    $ipUas = array_key_exists($ipKey, $ipUasCounts) ? $ipUasCounts[$ipKey] : null;
+    if ($ipUas !== null) {
+        $doc['ip_uas_24h_i'] = $ipUas;
+    }
+
+    $signals = Signals::fromSession($session, $doc, $fpIps, $ipUas);
 
     try {
         $verdict = $rules->score($signals, [

@@ -423,6 +423,7 @@
       the rule that reads it must not treat absent as 1.
     -->
     <field name="fp_ips_24h_i" type="pint" indexed="true" stored="true" docValues="true"/>
+    <field name="ip_uas_24h_i" type="pint" indexed="true" stored="true" docValues="true"/>
 
 
     <!-- ==================== VERDICT ==================== -->

@@ -83,7 +83,7 @@ final class Rules
      * under 2 and 3 — but the condition this field records is "would a past session score
      * differently today", and a provisional one would.
      */
-    public const RULE_VERSION = 4;
+    public const RULE_VERSION = 5;
 
     /**
      * Rules that may not be evaluated until the session has ENDED.
@@ -186,6 +186,7 @@ final class Rules
      * @var string[]
      */
     public const TRANSPORT_CODES = [
+        'ua_rotation',
         'no_js_on_html',
         'no_assets',
         'no_304_on_repeat',
@@ -482,6 +483,7 @@ final class Rules
         'mostly_refused'         => 45,
         'refused_403'            => 40,
         'hosting_asn_browser_ua' => 45,
+        'ua_rotation'            => 45,
         'periodic_timing'        => 45,
         'no_interaction'         => 40,
         'desktop_on_mobile_asn'  => 40,
@@ -514,6 +516,9 @@ final class Rules
      * may want it higher.
      */
     public const FP_FLEET_MIN_IPS = 5;
+
+    /** Distinct User-Agents from one address in 24 hours at which ua_rotation fires. */
+    public const UA_ROTATION_MIN_UAS = 10;
 
     /** @var array<string,int> Effective weights after config overrides. */
     private array $weights;
@@ -598,6 +603,9 @@ final class Rules
     /** Minimum cluster size for fp_cluster_proxy_fleet. */
     private int $fpFleetMinIps;
 
+    /** Minimum distinct User-Agents per address for ua_rotation. */
+    private int $uaRotationMinUas;
+
     /** Effective rule version (config may pin it during a migration). */
     private int $ruleVersion;
 
@@ -635,6 +643,7 @@ final class Rules
         ];
 
         $this->fpFleetMinIps = (int) max(2, (int) ($scoringCfg['fp_fleet_min_ips'] ?? self::FP_FLEET_MIN_IPS));
+        $this->uaRotationMinUas = (int) max(3, (int) ($scoringCfg['ua_rotation_min_uas'] ?? self::UA_ROTATION_MIN_UAS));
         $this->ruleVersion   = (int) ($scoringCfg['rule_version'] ?? self::RULE_VERSION);
     }
 
@@ -746,6 +755,11 @@ final class Rules
             'label' => 'UA claim failed',
             'severity' => 'high',
             'why' => 'The User-Agent claimed a Chrome version whose engine features the page does not actually have. A spoofed UA string cannot retrofit V8.',
+        ],
+        'ua_rotation' => [
+            'label' => 'User-Agent rotation',
+            'severity' => 'med',
+            'why' => 'Ten or more different User-Agents came from this one address within 24 hours, outside a mobile carrier. One machine pretending to be many browsers.',
         ],
         'fp_cluster_proxy_fleet' => [
             'label' => 'Proxy fleet fingerprint',
@@ -1027,6 +1041,7 @@ final class Rules
             case 'platform_mismatch':      return $this->rulePlatformMismatch($s);
             case 'no_js_on_html':          return $this->ruleNoJsOnHtml($s, $ctx);
             case 'hosting_asn_browser_ua': return $this->ruleHostingAsnBrowserUa($s);
+            case 'ua_rotation':            return $this->ruleUaRotation($s);
             case 'desktop_on_mobile_asn':  return $this->ruleDesktopOnMobileAsn($s);
             case 'periodic_timing':        return $this->rulePeriodicTiming($s);
             case 'no_interaction':         return $this->ruleNoInteraction($s);
@@ -2371,6 +2386,37 @@ final class Rules
         return 'HTML was served and the client claims to be '
             . (string) ($s['browser'] ?? 'a browser')
             . ', but the page script never reported. This client does not execute JavaScript.';
+    }
+
+    /**
+     * ua_rotation — one address, many browsers.
+     *
+     * WEIGHT 45. A machine that cycles its User-Agent splits into one short session per UA, so
+     * every session alone looks like a different visitor. Counted across the address instead:
+     * `ip_uas_24h_i` distinct User-Agents in the 24 hours around the session. Mobile carriers
+     * are excluded (carrier-grade NAT puts thousands of handsets behind one address), and so is
+     * a crawler whose forward-confirmed reverse DNS passed. A shared office or VPN exit can reach
+     * the threshold with real people, which is why it needs a second signal to reach `bot`.
+     *
+     * @param array<string,mixed> $s
+     */
+    private function ruleUaRotation(array $s): ?string
+    {
+        $uas = $s['ip_uas_24h'] ?? null;
+        if ($uas === null || (int) $uas < $this->uaRotationMinUas) {
+            return null;
+        }
+        if (($s['as_type'] ?? null) === 'mobile') {
+            return null;
+        }
+        if (!empty($s['ua_bot']) && ($s['rdns_ok'] ?? null) === true) {
+            return null;
+        }
+
+        return 'This address presented ' . (int) $uas
+            . ' different User-Agents in a 24-hour window around this session'
+            . (isset($s['as_type']) && $s['as_type'] !== null ? ' (network type: ' . $s['as_type'] . ')' : '')
+            . '. One machine is rotating its User-Agent to look like many visitors.';
     }
 
     /**

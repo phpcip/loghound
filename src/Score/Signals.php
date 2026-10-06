@@ -378,9 +378,10 @@ final class Signals
      * @param array<string,mixed> $beacon  Merged beacon data (Beacon::mergeIntoSession()).
      *                                     Empty array when no beacon arrived.
      * @param int|null            $fpIps   fp_ips_24h_i, or null when it could not be computed.
+     * @param int|null            $ipUas   ip_uas_24h_i, or null when it could not be computed.
      * @return array<string,mixed>
      */
-    public static function fromSession(array $session, array $beacon = [], ?int $fpIps = null): array
+    public static function fromSession(array $session, array $beacon = [], ?int $fpIps = null, ?int $ipUas = null): array
     {
         $first = (array) ($session['first'] ?? []);
 
@@ -470,6 +471,7 @@ final class Signals
         $s['periodic']      = self::isPeriodic($gaps);
 
         $s['fp_ips_24h'] = $fpIps;
+        $s['ip_uas_24h'] = $ipUas;
 
         $s['beacon']         = (bool) ($beacon['beacon_b'] ?? false);
         /* THE SITE SAID WHO THIS IS. Written by Beacon only when a payload actually declared one
