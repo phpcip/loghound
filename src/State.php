@@ -141,6 +141,12 @@ final class State
             'CREATE INDEX IF NOT EXISTS idx_sessions_client
                 ON sessions_open (client_key, closed_at)'
         );
+        /* One visitor's open session is found by its own key, never by scanning every session
+           open in the idle window (that scan made a flood of new visitors quadratic). */
+        $this->db->exec(
+            'CREATE INDEX IF NOT EXISTS idx_sessions_client_last
+                ON sessions_open (client_key, closed_at, last_ts)'
+        );
         $this->db->exec(
             'CREATE INDEX IF NOT EXISTS idx_sessions_last
                 ON sessions_open (closed_at, last_ts)'
@@ -338,7 +344,7 @@ final class State
     {
         $row = $this->one(
             'SELECT session_id, client_key, host, first_ts, last_ts, hits, data, excluded
-               FROM sessions_open
+               FROM sessions_open INDEXED BY idx_sessions_client_last
               WHERE client_key = :ck AND closed_at IS NULL AND last_ts >= :cutoff
               ORDER BY last_ts DESC LIMIT 1',
             [':ck' => $clientKey, ':cutoff' => $nowMs - ($idleSec * 1000)]
