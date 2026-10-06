@@ -7,6 +7,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.12.0] — 2026-10-06
+
+### Added
+
+- **Program code requested as a page is a new decisive attack, "Script code in the path".** A
+  client that asks for paths full of JavaScript fragments (braces, `function(`, `&&`, `||`,
+  `!0)`, `this._`, a segment starting with a comma or a colon) is pulling "links" out of your
+  scripts without running them, or firing payloads into the path. One such request is enough for
+  a bot verdict. Only the path is read, so a search box that carries code in its query is never
+  flagged.
+
+### Fixed
+
+- **Every consumer browser counts as a browser claim.** Internet Explorer, Chromium, Vivaldi,
+  Yandex Browser, UC Browser, SeaMonkey and DuckDuckGo were missing, so a scraper presenting one
+  of them escaped the datacentre and no-JavaScript rules and could be scored as a person.
+
+---
+
 ## [1.11.1] — 2026-10-06
 
 ### Fixed
