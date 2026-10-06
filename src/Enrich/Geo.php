@@ -118,6 +118,9 @@ final class Geo
     /** A geolocation answer is a few hundred bytes. This much means something is wrong. */
     private const MAX_BODY_BYTES = 262144;
 
+    /** Addresses per request; the platform endpoint accepts up to fifty. */
+    private const BATCH_IPS = 50;
+
     /**
      * Consecutive transport failures after which the upstream lookup is abandoned.
      *
@@ -158,6 +161,15 @@ final class Geo
     /** Breaker state; see MAX_UPSTREAM_FAILURES. */
     private int $upstreamFailures = 0;
     private bool $upstreamOff = false;
+
+    /** @var callable|null  Called while waiting on the network; keeps the daemon's status fresh. */
+    private $tick = null;
+
+    /** Set the heartbeat called while lookups wait on the network. */
+    public function setTick(?callable $tick): void
+    {
+        $this->tick = $tick;
+    }
 
     /**
      * The default transport is the Solr client's curl transport, reused rather than
@@ -214,38 +226,70 @@ final class Geo
      */
     public function lookup(string $ip): array
     {
+        if (empty($this->cfg['geo_enabled']) || !self::isPublicIp($ip)) {
+            return [];
+        }
+        if (!isset($this->memo[$ip])) {
+            $this->prefetch([$ip]);
+        }
+        return $this->memo[$ip] ?? [];
+    }
+
+    /**
+     * Geolocate many addresses, BATCH_IPS per request, into the memo and the cache.
+     *
+     * @param string[] $ips
+     */
+    public function prefetch(array $ips): void
+    {
         if (empty($this->cfg['geo_enabled'])) {
-            return [];
-        }
-        if (!self::isPublicIp($ip)) {
-            return [];
+            return;
         }
 
-        if (isset($this->memo[$ip])) {
-            return $this->memo[$ip];
+        $want = [];
+        foreach ($ips as $ip) {
+            $ip = (string) $ip;
+            if (isset($want[$ip]) || isset($this->memo[$ip]) || !self::isPublicIp($ip)) {
+                continue;
+            }
+            if ($this->state !== null) {
+                $hit = false;
+                $cached = $this->state->cacheGet('geo', $ip, $hit);
+                if ($hit) {
+                    $this->remember($ip, $cached ?? []);
+                    continue;
+                }
+            }
+            $want[$ip] = $ip;
+        }
+        if ($want === []) {
+            return;
         }
 
-        if ($this->state !== null) {
-            $hit = false;
-            $cached = $this->state->cacheGet('geo', $ip, $hit);
-            if ($hit) {
-                return $this->remember($ip, $cached ?? []);
+        if ($this->asn !== null && !empty($this->cfg['asn_enabled'])) {
+            $this->asn->prefetch(array_values($want));
+        }
+
+        foreach (array_chunk(array_values($want), self::BATCH_IPS) as $chunk) {
+            if ($this->tick !== null) {
+                ($this->tick)();
+            }
+            $upstream = $this->platformLookup($chunk);
+            foreach ($chunk as $ip) {
+                $up = $upstream[$ip];
+                $fields = self::compose($up['data'], $this->networkCountry($ip));
+
+                if ($this->state !== null && ($up['status'] !== 'failed' || $fields !== [])) {
+                    $this->state->cachePut(
+                        'geo',
+                        $ip,
+                        $fields === [] ? null : $fields,
+                        ((int) ($this->cfg['geo_ttl_days'] ?? 30)) * 86400
+                    );
+                }
+                $this->remember($ip, $fields);
             }
         }
-
-        $upstream = $this->platformLookup($ip);
-        $fields   = self::compose($upstream['data'], $this->networkCountry($ip));
-
-        if ($this->state !== null && ($upstream['status'] !== 'failed' || $fields !== [])) {
-            $this->state->cachePut(
-                'geo',
-                $ip,
-                $fields === [] ? null : $fields,
-                ((int) ($this->cfg['geo_ttl_days'] ?? 30)) * 86400
-            );
-        }
-
-        return $this->remember($ip, $fields);
     }
 
     /**
@@ -273,13 +317,11 @@ final class Geo
      * is this method and nothing else.
      *
      *   Request:  POST {opensolr.api_base}/geo_lookup
-     *             body: ip=<address>&email=<account>&api_key=<key>, form-urlencoded
+     *             body: ip=<address> or ips=<a,b,...>, email=<account>&api_key=<key>, form-urlencoded
      *
      *             POST rather than GET so the API key does not land in an intermediate
-     *             proxy's access log. The endpoint accepts a batch of up to fifty addresses
-     *             through `ips`; one address per call is used here because enrichment is
-     *             driven one log line at a time and a per-address cache already collapses a
-     *             scraper's ten thousand requests into one lookup.
+     *             proxy's access log. A batch of up to fifty addresses goes through `ips`,
+     *             one address through `ip`.
      *
      *   Response: {"status":true, "contract_version":1, "results":{"<ip>":{...}}}, where the
      *             entry carries `found` plus `country_code`, `country_name`, `region`,
@@ -319,21 +361,28 @@ final class Geo
      * The API key reaches a request field and nothing else. It is never logged, never put in
      * an exception and never returned, because this method returns only mapped geography.
      *
-     * @return array{status:string,data:array<string,mixed>}
+     * @param string[] $ips
+     * @return array<string,array{status:string,data:array<string,mixed>}> keyed by address
      */
-    private function platformLookup(string $ip): array
+    private function platformLookup(array $ips): array
     {
-        $none = ['status' => 'off', 'data' => []];
+        $result = static function (string $status) use ($ips): array {
+            $out = [];
+            foreach ($ips as $ip) {
+                $out[$ip] = ['status' => $status, 'data' => []];
+            }
+            return $out;
+        };
 
         if ($this->upstreamOff) {
-            return $none;
+            return $result('off');
         }
 
         $email  = (string) ($this->opensolr['email'] ?? '');
         $apiKey = (string) ($this->opensolr['api_key'] ?? '');
         $url    = $this->endpointUrl();
         if ($email === '' || $apiKey === '' || $url === null) {
-            return $none;
+            return $result('off');
         }
 
         $timeout = Security::clampInt($this->cfg['lookup_timeout'] ?? 3, 1, 30, 3);
@@ -346,7 +395,9 @@ final class Geo
                 'Accept: application/json',
             ],
             'body'            => http_build_query(
-                ['ip' => $ip, 'email' => $email, 'api_key' => $apiKey],
+                count($ips) === 1
+                    ? ['ip' => $ips[0], 'email' => $email, 'api_key' => $apiKey]
+                    : ['ips' => implode(',', $ips), 'email' => $email, 'api_key' => $apiKey],
                 '',
                 '&',
                 PHP_QUERY_RFC3986
@@ -365,43 +416,42 @@ final class Geo
             if ($this->upstreamFailures >= self::MAX_UPSTREAM_FAILURES) {
                 $this->upstreamOff = true;
             }
-            return ['status' => 'failed', 'data' => []];
+            return $result('failed');
         }
         $this->upstreamFailures = 0;
 
         $doc = json_decode($body, true);
-        if (!is_array($doc)) {
-            return ['status' => 'answered', 'data' => []];
-        }
-
-        if (($doc['status'] ?? null) === false) {
-            return ['status' => 'answered', 'data' => []];
+        if (!is_array($doc) || ($doc['status'] ?? null) === false) {
+            return $result('answered');
         }
 
         $version = (int) ($doc['contract_version'] ?? self::CONTRACT_VERSION);
         if ($version !== self::CONTRACT_VERSION) {
             $this->upstreamOff = true;
-            return ['status' => 'failed', 'data' => []];
+            return $result('failed');
         }
 
         $results = $doc['results'] ?? null;
+        $out = $result('answered');
         if (!is_array($results)) {
-            return ['status' => 'answered', 'data' => []];
+            return $out;
         }
 
-        $info = $results[$ip] ?? (count($results) === 1 ? reset($results) : null);
-        if (!is_array($info) || ($info['found'] ?? false) !== true) {
-            return ['status' => 'answered', 'data' => []];
+        foreach ($ips as $ip) {
+            $info = $results[$ip] ?? (count($ips) === 1 && count($results) === 1 ? reset($results) : null);
+            if (!is_array($info) || ($info['found'] ?? false) !== true) {
+                continue;
+            }
+            $out[$ip]['data'] = [
+                'cc'     => self::pick($info, ['country_code']),
+                'region' => self::pick($info, ['region']),
+                'city'   => self::pick($info, ['city']),
+                'lat'    => self::pickNumeric($info, ['latitude']),
+                'lon'    => self::pickNumeric($info, ['longitude']),
+                'tz'     => self::pick($info, ['timezone']),
+            ];
         }
-
-        return ['status' => 'answered', 'data' => [
-            'cc'     => self::pick($info, ['country_code']),
-            'region' => self::pick($info, ['region']),
-            'city'   => self::pick($info, ['city']),
-            'lat'    => self::pickNumeric($info, ['latitude']),
-            'lon'    => self::pickNumeric($info, ['longitude']),
-            'tz'     => self::pick($info, ['timezone']),
-        ]];
+        return $out;
     }
 
     /**

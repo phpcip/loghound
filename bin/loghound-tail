@@ -300,7 +300,22 @@ $quotaCore = (string) $cfg->get('solr.hits_core', '');
 $badSampleCap = (int) $cfg->get('ingest.badline_sample', 200);
 $badSampler   = new BadLineSampler($BADLINES, $badSampleCap);
 
-buildSources($cfg, $args['from_start'], $cursors, $badSampler, $tails, $sourceMeta, $counters);
+$onChunk = static function (array $lines, array $meta) use (&$pipeline): void {
+    $pipeline->prefetch($lines, $meta);
+};
+
+/* Lookups that wait on the network keep the status document fresh, so the panel does not
+   read a long batch of bounded lookups as a stopped reader. */
+$tick = static function () use (&$lastStatus, $STATUS_FILE, &$tails, &$sourceMeta, &$counters, &$rateWindow, &$batch, &$args): void {
+    $now = microtime(true);
+    if ($now - $lastStatus >= 1.0) {
+        writeStatus($STATUS_FILE, $tails, $sourceMeta, $counters, $rateWindow, $batch, $args);
+        $lastStatus = $now;
+    }
+};
+$pipeline->setTick($tick);
+
+buildSources($cfg, $args['from_start'], $cursors, $badSampler, $tails, $sourceMeta, $counters, false, $onChunk);
 
 if ($tails === []) {
     fwrite(STDERR, "loghound-tail: no readable log sources are configured.\n");
@@ -339,7 +354,7 @@ do {
 
     if ($loopStart - $lastRescan >= 1.0) {
         $lastRescan = $loopStart;
-        buildSources($cfg, $args['from_start'], $cursors, $badSampler, $tails, $sourceMeta, $counters, true);
+        buildSources($cfg, $args['from_start'], $cursors, $badSampler, $tails, $sourceMeta, $counters, true, $onChunk);
 
         foreach ($tails as $path => $t) {
             $s = $t->status();
@@ -354,6 +369,7 @@ do {
         }
     }
 
+    $backlogged = false;
     foreach ($tails as $path => $tail) {
         $meta = $sourceMeta[$path];
 
@@ -432,6 +448,7 @@ do {
         } catch (\Throwable $e) {
             logLine('error', 'source ' . $path . ': ' . $e->getMessage());
         }
+        $backlogged = $backlogged || $tail->backlogged();
     }
 
     $now = microtime(true);
@@ -474,6 +491,7 @@ do {
         } else {
             $cfg      = $newCfg;
             $pipeline = new Pipeline($cfg, $args['dry_run'], $args['verbose'], $state);
+            $pipeline->setTick($tick);
             $pollUs   = max(50, (int) $cfg->get('ingest.poll_ms', 1000)) * 1000;
             $batchMax = max(1, (int) $cfg->get('solr.batch_size', 500));
             $batchMs  = max(100, (int) $cfg->get('solr.batch_ms', 2000));
@@ -484,7 +502,7 @@ do {
             }
             $tails = [];
             $sourceMeta = [];
-            buildSources($cfg, $args['from_start'], $cursors, $badSampler, $tails, $sourceMeta, $counters);
+            buildSources($cfg, $args['from_start'], $cursors, $badSampler, $tails, $sourceMeta, $counters, false, $onChunk);
             logLine('info', 'reload complete; watching ' . count($tails) . ' log file(s)');
         }
     }
@@ -494,7 +512,7 @@ do {
     }
 
     $spent = (int) ((microtime(true) - $loopStart) * 1000000);
-    if ($spent < $pollUs) {
+    if (!$backlogged && $spent < $pollUs) {
         usleep($pollUs - $spent);
     }
 } while ($RUNNING);
@@ -554,12 +572,14 @@ function buildSources(
     array &$tails,
     array &$sourceMeta,
     array &$counters,
-    bool $quiet = false
+    bool $quiet = false,
+    ?callable $onChunk = null
 ): void {
     $roots = (array) $cfg->get('allowed_log_roots', ['/var/log']);
     $opts = [
         'start_at'       => $fromStart ? 'start' : 'end',
         'max_line_bytes' => (int) $cfg->get('ingest.max_line_bytes', 16384),
+        'max_drain_ms'   => (int) $cfg->get('ingest.max_drain_ms', 1000),
         'on_bad_line'    => static function (string $chunk, int $off, string $why) use ($badSampler, &$counters): void {
             $counters['parse_errors']++;
             if ($badSampler->record('(oversized)', $off, $why . ': ' . $chunk)) {
@@ -626,20 +646,28 @@ function buildSources(
                 logLine('info', 'new log source discovered: ' . $real);
             }
 
+            $meta = [
+                'src'    => $real,
+                'format' => $src['format'] ?? 'combined',
+                'host'   => $src['host'] ?? null,
+            ];
+            $tailOpts = $opts;
+            if ($onChunk !== null) {
+                $tailOpts['on_chunk'] = static function (array $lines) use ($onChunk, $meta): void {
+                    $onChunk($lines, $meta);
+                };
+            }
+
             $tails[$real] = new Tail(
                 $real,
                 static fn(string $p): ?array => $cursors->load($p),
                 static function (string $p, int $d, int $i, int $o) use ($cursors): void {
                     $cursors->save($p, $d, $i, $o);
                 },
-                $opts
+                $tailOpts
             );
 
-            $sourceMeta[$real] = [
-                'src'    => $real,
-                'format' => $src['format'] ?? 'combined',
-                'host'   => $src['host'] ?? null,
-            ];
+            $sourceMeta[$real] = $meta;
         }
     }
 }
@@ -1198,8 +1226,9 @@ final class BadLineSampler
  *                                      int $offset): ?array  NORMALISED hit, SPEC §4.1 names
  *                         ->errors(): int
  *   \Loghound\Enrich\Ua   ::parse(string $ua)->fields(): array
- *   \Loghound\Enrich\Geo  ->lookup(string $ip): array
+ *   \Loghound\Enrich\Geo  ->lookup(string $ip): array   ->prefetch(string[] $ips): void
  *   \Loghound\Enrich\Asn  ->lookup(string $ip): array   ->rdns(string $ip): array
+ *                         ->prefetch(string[] $ips): void   ->prefetchRdns(string[] $ips): void
  *   \Loghound\Sessionizer ->assign(array $hit): array
  *   \Loghound\Solr        ->addDocs(string $core, array $docs, bool $softCommit): array
  *
@@ -1357,22 +1386,24 @@ final class Pipeline
     {
         $enrichCfg = (array) $this->cfg->get('enrich', []);
 
-        if (class_exists('\\Loghound\\Enrich\\Geo')) {
-            try {
-                $this->geo = new \Loghound\Enrich\Geo(
-                    $enrichCfg,
-                    $state,
-                    (array) $this->cfg->get('opensolr', [])
-                );
-            } catch (\Throwable $e) {
-                logLine('warn', 'Geo enrichment unavailable: ' . $e->getMessage());
-            }
-        }
         if (class_exists('\\Loghound\\Enrich\\Asn')) {
             try {
                 $this->asn = new \Loghound\Enrich\Asn($enrichCfg, $state);
             } catch (\Throwable $e) {
                 logLine('warn', 'ASN enrichment unavailable: ' . $e->getMessage());
+            }
+        }
+        if (class_exists('\\Loghound\\Enrich\\Geo')) {
+            try {
+                $this->geo = new \Loghound\Enrich\Geo(
+                    $enrichCfg,
+                    $state,
+                    (array) $this->cfg->get('opensolr', []),
+                    null,
+                    $this->asn instanceof \Loghound\Enrich\Asn ? $this->asn : null
+                );
+            } catch (\Throwable $e) {
+                logLine('warn', 'Geo enrichment unavailable: ' . $e->getMessage());
             }
         }
         $this->haveUa = class_exists('\\Loghound\\Enrich\\Ua');
@@ -1565,6 +1596,86 @@ final class Pipeline
 
     /** Set by process() when it refuses a line; read by refusedLast(). */
     private bool $refused = false;
+
+    /** Hand the status heartbeat to the enrichers, which call it while they wait on the network. */
+    public function setTick(callable $tick): void
+    {
+        foreach ([$this->asn, $this->geo] as $e) {
+            if ($e !== null && method_exists($e, 'setTick')) {
+                $e->setTick($tick);
+            }
+        }
+    }
+
+    /**
+     * Resolve the enrichment of a run of lines concurrently, before they are processed one by one.
+     *
+     * Applies the same refusals as process() so an excluded or private address is never looked
+     * up; the per-line lookups that follow are then answered from the enrichers' memo.
+     *
+     * @param string[] $lines
+     */
+    public function prefetch(array $lines, array $meta): void
+    {
+        if ($this->rawOnly || $this->parser === null || ($this->geo === null && $this->asn === null)) {
+            return;
+        }
+        $fmt = $this->format((string) ($meta['format'] ?? 'apache_combined'));
+        if ($fmt === null) {
+            return;
+        }
+        $this->parser->setSourceHost(isset($meta['host']) ? (string) $meta['host'] : null);
+
+        $ips = [];
+        foreach ($lines as $line) {
+            $line = rtrim((string) $line, "\r");
+            if ($line === '') {
+                continue;
+            }
+            try {
+                $hit = $this->parser->parseLine($fmt, $line, (string) ($meta['src'] ?? ''), 0);
+            } catch (\Throwable $e) {
+                continue;
+            }
+            if (!is_array($hit) || $hit === []) {
+                continue;
+            }
+            if (!isset($hit['host_s']) && !empty($meta['host'])) {
+                $hit['host_s'] = $meta['host'];
+            }
+            if (!$this->exclusions->isEmpty() && $this->exclusions->excludesHit($hit)) {
+                continue;
+            }
+            if (Security::isPrivateAddress((string) ($hit['ip_net_s'] ?? ($hit['ip_s'] ?? '')))) {
+                continue;
+            }
+            $ip = (string) ($hit['ip_s'] ?? '');
+            if ($ip !== '') {
+                $ips[$ip] = true;
+            }
+        }
+        if ($ips === []) {
+            return;
+        }
+        $ips = array_keys($ips);
+
+        try {
+            if ($this->asn !== null && method_exists($this->asn, 'prefetch')) {
+                $this->asn->prefetch($ips);
+            }
+            if ($this->geo !== null && method_exists($this->geo, 'prefetch')) {
+                $this->geo->prefetch($ips);
+            }
+            if ($this->asn !== null && method_exists($this->asn, 'prefetchRdns')
+                && $this->cfg->get('enrich.rdns_enabled', true)) {
+                $this->asn->prefetchRdns($ips);
+            }
+        } catch (\Throwable $e) {
+            if ($this->verbose) {
+                logLine('warn', 'enrichment prefetch failed: ' . $e->getMessage());
+            }
+        }
+    }
 
     public function process(string $line, int $offset, string $src, array $meta): ?array
     {

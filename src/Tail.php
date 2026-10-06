@@ -166,6 +166,18 @@ final class Tail
     /** Unix time the path was first observed to be missing, or null when it is present. */
     private ?int $missingSince = null;
 
+    /** Wall-clock budget of one drain, so a backlog never starves the daemon's main loop. */
+    private int $maxDrainMs;
+
+    /** @var callable(string[]):void|null  Sees each run of complete lines before they are emitted. */
+    private $onChunk;
+
+    /** Bytes at the head of $pending already shown to $onChunk. */
+    private int $chunkSeen = 0;
+
+    /** True when the last drain stopped on its time budget with data still unread. */
+    private bool $backlogged = false;
+
     /**
      * `start_at` defaults to 'end' because a first start on a busy box must not replay a
      * 4 GB backlog and spend a day catching up; the daemon's `--from-start` flips it.
@@ -191,6 +203,8 @@ final class Tail
         $this->maxLineBytes = max(1024, (int) ($opts['max_line_bytes'] ?? 16384));
         $this->readChunk    = max(4096, (int) ($opts['read_chunk'] ?? 262144));
         $this->onBadLine    = $opts['on_bad_line'] ?? null;
+        $this->onChunk      = $opts['on_chunk'] ?? null;
+        $this->maxDrainMs   = max(0, (int) ($opts['max_drain_ms'] ?? 1000));
 
         $this->rotateSuffixes = $opts['rotate_suffixes'] ?? ['.1', '.0'];
     }
@@ -277,6 +291,10 @@ final class Tail
 
             $this->persist();
 
+            if ($this->backlogged) {
+                return $emitted;
+            }
+
             $this->consumed = ['dev' => $this->dev, 'inode' => $this->inode];
 
             $this->closeHandle();
@@ -335,6 +353,9 @@ final class Tail
         }
 
         $emitted += $this->drainRotatedByInode($cursor, $onLine);
+        if ($this->backlogged) {
+            return $emitted;
+        }
 
         return $emitted + $this->openAt($st, 0, $onLine);
     }
@@ -439,6 +460,13 @@ final class Tail
             ($this->saveCursor)($this->path, (int) $cursor['dev'], (int) $cursor['inode'], $this->offset);
             fclose($fh);
             $this->fh = $saveFh;
+            $this->pending = '';
+            $this->chunkSeen = 0;
+
+            if ($this->backlogged) {
+                $this->lastNote = 'draining rotated file ' . basename($candidate) . ' (backlog)';
+                return $n;
+            }
 
             $this->rotations++;
             $this->lastNote = 'resumed and drained rotated file ' . basename($candidate);
@@ -475,47 +503,19 @@ final class Tail
      */
     private function drain(callable $onLine): int
     {
+        $this->backlogged = false;
         if (!is_resource($this->fh)) {
             return 0;
         }
 
-        $emitted = 0;
+        $emitted  = 0;
+        $deadline = $this->maxDrainMs > 0 ? microtime(true) + $this->maxDrainMs / 1000 : INF;
+        $eof      = false;
 
         while (true) {
-            $buf = @fread($this->fh, $this->readChunk);
-            if ($buf === false || $buf === '') {
-                break;
-            }
-            $this->lastReadAt = microtime(true);
-            $this->pending .= $buf;
-
-            $pos = 0;
-            while (($nl = strpos($this->pending, "\n", $pos)) !== false) {
-                $line = substr($this->pending, $pos, $nl - $pos);
-                $lineOffset = $this->offset + $pos;
-                $line = rtrim($line, "\r");
-
-                if (strlen($line) > $this->maxLineBytes) {
-                    $this->overlong++;
-                    if ($this->onBadLine !== null) {
-                        ($this->onBadLine)(
-                            substr($line, 0, 512),
-                            $lineOffset,
-                            'line of ' . strlen($line) . ' bytes exceeds max_line_bytes ('
-                                . $this->maxLineBytes . ')'
-                        );
-                    }
-                } elseif ($line !== '') {
-                    $onLine($line, $lineOffset, $this->path);
-                    $this->lines++;
-                    $emitted++;
-                }
-                $pos = $nl + 1;
-            }
-
-            if ($pos > 0) {
-                $this->offset += $pos;
-                $this->pending = substr($this->pending, $pos);
+            $emitted += $this->emitPending($onLine, $deadline);
+            if ($this->backlogged) {
+                return $emitted;
             }
 
             if (strlen($this->pending) > $this->maxLineBytes) {
@@ -529,12 +529,82 @@ final class Tail
                 }
                 $this->offset += strlen($this->pending);
                 $this->pending = '';
+                $this->chunkSeen = 0;
                 @fseek($this->fh, $this->offset, SEEK_SET);
             }
 
-            if (strlen($buf) < $this->readChunk) {
+            if ($eof) {
                 break;
             }
+
+            $buf = @fread($this->fh, $this->readChunk);
+            if ($buf === false || $buf === '') {
+                break;
+            }
+            $this->lastReadAt = microtime(true);
+            $this->pending .= $buf;
+
+            if (strlen($buf) < $this->readChunk) {
+                $eof = true;
+            }
+        }
+
+        return $emitted;
+    }
+
+    /**
+     * Emit the complete lines buffered in $pending, stopping at $deadline.
+     *
+     * Lines not emitted stay in $pending and $offset only advances past emitted ones, so a
+     * stop on the deadline loses nothing and the next drain resumes on the next line.
+     */
+    private function emitPending(callable $onLine, float $deadline): int
+    {
+        $last = strrpos($this->pending, "\n");
+        if ($last === false) {
+            return 0;
+        }
+
+        if ($this->onChunk !== null && $last >= $this->chunkSeen) {
+            $fresh = explode("\n", substr($this->pending, $this->chunkSeen, $last - $this->chunkSeen));
+            ($this->onChunk)($fresh);
+            $this->chunkSeen = $last + 1;
+        }
+
+        $emitted = 0;
+        $pos = 0;
+        while (($nl = strpos($this->pending, "\n", $pos)) !== false) {
+            $line = substr($this->pending, $pos, $nl - $pos);
+            $lineOffset = $this->offset + $pos;
+            $line = rtrim($line, "\r");
+
+            if (strlen($line) > $this->maxLineBytes) {
+                $this->overlong++;
+                if ($this->onBadLine !== null) {
+                    ($this->onBadLine)(
+                        substr($line, 0, 512),
+                        $lineOffset,
+                        'line of ' . strlen($line) . ' bytes exceeds max_line_bytes ('
+                            . $this->maxLineBytes . ')'
+                    );
+                }
+            } elseif ($line !== '') {
+                $onLine($line, $lineOffset, $this->path);
+                $this->lines++;
+                $emitted++;
+            }
+            $pos = $nl + 1;
+
+            if ($pos <= $last && microtime(true) >= $deadline) {
+                $this->backlogged = true;
+                break;
+            }
+        }
+
+        if ($pos > 0) {
+            $this->offset += $pos;
+            $this->pending = substr($this->pending, $pos);
+            $this->chunkSeen = max(0, $this->chunkSeen - $pos);
         }
 
         return $emitted;
@@ -589,6 +659,7 @@ final class Tail
     {
         $this->offset = max(0, $offset);
         $this->pending = '';
+        $this->chunkSeen = 0;
         if (is_resource($this->fh)) {
             @fseek($this->fh, $this->offset, SEEK_SET);
         }
@@ -659,6 +730,7 @@ final class Tail
             'size'             => $size,
             'lag_bytes'        => $size === null ? null : max(0, $size - $this->offset),
             'pending_bytes'    => strlen($this->pending),
+            'backlogged'       => $this->backlogged,
             'lines'            => $this->lines,
             'rotations'        => $this->rotations,
             'truncations'      => $this->truncations,
@@ -672,6 +744,12 @@ final class Tail
             'last_read_at'     => $this->lastReadAt > 0 ? gmdate('Y-m-d\TH:i:s\Z', (int) $this->lastReadAt) : null,
             'note'             => $this->lastNote,
         ];
+    }
+
+    /** True when the last poll stopped on its time budget with lines still to read. */
+    public function backlogged(): bool
+    {
+        return $this->backlogged;
     }
 
     /** Path this tailer is following. */

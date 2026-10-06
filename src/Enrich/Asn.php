@@ -56,6 +56,18 @@ final class Asn
      */
     private const CARRIED_CC = '_cc';
 
+    /** Addresses per Cymru bulk connection. */
+    private const CYMRU_BULK = 500;
+
+    /** Concurrent connections allowed to any one RIR whois server. */
+    private const WHOIS_PER_HOST = 4;
+
+    /** DNS questions in flight at once against one resolver. */
+    private const DNS_IN_FLIGHT = 128;
+
+    /** A whois answer is a few kilobytes; more than this means something is wrong. */
+    private const WHOIS_MAX_BYTES = 262144;
+
     /** Cymru's `registry` column => the RIR whois server that holds the netname. */
     private const RIR_SERVERS = [
         'arin'     => 'whois.arin.net',
@@ -220,6 +232,15 @@ final class Asn
     /** @var string[]|null Resolvers from /etc/resolv.conf, parsed once. */
     private ?array $resolvers = null;
 
+    /** @var callable|null  Called while waiting on the network; keeps the daemon's status fresh. */
+    private $tick = null;
+
+    /** Set the heartbeat called while lookups wait on the network. */
+    public function setTick(?callable $tick): void
+    {
+        $this->tick = $tick;
+    }
+
     /**
      * @param array<string,mixed> $enrichCfg Config::get('enrich')
      * @param State|null          $state     Cache backing store.
@@ -290,37 +311,111 @@ final class Asn
      */
     private function cached(string $ip): array
     {
-        if (empty($this->cfg['asn_enabled'])) {
+        if (empty($this->cfg['asn_enabled']) || !Geo::isPublicIp($ip)) {
             return [];
         }
-        if (!Geo::isPublicIp($ip)) {
-            return [];
-        }
-
         $key = Security::ipNetwork($ip, 24, 48);
-
-        if (isset($this->memoAsn[$key])) {
-            return $this->memoAsn[$key];
+        if (!isset($this->memoAsn[$key])) {
+            $this->prefetch([$ip]);
         }
-        if ($this->state !== null) {
-            $hit = false;
-            $cached = $this->state->cacheGet('asn', $key, $hit);
-            if ($hit) {
-                return $this->remember($this->memoAsn, $key, $cached ?? []);
+        return $this->memoAsn[$key] ?? [];
+    }
+
+    /**
+     * Look up the netblocks of many addresses at once, into the memo and the cache.
+     *
+     * One Cymru bulk connection per CYMRU_BULK addresses (the mode Cymru asks automated
+     * clients to use), then the RIR whois requests concurrently. A netblock whose lookup
+     * failed in transport is kept in the memo only and never cached, so an outage does not
+     * blind the installation for the cache TTL.
+     *
+     * @param string[] $ips
+     */
+    public function prefetch(array $ips): void
+    {
+        if (empty($this->cfg['asn_enabled'])) {
+            return;
+        }
+
+        $want = [];
+        foreach ($ips as $ip) {
+            $ip = (string) $ip;
+            if (!Geo::isPublicIp($ip)) {
+                continue;
+            }
+            $key = Security::ipNetwork($ip, 24, 48);
+            if (isset($want[$key]) || isset($this->memoAsn[$key])) {
+                continue;
+            }
+            if ($this->state !== null) {
+                $hit = false;
+                $cached = $this->state->cacheGet('asn', $key, $hit);
+                if ($hit) {
+                    $this->remember($this->memoAsn, $key, $cached ?? []);
+                    continue;
+                }
+            }
+            $want[$key] = $ip;
+        }
+        if ($want === []) {
+            return;
+        }
+
+        $timeout = max(1, (int) ($this->cfg['lookup_timeout'] ?? 3));
+        $ttl = ((int) ($this->cfg['asn_ttl_days'] ?? 30)) * 86400;
+
+        foreach (array_chunk($want, self::CYMRU_BULK, true) as $chunk) {
+            if ($this->tick !== null) {
+                ($this->tick)();
+            }
+            $body = $this->whoisQuery(
+                self::CYMRU_HOST,
+                self::CYMRU_PORT,
+                "begin\nverbose\n" . implode("\n", $chunk) . "\nend\n",
+                $timeout * (1 + intdiv(count($chunk), 100))
+            );
+            if ($body === null) {
+                foreach ($chunk as $key => $_) {
+                    $this->remember($this->memoAsn, (string) $key, []);
+                }
+                continue;
+            }
+
+            $rows = self::parseCymru($body);
+            $found = [];
+            $jobs = [];
+            foreach ($chunk as $key => $ip) {
+                $bin = @inet_pton($ip);
+                $row = $rows[$bin === false ? $ip : (string) inet_ntop($bin)] ?? null;
+                if ($row === null) {
+                    if ($this->state !== null) {
+                        $this->state->cachePut('asn', (string) $key, null, $ttl);
+                    }
+                    $this->remember($this->memoAsn, (string) $key, []);
+                    continue;
+                }
+                $found[$key] = $row;
+                if (!empty($this->cfg['whois_enabled'])) {
+                    $job = self::rirJob($ip, $row['registry']);
+                    if ($job !== null) {
+                        $jobs[$key] = $job;
+                    }
+                }
+            }
+
+            $replies = $jobs === [] ? [] : $this->whoisMany($jobs);
+
+            foreach ($found as $key => $row) {
+                $key = (string) $key;
+                $reply = $replies[$key] ?? null;
+                $failed = isset($jobs[$key]) && $reply === null;
+                $fields = self::payload($row, $reply === null ? null : self::parseRir($reply));
+                if (!$failed && $this->state !== null) {
+                    $this->state->cachePut('asn', $key, $fields, $ttl);
+                }
+                $this->remember($this->memoAsn, $key, $fields);
             }
         }
-
-        $fields = $this->lookupUncached($ip);
-
-        if ($this->state !== null) {
-            $this->state->cachePut(
-                'asn',
-                $key,
-                $fields === [] ? null : $fields,
-                ((int) ($this->cfg['asn_ttl_days'] ?? 30)) * 86400
-            );
-        }
-        return $this->remember($this->memoAsn, $key, $fields);
     }
 
     /**
@@ -364,25 +459,17 @@ final class Asn
     }
 
     /**
-     * The uncached half of lookup(): Cymru, then optionally the RIR, then classify.
+     * Build the cached payload for one netblock from its Cymru row and optional RIR reply.
      *
-     * The RIR lookup is a second network round trip. It is what finds leased ranges, but it is
-     * also the slowest part, which is why it is separately switchable. Its org name is
-     * preferred only when Cymru gave us nothing.
+     * Cymru's country is carried out under CARRIED_CC for Geo to read, validated to the
+     * two-letter shape here so a malformed whois line cannot put anything else into the cache.
      *
-     * Cymru's country is carried out under CARRIED_CC for Geo to read. It is validated to the
-     * two-letter shape here rather than at the point of use, so that a malformed whois line
-     * cannot put anything else into the cache.
-     *
+     * @param array{asn:int,prefix:string,cc:string,registry:string,as_name:string} $cymru
+     * @param array{netname:string,org:string}|null $rir
      * @return array<string,mixed>
      */
-    private function lookupUncached(string $ip): array
+    private static function payload(array $cymru, ?array $rir): array
     {
-        $cymru = $this->cymru($ip);
-        if ($cymru === null) {
-            return [];
-        }
-
         $out = [];
         if ($cymru['asn'] > 0) {
             $out['asn_i'] = $cymru['asn'];
@@ -394,58 +481,34 @@ final class Asn
             $out['as_org_s'] = self::clean($cymru['as_name'], 255);
         }
 
-        $netname = '';
-        $orgName = '';
-        if (!empty($this->cfg['whois_enabled'])) {
-            $rir = $this->rirWhois($ip, $cymru['registry']);
-            if ($rir !== null) {
-                $netname = $rir['netname'];
-                $orgName = $rir['org'];
-                if ($netname !== '') {
-                    $out['netname_s'] = self::clean($netname, 255);
-                }
-                if (!isset($out['as_org_s']) && $orgName !== '') {
-                    $out['as_org_s'] = self::clean($orgName, 255);
-                }
-            }
+        $netname = $rir['netname'] ?? '';
+        $orgName = $rir['org'] ?? '';
+        if ($netname !== '') {
+            $out['netname_s'] = self::clean($netname, 255);
+        }
+        if (!isset($out['as_org_s']) && $orgName !== '') {
+            $out['as_org_s'] = self::clean($orgName, 255);
         }
 
-        $out['as_type_s'] = self::classifyOrg(
-            ($cymru['as_name'] . ' ' . $orgName),
-            $netname
-        );
+        $out['as_type_s'] = self::classifyOrg(($cymru['as_name'] . ' ' . $orgName), $netname);
 
         return $out;
     }
 
     /**
-     * Query Team Cymru's bulk whois for one address.
+     * Parse a Cymru bulk whois answer into rows keyed by the address they answer.
      *
-     * Bulk mode ("begin" / "verbose" / addresses / "end") is used even for a single address
-     * because it is the mode that returns the BGP prefix and the registry, both of which we
-     * need, and because it is the mode Cymru asks automated clients to use.
-     *
-     * Response shape:
      *   AS      | IP            | BGP Prefix    | CC | Registry | Allocated  | AS Name
      *   15169   | 8.8.8.8       | 8.8.8.0/24    | US | arin     | 1992-12-01 | GOOGLE, US
      *
-     * The header row is told apart from the data by its first column: the header starts with
-     * the literal "AS", a data row with a number. The AS name column carries a trailing
-     * country code ("GOOGLE, US") which is noise and is dropped.
+     * A data row starts with a number, the header with "AS". The trailing country code on the
+     * AS name is noise and is dropped.
      *
-     * @return array{asn:int,prefix:string,cc:string,registry:string,as_name:string}|null
+     * @return array<string,array{asn:int,prefix:string,cc:string,registry:string,as_name:string}>
      */
-    private function cymru(string $ip): ?array
+    private static function parseCymru(string $body): array
     {
-        $body = $this->whoisQuery(
-            self::CYMRU_HOST,
-            self::CYMRU_PORT,
-            "begin\nverbose\n" . $ip . "\nend\n"
-        );
-        if ($body === null) {
-            return null;
-        }
-
+        $rows = [];
         foreach (preg_split('/\r\n|\n/', $body) ?: [] as $line) {
             if (!str_contains($line, '|')) {
                 continue;
@@ -454,7 +517,9 @@ final class Asn
             if (count($cols) < 7 || !ctype_digit($cols[0])) {
                 continue;
             }
-            return [
+            $bin = @inet_pton($cols[1]);
+            $key = $bin === false ? $cols[1] : (string) inet_ntop($bin);
+            $rows[$key] = [
                 'asn'      => (int) $cols[0],
                 'prefix'   => $cols[2],
                 'cc'       => $cols[3],
@@ -462,35 +527,39 @@ final class Asn
                 'as_name'  => (string) preg_replace('/,\s*[A-Z]{2}$/', '', $cols[6]),
             ];
         }
-        return null;
+        return $rows;
     }
 
     /**
-     * Query the appropriate RIR whois server for the netname and org of an address.
+     * The whois request that asks the right RIR for the netname and org of an address.
      *
      * ARIN needs the 'n +' flag to return the network record with its NetName; the other RIRs
-     * answer a bare address directly. The reply is then read with each RIR's own spelling in
-     * mind: `netname` for RIPE, APNIC, AFRINIC and ARIN alike, matched case-insensitively;
-     * `orgname` for ARIN, `org-name` for RIPE and `owner` for LACNIC; and the free-text
-     * `descr` field that RIPE and APNIC share, as the usual fallback.
+     * answer a bare address directly.
      *
      * @param string $registry Cymru's registry column ('arin', 'ripencc', ...).
-     * @return array{netname:string,org:string}|null
+     * @return array{0:string,1:int,2:string}|null [host, port, query]
      */
-    private function rirWhois(string $ip, string $registry): ?array
+    private static function rirJob(string $ip, string $registry): ?array
     {
         $server = self::RIR_SERVERS[$registry] ?? null;
         if ($server === null) {
             return null;
         }
-
         $query = $server === 'whois.arin.net' ? ('n + ' . $ip . "\r\n") : ($ip . "\r\n");
+        return [$server, 43, $query];
+    }
 
-        $body = $this->whoisQuery($server, 43, $query);
-        if ($body === null) {
-            return null;
-        }
-
+    /**
+     * Read the netname and org out of an RIR whois reply.
+     *
+     * `netname` for RIPE, APNIC, AFRINIC and ARIN alike, matched case-insensitively;
+     * `orgname` for ARIN, `org-name` for RIPE and `owner` for LACNIC; and the free-text
+     * `descr` field that RIPE and APNIC share, as the usual fallback.
+     *
+     * @return array{netname:string,org:string}|null
+     */
+    private static function parseRir(string $body): ?array
+    {
         $netname = '';
         $org     = '';
         $descr   = '';
@@ -546,9 +615,9 @@ final class Asn
      * response parsing without making a request. It is held to the same contract: a string or
      * null, never an empty string standing in for a failure.
      */
-    private function whoisQuery(string $host, int $port, string $query): ?string
+    private function whoisQuery(string $host, int $port, string $query, ?int $timeout = null): ?string
     {
-        $timeout = max(1, (int) ($this->cfg['lookup_timeout'] ?? 3));
+        $timeout = $timeout ?? max(1, (int) ($this->cfg['lookup_timeout'] ?? 3));
 
         if ($this->whois !== null) {
             $body = ($this->whois)($host, $port, $query, $timeout);
@@ -576,7 +645,10 @@ final class Asn
                 break;
             }
             $body .= $chunk;
-            if (strlen($body) > 262144 || microtime(true) > $deadline) {
+            if ($this->tick !== null) {
+                ($this->tick)();
+            }
+            if (strlen($body) > self::WHOIS_MAX_BYTES || microtime(true) > $deadline) {
                 break;
             }
             $meta = stream_get_meta_data($fp);
@@ -587,6 +659,112 @@ final class Asn
         fclose($fp);
 
         return $body === '' ? null : $body;
+    }
+
+    /**
+     * Many whois requests at once, at most WHOIS_PER_HOST open to any one server.
+     *
+     * @param array<string,array{0:string,1:int,2:string}> $jobs key => [host, port, query]
+     * @return array<string,string|null> key => body, null on failure.
+     */
+    private function whoisMany(array $jobs): array
+    {
+        $out = [];
+        if ($this->whois !== null) {
+            foreach ($jobs as $k => $j) {
+                $out[$k] = $this->whoisQuery($j[0], $j[1], $j[2]);
+            }
+            return $out;
+        }
+
+        $timeout = max(1, (int) ($this->cfg['lookup_timeout'] ?? 3));
+        $queue = $jobs;
+        $active = [];
+        $perHost = [];
+
+        while ($queue !== [] || $active !== []) {
+            foreach ($queue as $k => $j) {
+                if (($perHost[$j[0]] ?? 0) >= self::WHOIS_PER_HOST) {
+                    continue;
+                }
+                unset($queue[$k]);
+                $errno = 0;
+                $errstr = '';
+                $fp = @stream_socket_client(
+                    'tcp://' . $j[0] . ':' . $j[1],
+                    $errno,
+                    $errstr,
+                    (float) $timeout,
+                    STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT
+                );
+                if ($fp === false) {
+                    $out[$k] = null;
+                    continue;
+                }
+                stream_set_blocking($fp, false);
+                $active[(int) $fp] = [
+                    'key' => $k, 'fp' => $fp, 'host' => $j[0], 'query' => $j[2],
+                    'sent' => false, 'body' => '', 'deadline' => microtime(true) + $timeout,
+                ];
+                $perHost[$j[0]] = ($perHost[$j[0]] ?? 0) + 1;
+            }
+            if ($active === []) {
+                continue;
+            }
+
+            $read = [];
+            $write = [];
+            foreach ($active as $id => $a) {
+                if ($a['sent']) {
+                    $read[$id] = $a['fp'];
+                } else {
+                    $write[$id] = $a['fp'];
+                }
+            }
+            $e = null;
+            if ($this->tick !== null) {
+                ($this->tick)();
+            }
+            $ready = @stream_select($read, $write, $e, 0, 100000);
+
+            $done = [];
+            if ($ready > 0) {
+                foreach ($write as $fp) {
+                    $id = (int) $fp;
+                    if (@fwrite($fp, $active[$id]['query']) === false) {
+                        $done[$id] = true;
+                    } else {
+                        $active[$id]['sent'] = true;
+                    }
+                }
+                foreach ($read as $fp) {
+                    $id = (int) $fp;
+                    $chunk = @fread($fp, 8192);
+                    if ($chunk === false || $chunk === '') {
+                        if ($chunk === false || feof($fp)) {
+                            $done[$id] = true;
+                        }
+                        continue;
+                    }
+                    $active[$id]['body'] .= $chunk;
+                    if (strlen($active[$id]['body']) > self::WHOIS_MAX_BYTES) {
+                        $done[$id] = true;
+                    }
+                }
+            }
+
+            $now = microtime(true);
+            foreach ($active as $id => $a) {
+                if (isset($done[$id]) || $now > $a['deadline']) {
+                    fclose($a['fp']);
+                    $out[$a['key']] = $a['body'] === '' ? null : $a['body'];
+                    $perHost[$a['host']]--;
+                    unset($active[$id]);
+                }
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -639,95 +817,124 @@ final class Asn
      * Resolve the PTR for an address and forward-confirm it.
      *
      * "Forward-confirmed" means: PTR(ip) gives a name, then A/AAAA(name) must include the
-     * original address. Only then is `rdns_ok_b` true.
-     *
-     * This is the single check that separates a real Googlebot from the thousands of
-     * scrapers that put "Googlebot" in their User-Agent, and it is the reason
-     * `rdns_claim_failed` carries the heaviest non-definitive weight in SPEC §7. It works
-     * because the reverse zone for a crawler's address range is controlled by the crawler's
-     * operator and by nobody else.
-     *
-     * A PTR that does not resolve back is not a lie by itself — plenty of legitimate hosts
-     * have stale reverse zones. It is only evidence when combined with a UA that CLAIMS to be
-     * a named crawler.
+     * original address. Only then is `rdns_ok_b` true. It is what separates a real Googlebot
+     * from a scraper that only claims to be one (`rdns_claim_failed`, SPEC §7).
      *
      * @return array<string,mixed> `rdns_s` and `rdns_ok_b`, or empty when nothing resolved.
      */
     public function rdns(string $ip): array
     {
-        if (empty($this->cfg['rdns_enabled'])) {
+        if (empty($this->cfg['rdns_enabled']) || filter_var($ip, FILTER_VALIDATE_IP) === false) {
             return [];
         }
-        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
-            return [];
+        if (!isset($this->memoRdns[$ip])) {
+            $this->prefetchRdns([$ip]);
         }
-
-        if (isset($this->memoRdns[$ip])) {
-            return $this->memoRdns[$ip];
-        }
-        if ($this->state !== null) {
-            $hit = false;
-            $cached = $this->state->cacheGet('rdns', $ip, $hit);
-            if ($hit) {
-                return $this->remember($this->memoRdns, $ip, $cached ?? []);
-            }
-        }
-
-        $fields = [];
-        $name = $this->ptr($ip);
-        if ($name !== null) {
-            $fields['rdns_s'] = self::clean($name, 255);
-            $fields['rdns_ok_b'] = $this->forwardConfirms($name, $ip);
-        }
-
-        if ($this->state !== null) {
-            $this->state->cachePut(
-                'rdns',
-                $ip,
-                $fields === [] ? null : $fields,
-                ((int) ($this->cfg['rdns_ttl_days'] ?? 7)) * 86400
-            );
-        }
-        return $this->remember($this->memoRdns, $ip, $fields);
+        return $this->memoRdns[$ip] ?? [];
     }
 
     /**
-     * Resolve the PTR record for an address, or null.
+     * Resolve and forward-confirm many addresses concurrently, into the memo and the cache.
      *
-     * The name that comes back is checked against the restricted grammar a hostname has;
-     * anything else came from a hostile PTR zone and must not be allowed into a Solr document
-     * or the panel.
+     * A lookup that could not be answered (every resolver timed out) is kept in the memo only,
+     * never in the cache, and a forward check that could not be answered leaves `rdns_ok_b`
+     * absent (unknown) rather than false (failed).
+     *
+     * @param string[] $ips
      */
-    private function ptr(string $ip): ?string
+    public function prefetchRdns(array $ips): void
     {
-        $qname = self::reverseName($ip);
-        if ($qname === null) {
-            return null;
+        if (empty($this->cfg['rdns_enabled'])) {
+            return;
         }
-        $answers = $this->dnsQuery($qname, 12);
-        if ($answers === []) {
-            return null;
+
+        $ptr = [];
+        foreach ($ips as $ip) {
+            $ip = (string) $ip;
+            if (isset($ptr[$ip]) || isset($this->memoRdns[$ip]) || filter_var($ip, FILTER_VALIDATE_IP) === false) {
+                continue;
+            }
+            if ($this->state !== null) {
+                $hit = false;
+                $cached = $this->state->cacheGet('rdns', $ip, $hit);
+                if ($hit) {
+                    $this->remember($this->memoRdns, $ip, $cached ?? []);
+                    continue;
+                }
+            }
+            $qname = self::reverseName($ip);
+            if ($qname === null) {
+                continue;
+            }
+            $ptr[$ip] = [$qname, 12];
         }
-        $name = rtrim((string) $answers[0], '.');
+        if ($ptr === []) {
+            return;
+        }
+
+        $names = [];
+        $failed = [];
+        foreach ($this->dnsMany($ptr) as $ip => $answers) {
+            $ip = (string) $ip;
+            if ($answers === null) {
+                $failed[$ip] = true;
+                continue;
+            }
+            $name = $answers === [] ? null : self::validName((string) $answers[0]);
+            if ($name !== null) {
+                $names[$ip] = $name;
+            }
+        }
+
+        $fwd = [];
+        foreach ($names as $ip => $name) {
+            $fwd[$ip] = [$name, str_contains($ip, ':') ? 28 : 1];
+        }
+        $confirm = $fwd === [] ? [] : $this->dnsMany($fwd);
+
+        $ttl = ((int) ($this->cfg['rdns_ttl_days'] ?? 7)) * 86400;
+        foreach ($ptr as $ip => $_) {
+            $ip = (string) $ip;
+            if (isset($failed[$ip])) {
+                $this->remember($this->memoRdns, $ip, []);
+                continue;
+            }
+            $fields = [];
+            $complete = true;
+            if (isset($names[$ip])) {
+                $fields['rdns_s'] = self::clean($names[$ip], 255);
+                $answers = $confirm[$ip] ?? null;
+                if ($answers === null) {
+                    $complete = false;
+                } else {
+                    $fields['rdns_ok_b'] = self::addressIn($ip, $answers);
+                }
+            }
+            if ($complete && $this->state !== null) {
+                $this->state->cachePut('rdns', $ip, $fields === [] ? null : $fields, $ttl);
+            }
+            $this->remember($this->memoRdns, $ip, $fields);
+        }
+    }
+
+    /**
+     * A PTR answer as a hostname, or null.
+     *
+     * Anything outside the restricted hostname grammar came from a hostile PTR zone and must
+     * not reach a Solr document or the panel.
+     */
+    private static function validName(string $name): ?string
+    {
+        $name = rtrim($name, '.');
         if (!preg_match('/^[A-Za-z0-9]([A-Za-z0-9\-._]{0,252}[A-Za-z0-9])?$/D', $name)) {
             return null;
         }
         return strtolower($name);
     }
 
-    /**
-     * Does resolving $name forward produce $ip?
-     *
-     * Asks for the record family the address actually belongs to: A (type 1) for IPv4, AAAA
-     * (type 28) for IPv6.
-     */
-    private function forwardConfirms(string $name, string $ip): bool
+    /** Is $ip among the A/AAAA answers? */
+    private static function addressIn(string $ip, array $answers): bool
     {
-        $isV6 = str_contains($ip, ':');
-        $answers = $this->dnsQuery($name, $isV6 ? 28 : 1);
-        if ($answers === []) {
-            return false;
-        }
         $target = @inet_pton($ip);
         if ($target === false) {
             return false;
@@ -762,71 +969,106 @@ final class Asn
     }
 
     /**
-     * Resolve one name/type over UDP against the system resolvers, with a real timeout.
+     * Resolve many name/type questions at once over UDP, each with a hard timeout.
      *
-     * PHP's `gethostbyaddr()` and `dns_get_record()` are used nowhere in this class on
-     * purpose: neither accepts a timeout, so a single unresponsive authoritative server
-     * would stall the ingest daemon for the resolver library's whole retry schedule. About
-     * eighty lines of packet building and parsing buys a hard deadline, which SPEC §5.3
-     * requires.
+     * All questions are in flight together against one resolver; whatever timed out or failed
+     * is asked again of the next. A valid empty answer (NXDOMAIN/NODATA) is a real result.
      *
-     * Scope is deliberately narrow — one question, UDP only, no EDNS, no DNSSEC, truncated
-     * answers abandoned. A truncated PTR or A answer is vanishingly rare and the correct
-     * behaviour when it happens is "field absent", which is what returning [] produces.
-     *
-     * The read buffer is 4096 bytes, which covers any answer we would accept; more than that
-     * means the response was truncated and it is dropped. A valid but empty answer, NXDOMAIN
-     * or NODATA, is a real result, so the next resolver is not asked.
-     *
-     * @param int $qtype 1 = A, 12 = PTR, 28 = AAAA
-     * @return string[] Answer values (names for PTR, addresses for A/AAAA).
+     * @param array<string,array{0:string,1:int}> $queries key => [qname, qtype]
+     * @return array<string,string[]|null> key => answers, [] when empty, null when no resolver answered.
      */
-    private function dnsQuery(string $qname, int $qtype): array
+    private function dnsMany(array $queries): array
     {
         $timeout = max(1, (int) ($this->cfg['lookup_timeout'] ?? 3));
+        $out = [];
+        $todo = $queries;
 
         foreach ($this->resolvers() as $server) {
-            $packet = self::buildQuery($qname, $qtype);
-            if ($packet === null) {
-                return [];
+            if ($todo === []) {
+                break;
             }
-
-            $errno  = 0;
-            $errstr = '';
             $target = str_contains($server, ':') ? '[' . $server . ']' : $server;
-            $sock = @stream_socket_client(
-                'udp://' . $target . ':53',
-                $errno,
-                $errstr,
-                (float) $timeout,
-                STREAM_CLIENT_CONNECT
-            );
-            if ($sock === false) {
-                continue;
-            }
-            stream_set_timeout($sock, $timeout);
+            $queue = $todo;
+            $todo = [];
+            $flight = [];
 
-            if (@fwrite($sock, $packet) === false) {
-                fclose($sock);
-                continue;
-            }
-            $response = @fread($sock, 4096);
-            $meta = stream_get_meta_data($sock);
-            fclose($sock);
+            while ($queue !== [] || $flight !== []) {
+                while ($queue !== [] && count($flight) < self::DNS_IN_FLIGHT) {
+                    $k = array_key_first($queue);
+                    $q = $queue[$k];
+                    unset($queue[$k]);
 
-            if (!empty($meta['timed_out']) || !is_string($response) || strlen($response) < 12) {
-                continue;
-            }
+                    $packet = self::buildQuery($q[0], $q[1]);
+                    if ($packet === null) {
+                        $out[$k] = [];
+                        continue;
+                    }
+                    $errno = 0;
+                    $errstr = '';
+                    $sock = @stream_socket_client('udp://' . $target . ':53', $errno, $errstr, (float) $timeout);
+                    if ($sock === false) {
+                        $todo[$k] = $q;
+                        continue;
+                    }
+                    stream_set_blocking($sock, false);
+                    if (@fwrite($sock, $packet) === false) {
+                        fclose($sock);
+                        $todo[$k] = $q;
+                        continue;
+                    }
+                    $flight[(int) $sock] = [$k, $sock, $packet, microtime(true) + $timeout, $q];
+                }
+                if ($flight === []) {
+                    continue;
+                }
 
-            $answers = self::parseAnswers($response, $packet, $qtype);
-            if ($answers !== []) {
-                return $answers;
-            }
-            if (self::responseIsAuthoritativeEmpty($response, $packet)) {
-                return [];
+                $read = [];
+                foreach ($flight as $id => $f) {
+                    $read[$id] = $f[1];
+                }
+                $w = null;
+                $e = null;
+                if ($this->tick !== null) {
+                    ($this->tick)();
+                }
+                if (@stream_select($read, $w, $e, 0, 100000) > 0) {
+                    foreach ($read as $sock) {
+                        $id = (int) $sock;
+                        [$k, , $packet, , $q] = $flight[$id];
+                        $response = @fread($sock, 4096);
+                        fclose($sock);
+                        unset($flight[$id]);
+
+                        if (!is_string($response) || strlen($response) < 12) {
+                            $todo[$k] = $q;
+                            continue;
+                        }
+                        $answers = self::parseAnswers($response, $packet, $q[1]);
+                        if ($answers !== []) {
+                            $out[$k] = $answers;
+                        } elseif (self::responseIsAuthoritativeEmpty($response, $packet)) {
+                            $out[$k] = [];
+                        } else {
+                            $todo[$k] = $q;
+                        }
+                    }
+                }
+
+                $now = microtime(true);
+                foreach ($flight as $id => $f) {
+                    if ($now >= $f[3]) {
+                        fclose($f[1]);
+                        unset($flight[$id]);
+                        $todo[$f[0]] = $f[4];
+                    }
+                }
             }
         }
-        return [];
+
+        foreach ($todo as $k => $_) {
+            $out[$k] = null;
+        }
+        return $out;
     }
 
     /**
