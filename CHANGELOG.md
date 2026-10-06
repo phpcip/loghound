@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.13.0] — 2026-10-06
+
+### Added
+
+- **A new rule, "User-Agent rotation".** A machine that cycles its User-Agent used to split into
+  one short session per browser string, each of which looked like a different visitor and ended
+  as `unknown`. The scorer now counts the distinct User-Agents each address presented in the 24
+  hours around a session (`ip_uas_24h_i`), and ten or more fires `ua_rotation` (45 points),
+  outside mobile carriers and verified crawlers. Together with a datacentre address it reaches
+  `bot`. The threshold is tunable as `scoring.ua_rotation_min_uas`.
+
+- **Deploying this release needs a schema push** for the new `ip_uas_24h_i` field:
+  `php bin/loghound-schema --force`.
+
+---
+
 ## [1.12.0] — 2026-10-06
 
 ### Added
