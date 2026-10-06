@@ -181,7 +181,7 @@ final class State
                 ON beacon_staging (client_key, merged)'
         );
 
-        foreach (['cache_geo', 'cache_asn', 'cache_rdns'] as $table) {
+        foreach (['cache_geo', 'cache_asn', 'cache_rdns', 'cache_referer'] as $table) {
             $this->db->exec(
                 'CREATE TABLE IF NOT EXISTS ' . $table . ' (
                     k          TEXT PRIMARY KEY,
@@ -938,7 +938,7 @@ final class State
      */
     public function cachePurgeExpired(?string $ns = null): int
     {
-        $tables = $ns === null ? ['cache_geo', 'cache_asn', 'cache_rdns'] : [self::cacheTable($ns)];
+        $tables = $ns === null ? ['cache_geo', 'cache_asn', 'cache_rdns', 'cache_referer'] : [self::cacheTable($ns)];
         $removed = 0;
         foreach ($tables as $table) {
             $this->run('DELETE FROM ' . $table . ' WHERE expires_at <= :now', [':now' => time()]);
@@ -963,6 +963,8 @@ final class State
                 return 'cache_asn';
             case 'rdns':
                 return 'cache_rdns';
+            case 'referer':
+                return 'cache_referer';
             default:
                 throw new \InvalidArgumentException('Unknown cache namespace: ' . $ns);
         }

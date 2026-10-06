@@ -11,8 +11,8 @@
  * the same host whose referer is external, at or before the session's first request. When there
  * is none, the visit is direct. The site's own host is never a source.
  *
- * Two places answer the question, newest first: the referers this process has already seen,
- * which covers hits not yet committed to Solr, and the `hits` core, sorted by `ts desc`.
+ * Answered from the referers this process has already seen and, across restarts, from the
+ * local state database. Without a state database the `hits` core is asked instead.
  *
  * @package Loghound
  * @license MIT
@@ -45,6 +45,18 @@ final class RefererOrigin
 
     private int $pausedUntil = 0;
 
+    /** Latest external referer per ip|host, kept across restarts so a lookup never leaves the box. */
+    private ?State $state = null;
+
+    /** How long a remembered external referer stays usable. */
+    private const STATE_TTL = 90 * 86400;
+
+    /** Keep the latest external referer per address and host in the local state database. */
+    public function useState(State $state): void
+    {
+        $this->state = $state;
+    }
+
     /**
      * Enable the `hits` core lookup. Without it only referers seen by this process are used.
      */
@@ -73,6 +85,14 @@ final class RefererOrigin
         unset($this->memo[$key]);
         $this->memo[$key] = ['ts' => $tsMs, 'fields' => $fields];
 
+        if ($this->state !== null) {
+            $hit = false;
+            $prev = $this->state->cacheGet('referer', $key, $hit);
+            if (!is_array($prev) || (int) ($prev['ts'] ?? 0) <= $tsMs) {
+                $this->state->cachePut('referer', $key, ['ts' => $tsMs, 'fields' => $fields], self::STATE_TTL);
+            }
+        }
+
         if (count($this->memo) > self::MEMO_CAP) {
             unset($this->memo[array_key_first($this->memo)]);
         }
@@ -98,6 +118,12 @@ final class RefererOrigin
         if ($key !== null) {
             if (isset($this->memo[$key]) && $this->memo[$key]['ts'] <= $tsMs) {
                 $found = $this->memo[$key]['fields'];
+            } elseif ($this->state !== null) {
+                $hitState = false;
+                $row = $this->state->cacheGet('referer', $key, $hitState);
+                if (is_array($row) && (int) ($row['ts'] ?? 0) <= $tsMs && is_array($row['fields'] ?? null)) {
+                    $found = $row['fields'];
+                }
             } else {
                 $found = $this->lookup((string) $hit['ip_s'], (string) $hit['host_s'], $tsMs);
             }

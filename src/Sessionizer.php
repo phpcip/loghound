@@ -199,6 +199,9 @@ final class Sessionizer
         $this->selfCollector = (string) $own['collector'];
 
         $this->refererOrigin = new RefererOrigin();
+        if ($state instanceof State) {
+            $this->refererOrigin->useState($state);
+        }
     }
 
     /**
