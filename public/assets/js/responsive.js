@@ -1461,7 +1461,11 @@ function setUpSections() {
 
     pruneCardKeys();
     const untouched = !viewHasChoices();
-    cards.forEach((card, index) => foldCard(cards, card, untouched && index === 0));
+    /* The never-touched default opens the first section THAT IS ON SCREEN. On a phone the
+       Sessions search card is rendered but hidden, so counting it left Recent visitors shut
+       behind a heading the phone also hides, with nothing to press. */
+    const firstShown = cards.find((card) => card.offsetParent !== null) || cards[0];
+    cards.forEach((card) => foldCard(cards, card, untouched && card === firstShown));
     document.documentElement.classList.add('lh-sections');
     openFromHash();
 
@@ -1474,7 +1478,20 @@ function setUpSections() {
         }
     });
 
-    return () => cards.forEach((card) => { if (hasTrouble(card)) { forceCard(card); } });
+    /* Re-checked on every layout pass: the sort bar that hides a heading is appended after
+       this runs, and a width change can hide or show it. A shut card with no reachable toggle
+       is opened on screen without touching the operator's choice. */
+    return () => cards.forEach((card) => {
+        if (hasTrouble(card) || (!isCardOpen(card) && !toggleShown(card))) {
+            forceCard(card);
+        }
+    });
+}
+
+/** Can the operator reach this section's expand control on screen right now? */
+function toggleShown(card) {
+    const button = card.querySelector(':scope > .card-head .card-toggle');
+    return button !== null && button.offsetParent !== null;
 }
 
 /**
@@ -1528,7 +1545,9 @@ function foldCard(cards, card, first) {
     });
 
     const remembered = rememberedCard(card);
-    const chosen = remembered === null ? first : remembered;
+    /* A section whose toggle the stylesheet hides cannot be opened by hand, so it is never
+       shut by default: shut would be unreachable content, not a collapsed heading. */
+    const chosen = remembered === null ? (first || button.offsetParent === null) : remembered;
     card.dataset.foldChosen = chosen ? 'open' : 'shut';
     setCard(card, hasTrouble(card) || chosen);
 }
