@@ -120,6 +120,12 @@ final class Bounce
     /** Engaged for at least the threshold. */
     public const ENGAGED = 'engaged_ms_l:[' . self::ENGAGED_MS . ' TO *]';
 
+    /** One visit's Bounce column as a query: at most one page and not engaged past the threshold (Sessions::bouncedOf()). */
+    public const VISIT_BOUNCED = '(*:* -' . self::MULTI_PAGE . ' -' . self::ENGAGED . ')';
+
+    /** The exact complement of VISIT_BOUNCED. */
+    public const VISIT_NOT_BOUNCED = '(' . self::MULTI_PAGE . ' OR ' . self::ENGAGED . ')';
+
     /**
      * The sentence that defines the metric, for the card.
      *

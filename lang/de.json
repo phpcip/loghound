@@ -3485,5 +3485,7 @@
     "{where} answered, but there is no core called {core} on it.": "{where} hat geantwortet, aber dort gibt es keinen Core namens {core}.",
     "{where} answered, but this account is not allowed to read {core}.": "{where} hat geantwortet, aber dieses Konto darf {core} nicht lesen.",
     "{where} did not answer as expected: {error}": "{where} hat nicht wie erwartet geantwortet: {error}",
-    "— the {n} most frequent are listed": "— die {n} häufigsten sind aufgeführt"
+    "— the {n} most frequent are listed": "— die {n} häufigsten sind aufgeführt",
+    "One page at most, and either under the engaged-time threshold or with no beacon to measure it.": "Höchstens eine Seite, und entweder unter der Schwelle für aktive Zeit oder ohne Beacon, der sie misst.",
+    "More than one page, or one page read for at least the engaged-time threshold.": "Mehr als eine Seite, oder eine Seite, die mindestens so lange wie die Schwelle für aktive Zeit gelesen wurde."
 }

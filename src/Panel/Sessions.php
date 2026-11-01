@@ -580,7 +580,8 @@ final class Sessions extends Controller
         }
 
         $search = Facets::searchTerm($_GET['vq'] ?? null);
-        if ($search !== '') {
+        // A computed dimension has no term dictionary to search; its listing is already complete.
+        if ($search !== '' && !isset(Query::computedFilterFields()[$field])) {
             return $this->valueSearch($field, $fields[$field], $search);
         }
 
@@ -948,7 +949,9 @@ final class Sessions extends Controller
     private function dimensionScope(string $field, string $value): ?array
     {
         $solrField = Query::sessionFilterAliases()[$field] ?? $field;
-        $clause = self::termFor($solrField, $value);
+        $clause = isset(Query::computedFilterFields()[$field])
+            ? Query::computedClause($field, $value)
+            : self::termFor($solrField, $value);
         if ($clause === null) {
             return null;
         }

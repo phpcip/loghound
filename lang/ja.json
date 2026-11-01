@@ -3284,5 +3284,7 @@
     "{where} answered, but there is no core called {core} on it.": "{where} は応答しましたが、{core} という名前の core はありません。",
     "{where} answered, but this account is not allowed to read {core}.": "{where} は応答しましたが、このアカウントには {core} の読み取り権限がありません。",
     "{where} did not answer as expected: {error}": "{where} が想定どおりに応答しませんでした：{error}",
-    "— the {n} most frequent are listed": "——最も多い {n} 件を表示"
+    "— the {n} most frequent are listed": "——最も多い {n} 件を表示",
+    "One page at most, and either under the engaged-time threshold or with no beacon to measure it.": "1ページ以下で、エンゲージ時間のしきい値未満、または計測するビーコンがない。",
+    "More than one page, or one page read for at least the engaged-time threshold.": "2ページ以上、または1ページをエンゲージ時間のしきい値以上読んだ。"
 }

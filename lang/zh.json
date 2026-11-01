@@ -3284,5 +3284,7 @@
     "{where} answered, but there is no core called {core} on it.": "{where} 已响应，但其上没有名为 {core} 的 core。",
     "{where} answered, but this account is not allowed to read {core}.": "{where} 已响应，但此账户无权读取 {core}。",
     "{where} did not answer as expected: {error}": "{where} 的响应不符合预期：{error}",
-    "— the {n} most frequent are listed": "——列出最常见的 {n} 个"
+    "— the {n} most frequent are listed": "——列出最常见的 {n} 个",
+    "One page at most, and either under the engaged-time threshold or with no beacon to measure it.": "最多一个页面，且参与时间低于阈值或没有信标可测量。",
+    "More than one page, or one page read for at least the engaged-time threshold.": "多于一个页面，或一个页面的阅读时间至少达到参与时间阈值。"
 }

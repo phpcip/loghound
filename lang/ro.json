@@ -3552,5 +3552,7 @@
     "{where} answered, but there is no core called {core} on it.": "{where} a răspuns, dar nu există niciun core numit {core} pe el.",
     "{where} answered, but this account is not allowed to read {core}.": "{where} a răspuns, dar acest cont nu are voie să citească {core}.",
     "{where} did not answer as expected: {error}": "{where} nu a răspuns cum era de așteptat: {error}",
-    "— the {n} most frequent are listed": "— sunt listate cele mai frecvente {n}"
+    "— the {n} most frequent are listed": "— sunt listate cele mai frecvente {n}",
+    "One page at most, and either under the engaged-time threshold or with no beacon to measure it.": "Cel mult o pagină, și fie sub pragul de timp angajat, fie fără beacon care să o măsoare.",
+    "More than one page, or one page read for at least the engaged-time threshold.": "Mai mult de o pagină, sau o pagină citită cel puțin cât pragul de timp angajat."
 }

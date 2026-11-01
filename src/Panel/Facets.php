@@ -529,6 +529,24 @@ final class Facets
             return null;
         }
 
+        $op = $this->op($field);
+        $tag = $tagged && $this->exclusion === self::EXCLUDE_TAGGED ? '{!tag=' . $this->tag($field) . '}' : '';
+
+        // A computed dimension has no field: each chosen value is its own fixed query.
+        if (isset(Query::computedFilterFields()[$field])) {
+            $parts = [];
+            foreach ($values as $value) {
+                $q = Query::computedClause($field, $value);
+                if ($q !== null) {
+                    $parts[] = $q;
+                }
+            }
+            if ($parts === []) {
+                return null;
+            }
+            return $tag . ($op === self::OP_NONE ? '-' : '') . '(' . implode(' OR ', $parts) . ')';
+        }
+
         $target = $this->aliases[$field] ?? $field;
         if (!Security::isSafeFieldName($target)) {
             return null;
@@ -539,13 +557,11 @@ final class Facets
             $literals[] = $this->kind($field) === 'string' ? Query::quote($value) : $value;
         }
 
-        $op = $this->op($field);
         $joiner = $op === self::OP_ALL ? ' AND ' : ' OR ';
         $group = $target . ':(' . implode($joiner, $literals) . ')';
         $clause = ($op === self::OP_NONE ? '-' : '') . $group;
 
-        return ($tagged && $this->exclusion === self::EXCLUDE_TAGGED ? '{!tag=' . $this->tag($field) . '}' : '')
-            . $clause;
+        return $tag . $clause;
     }
 
     /**
@@ -598,6 +614,17 @@ final class Facets
             if (!isset($this->labels[$field])) {
                 continue;
             }
+            // A computed dimension is counted as one query facet per value, read back by group().
+            if (isset(Query::computedFilterFields()[$field])) {
+                foreach (Query::computedFilterFields()[$field] as $value => $q) {
+                    $def = ['type' => 'query', 'q' => $q];
+                    if ($this->exclusion === self::EXCLUDE_TAGGED && isset($this->sel[$field])) {
+                        $def['domain'] = ['excludeTags' => [$this->tag($field)]];
+                    }
+                    $out[self::computedKey($field, $value)] = $def;
+                }
+                continue;
+            }
             $def = [
                 'type'     => 'terms',
                 'field'    => $this->aliases[$field] ?? $field,
@@ -612,6 +639,30 @@ final class Facets
                 $def['domain'] = ['excludeTags' => [$this->tag($field)]];
             }
             $out[$field] = $def;
+        }
+        return $out;
+    }
+
+    /** The facet key one value of a computed dimension is counted under. */
+    private static function computedKey(string $field, string $value): string
+    {
+        return 'cf_' . $field . '_' . $value;
+    }
+
+    /**
+     * A computed dimension's query-facet counts in the shape of a terms facet's buckets.
+     *
+     * @param array<string,mixed> $facets
+     * @return array<int,array{val:string,count:int}>
+     */
+    private static function computedBuckets(array $facets, string $field): array
+    {
+        $out = [];
+        foreach (array_keys(Query::computedFilterFields()[$field] ?? []) as $value) {
+            $count = (int) ($facets[self::computedKey($field, (string) $value)]['count'] ?? 0);
+            if ($count > 0) {
+                $out[] = ['val' => (string) $value, 'count' => $count];
+            }
         }
         return $out;
     }
@@ -858,6 +909,9 @@ final class Facets
         $buckets = [];
 
         $node = $facets[$field] ?? null;
+        if (isset(Query::computedFilterFields()[$field])) {
+            $node = ['buckets' => self::computedBuckets($facets, $field)];
+        }
         foreach (is_array($node) && is_array($node['buckets'] ?? null) ? $node['buckets'] : [] as $bucket) {
             if (!is_array($bucket)) {
                 continue;

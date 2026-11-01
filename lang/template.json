@@ -3485,5 +3485,7 @@
     "{where} answered, but there is no core called {core} on it.": "{where} answered, but there is no core called {core} on it.",
     "{where} answered, but this account is not allowed to read {core}.": "{where} answered, but this account is not allowed to read {core}.",
     "{where} did not answer as expected: {error}": "{where} did not answer as expected: {error}",
-    "— the {n} most frequent are listed": "— the {n} most frequent are listed"
+    "— the {n} most frequent are listed": "— the {n} most frequent are listed",
+    "One page at most, and either under the engaged-time threshold or with no beacon to measure it.": "One page at most, and either under the engaged-time threshold or with no beacon to measure it.",
+    "More than one page, or one page read for at least the engaged-time threshold.": "More than one page, or one page read for at least the engaged-time threshold."
 }

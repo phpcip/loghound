@@ -642,6 +642,7 @@ final class Query
             'entry_path_s'     => I18n::t('Landing page'),
             'exit_path_s'      => I18n::t('Exit page'),
             'signed_in_b'      => I18n::t('Signed in'),
+            'bounced'          => I18n::t('Bounced'),
 
             /* THE NAME THE MEASURED SITE ATTACHED, and a real dimension rather than a field that
                merely rides along on the document. It was in sessionFl() — returned with every
@@ -768,6 +769,7 @@ final class Query
             'host_s',
             'bot_verdict_s',
             'signed_in_b',
+            'bounced',
             'referer_type_s',
             'referer_host_s',
             'paths_ss',
@@ -807,7 +809,29 @@ final class Query
             'status_i'    => 'int',
             'status_codes_is' => 'int',
             'signed_in_b' => 'bool',
+            'bounced'     => 'bool',
         ];
+    }
+
+    /**
+     * Dimensions with no field of their own: each value maps to a fixed sessions-core query.
+     *
+     * @return array<string,array<string,string>> dimension => value => clause
+     */
+    public static function computedFilterFields(): array
+    {
+        return [
+            'bounced' => [
+                'true'  => Bounce::VISIT_BOUNCED,
+                'false' => Bounce::VISIT_NOT_BOUNCED,
+            ],
+        ];
+    }
+
+    /** The query behind one value of a computed dimension, or null when there is none. */
+    public static function computedClause(string $field, string $value): ?string
+    {
+        return self::computedFilterFields()[$field][$value] ?? null;
     }
 
     /**
@@ -924,6 +948,7 @@ final class Query
             'signed_in_b',
             'ident_s',
             'planes_s',
+            'bounced',
         ];
 
         return array_diff_key(self::filterFields(), array_flip($sessionOnly));

@@ -183,6 +183,12 @@ final class Vocabulary
         'false' => ['label' => 'Anonymous', 'why' => 'The measured site reported an unauthenticated visitor.'],
     ];
 
+    /** The Bounced dimension, decided exactly as the visit table's Bounce column is. */
+    private const BOUNCED = [
+        'true'  => ['label' => 'Yes', 'why' => 'One page at most, and either under the engaged-time threshold or with no beacon to measure it.'],
+        'false' => ['label' => 'No', 'why' => 'More than one page, or one page read for at least the engaged-time threshold.'],
+    ];
+
     /**
      * The four status classes, plus the two nobody thinks about.
      *
@@ -255,6 +261,7 @@ final class Vocabulary
             'ua_bot_cat_s',
             'bot_reasons_ss',
             'signed_in_b',
+            'bounced',
             'planes_s',
             'status_class_s',
             'hit_flags_ss',
@@ -302,6 +309,7 @@ final class Vocabulary
             'referer_type_s' => self::REFERER_TYPES,
             'ua_bot_cat_s'   => self::BOT_CATEGORIES,
             'signed_in_b'    => self::SIGNED_IN,
+            'bounced'        => self::BOUNCED,
             'planes_s'       => self::PLANES,
             'status_class_s' => self::STATUS_CLASSES,
             'ip'             => self::CALLERS,
@@ -384,7 +392,7 @@ final class Vocabulary
     public static function all(): array
     {
         $out = [];
-        foreach (['bot_verdict_s', 'bot_class_s', 'as_type_s', 'referer_type_s', 'ua_bot_cat_s', 'signed_in_b', 'planes_s', 'bot_reasons_ss', 'status_class_s', 'hit_flags_ss'] as $field) {
+        foreach (['bot_verdict_s', 'bot_class_s', 'as_type_s', 'referer_type_s', 'ua_bot_cat_s', 'signed_in_b', 'bounced', 'planes_s', 'bot_reasons_ss', 'status_class_s', 'hit_flags_ss'] as $field) {
             foreach (self::knownValues($field) as $value) {
                 $spoken = self::value($field, $value);
                 $out[$field][$value] = ['label' => $spoken['label'], 'why' => $spoken['why']];
@@ -416,6 +424,7 @@ final class Vocabulary
             'ua_bot_cat_s'   => array_keys(self::BOT_CATEGORIES),
             'bot_reasons_ss' => Rules::reasonCodes(),
             'signed_in_b'    => array_keys(self::SIGNED_IN),
+            'bounced'        => array_keys(self::BOUNCED),
             'planes_s'       => array_keys(self::PLANES),
             'status_class_s' => array_keys(self::STATUS_CLASSES),
             'hit_flags_ss'   => Attacks::codes(),
