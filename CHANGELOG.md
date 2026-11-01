@@ -7,6 +7,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.14.0] — 2026-11-01
+
+### Added
+
+- **Recent visitors can be filtered by Bounced: Yes / No.** A new dimension in the filter rail,
+  right under Signed in, decided exactly as the Bounce column of the visit table: at most one page
+  and under the engaged-time threshold (or no beacon to measure it) is Yes, everything else is No.
+  It works with all three operators, counts both values with its own filter lifted, and narrows
+  every sessions-plane view like any other filter. Nothing is stored and nothing is reindexed: each
+  value is a fixed query over fields every session already has.
+
+### Fixed
+
+- **The section that opens by default is the first one on screen**, and a section whose toggle is
+  hidden is never left closed.
+
+---
+
 ## [1.13.0] — 2026-10-06
 
 ### Added
