@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.14.1] — 2026-11-05
+
+### Changed
+
+- **Applied filters stand out in the filter rail.** A selected value is now a solid accent row
+  with white text, so the active filters can be read at a glance among the unselected ones.
+
+- **Planes sits right under Website** in the filter rail, instead of near the bottom.
+
+---
+
 ## [1.14.0] — 2026-11-01
 
 ### Added
