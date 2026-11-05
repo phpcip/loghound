@@ -3378,13 +3378,16 @@ table .sub,
     color: var(--faint); text-align: right;
 }
 
-.facet-opt.is-on { border-color: var(--accent); background: var(--band); color: var(--ink); font-weight: 600; }
-/* The proportion bar behind a SELECTED value. It was on --c-human, which made every
-   selected facet green regardless of what it filtered — the token that means "this visit
-   is a person" turned into "this box is ticked". Selection is the accent, like every other
-   selected control in the panel; the verdict hues belong to verdicts only. */
-.facet-opt.is-on .facet-fill { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.facet-opt.is-on .facet-n { background: none; color: var(--ink); }
+/* An applied value is a solid accent row with white text, so the active filters stand out at a glance. */
+.facet-opt.is-on,
+.facet-opt.is-on:hover,
+.facet-opt.is-on:focus-visible { border-color: var(--accent); background: var(--accent); color: #ffffff; font-weight: 700; }
+.facet-opt.is-on .facet-fill { background: color-mix(in srgb, #ffffff 18%, transparent); }
+.facet-opt.is-on .facet-mark,
+.facet-opt.is-on .facet-val,
+.facet-opt.is-on .facet-n { background: none; color: #ffffff; }
+.facet-opt.is-on .facet-val svg { color: #ffffff; }
+.facet-opt.is-on:focus-visible { outline-color: var(--ink); }
 
 .facet-more {
     margin-top: 6px;

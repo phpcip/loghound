@@ -767,6 +767,7 @@ final class Query
     {
         return [
             'host_s',
+            'planes_s',
             'bot_verdict_s',
             'signed_in_b',
             'bounced',
@@ -783,7 +784,6 @@ final class Query
             'entry_path_s',
             'exit_path_s',
             'hit_flags_ss',
-            'planes_s',
             'ua_bot_cat_s',
         ];
     }
